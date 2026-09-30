@@ -248,31 +248,96 @@ srgb_funcs = custom_target(
   command: [python, generate_srgb_funcs, '@OUTPUT0@', '@OUTPUT1@']
 )
 
+
+
+
+composed_obj = custom_target(
+  'composed_obj',
+  input: 'composed.zig',
+  output: 'composed.o',
+  command: [python, files('compile_zig.py'), '@INPUT@', '@OUTPUT@']
+)
+
+base64_obj = custom_target(
+  'base64_obj',
+  input: 'base64.zig',
+  output: 'base64.o',
+  command: [python, files('compile_zig.py'), '@INPUT@', '@OUTPUT@']
+)
+
+xsnprintf_obj = custom_target(
+  'xsnprintf_obj',
+  input: 'xsnprintf.zig',
+  output: 'xsnprintf.o',
+  command: [python, files('compile_zig.py'), '@INPUT@', '@OUTPUT@']
+)
+
+
+char32_obj = custom_target(
+  'char32_obj',
+  input: 'char32.zig',
+  output: 'char32.o',
+  command: [python, files('compile_zig.py'), '@INPUT@', '@OUTPUT@']
+)
+
+
+hsl_obj = custom_target(
+  'hsl_obj',
+  input: 'hsl.zig',
+  output: 'hsl.o',
+  command: [python, files('compile_zig.py'), '@INPUT@', '@OUTPUT@']
+)
+
+
+uri_obj = custom_target(
+  'uri_obj',
+  input: 'uri.zig',
+  output: 'uri.o',
+  command: [python, files('compile_zig.py'), '@INPUT@', '@OUTPUT@']
+)
+
+
+grid_obj = custom_target(
+  'grid_obj',
+  input: 'grid.zig',
+  output: 'grid.o',
+  command: [python, files('compile_zig.py'), '@INPUT@', '@OUTPUT@']
+)
+
+xmalloc_obj = custom_target(
+  'xmalloc_obj',
+  input: 'xmalloc.zig',
+  output: 'xmalloc.o',
+  command: [python, files('compile_zig.py'), '@INPUT@', '@OUTPUT@']
+)
+
 common = static_library(
   'common',
   'log.c', 'log.h',
-  'char32.c', 'char32.h',
+  char32_obj, 'char32.h',
   'debug.c', 'debug.h',
   'macros.h',
-  'xmalloc.c', 'xmalloc.h',
-  'xsnprintf.c', 'xsnprintf.h',
+  'xmalloc-shim.c',
+    xmalloc_obj, 'xmalloc.h',
+  'xsnprintf-shim.c',
+  xsnprintf_obj, 'xsnprintf.h',
   dependencies: [utf8proc]
 )
 
 misc = static_library(
   'misc',
-  'hsl.c', 'hsl.h',
+  hsl_obj, 'hsl.h',
   'macros.h',
   'misc.c', 'misc.h',
-  'uri.c', 'uri.h',
+  uri_obj, 'uri.h',
   dependencies: [utf8proc],
   link_with: [common]
 )
 
 vtlib = static_library(
   'vtlib',
-  'base64.c', 'base64.h',
-  'composed.c', 'composed.h',
+  base64_obj, 'base64.h',
+  composed_obj, 'composed.h',
   'cursor-shape.c', 'cursor-shape.h',
   'csi.c', 'csi.h',
   'dcs.c', 'dcs.h',
@@ -289,7 +354,7 @@ vtlib = static_library(
 
 pgolib = static_library(
   'pgolib',
-  'grid.c', 'grid.h',
+  grid_obj, 'grid.h',
   'selection.c', 'selection.h',
   'terminal.c', 'terminal.h',
   emoji_variation_sequences,
@@ -455,3 +520,6 @@ summary(
   },
   bool_yn: true
 )
+
+
+
