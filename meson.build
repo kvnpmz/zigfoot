@@ -297,6 +297,64 @@ uri_obj = custom_target(
 )
 
 
+
+async_obj = custom_target(
+  'async_obj',
+  input: 'async.zig',
+  output: 'async.o',
+  command: [python, files('compile_zig.py'), '@INPUT@', '@OUTPUT@']
+)
+
+cursor_shape_obj = custom_target(
+  'cursor_shape_obj',
+  input: 'cursor-shape.zig',
+  output: 'cursor-shape.o',
+  command: [python, files('compile_zig.py'), '@INPUT@', '@OUTPUT@']
+)
+
+fdm_obj = custom_target(
+  'fdm_obj',
+  input: 'fdm.zig',
+  output: 'fdm.o',
+  command: [python, files('compile_zig.py'), '@INPUT@', '@OUTPUT@']
+)
+
+misc_obj = custom_target(
+  'misc_obj',
+  input: 'misc.zig',
+  output: 'misc.o',
+  command: [python, files('compile_zig.py'), '@INPUT@', '@OUTPUT@']
+)
+
+reaper_obj = custom_target(
+  'reaper_obj',
+  input: 'reaper.zig',
+  output: 'reaper.o',
+  command: [python, files('compile_zig.py'), '@INPUT@', '@OUTPUT@']
+)
+
+
+spawn_template_obj = custom_target(
+  'spawn_template_obj',
+  input: 'spawn_template.zig',
+  output: 'spawn_template.o',
+  command: [python, files('compile_zig.py'), '@INPUT@', '@OUTPUT@']
+)
+
+spawn_obj = custom_target(
+  'spawn_obj',
+  input: 'spawn.zig',
+  output: 'spawn.o',
+  command: [python, files('compile_zig.py'), '@INPUT@', '@OUTPUT@']
+)
+
+tokenize_obj = custom_target(
+  'tokenize_obj',
+  input: 'tokenize.zig',
+  output: 'tokenize.o',
+  command: [python, files('compile_zig.py'), '@INPUT@', '@OUTPUT@']
+)
+
 grid_obj = custom_target(
   'grid_obj',
   input: 'grid.zig',
@@ -328,7 +386,7 @@ misc = static_library(
   'misc',
   hsl_obj, 'hsl.h',
   'macros.h',
-  'misc.c', 'misc.h',
+  misc_obj, 'misc.h',
   uri_obj, 'uri.h',
   dependencies: [utf8proc],
   link_with: [common]
@@ -338,7 +396,7 @@ vtlib = static_library(
   'vtlib',
   base64_obj, 'base64.h',
   composed_obj, 'composed.h',
-  'cursor-shape.c', 'cursor-shape.h',
+  cursor_shape_obj, 'cursor-shape.h',
   'csi.c', 'csi.h',
   'dcs.c', 'dcs.h',
   'macros.h',
@@ -365,7 +423,7 @@ pgolib = static_library(
 
 tokenize = static_library(
   'tokenizelib',
-  'tokenize.c',
+  tokenize_obj,
   dependencies: [utf8proc],
   link_with: [common],
 )
@@ -382,12 +440,12 @@ endif
 
 executable(
   'foot',
-  'async.c', 'async.h',
+  async_obj, 'async.h',
   'box-drawing.c', 'box-drawing.h',
   'config.c', 'config.h',
   'commands.c', 'commands.h',
   'extract.c', 'extract.h',
-  'fdm.c', 'fdm.h',
+  fdm_obj, 'fdm.h',
   'foot-features.c', 'foot-features.h',
   'ime.c', 'ime.h',
   'input.c', 'input.h',
@@ -395,14 +453,14 @@ executable(
   'main.c',
   'notify.c', 'notify.h',
   'quirks.c', 'quirks.h',
-  'reaper.c', 'reaper.h',
+  reaper_obj, 'reaper.h',
   'render.c', 'render.h',
   'search.c', 'search.h',
   'server.c', 'server.h', 'client-protocol.h',
   'shm.c', 'shm.h',
   'slave.c', 'slave.h',
-  'spawn.c', 'spawn.h',
-  'tokenize.c', 'tokenize.h',
+  spawn_obj, spawn_template_obj, 'spawn.h',
+  tokenize_obj, 'tokenize.h',
   'unicode-mode.c', 'unicode-mode.h',
   'url-mode.c', 'url-mode.h',
   'user-notification.c', 'user-notification.h',
@@ -520,6 +578,13 @@ summary(
   },
   bool_yn: true
 )
+
+
+
+
+
+
+
 
 
 
