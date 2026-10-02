@@ -358,6 +358,7 @@ tokenize_obj = custom_target(
 grid_obj = custom_target(
   'grid_obj',
   input: 'grid.zig',
+  depend_files: files('terminal_types.zig', 'composed.zig'),
   output: 'grid.o',
   command: [python, files('compile_zig.py'), '@INPUT@', '@OUTPUT@']
 )
