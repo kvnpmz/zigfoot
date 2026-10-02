@@ -217,6 +217,58 @@ pub const SixelList = extern struct {
     length: usize,
 };
 
+
+pub const VtSubparams = extern struct {
+    idx: u8,
+    cur: ?[*]c_uint,
+    value: [16]c_uint,
+    dummy: c_uint,
+};
+
+pub const VtParam = extern struct {
+    value: c_uint,
+    sub: VtSubparams,
+};
+
+pub const Vt = extern struct {
+    state: c_int,
+    last_printed: u32,
+    grapheme_state: i32,
+    codepoint_merging_ok: bool,
+    _pad0: [3]u8 = undefined,
+    utf8: u32,
+    params: extern struct {
+        idx: u8,
+        _pad0: [7]u8 = undefined,
+        cur: ?*VtParam,
+        v: [16]VtParam,
+        dummy: VtParam,
+    },
+    private: u32,
+    _pad1: [4]u8 = undefined,
+    attrs: Attributes,
+    osc: extern struct {
+        data: ?[*]u8,
+        size: usize,
+        idx: usize,
+        bel: bool,
+        _pad0: [7]u8 = undefined,
+    },
+    osc8: extern struct {
+        id: u64,
+        uri: ?[*:0]u8,
+    },
+    underline: UnderlineRangeData,
+    _pad2: [4]u8 = undefined,
+    dcs: extern struct {
+        data: ?[*]u8,
+        size: usize,
+        idx: usize,
+        put_handler: ?*const fn (?*anyopaque, u8) callconv(.c) void,
+        unhook_handler: ?*const fn (?*anyopaque) callconv(.c) void,
+    },
+};
+
 test "layout matches C probe (probe_layout.c)" {
     const t = std.testing;
 
@@ -242,5 +294,29 @@ test "layout matches C probe (probe_layout.c)" {
     try t.expectEqual(@as(usize, 8), @offsetOf(RowRange, "data"));
 
     try t.expectEqual(@as(usize, 16), @sizeOf(Damage));
-    try t.expectEqual(@as(usize, 32), @sizeOf(DamageNode));
+        try t.expectEqual(@as(usize, 88), @sizeOf(VtSubparams));
+    try t.expectEqual(@as(usize, 96), @sizeOf(VtParam));
+    try t.expectEqual(@as(usize, 1792), @sizeOf(Vt));
+try t.expectEqual(@as(usize, 32), @sizeOf(DamageNode));
 }
+
+pub const Terminal = extern struct {
+    fdm: ?*anyopaque,
+    reaper: ?*anyopaque,
+    conf: ?*const anyopaque,
+    ascii_printer: ?*const anyopaque,
+    bits_affecting_ascii_printer: extern union {
+        _: extern struct {
+            sixels: bool,
+            osc8: bool,
+            underline_style: bool,
+            underline_color: bool,
+            insert_mode: bool,
+            charset: bool,
+        },
+        value: u8,
+    },
+    slave: c_int,
+    ptmx: c_int,
+    vt: Vt,
+};
