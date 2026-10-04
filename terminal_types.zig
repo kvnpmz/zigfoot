@@ -22,6 +22,173 @@ pub const Cursor = extern struct {
     lcf: bool,
 };
 
+pub const CursorOrigin = enum(c_int) {
+    absolute,
+    relative,
+};
+
+pub const Charset = enum(c_int) {
+    ascii,
+    graphic,
+};
+
+pub const TermSurface = enum(c_int) {
+    none,
+    grid,
+    title,
+    border_left,
+    border_right,
+    border_top,
+    border_bottom,
+    button_minimize,
+    button_maximize,
+    button_close,
+};
+
+pub const SelectionKind = enum(c_int) {
+    none,
+    char_wise,
+    word_wise,
+    quote_wise,
+    line_wise,
+    block,
+};
+
+pub const SelectionDirection = enum(c_int) {
+    undir,
+    left,
+    right,
+};
+
+pub const SelectionScrollDirection = enum(c_int) {
+    not,
+    up,
+    down,
+};
+
+pub const SearchDirection = enum(c_int) {
+    backward_same_position,
+    backward,
+    forward,
+};
+
+pub const CursorStyle = enum(c_int) {
+    block,
+    underline,
+    beam,
+    hollow,
+};
+
+pub const WhichColorTheme = enum(c_int) {
+    dark,
+    light,
+    color_theme_1,
+    color_theme_2,
+};
+
+pub const PtmxBuffer = extern struct {
+    data: ?*anyopaque,
+    len: usize,
+    idx: usize,
+};
+
+pub const Colors = extern struct {
+    fg: u32,
+    bg: u32,
+    table: [256]u32,
+    alpha: u16,
+    cursor_fg: u32,
+    cursor_bg: u32,
+    selection_fg: u32,
+    selection_bg: u32,
+    active_theme: WhichColorTheme,
+};
+
+pub const CursorKeys = enum(c_int) {
+    dontcare,
+    normal,
+    application,
+};
+
+pub const KeypadKeys = enum(c_int) {
+    dontcare,
+    numerical,
+    application,
+};
+
+pub const MouseTracking = enum(c_int) {
+    none,
+    x10,
+    click,
+    drag,
+    motion,
+};
+
+pub const MouseReporting = enum(c_int) {
+    normal,
+    utf8,
+    sgr,
+    urxvt,
+    sgr_pixels,
+};
+
+pub const TllInt = extern struct {
+    head: ?*anyopaque,
+    tail: ?*anyopaque,
+    length: usize,
+};
+
+pub const Meta = extern struct {
+    esc_prefix: bool,
+    eight_bit: bool,
+};
+
+pub const Flash = extern struct {
+    active: bool,
+    fd: c_int,
+};
+
+pub const BlinkState = enum(c_int) {
+    on,
+    off,
+};
+
+pub const Blink = extern struct {
+    state: BlinkState,
+    fd: c_int,
+};
+
+pub const Margins = extern struct {
+    left: c_int,
+    right: c_int,
+    top: c_int,
+    bottom: c_int,
+};
+
+pub const Composed = extern struct {
+    chars: ?[*]u32,
+    left: ?*Composed,
+    right: ?*Composed,
+    key: u32,
+    count: u8,
+    width: u8,
+    forced_width: u8,
+    _pad0: u8 = undefined,
+};
+
+pub const CharsetDesignator = enum(c_int) {
+    g0,
+    g1,
+    g2,
+    g3,
+};
+
+pub const Charsets = extern struct {
+    selected: CharsetDesignator,
+    saved: CharsetDesignator,
+    set: [4]Charset,
+};
+
 pub const ScrollRegion = extern struct {
     start: c_int,
     end: c_int,
@@ -217,7 +384,6 @@ pub const SixelList = extern struct {
     length: usize,
 };
 
-
 pub const VtSubparams = extern struct {
     idx: u8,
     cur: ?[*]c_uint,
@@ -294,10 +460,10 @@ test "layout matches C probe (probe_layout.c)" {
     try t.expectEqual(@as(usize, 8), @offsetOf(RowRange, "data"));
 
     try t.expectEqual(@as(usize, 16), @sizeOf(Damage));
-        try t.expectEqual(@as(usize, 88), @sizeOf(VtSubparams));
+    try t.expectEqual(@as(usize, 88), @sizeOf(VtSubparams));
     try t.expectEqual(@as(usize, 96), @sizeOf(VtParam));
     try t.expectEqual(@as(usize, 1792), @sizeOf(Vt));
-try t.expectEqual(@as(usize, 32), @sizeOf(DamageNode));
+    try t.expectEqual(@as(usize, 32), @sizeOf(DamageNode));
 }
 
 pub const Terminal = extern struct {
@@ -319,4 +485,106 @@ pub const Terminal = extern struct {
     slave: c_int,
     ptmx: c_int,
     vt: Vt,
+    grid: ?*Grid,
+    normal: Grid,
+    alt: Grid,
+    cols: c_int,
+    rows: c_int,
+    scroll_region: ScrollRegion,
+    charsets: Charsets,
+    saved_charsets: Charsets,
+    auto_margin: bool,
+    insert_mode: bool,
+    reverse: bool,
+    hide_cursor: bool,
+    reverse_wrap: bool,
+    bracketed_paste: bool,
+    focus_events: bool,
+    visibility_reports: bool,
+    alt_scrolling: bool,
+    modify_other_keys_2: bool,
+    origin: CursorOrigin,
+    cursor_keys_mode: CursorKeys,
+    keypad_keys_mode: KeypadKeys,
+    mouse_tracking: MouseTracking,
+    mouse_reporting: MouseReporting,
+    mouse_user_cursor: ?[*:0]u8,
+    tab_stops: TllInt,
+    composed_count: usize,
+    composed: ?*Composed,
+    custom_glyphs: extern struct {
+        box_drawing: ?*anyopaque,
+        braille: ?*anyopaque,
+        octants: ?*anyopaque,
+        legacy: ?*anyopaque,
+    },
+    is_sending_paste_data: bool,
+    ptmx_buffers: TllInt,
+    ptmx_paste_buffers: TllInt,
+    meta: Meta,
+    num_lock_modifier: bool,
+    bell_action_enabled: bool,
+    report_theme_changes: bool,
+    xtsave: u32,
+    window_title_has_been_set: bool,
+    window_title: ?[*:0]u8,
+    window_title_stack: TllInt,
+    app_id: ?[*:0]u8,
+    flash: Flash,
+    blink: Blink,
+    scale: f32,
+    scale_before_unmap: f32,
+    width: c_int,
+    height: c_int,
+    stashed_width: c_int,
+    stashed_height: c_int,
+    margins: Margins,
+    cell_width: c_int,
+    cell_height: c_int,
+    colors: Colors,
+    color_stack: extern struct {
+        stack: ?*Colors,
+        idx: usize,
+        size: usize,
+    },
+    cursor_style: CursorStyle,
+    cursor_blink: extern struct {
+        decset: bool,
+        deccsusr: bool,
+        fd: c_int,
+        state: c_int,
+    },
+    selection: extern struct {
+        kind: SelectionKind,
+        direction: SelectionDirection,
+        coords: Range,
+        ongoing: bool,
+        spaces_only: bool,
+        pivot: Range,
+        auto_scroll: extern struct {
+            fd: c_int,
+            col: c_int,
+            direction: SelectionScrollDirection,
+        },
+    },
+    is_searching: bool,
+    search: extern struct {
+        buf: ?[*]u32,
+        len: usize,
+        sz: usize,
+        cursor: usize,
+        original_view: c_int,
+        view_followed_offset: bool,
+        match: Coord,
+        match_len: usize,
+        last: extern struct {
+            buf: ?[*]u32,
+            len: usize,
+        },
+    },
+    wl: ?*anyopaque,
+    window: ?*anyopaque,
+    visual_focus: bool,
+    kbd_focus: bool,
+    active_surface: TermSurface,
 };

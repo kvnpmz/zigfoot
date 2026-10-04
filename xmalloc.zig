@@ -71,7 +71,7 @@ export fn xc32dup(str: ?[*:0]const u32) ?[*:0]u32 {
     while (s[len] != 0) : (len += 1) {}
     const dup = xmalloc((len + 1) * @sizeOf(u32)) orelse return null;
     const dest: [*:0]u32 = @ptrCast(@alignCast(dup));
-    @memcpy(dest[0..len + 1], s[0..len + 1]);
+    @memcpy(dest[0 .. len + 1], s[0 .. len + 1]);
     return dest;
 }
 
@@ -84,4 +84,3 @@ export fn xvasprintf(format: [*:0]const u8, ap: ?*anyopaque) ?[*:0]u8 {
     }
     return ret;
 }
-

@@ -67,16 +67,13 @@ export fn spawn_expand_template(
 
                 if (!valid) {
                     append(&buf, &len, arg + dollar, brace + 1 - dollar);
-                    log_msg(log_class_warning, log_module, @src().file, @src().line,
-                            "notify: unrecognized template: %.*s",
-                            @as(c_int, @intCast(brace + 1 - dollar)), arg + dollar);
+                    log_msg(log_class_warning, log_module, @src().file, @src().line, "notify: unrecognized template: %.*s", @as(c_int, @intCast(brace + 1 - dollar)), arg + dollar);
                 }
 
                 last_end = brace + 1;
                 search_from = brace + 1;
             } else {
-                log_msg(log_class_warning, log_module, @src().file, @src().line,
-                        "notify: unclosed template: %s", arg_z + dollar);
+                log_msg(log_class_warning, log_module, @src().file, @src().line, "notify: unclosed template: %s", arg_z + dollar);
                 last_end = dollar;
                 break;
             }

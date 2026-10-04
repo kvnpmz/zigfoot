@@ -47,8 +47,8 @@ export fn cursor_shape_to_string(shape: c_int) [*c]const [*c]const u8 {
 
 export fn cursor_shape_to_server_shape(shape: c_int) c_int {
     return switch (shape) {
-        3 => 1,  // DEFAULT
-        4 => 9,  // TEXT
+        3 => 1, // DEFAULT
+        4 => 9, // TEXT
         5 => 21, // NW_RESIZE
         6 => 20, // NE_RESIZE
         7 => 24, // SW_RESIZE
@@ -75,22 +75,22 @@ export fn cursor_string_to_server_shape(xcursor: [*c]const u8, bound_version: c_
         names: []const [*c]const u8,
     }{
         .{ .shape = 1, .version = 0, .names = &.{ "default", "left_ptr" } },
-        .{ .shape = 2, .version = 0, .names = &.{ "context-menu" } },
+        .{ .shape = 2, .version = 0, .names = &.{"context-menu"} },
         .{ .shape = 3, .version = 0, .names = &.{ "help", "question_arrow" } },
         .{ .shape = 4, .version = 0, .names = &.{ "pointer", "hand" } },
         .{ .shape = 5, .version = 0, .names = &.{ "progress", "left_ptr_watch" } },
         .{ .shape = 6, .version = 0, .names = &.{ "wait", "watch" } },
-        .{ .shape = 7, .version = 0, .names = &.{ "cell" } },
+        .{ .shape = 7, .version = 0, .names = &.{"cell"} },
         .{ .shape = 8, .version = 0, .names = &.{ "crosshair", "cross" } },
         .{ .shape = 9, .version = 0, .names = &.{ "text", "xterm" } },
-        .{ .shape = 10, .version = 0, .names = &.{ "vertical-text" } },
+        .{ .shape = 10, .version = 0, .names = &.{"vertical-text"} },
         .{ .shape = 11, .version = 0, .names = &.{ "alias", "dnd-link" } },
         .{ .shape = 12, .version = 0, .names = &.{ "copy", "dnd-copy" } },
         .{ .shape = 13, .version = 0, .names = &.{ "move", "dnd-move" } },
         .{ .shape = 14, .version = 0, .names = &.{ "no-drop", "dnd-no-drop" } },
         .{ .shape = 15, .version = 0, .names = &.{ "not-allowed", "crossed_circle" } },
         .{ .shape = 16, .version = 0, .names = &.{ "grab", "hand1" } },
-        .{ .shape = 17, .version = 0, .names = &.{ "grabbing" } },
+        .{ .shape = 17, .version = 0, .names = &.{"grabbing"} },
         .{ .shape = 18, .version = 0, .names = &.{ "e-resize", "right_side" } },
         .{ .shape = 19, .version = 0, .names = &.{ "n-resize", "top_side" } },
         .{ .shape = 20, .version = 0, .names = &.{ "ne-resize", "top_right_corner" } },
@@ -106,10 +106,10 @@ export fn cursor_string_to_server_shape(xcursor: [*c]const u8, bound_version: c_
         .{ .shape = 30, .version = 0, .names = &.{ "col-resize", "sb_h_double_arrow" } },
         .{ .shape = 31, .version = 0, .names = &.{ "row-resize", "sb_v_double_arrow" } },
         .{ .shape = 32, .version = 0, .names = &.{ "all-scroll", "fleur" } },
-        .{ .shape = 33, .version = 0, .names = &.{ "zoom-in" } },
-        .{ .shape = 34, .version = 0, .names = &.{ "zoom-out" } },
-        .{ .shape = 35, .version = 2, .names = &.{ "dnd-ask" } },
-        .{ .shape = 36, .version = 2, .names = &.{ "all-resize" } },
+        .{ .shape = 33, .version = 0, .names = &.{"zoom-in"} },
+        .{ .shape = 34, .version = 0, .names = &.{"zoom-out"} },
+        .{ .shape = 35, .version = 2, .names = &.{"dnd-ask"} },
+        .{ .shape = 36, .version = 2, .names = &.{"all-resize"} },
     };
 
     for (names) |entry| {
