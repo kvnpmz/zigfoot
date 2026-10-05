@@ -2486,55 +2486,6 @@ term_font_baseline(const struct terminal *term)
 }
 
 void
-term_damage_rows(struct terminal *term, int start, int end)
-{
-    xassert(start <= end);
-    for (int r = start; r <= end; r++) {
-        struct row *row = grid_row(term->grid, r);
-        row->dirty = true;
-        for (int c = 0; c < term->grid->num_cols; c++)
-            row->cells[c].attrs.clean = 0;
-    }
-}
-
-void
-term_damage_rows_in_view(struct terminal *term, int start, int end)
-{
-    xassert(start <= end);
-    for (int r = start; r <= end; r++) {
-        struct row *row = grid_row_in_view(term->grid, r);
-        row->dirty = true;
-        for (int c = 0; c < term->grid->num_cols; c++)
-            row->cells[c].attrs.clean = 0;
-    }
-}
-
-void
-term_damage_all(struct terminal *term)
-{
-    term_damage_rows(term, 0, term->rows - 1);
-}
-
-void
-term_damage_view(struct terminal *term)
-{
-    term_damage_rows_in_view(term, 0, term->rows - 1);
-}
-
-void
-term_damage_cursor(struct terminal *term)
-{
-    term->grid->cur_row->cells[term->grid->cursor.point.col].attrs.clean = 0;
-    term->grid->cur_row->dirty = true;
-}
-
-void
-term_damage_margins(struct terminal *term)
-{
-    term->render.margins = true;
-}
-
-void
 term_damage_color(struct terminal *term, enum color_source src, int idx)
 {
     xassert(src == COLOR_DEFAULT || src == COLOR_BASE256);

@@ -466,6 +466,104 @@ test "layout matches C probe (probe_layout.c)" {
     try t.expectEqual(@as(usize, 32), @sizeOf(DamageNode));
 }
 
+pub const Render = extern struct {
+    chains: extern struct {
+        grid: ?*anyopaque,
+        search: ?*anyopaque,
+        scrollback_indicator: ?*anyopaque,
+        render_timer: ?*anyopaque,
+        url: ?*anyopaque,
+        csd: ?*anyopaque,
+        overlay: ?*anyopaque,
+    },
+    refresh: extern struct {
+        grid: bool,
+        csd: bool,
+        search: bool,
+        urls: bool,
+    },
+    pending: extern struct {
+        grid: bool,
+        csd: bool,
+        search: bool,
+        urls: bool,
+    },
+    margins: bool,
+    urgency: bool,
+    _pad0: [6]u8 = undefined,
+
+    title: extern struct {
+        last_update: [16]u8,
+        timer_fd: c_int,
+        _pad0: [4]u8 = undefined,
+    },
+    icon: extern struct {
+        last_update: [16]u8,
+        timer_fd: c_int,
+        _pad0: [4]u8 = undefined,
+    },
+    app_id: extern struct {
+        last_update: [16]u8,
+        timer_fd: c_int,
+        _pad0: [4]u8 = undefined,
+    },
+
+    scrollback_lines: u32,
+    app_sync_updates: extern struct {
+        enabled: bool,
+        _pad0: [3]u8 = undefined,
+        timer_fd: c_int,
+    },
+
+    workers: extern struct {
+        count: u16,
+        _pad0: [6]u8 = undefined,
+        start: [32]u8,
+        done: [32]u8,
+        lock: [40]u8,
+        queue: TllInt,
+        threads: ?*anyopaque,
+        buf: ?*anyopaque,
+        preapplied_damage: extern struct {
+            lock: [40]u8,
+            cond: [48]u8,
+            buf: ?*anyopaque,
+            start: [16]u8,
+            stop: [16]u8,
+        },
+    },
+
+    last_cursor: extern struct {
+        row: ?*Row,
+        col: c_int,
+        hidden: bool,
+        _pad0: [3]u8 = undefined,
+    },
+    last_buf: ?*anyopaque,
+    frames_since_last_immediate_release: usize,
+    preapply_last_frame_damage: bool,
+    _pad1: [3]u8 = undefined,
+    last_overlay_style: c_int,
+    last_overlay_buf: ?*anyopaque,
+    last_overlay_clip: [24]u8,
+    search_glyph_offset: usize,
+    input_time: [16]u8,
+};
+
+test "Render layout matches C probe" {
+    const t = std.testing;
+
+    try t.expectEqual(@as(usize, 536), @sizeOf(Render));
+    try t.expectEqual(@as(usize, 64), @offsetOf(Render, "margins"));
+
+    try t.expectEqual(@as(usize, 3872), @offsetOf(Terminal, "render"));
+    try t.expectEqual(@as(usize, 4408), @sizeOf(Terminal));
+    try t.expectEqual(@as(usize, 160), @offsetOf(Render, "workers"));
+    try t.expectEqual(@as(usize, 440), @offsetOf(Render, "last_cursor"));
+    try t.expectEqual(@as(usize, 512), @offsetOf(Render, "search_glyph_offset"));
+    try t.expectEqual(@as(usize, 520), @offsetOf(Render, "input_time"));
+}
+
 pub const Terminal = extern struct {
     fdm: ?*anyopaque,
     reaper: ?*anyopaque,
@@ -512,6 +610,7 @@ pub const Terminal = extern struct {
     tab_stops: TllInt,
     composed_count: usize,
     composed: ?*Composed,
+    _font_state: [104]u8 = undefined,
     custom_glyphs: extern struct {
         box_drawing: ?*anyopaque,
         braille: ?*anyopaque,
@@ -525,7 +624,7 @@ pub const Terminal = extern struct {
     num_lock_modifier: bool,
     bell_action_enabled: bool,
     report_theme_changes: bool,
-    xtsave: u32,
+    xtsave: [4]u8,
     window_title_has_been_set: bool,
     window_title: ?[*:0]u8,
     window_title_stack: TllInt,
@@ -568,6 +667,7 @@ pub const Terminal = extern struct {
         },
     },
     is_searching: bool,
+    _search_pad: [15]u8 = undefined,
     search: extern struct {
         buf: ?[*]u32,
         len: usize,
@@ -587,4 +687,5 @@ pub const Terminal = extern struct {
     visual_focus: bool,
     kbd_focus: bool,
     active_surface: TermSurface,
+    render: Render,
 };

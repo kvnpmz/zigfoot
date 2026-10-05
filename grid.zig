@@ -116,7 +116,7 @@ export fn rowFree(maybe_row: ?*types.Row) void {
     allocator.destroy(r);
 }
 
-export fn row(grid: *types.Grid, row_no: c_int) *types.Row {
+pub export fn row(grid: *types.Grid, row_no: c_int) *types.Row {
     const real_row = rowAbsolute(grid, row_no);
     return grid.rows.?[@intCast(real_row)].?;
 }
@@ -130,7 +130,7 @@ export fn rowAndAlloc(grid: *types.Grid, row_no: c_int) *types.Row {
     return grid.rows.?[@intCast(real_row)].?;
 }
 
-export fn rowInView(grid: *types.Grid, row_no: c_int) *types.Row {
+pub export fn rowInView(grid: *types.Grid, row_no: c_int) *types.Row {
     const real_row = rowAbsoluteInView(grid, row_no);
     return grid.rows.?[@intCast(real_row)].?;
 }
