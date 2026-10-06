@@ -2485,123 +2485,6 @@ term_font_baseline(const struct terminal *term)
     return term->font_y_ofs + line_height - glyph_top_y - font->descent;
 }
 
-void
-term_damage_color(struct terminal *term, enum color_source src, int idx)
-{
-    xassert(src == COLOR_DEFAULT || src == COLOR_BASE256);
-
-    for (int r = 0; r < term->rows; r++) {
-        struct row *row = grid_row_in_view(term->grid, r);
-        struct cell *cell = &row->cells[0];
-        const struct cell *end = &row->cells[term->cols];
-
-        for (; cell < end; cell++) {
-            bool dirty = false;
-
-            switch (cell->attrs.fg_src) {
-            case COLOR_BASE16:
-            case COLOR_BASE256:
-                if (src == COLOR_BASE256 && cell->attrs.fg == idx)
-                    dirty = true;
-                break;
-
-            case COLOR_DEFAULT:
-                if (src == COLOR_DEFAULT) {
-                    /* Doesn't matter whether we've updated the
-                       default foreground, or background, we still
-                       want to dirty this cell, to be sure we handle
-                       all cases of color inversion/reversal */
-                    dirty = true;
-                }
-                break;
-
-            case COLOR_RGB:
-                /* Not affected */
-                break;
-            }
-
-            switch (cell->attrs.bg_src) {
-            case COLOR_BASE16:
-            case COLOR_BASE256:
-                if (src == COLOR_BASE256 && cell->attrs.bg == idx)
-                    dirty = true;
-                break;
-
-            case COLOR_DEFAULT:
-                if (src == COLOR_DEFAULT) {
-                    /* Doesn't matter whether we've updated the
-                       default foreground, or background, we still
-                       want to dirty this cell, to be sure we handle
-                       all cases of color inversion/reversal */
-                    dirty = true;
-                }
-                break;
-
-            case COLOR_RGB:
-                /* Not affected */
-                break;
-            }
-
-            if (dirty) {
-                cell->attrs.clean = 0;
-                row->dirty = true;
-            }
-        }
-
-        /* Colored underlines */
-        if (row->extra != NULL) {
-            const struct row_ranges *underlines = &row->extra->underline_ranges;
-
-            for (int i = 0; i < underlines->count; i++) {
-                const struct row_range *range = &underlines->v[i];
-
-                /* Underline colors are either default, or
-                   BASE256/RGB, but never BASE16 */
-                xassert(range->underline.color_src == COLOR_DEFAULT ||
-                        range->underline.color_src == COLOR_BASE256 ||
-                        range->underline.color_src == COLOR_RGB);
-
-                if (range->underline.color_src == src) {
-                    struct cell *c = &row->cells[range->start];
-                    const struct cell *e = &row->cells[range->end + 1];
-
-                    for (; c < e; c++)
-                        c->attrs.clean = 0;
-
-                    row->dirty = true;
-                }
-            }
-        }
-    }
-}
-
-void
-term_damage_scroll(struct terminal *term, enum damage_type damage_type,
-                   struct scroll_region region, int lines)
-{
-    if (likely(tll_length(term->grid->scroll_damage) > 0)) {
-        struct damage *dmg = &tll_back(term->grid->scroll_damage);
-
-        if (likely(
-                dmg->type == damage_type &&
-                dmg->region.start == region.start &&
-                dmg->region.end == region.end))
-        {
-            /* Make sure we don't overflow... */
-            int new_line_count = (int)dmg->lines + lines;
-            if (likely(new_line_count <= UINT16_MAX)) {
-                dmg->lines = new_line_count;
-                return;
-            }
-        }
-    }
-    struct damage dmg = {
-        .type = damage_type,
-        .region = region,
-        .lines = lines,
-    };
-    tll_push_back(term->grid->scroll_damage, dmg);
-}
 
 void
 term_erase(struct terminal *term, int start_row, int start_col,
@@ -2861,78 +2744,6 @@ term_row_rel_to_abs(const struct terminal *term, int row)
     return -1;
 }
 
-void
-term_cursor_to(struct terminal *term, int row, int col)
-{
-    xassert(row < term->rows);
-    xassert(col < term->cols);
-
-    term->grid->cursor.lcf = false;
-
-    term->grid->cursor.point.col = col;
-    term->grid->cursor.point.row = row;
-
-    term_reset_grapheme_state(term);
-
-    term->grid->cur_row = grid_row(term->grid, row);
-}
-
-void
-term_cursor_home(struct terminal *term)
-{
-    term_cursor_to(term, term_row_rel_to_abs(term, 0), 0);
-}
-
-void
-term_cursor_col(struct terminal *term, int col)
-{
-    xassert(col < term->cols);
-
-    term->grid->cursor.lcf = false;
-    term->grid->cursor.point.col = col;
-    term_reset_grapheme_state(term);
-}
-
-void
-term_cursor_left(struct terminal *term, int count)
-{
-    int move_amount = min(term->grid->cursor.point.col, count);
-    term->grid->cursor.point.col -= move_amount;
-    xassert(term->grid->cursor.point.col >= 0);
-    term->grid->cursor.lcf = false;
-    term_reset_grapheme_state(term);
-}
-
-void
-term_cursor_right(struct terminal *term, int count)
-{
-    int move_amount = min(term->cols - term->grid->cursor.point.col - 1, count);
-    term->grid->cursor.point.col += move_amount;
-    xassert(term->grid->cursor.point.col < term->cols);
-    term->grid->cursor.lcf = false;
-    term_reset_grapheme_state(term);
-}
-
-void
-term_cursor_up(struct terminal *term, int count)
-{
-    int top = term->origin == ORIGIN_ABSOLUTE ? 0 : term->scroll_region.start;
-    xassert(term->grid->cursor.point.row >= top);
-
-    int move_amount = min(term->grid->cursor.point.row - top, count);
-    term_cursor_to(term, term->grid->cursor.point.row - move_amount, term->grid->cursor.point.col);
-}
-
-void
-term_cursor_down(struct terminal *term, int count)
-{
-    int bottom = term->origin == ORIGIN_ABSOLUTE ? term->rows : term->scroll_region.end;
-    xassert(bottom >= term->grid->cursor.point.row);
-
-    int move_amount = min(bottom - term->grid->cursor.point.row - 1, count);
-    term_cursor_to(term, term->grid->cursor.point.row + move_amount, term->grid->cursor.point.col);
-}
-
 static bool
 cursor_blink_rearm_timer(struct terminal *term)
 {
@@ -3182,11 +2993,6 @@ term_scroll_reverse(struct terminal *term, int rows)
     term_scroll_reverse_partial(term, term->scroll_region, rows);
 }
 
-void
-term_carriage_return(struct terminal *term)
-{
-    term_cursor_left(term, term->grid->cursor.point.col);
-}
 
 void
 term_linefeed(struct terminal *term)
@@ -3210,62 +3016,9 @@ term_reverse_index(struct terminal *term)
         term_cursor_up(term, 1);
 }
 
-void
-term_reset_view(struct terminal *term)
-{
-    if (term->grid->view == term->grid->offset)
-        return;
 
-    term->grid->view = term->grid->offset;
-    term_damage_view(term);
-}
 
-void
-term_save_cursor(struct terminal *term)
-{
-    term->grid->saved_cursor = term->grid->cursor;
-    term->grid->saved_attrs = term->vt.attrs;
-    term->saved_charsets = term->charsets;
-}
 
-void
-term_restore_cursor(struct terminal *term, const struct cursor *cursor)
-{
-    int row = min(cursor->point.row, term->rows - 1);
-    int col = min(cursor->point.col, term->cols - 1);
-
-    term_cursor_to(term, row, col);
-    term->grid->cursor.lcf = cursor->lcf;
-
-    term->vt.attrs = term->grid->saved_attrs;
-    term->charsets = term->saved_charsets;
-
-    term->bits_affecting_ascii_printer.charset =
-        term->charsets.set[term->charsets.selected] != CHARSET_ASCII;
-    term_update_ascii_printer(term);
-}
-
-void
-term_visual_focus_in(struct terminal *term)
-{
-    if (term->visual_focus)
-        return;
-
-    term->visual_focus = true;
-    term_cursor_blink_update(term);
-    render_refresh_csd(term);
-}
-
-void
-term_visual_focus_out(struct terminal *term)
-{
-    if (!term->visual_focus)
-        return;
-
-    term->visual_focus = false;
-    term_cursor_blink_update(term);
-    render_refresh_csd(term);
-}
 
 void
 term_send_visibility_report(struct terminal *term)
@@ -3274,6 +3027,7 @@ term_send_visibility_report(struct terminal *term)
         term,
         !term->window->is_suspended ? "\033[?999;1n" : "\033[?999;2n", 9);
 }
+
 
 void
 term_kbd_focus_in(struct terminal *term)
