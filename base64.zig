@@ -1,8 +1,8 @@
 const std = @import("std");
 
-extern fn strlen(s: [*c]const u8) usize;
-extern fn malloc(size: usize) ?*anyopaque;
-extern fn free(ptr: ?*anyopaque) void;
+extern fn strlen(s: [*c]const u8) callconv(.c) usize;
+extern fn malloc(size: usize) callconv(.c) ?*anyopaque;
+extern fn free(ptr: ?*anyopaque) callconv(.c) void;
 extern fn __errno_location() *c_int;
 
 fn setErrno(err: c_int) void {

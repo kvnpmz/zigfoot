@@ -1,6 +1,6 @@
 const std = @import("std");
 
-extern fn vsnprintf(str: [*c]u8, size: usize, format: [*c]const u8, ap: *std.builtin.VaList) c_int;
+extern fn vsnprintf(str: [*c]u8, size: usize, format: [*c]const u8, ap: *anyopaque) callconv(.c) c_int;
 
 fn fatalError(msg: []const u8) noreturn {
     std.debug.print("xsnprintf fatal error: {s}\n", .{msg});

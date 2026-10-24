@@ -1,8 +1,8 @@
 const std = @import("std");
 
-extern fn iswgraph(wc: u32) c_int;
-extern fn wcschr(str: [*c]const u32, wc: u32) [*c]u32;
-extern fn ambstoc32(src: [*c]const u8) [*c]u32;
+extern fn iswgraph(wc: u32) callconv(.c) c_int;
+extern fn wcschr(str: [*c]const u32, wc: u32) callconv(.c) [*c]u32;
+extern fn ambstoc32(src: [*c]const u8) callconv(.c) [*c]u32;
 extern fn iswprint(wc: u32) c_int;
 extern fn free(ptr: ?*anyopaque) void;
 

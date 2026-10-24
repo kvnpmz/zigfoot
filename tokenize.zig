@@ -1,8 +1,8 @@
-extern fn log_msg(log_class: c_int, module: [*:0]const u8, file: [*:0]const u8, lineno: c_int, fmt: [*:0]const u8, ...) void;
-extern fn xstrndup(str: [*c]const u8, n: usize) [*c]u8;
-extern fn realloc(ptr: ?*anyopaque, size: usize) ?*anyopaque;
-extern fn free(ptr: ?*anyopaque) void;
-extern fn strlen(s: [*c]const u8) usize;
+extern fn log_msg(log_class: c_int, module: [*:0]const u8, file: [*:0]const u8, lineno: c_int, fmt: [*:0]const u8, ...) callconv(.c) void;
+extern fn xstrndup(str: [*c]const u8, n: usize) callconv(.c) [*c]u8;
+extern fn realloc(ptr: ?*anyopaque, size: usize) callconv(.c) ?*anyopaque;
+extern fn free(ptr: ?*anyopaque) callconv(.c) void;
+extern fn strlen(s: [*c]const u8) callconv(.c) usize;
 extern fn strchr(s: [*c]const u8, c: c_int) [*c]u8;
 extern fn memmove(dst: ?*anyopaque, src: ?*const anyopaque, n: usize) ?*anyopaque;
 

@@ -365,7 +365,7 @@ grid_obj = custom_target(
 
 
 terminal_obj = custom_target(
-  'terminal_obj',
+  '',
   input: 'terminal.zig',
   depend_files: files('terminal_types.zig'),
   output: 'terminal.o',

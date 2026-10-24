@@ -1,7 +1,7 @@
 const std = @import("std");
 
-extern fn write(fd: c_int, buf: [*]const u8, count: usize) isize;
-extern fn __errno_location() *c_int;
+extern fn write(fd: c_int, buf: [*]const u8, count: usize) callconv(.c) isize;
+extern fn __errno_location() callconv(.c) *c_int;
 
 const EAGAIN: c_int = 11;
 const EWOULDBLOCK: c_int = 11;

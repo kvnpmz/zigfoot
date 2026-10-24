@@ -1,6 +1,6 @@
 const std = @import("std");
 
-extern fn strcmp(a: [*c]const u8, b: [*c]const u8) c_int;
+extern fn strcmp(a: [*c]const u8, b: [*c]const u8) callconv(.c) c_int;
 
 const CursorShape = enum(c_int) {
     none = 0,

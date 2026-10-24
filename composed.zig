@@ -1,6 +1,6 @@
 const std = @import("std");
 
-extern fn free(ptr: ?*anyopaque) void;
+extern fn free(ptr: ?*anyopaque) callconv(.c) void;
 
 pub const CELL_COMB_CHARS_LO: u32 = 0x0020_0000;
 pub const CELL_COMB_CHARS_HI: u32 = CELL_COMB_CHARS_LO + 0x3fff_ffff;
