@@ -1704,32 +1704,4 @@ osc_dispatch(struct terminal *term)
     }
 }
 
-bool
-osc_ensure_size(struct terminal *term, size_t required_size)
-{
-    if (likely(required_size <= term->vt.osc.size))
-        return true;
 
-    const size_t pow2_max = ~(SIZE_MAX >> 1);
-    if (unlikely(required_size > pow2_max)) {
-        LOG_ERR("required OSC buffer size (%zu) exceeds limit (%zu)",
-            required_size, pow2_max);
-        return false;
-    }
-
-    size_t new_size = max(term->vt.osc.size, 4096);
-    while (new_size < required_size) {
-        new_size <<= 1;
-    }
-
-    uint8_t *new_data = realloc(term->vt.osc.data, new_size);
-    if (new_data == NULL) {
-        LOG_ERRNO("failed to increase size of OSC buffer");
-        return false;
-    }
-
-    LOG_DBG("resized OSC buffer: %zu", new_size);
-    term->vt.osc.data = new_data;
-    term->vt.osc.size = new_size;
-    return true;
-}

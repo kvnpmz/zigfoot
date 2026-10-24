@@ -389,6 +389,14 @@ dcs_obj = custom_target(
   command: [python, files('compile_zig.py'), '@INPUT@', '@OUTPUT@']
 )
 
+osc_obj = custom_target(
+  'osc_obj',
+  input: 'osc.zig',
+  depend_files: files('terminal_types.zig'),
+  output: 'osc.o',
+  command: [python, files('compile_zig.py'), '@INPUT@', '@OUTPUT@']
+)
+
 xmalloc_obj = custom_target(
   'xmalloc_obj',
   input: 'xmalloc.zig',
@@ -428,7 +436,7 @@ vtlib = static_library(
   dcs_obj, 'dcs.h',
   'dcs-shim.c',
   'macros.h',
-  'osc.c', 'osc.h',
+  'osc.c', osc_obj, 'osc.h',
   'sixel.c', 'sixel.h',
   'vt.c', 'vt.h',
   builtin_terminfo, srgb_funcs,
