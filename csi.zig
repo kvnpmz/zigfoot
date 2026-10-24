@@ -647,3 +647,39 @@ export fn decrst(term: *types.Terminal, param: c_uint) callconv(.c) void {
     decset_decrst(term, param, false);
 }
 
+// ─── Chunk D: params_to_rectangular_area ──────────────────────────
+// Parses 4 CSI params (top;left;bottom;right) into absolute coordinates.
+// Returns false if the rectangle is degenerate.
+
+extern fn term_row_rel_to_abs(term: *const types.Terminal, row: c_int) callconv(.c) c_int;
+
+// Inline vt_param_get (was static inline in vt.h)
+fn vtParamGet(term: *const types.Terminal, idx: usize, default_value: c_int) c_int {
+    const value_mask: c_uint = 0x7fff_ffff;
+    if (@as(usize, term.vt.params.idx) > idx) {
+        const value: c_uint = term.vt.params.v[idx].value & value_mask;
+        return if (value != 0) @intCast(value) else default_value;
+    }
+    return default_value;
+}
+
+export fn params_to_rectangular_area(
+    term: *const types.Terminal,
+    first_idx: c_int,
+    top: *c_int,
+    left: *c_int,
+    bottom: *c_int,
+    right: *c_int,
+) callconv(.c) bool {
+    const rel_top: c_int = vtParamGet(term, @intCast(first_idx + 0), 1) - 1;
+    left.* = @min(vtParamGet(term, @intCast(first_idx + 1), 1) - 1, term.cols - 1);
+    const rel_bottom: c_int = vtParamGet(term, @intCast(first_idx + 2), term.rows) - 1;
+    right.* = @min(vtParamGet(term, @intCast(first_idx + 3), term.cols) - 1, term.cols - 1);
+
+    if (rel_top > rel_bottom or left.* > right.*) return false;
+
+    top.* = term_row_rel_to_abs(term, rel_top);
+    bottom.* = term_row_rel_to_abs(term, rel_bottom);
+    return true;
+}
+
