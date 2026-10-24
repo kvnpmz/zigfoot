@@ -441,6 +441,7 @@ vtlib = static_library(
   composed_obj, 'composed.h',
   cursor_shape_obj, 'cursor-shape.h',
   csi_obj, 'csi.h',
+  'csi-shim.c',
   dcs_obj, 'dcs.h',
   'dcs-shim.c',
   'macros.h',
