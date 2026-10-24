@@ -29,6 +29,10 @@
 void sgr_reset(struct terminal *term);
 void csi_sgr(struct terminal *term);
 
+/* Ported to csi.zig (chunk B) */
+void xtsave(struct terminal *term, unsigned param);
+void xtrestore(struct terminal *term, unsigned param);
+
 #define UNHANDLED()        LOG_DBG("unhandled: %s", csi_as_string(term, final, -1))
 #define UNHANDLED_SGR(idx) LOG_DBG("unhandled: %s", csi_as_string(term, 'm', idx))
 
@@ -66,7 +70,7 @@ csi_as_string(struct terminal *term, uint8_t final, int idx)
     return msg;
 }
 
-static void
+void
 decset_decrst(struct terminal *term, unsigned param, bool enable)
 {
 #if defined(_DEBUG)
@@ -426,101 +430,6 @@ decrqm(const struct terminal *term, unsigned param)
     }
 
     return DECRPM_NOT_RECOGNIZED;
-}
-
-static void
-xtsave(struct terminal *term, unsigned param)
-{
-    switch (param) {
-    case 1: term->xtsave.application_cursor_keys = term->cursor_keys_mode == CURSOR_KEYS_APPLICATION; break;
-    case 5: term->xtsave.reverse = term->reverse; break;
-    case 6: term->xtsave.origin = term->origin; break;
-    case 7: term->xtsave.auto_margin = term->auto_margin; break;
-    case 9: /* term->xtsave.mouse_x10 = term->mouse_tracking == MOUSE_X10; */ break;
-    case 12: term->xtsave.cursor_blink = term->cursor_blink.decset; break;
-    case 25: term->xtsave.show_cursor = !term->hide_cursor; break;
-    case 45: term->xtsave.reverse_wrap = term->reverse_wrap; break;
-    case 47: term->xtsave.alt_screen = term->grid == &term->alt; break;
-    case 66: term->xtsave.application_keypad_keys = term->keypad_keys_mode == KEYPAD_APPLICATION; break;
-    case 67: break;
-    case 80: term->xtsave.sixel_display_mode = !term->sixel.scrolling; break;
-    case 1000: term->xtsave.mouse_click = term->mouse_tracking == MOUSE_CLICK; break;
-    case 1001: break;
-    case 1002: term->xtsave.mouse_drag = term->mouse_tracking == MOUSE_DRAG; break;
-    case 1003: term->xtsave.mouse_motion = term->mouse_tracking == MOUSE_MOTION; break;
-    case 1004: term->xtsave.focus_events = term->focus_events; break;
-    case 1005: /* term->xtsave.mouse_utf8 = term->mouse_reporting == MOUSE_UTF8; */ break;
-    case 1006: term->xtsave.mouse_sgr = term->mouse_reporting == MOUSE_SGR; break;
-    case 1007: term->xtsave.alt_scrolling = term->alt_scrolling; break;
-    case 1015: term->xtsave.mouse_urxvt = term->mouse_reporting == MOUSE_URXVT; break;
-    case 1016: term->xtsave.mouse_sgr_pixels = term->mouse_reporting == MOUSE_SGR_PIXELS; break;
-    case 1034: term->xtsave.meta_eight_bit = term->meta.eight_bit; break;
-    case 1035: term->xtsave.num_lock_modifier = term->num_lock_modifier; break;
-    case 1036: term->xtsave.meta_esc_prefix = term->meta.esc_prefix; break;
-    case 1042: term->xtsave.bell_action_enabled = term->bell_action_enabled; break;
-    case 1047: term->xtsave.alt_screen = term->grid == &term->alt; break;
-    case 1048: term_save_cursor(term); break;
-    case 1049: term->xtsave.alt_screen = term->grid == &term->alt; break;
-    case 1070: term->xtsave.sixel_private_palette = term->sixel.use_private_palette; break;
-    case 2004: term->xtsave.bracketed_paste = term->bracketed_paste; break;
-    case 2026: term->xtsave.app_sync_updates = term->render.app_sync_updates.enabled; break;
-    case 2027: term->xtsave.grapheme_shaping = term->grapheme_shaping; break;
-    case 2031: term->xtsave.report_theme_changes = term->report_theme_changes; break;
-    case 2033: term->xtsave.visibility_reports = term->visibility_reports; break;
-    case 2048: term->xtsave.size_notifications = term->size_notifications; break;
-    case 8452: term->xtsave.sixel_cursor_right_of_graphics = term->sixel.cursor_right_of_graphics; break;
-    case 737769: term->xtsave.ime = term_ime_is_enabled(term); break;
-    }
-}
-
-static void
-xtrestore(struct terminal *term, unsigned param)
-{
-    bool enable;
-    switch (param) {
-    case 1: enable = term->xtsave.application_cursor_keys; break;
-    case 5: enable = term->xtsave.reverse; break;
-    case 6: enable = term->xtsave.origin; break;
-    case 7: enable = term->xtsave.auto_margin; break;
-    case 9: /* enable = term->xtsave.mouse_x10; break; */ return;
-    case 12: enable = term->xtsave.cursor_blink; break;
-    case 25: enable = term->xtsave.show_cursor; break;
-    case 45: enable = term->xtsave.reverse_wrap; break;
-    case 47: enable = term->xtsave.alt_screen; break;
-    case 66: enable = term->xtsave.application_keypad_keys; break;
-    case 67: return;
-    case 80: enable = term->xtsave.sixel_display_mode; break;
-    case 1000: enable = term->xtsave.mouse_click; break;
-    case 1001: return;
-    case 1002: enable = term->xtsave.mouse_drag; break;
-    case 1003: enable = term->xtsave.mouse_motion; break;
-    case 1004: enable = term->xtsave.focus_events; break;
-    case 1005: /* enable = term->xtsave.mouse_utf8; break; */ return;
-    case 1006: enable = term->xtsave.mouse_sgr; break;
-    case 1007: enable = term->xtsave.alt_scrolling; break;
-    case 1015: enable = term->xtsave.mouse_urxvt; break;
-    case 1016: enable = term->xtsave.mouse_sgr_pixels; break;
-    case 1034: enable = term->xtsave.meta_eight_bit; break;
-    case 1035: enable = term->xtsave.num_lock_modifier; break;
-    case 1036: enable = term->xtsave.meta_esc_prefix; break;
-    case 1042: enable = term->xtsave.bell_action_enabled; break;
-    case 1047: enable = term->xtsave.alt_screen; break;
-    case 1048: enable = true; break;
-    case 1049: enable = term->xtsave.alt_screen; break;
-    case 1070: enable = term->xtsave.sixel_private_palette; break;
-    case 2004: enable = term->xtsave.bracketed_paste; break;
-    case 2026: enable = term->xtsave.app_sync_updates; break;
-    case 2027: enable = term->xtsave.grapheme_shaping; break;
-    case 2031: enable = term->xtsave.report_theme_changes; break;
-    case 2033: enable = term->xtsave.visibility_reports; break;
-    case 2048: enable = term->xtsave.size_notifications; break;
-    case 8452: enable = term->xtsave.sixel_cursor_right_of_graphics; break;
-    case 737769: enable = term->xtsave.ime; break;
-
-    default: return;
-    }
-
-    decset_decrst(term, param, enable);
 }
 
 static bool
