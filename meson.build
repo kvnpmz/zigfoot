@@ -437,6 +437,7 @@ vtlib = static_library(
   'dcs-shim.c',
   'macros.h',
   'osc.c', osc_obj, 'osc.h',
+  'osc-shim.c',
   'sixel.c', 'sixel.h',
   'vt.c', 'vt.h',
   builtin_terminfo, srgb_funcs,

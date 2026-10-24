@@ -21,6 +21,11 @@
 #include "xmalloc.h"
 #include "xsnprintf.h"
 
+/* Ported to osc.zig (chunk B) */
+void osc_flash(struct terminal *term);
+void osc_set_pwd(struct terminal *term, char *string);
+void osc_uri(struct terminal *term, char *string);
+
 #define UNHANDLED() LOG_DBG("unhandled: OSC: %.*s", (int)term->vt.osc.idx, term->vt.osc.data)
 
 static void
@@ -296,13 +301,6 @@ osc_selection(struct terminal *term, char *string)
         osc_to_clipboard(term, string, p);
 }
 
-static void
-osc_flash(struct terminal *term)
-{
-    /* Our own private - flash */
-    term_flash(term, 50);
-}
-
 static bool
 parse_legacy_color(const char *string, uint32_t *color, bool *_have_alpha,
                    uint16_t *_alpha)
@@ -451,88 +449,6 @@ parse_rgb(const char *string, uint32_t *color, bool *_have_alpha,
 
     *color = r << 16 | g << 8 | b;
     return true;
-}
-
-static void
-osc_set_pwd(struct terminal *term, char *string)
-{
-    LOG_DBG("PWD: URI: %s", string);
-
-    char *scheme, *host, *path;
-    if (!uri_parse(string, strlen(string), &scheme, NULL, NULL, &host, NULL, &path, NULL, NULL)) {
-        LOG_ERR("OSC7: invalid URI: %s", string);
-        return;
-    }
-
-    if (streq(scheme, "file") && hostname_is_localhost(host)) {
-        LOG_DBG("OSC7: pwd: %s", path);
-        free(term->cwd);
-        term->cwd = path;
-    } else
-        free(path);
-
-    free(scheme);
-    free(host);
-}
-
-static void
-osc_uri(struct terminal *term, char *string)
-{
-    /*
-     * \E]8;<params>;URI\e\\
-     *
-     * Params are key=value pairs, separated by ':'.
-     *
-     * The only defined key (as of 2020-05-31) is 'id', which is used
-     * to group split-up URIs:
-     *
-     * ╔═ file1 ════╗
-     * ║          ╔═ file2 ═══╗
-     * ║http://exa║Lorem ipsum║
-     * ║le.com    ║ dolor sit ║
-     * ║          ║amet, conse║
-     * ╚══════════║ctetur adip║
-     *            ╚═══════════╝
-     *
-     * This lets a terminal emulator highlight both parts at the same
-     * time (e.g. when hovering over one of the parts with the mouse).
-     */
-
-    char *params = string;
-    char *params_end = strchr(params, ';');
-    if (params_end == NULL)
-        return;
-
-    *params_end = '\0';
-    const char *uri = params_end + 1;
-    uint64_t id = (uint64_t)rand() << 32 | rand();
-
-    char *ctx = NULL;
-    for (const char *key_value = strtok_r(params, ":", &ctx);
-         key_value != NULL;
-         key_value = strtok_r(NULL, ":", &ctx))
-    {
-        const char *key = key_value;
-        char *operator = (char *)strchr(key_value, '=');
-
-        if (operator == NULL)
-            continue;
-        *operator = '\0';
-
-        const char *value = operator + 1;
-
-        if (streq(key, "id"))
-            id = sdbm_hash(value);
-    }
-
-
-    if (uri[0] == '\0') {
-        LOG_DBG("OSC-8: close");
-        term_osc8_close(term);
-    } else {
-        LOG_DBG("OSC-8: URL=%s, id=%" PRIu64, uri, id);
-        term_osc8_open(term, id, uri);
-    }
 }
 
 static void
