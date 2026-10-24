@@ -4,6 +4,10 @@
 #include "terminal.h"
 
 /* ── term->sixel.* accessors ─────────────────────────────────────── */
+/* Terminal.sixel is a ~30-field parser state struct that isn't yet
+ * ported to terminal_types.zig. Accessors expose only the fields the
+ * ported Zig code needs, and only through this file — the layout of
+ * `struct sixel` remains a C concern. */
 
 bool sixel_get_scrolling(struct terminal *t) {
     return t->sixel.scrolling;
@@ -21,22 +25,52 @@ unsigned sixel_get_palette_size(struct terminal *t) {
     return t->sixel.palette_size;
 }
 
+void sixel_set_palette_size(struct terminal *t, unsigned v) {
+    t->sixel.palette_size = v;
+}
+
 unsigned sixel_get_max_width(struct terminal *t) {
     return t->sixel.max_width;
+}
+
+void sixel_set_max_width(struct terminal *t, unsigned v) {
+    t->sixel.max_width = v;
 }
 
 unsigned sixel_get_max_height(struct terminal *t) {
     return t->sixel.max_height;
 }
 
-bool sixel_get_shared_palette(struct terminal *t) {
+void sixel_set_max_height(struct terminal *t, unsigned v) {
+    t->sixel.max_height = v;
+}
+
+/* Palette pointers. The C code does:
+ *     free(term->sixel.palette);
+ *     term->sixel.palette = NULL;
+ * so we expose both a getter (returning the raw pointer, which Zig
+ * passes to libc free) and a setter (usually called with NULL). */
+
+uint32_t *sixel_get_palette(struct terminal *t) {
+    return t->sixel.palette;
+}
+
+void sixel_set_palette(struct terminal *t, uint32_t *p) {
+    t->sixel.palette = p;
+}
+
+uint32_t *sixel_get_private_palette(struct terminal *t) {
+    return t->sixel.private_palette;
+}
+
+void sixel_set_private_palette(struct terminal *t, uint32_t *p) {
+    t->sixel.private_palette = p;
+}
+
+uint32_t *sixel_get_shared_palette(struct terminal *t) {
     return t->sixel.shared_palette;
 }
 
-unsigned sixel_get_image_width(struct terminal *t) {
-    return (unsigned)t->sixel.image.width;
-}
-
-unsigned sixel_get_image_height(struct terminal *t) {
-    return (unsigned)t->sixel.image.height;
+void sixel_set_shared_palette(struct terminal *t, uint32_t *p) {
+    t->sixel.shared_palette = p;
 }
