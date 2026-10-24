@@ -568,3 +568,283 @@ export fn osc_selection(term: *types.Terminal, string: [*:0]u8) callconv(.c) voi
     }
 }
 
+// ─── Chunk F: osc_dispatch ─────────────────────────────────────────
+
+extern fn isdigit(c: c_int) callconv(.c) c_int;
+extern fn strtok(s: ?[*:0]u8, delim: [*:0]const u8) callconv(.c) ?[*:0]u8;
+extern fn memcpy(dst: ?*anyopaque, src: ?*const anyopaque, n: usize) callconv(.c) ?*anyopaque;
+extern fn __errno_location() callconv(.c) *c_int;
+
+extern fn xsnprintf(buf: [*]u8, n: usize, fmt: [*:0]const u8, ...) callconv(.c) usize;
+extern fn term_set_window_title(term: *types.Terminal, title: [*:0]const u8) callconv(.c) void;
+extern fn term_set_app_id(term: *types.Terminal, app_id: [*:0]const u8) callconv(.c) void;
+extern fn term_set_user_mouse_cursor(term: *types.Terminal, cursor: [*:0]const u8) callconv(.c) void;
+extern fn term_damage_color(term: *types.Terminal, src: types.ColorSource, idx: u32) callconv(.c) void;
+extern fn term_damage_cursor(term: *types.Terminal) callconv(.c) void;
+extern fn term_damage_margins(term: *types.Terminal) callconv(.c) void;
+extern fn term_damage_view(term: *types.Terminal) callconv(.c) void;
+extern fn term_font_subpixel_changed(term: *types.Terminal) callconv(.c) void;
+
+extern fn wayl_win_alpha_changed(win: ?*anyopaque) callconv(.c) void;
+
+extern fn osc_notify(term: *types.Terminal, string: [*:0]u8) callconv(.c) void;
+extern fn kitty_notification(term: *types.Terminal, string: [*:0]u8) callconv(.c) void;
+extern fn kitty_text_size(term: *types.Terminal, string: [*:0]u8) callconv(.c) void;
+
+extern fn osc_theme_fg(term: *types.Terminal) callconv(.c) u32;
+extern fn osc_theme_bg(term: *types.Terminal) callconv(.c) u32;
+extern fn osc_theme_alpha(term: *types.Terminal) callconv(.c) u16;
+extern fn osc_theme_cursor_text(term: *types.Terminal) callconv(.c) u32;
+extern fn osc_theme_cursor_cursor(term: *types.Terminal) callconv(.c) u32;
+extern fn osc_theme_selection_bg(term: *types.Terminal) callconv(.c) u32;
+extern fn osc_theme_selection_fg(term: *types.Terminal) callconv(.c) u32;
+extern fn osc_theme_table_copy(term: *types.Terminal, out: *[256]u32) callconv(.c) void;
+extern fn osc_conf_colors_dark_use_custom_cursor(term: *types.Terminal) callconv(.c) bool;
+
+fn unhandled(term: *types.Terminal) void {
+    std.debug.print("osc: unhandled: OSC: {s}\n", .{term.vt.osc.data.?[0..term.vt.osc.idx]});
+}
+
+// Parse a leading integer from a C string (advancing through decimal digits).
+fn parseIdx(s_in: [*:0]const u8) struct { idx: u32, rest: [*:0]const u8 } {
+    var idx: u32 = 0;
+    var p: usize = 0;
+    while (s_in[p] != 0) : (p += 1) {
+        const c = s_in[p];
+        if (c < '0' or c > '9') break;
+        idx = idx * 10 + @as(u32, c - '0');
+    }
+    return .{ .idx = idx, .rest = @ptrCast(s_in + p) };
+}
+
+export fn osc_dispatch(term: *types.Terminal) callconv(.c) void {
+    var param: c_uint = 0;
+    var data_ofs: usize = 0;
+    const data = term.vt.osc.data.?;
+
+    var i: usize = 0;
+    while (i < term.vt.osc.idx) : ({
+        i += 1;
+        data_ofs += 1;
+    }) {
+        const c = data[i];
+        if (c == ';') {
+            data_ofs += 1;
+            break;
+        }
+        if (isdigit(@intCast(c)) == 0) {
+            unhandled(term);
+            return;
+        }
+        param = param *% 10 +% @as(c_uint, c - '0');
+    }
+
+    const string: [*:0]u8 = @ptrCast(data + data_ofs);
+
+    switch (param) {
+        0, 2 => term_set_window_title(term, string),
+        1 => {},
+        4 => {
+            // Set color<idx>
+            const prev = string - 1;
+            if (prev[0] != ';') return;
+
+            var s_idx_opt: ?[*:0]u8 = strtok(string, ";");
+            var s_color_opt: ?[*:0]u8 = strtok(null, ";");
+            while (s_idx_opt != null and s_color_opt != null) : ({
+                s_idx_opt = strtok(null, ";");
+                s_color_opt = strtok(null, ";");
+            }) {
+                const s_idx = s_idx_opt.?;
+                const s_color = s_color_opt.?;
+
+                const parsed = parseIdx(s_idx);
+                const idx = parsed.idx;
+                if (idx >= 256) {
+                    std.debug.print("osc: WARN: invalid OSC 4 color index: {d}\n", .{idx});
+                    break;
+                }
+
+                if (s_color[0] == '?' and s_color[1] == 0) {
+                    const color = term.colors.table[idx];
+                    const r: u8 = @intCast((color >> 16) & 0xff);
+                    const g: u8 = @intCast((color >> 8) & 0xff);
+                    const b: u8 = @intCast(color & 0xff);
+                    const terminator = if (term.vt.osc.bel) "\x07" else "\x1b\\";
+
+                    var reply: [32]u8 = undefined;
+                    const n = xsnprintf(&reply, reply.len, "\x1b]4;%u;rgb:%02x%02x/%02x%02x/%02x%02x%s", idx, r, r, g, g, b, b, terminator.ptr);
+                    term_to_slave(term, &reply, n);
+                } else {
+                    var color: u32 = 0;
+                    const color_is_valid = if (s_color[0] == '#' or s_color[0] == '[')
+                        parse_legacy_color(s_color, &color, null, null)
+                    else
+                        parse_rgb(s_color, &color, null, null);
+
+                    if (!color_is_valid) continue;
+
+                    term.colors.table[idx] = color;
+                    term_damage_color(term, .base256, idx);
+                }
+            }
+        },
+        7 => osc_set_pwd(term, string),
+        8 => osc_uri(term, string),
+        9 => {
+            const sep = strchr(string, ';');
+            if (sep != null) {
+                const e = __errno_location();
+                e.* = 0;
+                var end: [*:0]u8 = undefined;
+                _ = strtoul(string, &end, 10);
+                if (end == sep.? and e.* == 0) {
+                    return;
+                }
+            }
+            osc_notify(term, string);
+        },
+        10, 11, 12, 17, 19 => {
+            if (string[0] == '?' and string[1] == 0) {
+                const color: u32 = switch (param) {
+                    10 => term.colors.fg,
+                    11 => term.colors.bg,
+                    12 => term.colors.cursor_bg,
+                    17 => term.colors.selection_bg,
+                    else => term.colors.selection_fg,
+                };
+                const r: u8 = @intCast((color >> 16) & 0xff);
+                const g: u8 = @intCast((color >> 8) & 0xff);
+                const b: u8 = @intCast(color & 0xff);
+                const terminator = if (term.vt.osc.bel) "\x07" else "\x1b\\";
+
+                var reply: [32]u8 = undefined;
+                const n = xsnprintf(&reply, reply.len, "\x1b]%u;rgb:%02x%02x/%02x%02x/%02x%02x%s", param, r, r, g, g, b, b, terminator.ptr);
+                term_to_slave(term, &reply, n);
+                return;
+            }
+
+            var color: u32 = 0;
+            var have_alpha: bool = false;
+            var alpha: u16 = 0xffff;
+
+            const parsed_ok = if (string[0] == '#' or string[0] == '[')
+                parse_legacy_color(string, &color, &have_alpha, &alpha)
+            else
+                parse_rgb(string, &color, &have_alpha, &alpha);
+            if (!parsed_ok) return;
+
+            switch (param) {
+                10 => {
+                    term.colors.fg = color;
+                    term_damage_color(term, .default, 0);
+                },
+                11 => {
+                    term.colors.bg = color;
+                    if (!have_alpha) alpha = osc_theme_alpha(term);
+                    const changed = term.colors.alpha != alpha;
+                    term.colors.alpha = alpha;
+                    if (changed) {
+                        wayl_win_alpha_changed(term.window);
+                        term_font_subpixel_changed(term);
+                    }
+                    term_damage_color(term, .default, 0);
+                    term_damage_margins(term);
+                },
+                12 => {
+                    term.colors.cursor_bg = (1 << 31) | color;
+                    term_damage_cursor(term);
+                },
+                17 => term.colors.selection_bg = color,
+                19 => term.colors.selection_fg = color,
+                else => unreachable,
+            }
+        },
+        22 => term_set_user_mouse_cursor(term, string),
+        30 => {},
+        52 => osc_selection(term, string),
+        66 => kitty_text_size(term, string),
+        99 => kitty_notification(term, string),
+        104 => {
+            if (string[0] == 0) {
+                osc_theme_table_copy(term, &term.colors.table);
+                term_damage_view(term);
+            } else {
+                var s_idx_opt: ?[*:0]u8 = strtok(string, ";");
+                while (s_idx_opt) |s_idx| : (s_idx_opt = strtok(null, ";")) {
+                    const parsed = parseIdx(s_idx);
+                    const idx = parsed.idx;
+                    if (idx >= 256) {
+                        std.debug.print("osc: WARN: invalid OSC 104 color index: {d}\n", .{idx});
+                        continue;
+                    }
+                    var tbl: [256]u32 = undefined;
+                    osc_theme_table_copy(term, &tbl);
+                    term.colors.table[idx] = tbl[idx];
+                    term_damage_color(term, .base256, idx);
+                }
+            }
+        },
+        105 => {},
+        110 => {
+            term.colors.fg = osc_theme_fg(term);
+            term_damage_color(term, .default, 0);
+        },
+        111 => {
+            const alpha_changed = term.colors.alpha != osc_theme_alpha(term);
+            term.colors.bg = osc_theme_bg(term);
+            term.colors.alpha = osc_theme_alpha(term);
+            if (alpha_changed) {
+                wayl_win_alpha_changed(term.window);
+                term_font_subpixel_changed(term);
+            }
+            term_damage_color(term, .default, 0);
+            term_damage_margins(term);
+        },
+        112 => {
+            term.colors.cursor_fg = osc_theme_cursor_text(term);
+            term.colors.cursor_bg = osc_theme_cursor_cursor(term);
+            if (osc_conf_colors_dark_use_custom_cursor(term)) {
+                term.colors.cursor_fg |= 1 << 31;
+                term.colors.cursor_bg |= 1 << 31;
+            }
+            term_damage_cursor(term);
+        },
+        117 => term.colors.selection_bg = osc_theme_selection_bg(term),
+        119 => term.colors.selection_fg = osc_theme_selection_fg(term),
+        133 => {
+            const grid = term.grid orelse return;
+            const cur_row = grid.cur_row orelse return;
+            switch (string[0]) {
+                'A' => cur_row.shell_integration.prompt_marker = true,
+                'B' => {},
+                'C' => cur_row.shell_integration.cmd_start = grid.cursor.point.col,
+                'D' => cur_row.shell_integration.cmd_end = grid.cursor.point.col,
+                else => {},
+            }
+        },
+        176 => {
+            if (string[0] == '?' and string[1] == 0) {
+                std.debug.print("osc: WARN: OSC-176 app-id query ignored\n", .{});
+                return;
+            }
+            term_set_app_id(term, string);
+        },
+        555 => osc_flash(term),
+        777 => {
+            const param_brk = strchr(string, ';');
+            if (param_brk == null) {
+                unhandled(term);
+                return;
+            }
+            const prefix_len = @intFromPtr(param_brk.?) - @intFromPtr(string);
+            if (std.mem.eql(u8, string[0..prefix_len], "notify")) {
+                osc_notify(term, @ptrCast(param_brk.? + 1));
+            } else {
+                unhandled(term);
+            }
+        },
+        else => unhandled(term),
+    }
+}
+
