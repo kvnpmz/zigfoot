@@ -21,6 +21,18 @@ bool sixel_get_cursor_right_of_graphics(struct terminal *t) {
     return t->sixel.cursor_right_of_graphics;
 }
 
+void sixel_set_scrolling(struct terminal *t, bool v) {
+    t->sixel.scrolling = v;
+}
+
+void sixel_set_use_private_palette(struct terminal *t, bool v) {
+    t->sixel.use_private_palette = v;
+}
+
+void sixel_set_cursor_right_of_graphics(struct terminal *t, bool v) {
+    t->sixel.cursor_right_of_graphics = v;
+}
+
 unsigned sixel_get_palette_size(struct terminal *t) {
     return t->sixel.palette_size;
 }

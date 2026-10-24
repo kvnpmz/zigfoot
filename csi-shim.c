@@ -79,3 +79,11 @@ int csi_conf_grapheme_width_method(struct terminal *t) {
 bool csi_conf_tweak_sixel(struct terminal *t) {
     return t->conf->tweak.sixel;
 }
+
+bool csi_get_url_ime_reenable_after_url_mode(struct terminal *t) {
+    return t->url.ime_reenable_after_url_mode;
+}
+
+void csi_set_url_ime_reenable_after_url_mode(struct terminal *t, bool v) {
+    t->url.ime_reenable_after_url_mode = v;
+}
