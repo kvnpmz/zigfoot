@@ -298,3 +298,273 @@ export fn parse_rgb(
     return true;
 }
 
+// ─── Chunk D: osc_to_clipboard / osc_from_clipboard / osc_selection ─
+
+extern fn base64_decode(s: [*c]const u8, size: ?*usize) callconv(.c) [*c]u8;
+extern fn base64_encode(data: [*c]const u8, size: usize) callconv(.c) [*c]u8;
+extern fn base64_encode_final(data: [*c]const u8, size: usize, result: [*c]u8) callconv(.c) void;
+
+extern fn selection_clipboard_unset(seat: *anyopaque) callconv(.c) void;
+extern fn selection_primary_unset(seat: *anyopaque) callconv(.c) void;
+extern fn selection_clipboard_has_data(seat: *const anyopaque) callconv(.c) bool;
+extern fn selection_primary_has_data(seat: *const anyopaque) callconv(.c) bool;
+
+extern fn text_to_clipboard(seat: *anyopaque, term: *types.Terminal, text: [*:0]u8, serial: u32) callconv(.c) bool;
+extern fn text_to_primary(seat: *anyopaque, term: *types.Terminal, text: [*:0]u8, serial: u32) callconv(.c) bool;
+
+extern fn text_from_clipboard(
+    seat: *anyopaque,
+    term: *types.Terminal,
+    confirm: bool,
+    cb: ?*const fn ([*]u8, usize, ?*anyopaque) callconv(.c) void,
+    done_cb: ?*const fn (?*anyopaque) callconv(.c) void,
+    user: ?*anyopaque,
+) callconv(.c) void;
+extern fn text_from_primary(
+    seat: *anyopaque,
+    term: *types.Terminal,
+    confirm: bool,
+    cb: ?*const fn ([*]u8, usize, ?*anyopaque) callconv(.c) void,
+    done_cb: ?*const fn (?*anyopaque) callconv(.c) void,
+    user: ?*anyopaque,
+) callconv(.c) void;
+
+extern fn term_paste_data_to_slave(term: *types.Terminal, buf: [*]const u8, len: usize) callconv(.c) void;
+extern fn term_to_slave(term: *types.Terminal, buf: [*]const u8, len: usize) callconv(.c) void;
+
+extern fn xstrdup(s: [*:0]const u8) callconv(.c) ?[*:0]u8;
+extern fn xmalloc(size: usize) callconv(.c) ?*anyopaque;
+
+extern fn osc_seat_with_focus(term: *types.Terminal) callconv(.c) ?*anyopaque;
+extern fn osc_osc52_copy_allowed(term: *types.Terminal) callconv(.c) bool;
+extern fn osc_osc52_paste_allowed(term: *types.Terminal) callconv(.c) bool;
+extern fn osc_ptmx_buffers_len(term: *types.Terminal) callconv(.c) usize;
+extern fn osc_fdm_epollout_ptmx(term: *types.Terminal) callconv(.c) void;
+
+// ── Helpers ───────────────────────────────────────────────────────
+extern fn osc_seat_serial(seat: *anyopaque) callconv(.c) u32;
+fn termSeatSerial(seat: *anyopaque) u32 { return osc_seat_serial(seat); }
+
+// ── osc_to_clipboard ──────────────────────────────────────────────
+export fn osc_to_clipboard(
+    term: *types.Terminal,
+    target: [*:0]const u8,
+    base64_data: [*:0]const u8,
+) callconv(.c) void {
+    var to_clipboard = false;
+    var to_primary = false;
+
+    if (target[0] == 0) to_clipboard = true;
+
+    var t: usize = 0;
+    while (target[t] != 0) : (t += 1) {
+        switch (target[t]) {
+            'c' => to_clipboard = true,
+            's', 'p' => to_primary = true,
+            else => std.debug.print("osc: WARN: unimplemented clipboard target '{c}'\n", .{target[t]}),
+        }
+    }
+
+    const seat = osc_seat_with_focus(term);
+    if (seat == null) {
+        std.debug.print("osc: WARN: OSC52: client tried to write to clipboard while window unfocused\n", .{});
+        return;
+    }
+
+    if (!osc_osc52_copy_allowed(term)) {
+        std.debug.print("osc: ignoring copy request: disabled in configuration\n", .{});
+        return;
+    }
+
+    const decoded: [*c]u8 = base64_decode(base64_data, null);
+    if (decoded == null or decoded[0] == 0) {
+        if (decoded == null) {
+            std.debug.print("osc: WARN: invalid clipboard data\n", .{});
+        }
+        if (to_clipboard) selection_clipboard_unset(seat.?);
+        if (to_primary) selection_primary_unset(seat.?);
+        if (decoded != null) free(@ptrCast(decoded));
+        return;
+    }
+
+    if (to_clipboard) {
+        const copy = xstrdup(@ptrCast(decoded));
+        if (copy != null) {
+            const serial = termSeatSerial(seat.?);
+            if (!text_to_clipboard(seat.?, term, copy.?, serial)) free(@ptrCast(copy));
+        }
+    }
+    if (to_primary) {
+        const copy = xstrdup(@ptrCast(decoded));
+        if (copy != null) {
+            const serial = termSeatSerial(seat.?);
+            if (!text_to_primary(seat.?, term, copy.?, serial)) free(@ptrCast(copy));
+        }
+    }
+    free(@ptrCast(decoded));
+}
+
+// ── clip_context ──────────────────────────────────────────────────
+const ClipContext = extern struct {
+    seat: *anyopaque,
+    term: *types.Terminal,
+    buf: [3]u8,
+    idx: c_int,
+};
+
+fn fromClipboardCb(text: [*]u8, size: usize, user: ?*anyopaque) callconv(.c) void {
+    const ctx: *ClipContext = @ptrCast(@alignCast(user.?));
+    const term = ctx.term;
+
+    var tp: [*]u8 = text;
+    var left: usize = size;
+
+    if (ctx.idx > 0) {
+        var i: c_int = ctx.idx;
+        while (i < 3 and left > 0) : ({
+            i += 1;
+            tp += 1;
+            left -= 1;
+        }) {
+            ctx.buf[@intCast(ctx.idx)] = tp[0];
+            ctx.idx += 1;
+        }
+
+        if (ctx.idx == 3) {
+            const chunk = base64_encode(&ctx.buf, 3);
+            term_paste_data_to_slave(term, chunk, 4);
+            free(@ptrCast(chunk));
+            ctx.idx = 0;
+        }
+    }
+
+    if (left == 0) return;
+
+    const remaining: usize = left % 3;
+    var i: usize = remaining;
+    while (i > 0) : (i -= 1) {
+        ctx.buf[@intCast(ctx.idx)] = text[size - i];
+        ctx.idx += 1;
+    }
+
+    const chunk = base64_encode(tp, (left / 3) * 3);
+    term_paste_data_to_slave(term, chunk, strlen(@ptrCast(chunk)));
+    free(@ptrCast(chunk));
+}
+
+fn fromClipboardDone(user: ?*anyopaque) callconv(.c) void {
+    const ctx: *ClipContext = @ptrCast(@alignCast(user.?));
+    const term = ctx.term;
+
+    if (ctx.idx > 0) {
+        var res: [4]u8 = undefined;
+        base64_encode_final(&ctx.buf, @intCast(ctx.idx), &res);
+        term_paste_data_to_slave(term, @as([*]const u8, @ptrCast(&res)), 4);
+    }
+
+    if (term.vt.osc.bel) {
+        term_paste_data_to_slave(term, "\x07", 1);
+    } else {
+        term_paste_data_to_slave(term, "\x1b\\", 2);
+    }
+
+    term.is_sending_paste_data = false;
+
+    if (osc_ptmx_buffers_len(term) > 0) {
+        osc_fdm_epollout_ptmx(term);
+    }
+
+    free(user);
+}
+
+// ── osc_from_clipboard ────────────────────────────────────────────
+export fn osc_from_clipboard(term: *types.Terminal, source: [*:0]const u8) callconv(.c) void {
+    const seat = osc_seat_with_focus(term);
+    if (seat == null) {
+        std.debug.print("osc: WARN: OSC52: client tried to read clipboard while window unfocused\n", .{});
+        return;
+    }
+
+    if (!osc_osc52_paste_allowed(term)) {
+        std.debug.print("osc: ignoring paste request: disabled in configuration\n", .{});
+        return;
+    }
+
+    var src: u8 = if (source[0] == 0) 'c' else 0;
+    var from_clipboard = src == 'c';
+    var from_primary = false;
+
+    var i: usize = 0;
+    while (source[i] != 0 and !from_clipboard and !from_primary) : (i += 1) {
+        const c = source[i];
+        if (c == 'c' or c == 'p' or c == 's') {
+            src = c;
+            switch (c) {
+                'c' => from_clipboard = selection_clipboard_has_data(seat.?),
+                's', 'p' => from_primary = selection_primary_has_data(seat.?),
+                else => unreachable,
+            }
+        } else {
+            std.debug.print("osc: WARN: unimplemented clipboard source '{c}'\n", .{c});
+        }
+    }
+
+    if (!from_clipboard and !from_primary) return;
+
+    if (term.is_sending_paste_data) {
+        term_to_slave(term, "\x1b]52;", 5);
+        term_to_slave(term, @as([*]const u8, @ptrCast(&src)), 1);
+        term_to_slave(term, ";", 1);
+        if (term.vt.osc.bel) {
+            term_to_slave(term, "\x07", 1);
+        } else {
+            term_to_slave(term, "\x1b\\", 2);
+        }
+        return;
+    }
+
+    term.is_sending_paste_data = true;
+
+    term_paste_data_to_slave(term, "\x1b]52;", 5);
+    term_paste_data_to_slave(term, @as([*]const u8, @ptrCast(&src)), 1);
+    term_paste_data_to_slave(term, ";", 1);
+
+    const ctx_ptr = xmalloc(@sizeOf(ClipContext)) orelse return;
+    const ctx: *ClipContext = @ptrCast(@alignCast(ctx_ptr));
+    ctx.* = .{ .seat = seat.?, .term = term, .buf = undefined, .idx = 0 };
+
+    if (from_clipboard) {
+        text_from_clipboard(seat.?, term, true, &fromClipboardCb, &fromClipboardDone, ctx);
+    }
+    if (from_primary) {
+        text_from_primary(seat.?, term, true, &fromClipboardCb, &fromClipboardDone, ctx);
+    }
+}
+
+// ── osc_selection ─────────────────────────────────────────────────
+export fn osc_selection(term: *types.Terminal, string: [*:0]u8) callconv(.c) void {
+    var p: [*:0]u8 = string;
+    var clipboard_done = false;
+
+    while (p[0] != 0 and !clipboard_done) {
+        switch (p[0]) {
+            ';' => {
+                clipboard_done = true;
+                p[0] = 0;
+            },
+            else => {},
+        }
+        p += 1;
+    }
+
+    // osc_selection ends here in osc.c — the last lines of the function
+    // dispatch to osc_to_clipboard / osc_from_clipboard based on whether
+    // the data part is empty. Original C continues; see continuation.
+    const data: [*:0]const u8 = p;
+    if (data[0] == 0) {
+        osc_from_clipboard(term, string);
+    } else {
+        osc_to_clipboard(term, string, data);
+    }
+}
+
