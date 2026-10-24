@@ -158,3 +158,143 @@ export fn osc_uri(term: *types.Terminal, string: [*:0]u8) callconv(.c) void {
     }
 }
 
+// ─── Chunk C: parse_legacy_color / parse_rgb ──────────────────────
+
+extern fn strncmp(a: [*:0]const u8, b: [*:0]const u8, n: usize) callconv(.c) c_int;
+extern fn strtoul(s: [*:0]const u8, endptr: ?*[*:0]u8, base: c_int) callconv(.c) c_ulong;
+
+fn isxdigit(c: u8) bool {
+    return (c >= '0' and c <= '9') or
+           (c >= 'a' and c <= 'f') or
+           (c >= 'A' and c <= 'F');
+}
+
+fn hexNibble(c: u8) u8 {
+    if (c >= '0' and c <= '9') return c - '0';
+    if (c >= 'a' and c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' and c <= 'F') return c - 'A' + 10;
+    return 0;
+}
+
+export fn parse_legacy_color(
+    string_in: [*:0]const u8,
+    color: *u32,
+    have_alpha_out: ?*bool,
+    alpha_out: ?*u16,
+) callconv(.c) bool {
+    var have_alpha: bool = false;
+    var alpha: u16 = 0xffff;
+    var string: [*:0]const u8 = string_in;
+
+    if (string[0] == '[') {
+        // e.g. \E]11;[50]#00ff00
+        const start: [*:0]const u8 = @ptrCast(string + 1);
+
+        var end: [*:0]u8 = undefined;
+        const percent = strtoul(start, &end, 10);
+        if (end[0] != ']') return false;
+
+        have_alpha = true;
+        const pct_capped: c_ulong = @min(percent, 100);
+        alpha = @intCast((@as(c_ulong, 0xffff) * pct_capped + 50) / 100);
+
+        string = @ptrCast(end + 1);
+    }
+
+    if (string[0] != '#') return false;
+
+    string = @ptrCast(string + 1);
+    const len = strlen(string);
+    if (len % 3 != 0) return false;
+
+    const digits: usize = len / 3;
+    var rgb: [3]i32 = .{ 0, 0, 0 };
+    var i: usize = 0;
+    while (i < 3) : (i += 1) {
+        rgb[i] = 0;
+        var j: usize = 0;
+        while (j < digits) : (j += 1) {
+            const idx = i * digits + j;
+            const c: u8 = @bitCast(string[idx]);
+            rgb[i] <<= 4;
+            if (isxdigit(c)) rgb[i] |= hexNibble(c);
+            // else rgb[i] |= 0 (no-op)
+        }
+        rgb[i] <<= @intCast(16 - 4 * digits);
+    }
+
+    const r: u8 = @intFromFloat(256.0 * (@as(f64, @floatFromInt(rgb[0])) / 65536.0));
+    const g: u8 = @intFromFloat(256.0 * (@as(f64, @floatFromInt(rgb[1])) / 65536.0));
+    const b: u8 = @intFromFloat(256.0 * (@as(f64, @floatFromInt(rgb[2])) / 65536.0));
+
+    color.* = (@as(u32, r) << 16) | (@as(u32, g) << 8) | @as(u32, b);
+
+    if (have_alpha_out) |h| h.* = have_alpha;
+    if (alpha_out) |a| a.* = alpha;
+    return true;
+}
+
+export fn parse_rgb(
+    string_in: [*:0]const u8,
+    color: *u32,
+    have_alpha_out: ?*bool,
+    alpha_out: ?*u16,
+) callconv(.c) bool {
+    var string: [*:0]const u8 = string_in;
+    var len = strlen(string);
+    const have_alpha: bool = (len >= 4 and strncmp(string, "rgba", 4) == 0);
+
+    if (have_alpha) {
+        if (len < "rgba:x/x/x/x".len) return false;
+        if (strncmp(string, "rgba:", 5) != 0) return false;
+        string = @ptrCast(string + 5);
+        len -= 5;
+    } else {
+        if (len < "rgb:x/x/x".len) return false;
+        if (strncmp(string, "rgb:", 4) != 0) return false;
+        string = @ptrCast(string + 4);
+        len -= 4;
+    }
+
+    var rgb: [4]i32 = .{ 0, 0, 0, 0 };
+    var digits: [4]i32 = .{ 0, 0, 0, 0 };
+
+    const n_components: usize = if (have_alpha) 4 else 3;
+    var i: usize = 0;
+    while (i < n_components) : (i += 1) {
+        rgb[i] = 0;
+        digits[i] = 0;
+        while (len > 0 and string[0] != '/') : ({
+            len -= 1;
+            string = @ptrCast(string + 1);
+            digits[i] += 1;
+        }) {
+            const c: u8 = @bitCast(string[0]);
+            rgb[i] <<= 4;
+            if (isxdigit(c)) rgb[i] |= hexNibble(c);
+        }
+
+        const last_i: usize = if (have_alpha) 3 else 2;
+        if (i >= last_i) break;
+
+        if (len == 0 or string[0] != '/') return false;
+        string = @ptrCast(string + 1);
+        len -= 1;
+    }
+
+    const r: u8 = @intFromFloat(256.0 * (@as(f64, @floatFromInt(rgb[0])) / @as(f64, @floatFromInt(@as(i32, 1) << @intCast(4 * @as(u5, @intCast(digits[0])))))));
+    const g: u8 = @intFromFloat(256.0 * (@as(f64, @floatFromInt(rgb[1])) / @as(f64, @floatFromInt(@as(i32, 1) << @intCast(4 * @as(u5, @intCast(digits[1])))))));
+    const b: u8 = @intFromFloat(256.0 * (@as(f64, @floatFromInt(rgb[2])) / @as(f64, @floatFromInt(@as(i32, 1) << @intCast(4 * @as(u5, @intCast(digits[2])))))));
+
+    var alpha: u16 = 0xffff;
+    if (have_alpha) {
+        alpha = @intFromFloat(65536.0 * (@as(f64, @floatFromInt(rgb[3])) / @as(f64, @floatFromInt(@as(i32, 1) << @intCast(4 * @as(u5, @intCast(digits[3])))))));
+    }
+
+    if (have_alpha_out) |h| h.* = have_alpha;
+    if (alpha_out) |a| a.* = alpha;
+
+    color.* = (@as(u32, r) << 16) | (@as(u32, g) << 8) | @as(u32, b);
+    return true;
+}
+

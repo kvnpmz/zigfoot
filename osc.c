@@ -26,6 +26,10 @@ void osc_flash(struct terminal *term);
 void osc_set_pwd(struct terminal *term, char *string);
 void osc_uri(struct terminal *term, char *string);
 
+/* Ported to osc.zig (chunk C) */
+bool parse_legacy_color(const char *string, uint32_t *color, bool *_have_alpha, uint16_t *_alpha);
+bool parse_rgb(const char *string, uint32_t *color, bool *_have_alpha, uint16_t *_alpha);
+
 #define UNHANDLED() LOG_DBG("unhandled: OSC: %.*s", (int)term->vt.osc.idx, term->vt.osc.data)
 
 static void
@@ -299,156 +303,6 @@ osc_selection(struct terminal *term, char *string)
         osc_from_clipboard(term, string);
     else
         osc_to_clipboard(term, string, p);
-}
-
-static bool
-parse_legacy_color(const char *string, uint32_t *color, bool *_have_alpha,
-                   uint16_t *_alpha)
-{
-    bool have_alpha = false;
-    uint16_t alpha = 0xffff;
-
-    if (string[0] == '[') {
-        /* e.g. \E]11;[50]#00ff00 */
-        const char *start = &string[1];
-
-        errno = 0;
-        char *end;
-        unsigned long percent = strtoul(start, &end, 10);
-
-        if (errno != 0 || *end != ']')
-            return false;
-
-        have_alpha = true;
-        alpha = (0xffff * min(percent, 100) + 50) / 100;
-
-        string = end + 1;
-    }
-
-    if (string[0] != '#')
-        return false;
-
-    string++;
-    const size_t len = strlen(string);
-
-    if (len % 3 != 0)
-        return false;
-
-    const int digits = len / 3;
-
-    int rgb[3];
-    for (size_t i = 0; i < 3; i++) {
-        rgb[i] = 0;
-        for (size_t j = 0; j < digits; j++) {
-            size_t idx = i * digits + j;
-            char c = string[idx];
-            rgb[i] <<= 4;
-
-            if (!isxdigit(c))
-                rgb[i] |= 0;
-            else
-                rgb[i] |= c >= '0' && c <= '9' ? c - '0' :
-                    c >= 'a' && c <= 'f' ? c - 'a' + 10 : c - 'A' + 10;
-        }
-
-        /* Values with less than 16 bits represent the *most
-         * significant bits*. I.e. the values are *not* scaled */
-        rgb[i] <<= 16 - (4 * digits);
-    }
-
-    /* Re-scale to 8-bit */
-    uint8_t r = 256 * (rgb[0] / 65536.);
-    uint8_t g = 256 * (rgb[1] / 65536.);
-    uint8_t b = 256 * (rgb[2] / 65536.);
-
-    LOG_DBG("legacy: %02x%02x%02x (alpha=%04x)", r, g, b,
-            have_alpha ? alpha : 0xffff);
-
-    *color = r << 16 | g << 8 | b;
-
-    if (_have_alpha != NULL)
-        *_have_alpha = have_alpha;
-    if (_alpha != NULL)
-        *_alpha = alpha;
-    return true;
-}
-
-static bool
-parse_rgb(const char *string, uint32_t *color, bool *_have_alpha,
-          uint16_t *_alpha)
-{
-    size_t len = strlen(string);
-    bool have_alpha = len >= 4 && strncmp(string, "rgba", 4) == 0;
-
-    /* Verify we have the minimum required length (for "") */
-    if (have_alpha) {
-        if (len < STRLEN("rgba:x/x/x/x"))
-            return false;
-    } else {
-        if (len < STRLEN("rgb:x/x/x"))
-            return false;
-    }
-
-    /* Verify prefix is "rgb:" or "rgba:" */
-    if (have_alpha) {
-        if (strncmp(string, "rgba:", 5) != 0)
-            return false;
-        string += 5;
-        len -= 5;
-    } else {
-        if (strncmp(string, "rgb:", 4) != 0)
-            return false;
-        string += 4;
-        len -= 4;
-    }
-
-    int rgb[4];
-    int digits[4];
-
-    for (size_t i = 0; i < (have_alpha ? 4 : 3); i++) {
-        for (rgb[i] = 0, digits[i] = 0;
-             len > 0 && *string != '/';
-             len--, string++, digits[i]++)
-        {
-            char c = *string;
-            rgb[i] <<= 4;
-
-            if (!isxdigit(c))
-                rgb[i] |= 0;
-            else
-                rgb[i] |= c >= '0' && c <= '9' ? c - '0' :
-                    c >= 'a' && c <= 'f' ? c - 'a' + 10 : c - 'A' + 10;
-        }
-
-        if (i >= (have_alpha ? 3 : 2))
-            break;
-
-        if (len == 0 || *string != '/')
-            return false;
-        string++; len--;
-    }
-
-    /* Re-scale to 8-bit */
-    uint8_t r = 256 * (rgb[0] / (double)(1 << (4 * digits[0])));
-    uint8_t g = 256 * (rgb[1] / (double)(1 << (4 * digits[1])));
-    uint8_t b = 256 * (rgb[2] / (double)(1 << (4 * digits[2])));
-
-    uint16_t alpha = 0xffff;
-    if (have_alpha)
-        alpha = 65536 * (rgb[3] / (double)(1 << (4 * digits[3])));
-
-    if (have_alpha)
-        LOG_DBG("rgba: %02x%02x%02x (alpha=%04x)", r, g, b, alpha);
-    else
-        LOG_DBG("rgb: %02x%02x%02x", r, g, b);
-
-    if (_have_alpha != NULL)
-        *_have_alpha = have_alpha;
-    if (_alpha != NULL)
-        *_alpha = alpha;
-
-    *color = r << 16 | g << 8 | b;
-    return true;
 }
 
 static void
