@@ -15,6 +15,16 @@
 #include "xmalloc.h"
 #include "xsnprintf.h"
 
+/* Ported to sixel.zig (chunk A) */
+void sixel_colors_report_current(struct terminal *term);
+void sixel_colors_reset(struct terminal *term);
+void sixel_colors_set(struct terminal *term, unsigned count);
+void sixel_colors_report_max(struct terminal *term);
+void sixel_geometry_report_current(struct terminal *term);
+void sixel_geometry_reset(struct terminal *term);
+void sixel_geometry_set(struct terminal *term, unsigned width, unsigned height);
+void sixel_geometry_report_max(struct terminal *term);
+
 static size_t count;
 
 static void sixel_put_generic(struct terminal *term, uint8_t c);
@@ -2137,92 +2147,3 @@ sixel_put_ar_11(struct terminal *term, uint8_t c)
     count++;
 }
 
-void
-sixel_colors_report_current(struct terminal *term)
-{
-    char reply[24];
-    size_t n = xsnprintf(reply, sizeof(reply), "\033[?1;0;%uS", term->sixel.palette_size);
-    term_to_slave(term, reply, n);
-    LOG_DBG("query response for current color count: %u", term->sixel.palette_size);
-}
-
-void
-sixel_colors_reset(struct terminal *term)
-{
-    LOG_DBG("sixel palette size reset to %u", SIXEL_MAX_COLORS);
-
-    free(term->sixel.palette);
-    term->sixel.palette = NULL;
-
-    term->sixel.palette_size = SIXEL_MAX_COLORS;
-    sixel_colors_report_current(term);
-}
-
-void
-sixel_colors_set(struct terminal *term, unsigned count)
-{
-    unsigned new_palette_size = min(max(2, count), SIXEL_MAX_COLORS);
-    LOG_DBG("sixel palette size set to %u", new_palette_size);
-
-    free(term->sixel.private_palette);
-    free(term->sixel.shared_palette);
-    term->sixel.private_palette = NULL;
-    term->sixel.shared_palette = NULL;
-
-    term->sixel.palette_size = new_palette_size;
-    sixel_colors_report_current(term);
-}
-
-void
-sixel_colors_report_max(struct terminal *term)
-{
-    char reply[24];
-    size_t n = xsnprintf(reply, sizeof(reply), "\033[?1;0;%uS", SIXEL_MAX_COLORS);
-    term_to_slave(term, reply, n);
-    LOG_DBG("query response for max color count: %u", SIXEL_MAX_COLORS);
-}
-
-void
-sixel_geometry_report_current(struct terminal *term)
-{
-    char reply[64];
-    size_t n = xsnprintf(reply, sizeof(reply), "\033[?2;0;%u;%uS",
-             min(term->cols * term->cell_width, term->sixel.max_width),
-             min(term->rows * term->cell_height, term->sixel.max_height));
-    term_to_slave(term, reply, n);
-
-    LOG_DBG("query response for current sixel geometry: %ux%u",
-            term->sixel.max_width, term->sixel.max_height);
-}
-
-void
-sixel_geometry_reset(struct terminal *term)
-{
-    LOG_DBG("sixel geometry reset to %ux%u", SIXEL_MAX_WIDTH, SIXEL_MAX_HEIGHT);
-    term->sixel.max_width = SIXEL_MAX_WIDTH;
-    term->sixel.max_height = SIXEL_MAX_HEIGHT;
-    sixel_geometry_report_current(term);
-}
-
-void
-sixel_geometry_set(struct terminal *term, unsigned width, unsigned height)
-{
-    LOG_DBG("sixel geometry set to %ux%u", width, height);
-    term->sixel.max_width = width;
-    term->sixel.max_height = height;
-    sixel_geometry_report_current(term);
-}
-
-void
-sixel_geometry_report_max(struct terminal *term)
-{
-    unsigned max_width = term->sixel.max_width;
-    unsigned max_height = term->sixel.max_height;
-
-    char reply[64];
-    size_t n = xsnprintf(reply, sizeof(reply), "\033[?2;0;%u;%uS", max_width, max_height);
-    term_to_slave(term, reply, n);
-
-    LOG_DBG("query response for max sixel geometry: %ux%u",
-            max_width, max_height);
-}

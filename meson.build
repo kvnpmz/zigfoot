@@ -397,6 +397,14 @@ osc_obj = custom_target(
   command: [python, files('compile_zig.py'), '@INPUT@', '@OUTPUT@']
 )
 
+sixel_obj = custom_target(
+  'sixel_obj',
+  input: 'sixel.zig',
+  depend_files: files('terminal_types.zig'),
+  output: 'sixel.o',
+  command: [python, files('compile_zig.py'), '@INPUT@', '@OUTPUT@']
+)
+
 xmalloc_obj = custom_target(
   'xmalloc_obj',
   input: 'xmalloc.zig',
@@ -438,7 +446,8 @@ vtlib = static_library(
   'macros.h',
   'osc.c', osc_obj, 'osc.h',
   'osc-shim.c',
-  'sixel.c', 'sixel.h',
+  'sixel.c', sixel_obj, 'sixel.h',
+  'sixel-shim.c',
   'vt.c', 'vt.h',
   builtin_terminfo, srgb_funcs,
   wl_proto_src + wl_proto_headers,
