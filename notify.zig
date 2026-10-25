@@ -233,3 +233,87 @@ export fn notify_icon_del(term: *types.Terminal, id: [*:0]const u8) callconv(.c)
         return;
     }
 }
+
+// ── chunk B-1 ─────────────────────────────────────────────────────
+extern fn read(fd: c_int, buf: *anyopaque, count: usize) callconv(.c) isize;
+extern fn notify_active_first(term: *types.Terminal) callconv(.c) ?*types.Notification;
+extern fn notify_active_next(term: *types.Terminal, prev: *types.Notification) callconv(.c) ?*types.Notification;
+extern fn notify_conf_action_arg_configured(term: *types.Terminal) callconv(.c) bool;
+extern fn notify_spawn_expand_action_arg(term: *types.Terminal, name: [*:0]const u8, label: [*:0]const u8, argc: *usize, argv: *?[*:null]?[*:0]u8) callconv(.c) bool;
+extern fn notify_term_fdm(term: *types.Terminal) callconv(.c) ?*anyopaque;
+extern fn fdm_add(fdm: *anyopaque, fd: c_int, events: c_int, handler: *const fn (*anyopaque, c_int, c_int, ?*anyopaque) callconv(.c) bool, data: ?*anyopaque) callconv(.c) bool;
+extern fn fdm_del(fdm: *anyopaque, fd: c_int) callconv(.c) bool;
+extern fn xrealloc(ptr: ?*anyopaque, size: usize) callconv(.c) ?*anyopaque;
+extern fn xmalloc(size: usize) callconv(.c) ?*anyopaque;
+
+const EPOLLIN: c_int = 0x1;
+const EPOLLHUP: c_int = 0x10;
+const EINTR: c_int = 4;
+
+extern fn __errno_location() callconv(.c) *c_int;
+
+export fn fdm_notify_stdout(fdm: *anyopaque, fd: c_int, events: c_int, data: ?*anyopaque) callconv(.c) bool {
+    const term: *types.Terminal = @ptrCast(@alignCast(data.?));
+
+    var notif: ?*types.Notification = null;
+    var it = notify_active_first(term);
+    while (it) |n| {
+        if (n.stdout_fd == fd) { notif = n; break; }
+        it = notify_active_next(term, n);
+    }
+
+    if (events & EPOLLIN != 0) {
+        var buf: [512]u8 = undefined;
+        const count = read(fd, &buf, buf.len - 1);
+        if (count < 0) {
+            if (__errno_location().* == EINTR) return true;
+            return false;
+        }
+        if (count > 0) {
+            if (notif) |n| {
+                const c: usize = @intCast(count);
+                if (n.stdout_data == null) {
+                    n.stdout_data = @ptrCast(xmalloc(c) orelse return false);
+                } else {
+                    n.stdout_data = @ptrCast(xrealloc(@ptrCast(n.stdout_data), n.stdout_sz + c) orelse return false);
+                }
+                @memcpy(n.stdout_data.?[n.stdout_sz..n.stdout_sz + c], buf[0..c]);
+                n.stdout_sz += c;
+                consume_stdout(n, false);
+            }
+        }
+    }
+
+    if (events & EPOLLHUP != 0) {
+        _ = fdm_del(fdm, fd);
+        if (notif) |n| {
+            n.stdout_fd = -1;
+            consume_stdout(n, true);
+        }
+    }
+
+    return true;
+}
+
+export fn expand_action_to_argv(
+    term: *types.Terminal,
+    name: [*:0]const u8,
+    label: [*:0]const u8,
+    argc: *usize,
+    argv: *?[*:null]?[*:0]u8,
+) callconv(.c) bool {
+    var expanded: ?[*:null]?[*:0]u8 = null;
+    var count: usize = 0;
+    if (!notify_spawn_expand_action_arg(term, name, label, &count, &expanded)) return false;
+
+    const new_size = (argc.* + count) * @sizeOf(?[*:0]u8);
+    const old_ptr: ?*anyopaque = @ptrCast(argv.*);
+    const new_ptr: ?[*]?[*:0]u8 = @ptrCast(@alignCast(xrealloc(old_ptr, new_size) orelse return false));
+    argv.* = @ptrCast(new_ptr);
+    if (expanded) |e| {
+        @memcpy(new_ptr.?[argc.*..argc.* + count], e[0..count]);
+    }
+    argc.* += count;
+    if (expanded) |e| free(@ptrCast(e));
+    return true;
+}

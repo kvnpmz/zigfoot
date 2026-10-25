@@ -26,136 +26,10 @@ bool write_icon_file(const void *data, size_t data_sz, int *fd, char **filename,
 bool to_integer(const char *line, size_t len, uint32_t *res);
 void notify_icon_add(struct terminal *term, const char *id, const char *symbolic_name, const uint8_t *data, size_t data_sz);
 void notify_icon_del(struct terminal *term, const char *id);
-
-static void
-consume_stdout(struct notification *notif, bool eof)
-{
-    char *data = notif->stdout_data;
-    const char *line = data;
-    size_t left = notif->stdout_sz;
-
-    /* Process stdout, line-by-line */
-    while (left > 0) {
-        line = data;
-        size_t len = left;
-        char *eol = (char *)memchr(line, '\n', left);
-
-        if (eol != NULL) {
-            *eol = '\0';
-            len = strlen(line);
-            data = eol + 1;
-        } else if (!eof)
-            break;
-
-        uint32_t maybe_id = 0;
-        uint32_t maybe_button_nr = 0;
-
-        /* Check for daemon assigned ID, either '123', or 'id=123' */
-        if ((notif->external_id == 0 && to_integer(line, len, &maybe_id)) ||
-            (len > 3 && memcmp(line, "id=", 3) == 0 &&
-             to_integer(&line[3], len - 3, &maybe_id)))
-        {
-            notif->external_id = maybe_id;
-            LOG_DBG("external ID: %u", notif->external_id);
-        }
-
-        /* Check for triggered action, either 'default' or 'action=default' */
-        else if ((len == 7 && memcmp(line, "default", 7) == 0) ||
-                 (len == 7 + 7 && memcmp(line, "action=default", 7 + 7) == 0))
-        {
-            notif->activated = true;
-            LOG_DBG("notification's default action was triggered");
-        }
-
-        else if (len > 7 && memcmp(line, "action=", 7) == 0) {
-            notif->activated = true;
-
-            if (to_integer(&line[7], len - 7, &maybe_button_nr)) {
-                notif->activated_button = maybe_button_nr;
-                LOG_DBG("custom action %u triggered", notif->activated_button);
-            } else {
-                LOG_DBG("unrecognized action triggered: %.*s",
-                        (int)(len - 7), &line[7]);
-            }
-        }
-
-        else if (notif->external_id > 0 &&
-                 to_integer(line, len, &maybe_button_nr) &&
-                 maybe_button_nr > 0 &&
-                 maybe_button_nr <= notif->button_count)
-        {
-            /* Single integer, appearing *after* the ID, and is within
-               the custom button/action range */
-            notif->activated = true;
-            notif->activated_button = maybe_button_nr;
-            LOG_DBG("custom action %u triggered", notif->activated_button);
-        }
-
-        /* Check for XDG activation token, 'xdgtoken=xyz' */
-        else if (len > 9 && memcmp(line, "xdgtoken=", 9) == 0) {
-            notif->xdg_token = xstrndup(&line[9], len - 9);
-            LOG_DBG("XDG token: \"%s\"", notif->xdg_token);
-        }
-
-        left -= len + (eol != NULL ? 1 : 0);
-    }
-
-    if (left > 0)
-        memmove(notif->stdout_data, data, left);
-
-    notif->stdout_sz = left;
-}
-
-static bool
-fdm_notify_stdout(struct fdm *fdm, int fd, int events, void *data)
-{
-    const struct terminal *term = data;
-    struct notification *notif = NULL;
-
-    /* Find notification */
-    tll_foreach(term->active_notifications, it) {
-        if (it->item.stdout_fd == fd) {
-            notif = &it->item;
-            break;
-        }
-    }
-
-    if (events & EPOLLIN) {
-        char buf[512];
-        ssize_t count = read(fd, buf, sizeof(buf) - 1);
-
-        if (count < 0) {
-            if (errno == EINTR)
-                return true;
-
-            LOG_ERRNO("failed to read notification activation token");
-            return false;
-        }
-
-        if (count > 0 && notif != NULL) {
-            if (notif->stdout_data == NULL) {
-                xassert(notif->stdout_sz == 0);
-                notif->stdout_data = xmemdup(buf, count);
-            } else {
-                notif->stdout_data = xrealloc(notif->stdout_data, notif->stdout_sz + count);
-                memcpy(&notif->stdout_data[notif->stdout_sz], buf, count);
-            }
-
-            notif->stdout_sz += count;
-            consume_stdout(notif, false);
-        }
-    }
-
-    if (events & EPOLLHUP) {
-        fdm_del(fdm, fd);
-        if (notif != NULL) {
-            notif->stdout_fd = -1;
-            consume_stdout(notif, true);
-        }
-    }
-
-    return true;
-}
+bool fdm_notify_stdout(struct fdm *fdm, int fd, int events, void *data);
+bool expand_action_to_argv(struct terminal *term, const char *name, const char *label, size_t *argc, char ***argv);
+bool fdm_notify_stdout(struct fdm *fdm, int fd, int events, void *data);
+bool expand_action_to_argv(struct terminal *term, const char *name, const char *label, size_t *argc, char ***argv);
 
 struct done_context {
     struct wayland *wayl;
@@ -235,31 +109,6 @@ notif_done(struct reaper *reaper, pid_t pid, int status, void *data)
         tll_remove(term->active_notifications, it);
         return;
     }
-}
-
-static bool
-expand_action_to_argv(struct terminal *term, const char *name, const char *label,
-                      size_t *argc, char ***argv)
-{
-    char **expanded = NULL;
-    size_t count = 0;
-
-    if (!spawn_expand_template(
-        &term->conf->desktop_notifications.command_action_arg, 2,
-        (const char *[]){"action-name", "action-label"},
-        (const char *[]){name, label},
-        &count, &expanded))
-    {
-        return false;
-    }
-
-    /* Append to the "global" actions argv */
-    *argv = xrealloc(*argv, (*argc + count) * sizeof((*argv)[0]));
-    memcpy(&(*argv)[*argc], expanded, count * sizeof(expanded[0]));
-    *argc += count;
-
-    free(expanded);
-    return true;
 }
 
 bool
