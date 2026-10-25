@@ -1056,11 +1056,7 @@ fn case0Dispatch(term: *types.Terminal, final: u8) void {
             term_cursor_left(term, grid.cursor.point.col - new_col);
         },
 
-        // TODO: cases 'h', 'l' (DECSET/DECRST), 'n' (DECRQM), 'q', 'r', 's', 'u', 't', '>', etc.
-        // and the outer `private` branches ('$', '>', '?', ...)
-        // — will be added in chunk E2/E3.
-
-        else => {},
+        else => case0Extra(term, final),
     }
 }
 
@@ -1092,5 +1088,682 @@ fn freeIntList(list: *IntList) void {
     list.length = 0;
     list.head = null;
     list.tail = null;
+}
+
+// ─── Chunk E2: case 0, additional finals (h/l/r/s/u/t/n) ──────────
+
+extern fn term_set_window_title(term: *types.Terminal, title: [*:0]const u8) callconv(.c) void;
+extern fn xstrdup(s: [*:0]const u8) callconv(.c) ?[*:0]u8;
+extern fn xsnprintf(buf: [*]u8, n: usize, fmt: [*:0]const u8, ...) callconv(.c) usize;
+extern fn strlen(s: [*:0]const u8) callconv(.c) usize;
+
+// csi-shim.c window helpers
+extern fn csi_window_first_output_px_width(term: *types.Terminal) callconv(.c) c_int;
+extern fn csi_window_first_output_px_height(term: *types.Terminal) callconv(.c) c_int;
+extern fn csi_window_on_outputs_count(term: *types.Terminal) callconv(.c) c_int;
+extern fn csi_window_title_stack_len(term: *types.Terminal) callconv(.c) usize;
+extern fn csi_window_title_stack_push(term: *types.Terminal, title: ?[*:0]u8) callconv(.c) void;
+extern fn csi_window_title_stack_pop(term: *types.Terminal) callconv(.c) ?[*:0]u8;
+
+// ── Additional final cases ────────────────────────────────────────
+fn case0Extra(term: *types.Terminal, final: u8) void {
+    switch (final) {
+        'h', 'l' => blk: {
+            const param = vtParamGet(term, 0, 0);
+            const sm = (final == 'h');
+            if (param == 4) {
+                term.insert_mode = sm;
+                term.bits_affecting_ascii_printer._.insert_mode = sm;
+                term_update_ascii_printer(term);
+                break :blk;
+            }
+            // All other ECMA-48 SM/RM modes are unimplemented
+        },
+
+        'r' => {
+            const start = vtParamGet(term, 0, 1);
+            const end = @min(vtParamGet(term, 1, term.rows), term.rows);
+            if (end > start) {
+                term.scroll_region.start = start - 1;
+                term.scroll_region.end = end;
+                term_cursor_home(term);
+            }
+        },
+
+        's' => term_save_cursor(term),
+
+        'u' => {
+            const grid = term.grid orelse return;
+            term_restore_cursor(term, &grid.saved_cursor);
+        },
+
+        't' => {
+            const param = vtParamGet(term, 0, 0);
+            switch (param) {
+                1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 20, 24 => {}, // unimplemented
+                11 => { // report iconified — always report not-iconified
+                    term_to_slave(term, "\x1b[1t", 4);
+                },
+                13 => { // report window position — always (0,0)
+                    const reply = "\x1b[3;0;0t";
+                    switch (vtParamGet(term, 1, 0)) {
+                        0, 2 => term_to_slave(term, reply.ptr, reply.len),
+                        else => {},
+                    }
+                },
+                14 => { // report window size in pixels
+                    var width: c_int = -1;
+                    var height: c_int = -1;
+                    switch (vtParamGet(term, 1, 0)) {
+                        0 => { // text area size
+                            width = term.width - term.margins.left - term.margins.right;
+                            height = term.height - term.margins.top - term.margins.bottom;
+                        },
+                        2 => { // window size
+                            width = term.width;
+                            height = term.height;
+                        },
+                        else => {},
+                    }
+                    if (width >= 0 and height >= 0) {
+                        var reply: [64]u8 = undefined;
+                        const n = xsnprintf(&reply, reply.len, "\x1b[4;%d;%dt", height, width);
+                        term_to_slave(term, &reply, n);
+                    }
+                },
+                15 => { // report screen size in pixels
+                    const w = csi_window_first_output_px_width(term);
+                    const h = csi_window_first_output_px_height(term);
+                    if (w >= 0 and h >= 0) {
+                        var reply: [64]u8 = undefined;
+                        const n = xsnprintf(&reply, reply.len, "\x1b[5;%d;%dt", h, w);
+                        term_to_slave(term, &reply, n);
+                    } else {
+                        term_to_slave(term, "\x1b[5;0;0t", 8);
+                    }
+                },
+                16 => { // report cell size in pixels
+                    var reply: [64]u8 = undefined;
+                    const n = xsnprintf(&reply, reply.len, "\x1b[6;%d;%dt", term.cell_height, term.cell_width);
+                    term_to_slave(term, &reply, n);
+                },
+                18 => { // text area size in chars
+                    var reply: [64]u8 = undefined;
+                    const n = xsnprintf(&reply, reply.len, "\x1b[8;%d;%dt", term.rows, term.cols);
+                    term_to_slave(term, &reply, n);
+                },
+                19 => { // report screen size in chars
+                    const w = csi_window_first_output_px_width(term);
+                    const h = csi_window_first_output_px_height(term);
+                    if (w >= 0 and h >= 0) {
+                        var reply: [64]u8 = undefined;
+                        const n = xsnprintf(&reply, reply.len, "\x1b[9;%d;%dt", @divTrunc(h, term.cell_height), @divTrunc(w, term.cell_width));
+                        term_to_slave(term, &reply, n);
+                    } else {
+                        term_to_slave(term, "\x1b[9;0;0t", 8);
+                    }
+                },
+                21 => {}, // report window title — disabled upstream
+                22 => { // push window title
+                    const what = vtParamGet(term, 1, 0);
+                    if (what == 0 or what == 2) {
+                        if (csi_window_title_stack_len(term) < 128) {
+                            if (term.window_title) |title| {
+                                const dup = xstrdup(@ptrCast(title));
+                                csi_window_title_stack_push(term, dup);
+                            } else {
+                                const empty = xstrdup("");
+                                csi_window_title_stack_push(term, empty);
+                            }
+                        }
+                    }
+                },
+                23 => { // pop window title
+                    const what = vtParamGet(term, 1, 0);
+                    if (what == 0 or what == 2) {
+                        if (csi_window_title_stack_len(term) > 0) {
+                            const title = csi_window_title_stack_pop(term);
+                            if (title) |t| {
+                                term_set_window_title(term, t);
+                                free(@ptrCast(t));
+                            }
+                        }
+                    }
+                },
+                else => {},
+            }
+        },
+
+        'n' => blk: {
+            if (term.vt.params.idx == 0) break :blk;
+            const param = vtParamGet(term, 0, 0);
+            switch (param) {
+                5 => { // "Device OK"
+                    term_to_slave(term, "\x1b[0n", 4);
+                },
+                6 => { // cursor position report
+                    const grid = term.grid orelse break :blk;
+                    const row: c_int = if (term.origin == .absolute)
+                        grid.cursor.point.row
+                    else
+                        grid.cursor.point.row - term.scroll_region.start;
+                    var reply: [64]u8 = undefined;
+                    const n = xsnprintf(&reply, reply.len, "\x1b[%d;%dR", row + 1, grid.cursor.point.col + 1);
+                    term_to_slave(term, &reply, n);
+                },
+                else => {},
+            }
+        },
+
+        else => case0UnhandledDispatch(term, final),
+    }
+}
+
+fn case0UnhandledDispatch(term: *types.Terminal, final: u8) void {
+    _ = term;
+    _ = final;
+}
+
+// ─── Chunk E3a: case '?' private branch ───────────────────────────
+// DECSET/DECRST/DECRQM/XTSAVE/XTRESTORE/XTSMGRAPHICS/XTMODKEYS/kitty
+
+
+// csi-shim.c config/term accessors
+extern fn csi_modify_other_keys_2(term: *types.Terminal) callconv(.c) bool;
+extern fn csi_set_modify_other_keys_2(term: *types.Terminal, v: bool) callconv(.c) void;
+
+// sixel_colors_* / sixel_geometry_* — Zig exports from sixel.zig
+extern fn sixel_colors_report_current(term: *types.Terminal) callconv(.c) void;
+extern fn sixel_colors_reset(term: *types.Terminal) callconv(.c) void;
+extern fn sixel_colors_set(term: *types.Terminal, count: c_uint) callconv(.c) void;
+extern fn sixel_colors_report_max(term: *types.Terminal) callconv(.c) void;
+extern fn sixel_geometry_report_current(term: *types.Terminal) callconv(.c) void;
+extern fn sixel_geometry_reset(term: *types.Terminal) callconv(.c) void;
+extern fn sixel_geometry_set(term: *types.Terminal, w: c_uint, h: c_uint) callconv(.c) void;
+extern fn sixel_geometry_report_max(term: *types.Terminal) callconv(.c) void;
+
+// ZIG: decset/decrst/xtsave/xtrestore/decrqm — but these are `export fn` in same file.
+// Direct calls (no extern).
+
+const DECRPM_NOT_RECOGNIZED: c_uint = 0;
+
+fn caseQuestion(term: *types.Terminal, final: u8) void {
+    switch (final) {
+        'h' => { // DECSET
+            var i: usize = 0;
+            while (i < term.vt.params.idx) : (i += 1) {
+                decset(term, term.vt.params.v[i].value);
+            }
+        },
+        'l' => { // DECRST
+            var i: usize = 0;
+            while (i < term.vt.params.idx) : (i += 1) {
+                decrst(term, term.vt.params.v[i].value);
+            }
+        },
+        's' => { // XTSAVE
+            var i: usize = 0;
+            while (i < term.vt.params.idx) : (i += 1) {
+                xtsave(term, term.vt.params.v[i].value);
+            }
+        },
+        'r' => { // XTRESTORE
+            var i: usize = 0;
+            while (i < term.vt.params.idx) : (i += 1) {
+                xtrestore(term, term.vt.params.v[i].value);
+            }
+        },
+        'S' => blk: { // XTSMGRAPHICS — sixel colors/geometry
+            if (!csi_conf_tweak_sixel(term)) break :blk;
+            const target = vtParamGet(term, 0, 0);
+            const operation = vtParamGet(term, 1, 0);
+            switch (target) {
+                1 => switch (operation) {
+                    1 => sixel_colors_report_current(term),
+                    2 => sixel_colors_reset(term),
+                    3 => sixel_colors_set(term, @intCast(vtParamGet(term, 2, 0))),
+                    4 => sixel_colors_report_max(term),
+                    else => {},
+                },
+                2 => switch (operation) {
+                    1 => sixel_geometry_report_current(term),
+                    2 => sixel_geometry_reset(term),
+                    3 => sixel_geometry_set(term, @intCast(vtParamGet(term, 2, 0)), @intCast(vtParamGet(term, 3, 0))),
+                    4 => sixel_geometry_report_max(term),
+                    else => {},
+                },
+                else => {},
+            }
+        },
+        'm' => { // XTQMODKEYS — query modifier keys
+            const resource = vtParamGet(term, 0, 0);
+            var value: c_int = -1;
+            switch (resource) {
+                0 => value = 0, // modifyKeyboard
+                1, 2 => value = 1, // modifyCursorKeys/modifyFunctionKeys
+                4 => value = if (csi_modify_other_keys_2(term)) 2 else 1, // modifyOtherKeys
+                else => {},
+            }
+            if (value >= 0) {
+                var reply: [16]u8 = .{0} ** 16;
+                const chars = snprintf(&reply, reply.len, "\x1b[>%d;%dm", resource, value);
+                if (chars > 0) term_to_slave(term, &reply, @intCast(chars));
+            }
+        },
+        'n' => { // XTWINOPS theme report / DECRQM for insert mode
+            const param = vtParamGet(term, 0, 0);
+            switch (param) {
+                996 => { // query theme mode
+                    var reply: [16]u8 = .{0} ** 16;
+                    const chars = snprintf(&reply, reply.len, "\x1b[?997;%dn",
+                        if (term.colors.active_theme == .dark) @as(c_int, 1) else @as(c_int, 2));
+                    if (chars > 0) term_to_slave(term, &reply, @intCast(chars));
+                },
+                998 => term_send_visibility_report(term),
+                else => {},
+            }
+        },
+        'p' => { // DECRQM for SM/RM modes (ANSI private mode query)
+            const param = vtParamGet(term, 0, 0);
+            const status: DecrpmStatus = if (param == 4)
+                (if (term.insert_mode) .set else .reset)
+            else
+                .not_recognized;
+            var reply: [32]u8 = undefined;
+            const n = xsnprintf(&reply, reply.len, "\x1b[%u;%u$y", param, @intFromEnum(status));
+            term_to_slave(term, &reply, n);
+        },
+        'u' => { // kitty keyboard protocol query
+            const grid = term.grid orelse return;
+            const flags: u32 = @bitCast(grid.kitty_kbd.flags[grid.kitty_kbd.idx]);
+            var reply: [8]u8 = undefined;
+            const chars = snprintf(&reply, reply.len, "\x1b[?%uu", flags);
+            if (chars > 0) term_to_slave(term, &reply, @intCast(chars));
+        },
+        else => {},
+    }
+}
+
+// ─── Chunk E3b-1: private branches >, <, ' ', !, =, ?$ ────────────
+
+// externs
+extern fn term_reset(term: *types.Terminal, explicit: bool) callconv(.c) void;
+
+// csi-shim.c version + config accessors
+extern fn csi_foot_version_major() callconv(.c) c_uint;
+extern fn csi_foot_version_minor() callconv(.c) c_uint;
+extern fn csi_foot_version_patch() callconv(.c) c_uint;
+extern fn csi_foot_version_extra() callconv(.c) [*:0]const u8;
+extern fn csi_conf_cursor_style(term: *types.Terminal) callconv(.c) c_int;
+extern fn csi_conf_cursor_blink_enabled(term: *types.Terminal) callconv(.c) bool;
+
+const KITTY_KBD_SUPPORTED: c_int = 0x1f;
+
+// ── case '>' — secondary DA, XTVERSION, XTMODKEYS, kitty kbd push ──
+fn caseGreater(term: *types.Terminal, final: u8) void {
+    switch (final) {
+        'c' => blk: { // secondary DA
+            if (vtParamGet(term, 0, 0) != 0) break :blk;
+            var reply: [64]u8 = undefined;
+            const n = xsnprintf(&reply, reply.len, "\x1b[>1;%02u%02u%02u;0c",
+                csi_foot_version_major(),
+                csi_foot_version_minor(),
+                csi_foot_version_patch());
+            term_to_slave(term, &reply, n);
+        },
+        'm' => { // XTMODKEYS set
+            if (term.vt.params.idx == 0) return; // reset all — no-op
+            const resource = vtParamGet(term, 0, 0);
+            const value = vtParamGet(term, 1, -1);
+            switch (resource) {
+                0 => {},
+                1, 2 => {}, // modifyCursorKeys/modifyFunctionKeys ignored
+                4 => csi_set_modify_other_keys_2(term, value == 2),
+                else => {},
+            }
+        },
+        'n' => { // XTMODKEYS reset
+            const resource = vtParamGet(term, 0, 2);
+            switch (resource) {
+                0, 1, 2 => {},
+                4 => csi_set_modify_other_keys_2(term, false),
+                else => {},
+            }
+        },
+        'u' => { // kitty kbd push
+            const flags: u32 = @intCast(vtParamGet(term, 0, 0) & KITTY_KBD_SUPPORTED);
+            const grid = term.grid orelse return;
+            var idx = grid.kitty_kbd_idx;
+            if (idx + 1 >= grid.kitty_kbd_flags.len) {
+                idx = 0;
+            } else {
+                idx += 1;
+            }
+            grid.kitty_kbd_flags[idx] = @intCast(flags);
+            grid.kitty_kbd_idx = idx;
+        },
+        'q' => blk: { // XTVERSION
+            if (vtParamGet(term, 0, 0) != 0) break :blk;
+            const extra = csi_foot_version_extra();
+            const sep: [*:0]const u8 = if (extra[0] != 0) "-" else "";
+            var reply: [64]u8 = undefined;
+            const n = xsnprintf(&reply, reply.len, "\x1bP>|foot(%u.%u.%u%s%s)\x1b\\",
+                csi_foot_version_major(),
+                csi_foot_version_minor(),
+                csi_foot_version_patch(),
+                sep, extra);
+            term_to_slave(term, &reply, n);
+        },
+        else => {},
+    }
+}
+
+// ── case '<' — kitty kbd pop ──────────────────────────────────────
+fn caseLess(term: *types.Terminal, final: u8) void {
+    if (final != 'u') return;
+    const grid = term.grid orelse return;
+    const count: c_int = @min(vtParamGet(term, 0, 1), @as(c_int, @intCast(grid.kitty_kbd_flags.len)));
+    var idx = grid.kitty_kbd_idx;
+    var i: c_int = 0;
+    while (i < count) : (i += 1) {
+        grid.kitty_kbd_flags[idx] = 0;
+        if (idx == 0) {
+            idx = @intCast(grid.kitty_kbd_flags.len - 1);
+        } else {
+            idx -= 1;
+        }
+    }
+    grid.kitty_kbd_idx = idx;
+}
+
+// ── case ' ' — DECSCUSR cursor style ──────────────────────────────
+fn caseSpace(term: *types.Terminal, final: u8) void {
+    if (final != 'q') return;
+    const param = vtParamGet(term, 0, 0);
+    switch (param) {
+        0 => {
+            term.cursor_style = @enumFromInt(csi_conf_cursor_style(term));
+            term.cursor_blink.deccsusr = csi_conf_cursor_blink_enabled(term);
+            term_cursor_blink_update(term);
+        },
+        1, 2 => {
+            term.cursor_style = if (csi_conf_cursor_style(term) == 3) .hollow else .block;
+        },
+        3, 4 => { term.cursor_style = .underline; },
+        5, 6 => { term.cursor_style = .beam; },
+        else => {},
+    }
+    if (param > 0 and param <= 6) {
+        term.cursor_blink.deccsusr = (param & 1) != 0;
+        term_cursor_blink_update(term);
+    }
+}
+
+// ── case '!' — DECSTR soft reset ──────────────────────────────────
+fn caseBang(term: *types.Terminal, final: u8) void {
+    if (final != 'p') return;
+    term_reset(term, false);
+}
+
+// ── case '=' — tertiary DA + kitty kbd set ───────────────────────
+fn caseEquals(term: *types.Terminal, final: u8) void {
+    switch (final) {
+        'c' => { // tertiary DA
+            if (vtParamGet(term, 0, 0) != 0) return;
+            term_to_slave(term, "\x1bP!|464f4f54\x1b\\", 14);
+        },
+        'u' => { // kitty kbd set (mode 1/2/3)
+            const flag_set: u32 = @intCast(vtParamGet(term, 0, 0) & KITTY_KBD_SUPPORTED);
+            const mode = vtParamGet(term, 1, 1);
+            const grid = term.grid orelse return;
+            const idx = grid.kitty_kbd_idx;
+            switch (mode) {
+                1 => grid.kitty_kbd_flags[idx] = @intCast(flag_set),
+                2 => grid.kitty_kbd_flags[idx] |= @intCast(flag_set),
+                3 => grid.kitty_kbd_flags[idx] &= ~@as(types.KittyKbdFlags, @intCast(flag_set)),
+                else => {},
+            }
+        },
+        else => {},
+    }
+}
+
+// ── case 0x243f ("?$") — DECRQM for DEC private modes ────────────
+fn caseQuestionDollar(term: *types.Terminal, final: u8) void {
+    if (final != 'p') return;
+    const param: c_uint = @intCast(vtParamGet(term, 0, 0));
+    const status = decrqm(term, param);
+    var reply: [32]u8 = undefined;
+    const n = xsnprintf(&reply, reply.len, "\x1b[?%u;%u$y", param, @intFromEnum(status));
+    term_to_slave(term, &reply, n);
+}
+
+// ─── Chunk E3b-2: private branches $ and # ────────────────────────
+
+// externs
+extern fn grid_row(grid: *types.Grid, row_no: c_int) callconv(.c) ?*types.Row;
+extern fn grid_row_uri_range_erase(row: *types.Row, start: c_int, end: c_int) callconv(.c) void;
+extern fn sixel_overwrite_by_rectangle(term: *types.Terminal, row: c_int, col: c_int, height: c_int, width: c_int) callconv(.c) void;
+extern fn term_fill(term: *types.Terminal, row: c_int, col: c_int, c: u8, count: c_int, insert: bool) callconv(.c) void;
+extern fn xmalloc(size: usize) callconv(.c) ?*anyopaque;
+extern fn xrealloc(ptr: ?*anyopaque, size: usize) callconv(.c) ?*anyopaque;
+extern fn memcpy(dst: ?*anyopaque, src: ?*const anyopaque, n: usize) callconv(.c) ?*anyopaque;
+
+fn caseDollar(term: *types.Terminal, final: u8) void {
+    switch (final) {
+        'r' => blk: { // DECCARA — change attributes in rectangular area
+            var top: c_int = 0;
+            var left: c_int = 0;
+            var bottom: c_int = 0;
+            var right: c_int = 0;
+            if (!params_to_rectangular_area(term, 0, &top, &left, &bottom, &right)) break :blk;
+
+            const grid = term.grid orelse break :blk;
+            var r: c_int = top;
+            while (r <= bottom) : (r += 1) {
+                const row = grid_row(grid, r) orelse continue;
+                row.dirty = true;
+                const cells = row.cells orelse continue;
+                var c: c_int = left;
+                while (c <= right) : (c += 1) {
+                    const a = &cells[@intCast(c)].attrs;
+                    a.clean = false;
+                    var i: usize = 4;
+                    while (i < term.vt.params.idx) : (i += 1) {
+                        switch (@as(c_int, @intCast(term.vt.params.v[i].value))) {
+                            0 => { a.bold = false; a.underline = false; a.blink = false; a.reverse = false; },
+                            1 => a.bold = true,
+                            4 => a.underline = true,
+                            5 => a.blink = true,
+                            7 => a.reverse = true,
+                            22 => a.bold = false,
+                            24 => a.underline = false,
+                            25 => a.blink = false,
+                            27 => a.reverse = false,
+                            else => {},
+                        }
+                    }
+                }
+            }
+        },
+        't' => blk: { // DECRARA — reverse attributes in rectangular area
+            var top: c_int = 0;
+            var left: c_int = 0;
+            var bottom: c_int = 0;
+            var right: c_int = 0;
+            if (!params_to_rectangular_area(term, 0, &top, &left, &bottom, &right)) break :blk;
+            const grid = term.grid orelse break :blk;
+            var r: c_int = top;
+            while (r <= bottom) : (r += 1) {
+                const row = grid_row(grid, r) orelse continue;
+                row.dirty = true;
+                const cells = row.cells orelse continue;
+                var c: c_int = left;
+                while (c <= right) : (c += 1) {
+                    const a = &cells[@intCast(c)].attrs;
+                    a.clean = false;
+                    var i: usize = 4;
+                    while (i < term.vt.params.idx) : (i += 1) {
+                        switch (@as(c_int, @intCast(term.vt.params.v[i].value))) {
+                            0 => { a.bold = !a.bold; a.underline = !a.underline; a.blink = !a.blink; a.reverse = !a.reverse; },
+                            1 => a.bold = !a.bold,
+                            4 => a.underline = !a.underline,
+                            5 => a.blink = !a.blink,
+                            7 => a.reverse = !a.reverse,
+                            else => {},
+                        }
+                    }
+                }
+            }
+        },
+        'v' => blk: { // DECCRA — copy rectangular area
+            var src_top: c_int = 0;
+            var src_left: c_int = 0;
+            var src_bottom: c_int = 0;
+            var src_right: c_int = 0;
+            if (!params_to_rectangular_area(term, 0, &src_top, &src_left, &src_bottom, &src_right)) break :blk;
+
+            const src_page = vtParamGet(term, 4, 1);
+            const dst_rel_top = vtParamGet(term, 5, 1) - 1;
+            const dst_left = @min(vtParamGet(term, 6, 1) - 1, term.cols - 1);
+            const dst_page = vtParamGet(term, 7, 1);
+            if (src_page != 1 or dst_page != 1) break :blk;
+
+            const dst_rel_bottom = dst_rel_top + (src_bottom - src_top);
+            const dst_right = @min(dst_left + (src_right - src_left), term.cols - 1);
+            const dst_top = term_row_rel_to_abs(term, dst_rel_top);
+            const dst_bottom = term_row_rel_to_abs(term, dst_rel_bottom);
+            if (dst_left > dst_right or dst_top > dst_bottom) break :blk;
+
+            const row_count: c_int = @min(src_bottom - src_top, dst_bottom - dst_top) + 1;
+            const cell_count: c_int = @min(src_right - src_left, dst_right - dst_left) + 1;
+
+            sixel_overwrite_by_rectangle(term, dst_top, dst_left, row_count, cell_count);
+
+            const grid = term.grid orelse break :blk;
+            const cell_size = @sizeOf(types.Cell);
+            const row_count_u: usize = @intCast(row_count);
+            const cell_count_u: usize = @intCast(cell_count);
+
+            // Save src cells
+            const copy_ptr = xmalloc(row_count_u * @sizeOf(?[*]types.Cell)) orelse break :blk;
+            const copy: [*]?[*]types.Cell = @ptrCast(@alignCast(copy_ptr));
+
+            var r: c_int = 0;
+            while (r < row_count) : (r += 1) {
+                const row_buf = xmalloc(cell_count_u * cell_size) orelse break;
+                const row_cells: [*]types.Cell = @ptrCast(@alignCast(row_buf));
+                const src_row = grid_row(grid, src_top + r) orelse continue;
+                const src_cells = src_row.cells orelse continue;
+                _ = memcpy(row_cells, &src_cells[@intCast(src_left)], cell_count_u * cell_size);
+                copy[@intCast(r)] = row_cells;
+            }
+
+            // Paste into dst cells
+            r = 0;
+            while (r < row_count) : (r += 1) {
+                const dst_row = grid_row(grid, dst_top + r) orelse continue;
+                dst_row.dirty = true;
+                const dst_cells = dst_row.cells orelse continue;
+                const copy_row = copy[@intCast(r)] orelse continue;
+                _ = memcpy(&dst_cells[@intCast(dst_left)], copy_row, cell_count_u * cell_size);
+                free(@ptrCast(copy_row));
+
+                var c: c_int = 0;
+                while (c < cell_count) : (c += 1) {
+                    dst_cells[@intCast(dst_left + c)].attrs.clean = false;
+                }
+
+                if (dst_row.extra != null) {
+                    grid_row_uri_range_erase(dst_row, dst_left, dst_right);
+                }
+            }
+            free(@ptrCast(copy));
+        },
+        'x' => blk: { // DECFRA — fill rectangular area with char
+            const ch = vtParamGet(term, 0, 0);
+            if (!((ch >= 32 and ch < 126) or ch >= 160)) break :blk;
+
+            var top: c_int = 0;
+            var left: c_int = 0;
+            var bottom: c_int = 0;
+            var right: c_int = 0;
+            if (!params_to_rectangular_area(term, 1, &top, &left, &bottom, &right)) break :blk;
+
+            sixel_overwrite_by_rectangle(term, top, left, bottom - top + 1, right - left + 1);
+
+            var r: c_int = top;
+            while (r <= bottom) : (r += 1) {
+                term_fill(term, r, left, @intCast(ch), right - left + 1, true);
+            }
+        },
+        'z' => blk: { // DECERA — erase rectangular area
+            var top: c_int = 0;
+            var left: c_int = 0;
+            var bottom: c_int = 0;
+            var right: c_int = 0;
+            if (!params_to_rectangular_area(term, 0, &top, &left, &bottom, &right)) break :blk;
+
+            sixel_overwrite_by_rectangle(term, top, left, bottom - top + 1, right - left + 1);
+
+            var r: c_int = top;
+            while (r <= bottom) : (r += 1) {
+                term_erase(term, r, left, r, right);
+            }
+        },
+        else => {},
+    }
+}
+
+// ── case '#' — color stack push/pop/report ───────────────────────
+fn caseHash(term: *types.Terminal, final: u8) void {
+    switch (final) {
+        'P' => blk: { // XTPUSHCOLORS
+            var slot = vtParamGet(term, 0, 0);
+            if (slot == 0) slot = @intCast(term.color_stack.idx + 1);
+
+            const max_slot: c_int = 128;
+            if (slot > max_slot) slot = max_slot;
+
+            if (term.color_stack.size < @as(usize, @intCast(slot))) {
+                const new_size: usize = @intCast(slot);
+                const new_ptr = xrealloc(
+                    if (term.color_stack.stack) |s| @ptrCast(s) else null,
+                    new_size * @sizeOf(types.Colors),
+                ) orelse break :blk;
+                term.color_stack.stack = @ptrCast(@alignCast(new_ptr));
+
+                var i: usize = term.color_stack.size;
+                while (i < new_size - 1) : (i += 1) {
+                    const stack = term.color_stack.stack orelse break;
+                    _ = memcpy(&stack[i], &term.colors, @sizeOf(types.Colors));
+                }
+                term.color_stack.size = new_size;
+            }
+
+            term.color_stack.idx = @intCast(slot);
+            const stack = term.color_stack.stack orelse break :blk;
+            _ = memcpy(&stack[@as(usize, @intCast(slot - 1))], &term.colors, @sizeOf(types.Colors));
+        },
+        'Q' => blk: { // XTPOPCOLORS
+            var slot = vtParamGet(term, 0, 0);
+            if (slot == 0) slot = @intCast(term.color_stack.idx);
+
+            if (slot > 0 and @as(usize, @intCast(slot)) <= term.color_stack.size) {
+                const stack = term.color_stack.stack orelse break :blk;
+                _ = memcpy(&term.colors, &stack[@as(usize, @intCast(slot - 1))], @sizeOf(types.Colors));
+                term.color_stack.idx = @intCast(slot - 1);
+                term_damage_view(term);
+                term_damage_margins(term);
+            }
+        },
+        'R' => { // XTREPORTCOLORS
+            var reply: [64]u8 = undefined;
+            const n = xsnprintf(&reply, reply.len, "\x1b[?%zu;%zu#Q",
+                term.color_stack.idx, term.color_stack.size);
+            term_to_slave(term, &reply, n);
+        },
+        else => {},
+    }
 }
 

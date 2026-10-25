@@ -96,3 +96,47 @@ int csi_c32width(uint32_t c) {
     return wcwidth((wchar_t)c);
 #endif
 }
+
+/* XTWINOPS: query first output's physical dimensions (case 15, 19) */
+int csi_window_first_output_px_width(struct terminal *t) {
+    if (t->window == NULL) return -1;
+    tll_foreach(t->window->on_outputs, it) {
+        return it->item->dim.px_real.width;
+    }
+    return -1;
+}
+
+int csi_window_first_output_px_height(struct terminal *t) {
+    if (t->window == NULL) return -1;
+    tll_foreach(t->window->on_outputs, it) {
+        return it->item->dim.px_real.height;
+    }
+    return -1;
+}
+
+int csi_window_on_outputs_count(struct terminal *t) {
+    if (t->window == NULL) return 0;
+    return (int)tll_length(t->window->on_outputs);
+}
+
+/* window_title_stack: tll(char *) — needs char* push/pop helpers */
+size_t csi_window_title_stack_len(struct terminal *t) {
+    return tll_length(t->window_title_stack);
+}
+
+void csi_window_title_stack_push(struct terminal *t, char *title) {
+    tll_push_back(t->window_title_stack, title);
+}
+
+char *csi_window_title_stack_pop(struct terminal *t) {
+    if (tll_length(t->window_title_stack) == 0) return NULL;
+    return tll_pop_back(t->window_title_stack);
+}
+
+/* Foot version (for XTVERSION and secondary DA replies) */
+#include "version.h"
+
+unsigned csi_foot_version_major(void) { return FOOT_MAJOR; }
+unsigned csi_foot_version_minor(void) { return FOOT_MINOR; }
+unsigned csi_foot_version_patch(void) { return FOOT_PATCH; }
+const char *csi_foot_version_extra(void) { return FOOT_EXTRA; }
