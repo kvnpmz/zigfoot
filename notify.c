@@ -28,6 +28,8 @@ void notify_icon_add(struct terminal *term, const char *id, const char *symbolic
 void notify_icon_del(struct terminal *term, const char *id);
 bool fdm_notify_stdout(struct fdm *fdm, int fd, int events, void *data);
 bool expand_action_to_argv(struct terminal *term, const char *name, const char *label, size_t *argc, char ***argv);
+void notify_close(struct terminal *term, const char *id);
+void notify_close(struct terminal *term, const char *id);
 bool fdm_notify_stdout(struct fdm *fdm, int fd, int events, void *data);
 bool expand_action_to_argv(struct terminal *term, const char *name, const char *label, size_t *argc, char ***argv);
 
@@ -400,72 +402,5 @@ notify_notify(struct terminal *term, struct notification *notif)
     notif->pid = pid;
     notif->stdout_fd = stdout_fds[0];
     return true;
-}
-
-void
-notify_close(struct terminal *term, const char *id)
-{
-    xassert(id != NULL);
-    LOG_DBG("close notification %s", id);
-
-    tll_foreach(term->active_notifications, it) {
-        const struct notification *notif = &it->item;
-        if (notif->id == NULL || !streq(notif->id, id))
-            continue;
-
-        if (term->conf->desktop_notifications.close.argv.args == NULL) {
-            LOG_DBG(
-                "trying to close notification \"%s\" by sending SIGINT to %u",
-                id, notif->pid);
-
-            if (notif->pid == 0) {
-                LOG_WARN(
-                    "cannot close notification \"%s\": no helper process running",
-                    id);
-            } else {
-                /* Best-effort... */
-                kill(notif->pid, SIGINT);
-            }
-        } else {
-            LOG_DBG(
-                "trying to close notification \"%s\" "
-                "by running user defined command", id);
-
-            if (notif->external_id == 0) {
-                LOG_WARN("cannot close notification \"%s\": "
-                         "no daemon assigned notification ID available", id);
-                return;
-            }
-
-            char **argv = NULL;
-            size_t argc = 0;
-
-            char external_id[16];
-            xsnprintf(external_id, sizeof(external_id), "%u", notif->external_id);
-
-            if (!spawn_expand_template(
-                &term->conf->desktop_notifications.close, 1,
-                (const char *[]){"id"},
-                (const char *[]){external_id},
-                &argc, &argv))
-            {
-                return;
-            }
-
-            int devnull = open("/dev/null", O_RDONLY);
-            spawn(term->reaper, NULL, argv, devnull, -1, -1, NULL, NULL, NULL);
-
-            if (devnull >= 0)
-                close(devnull);
-
-            for (size_t i = 0; i < argc; i++)
-                free(argv[i]);
-            free(argv);
-        }
-
-        return;
-    }
-
-    LOG_WARN("cannot close notification \"%s\": no such notification", id);
 }
 

@@ -317,3 +317,53 @@ export fn expand_action_to_argv(
     if (expanded) |e| free(@ptrCast(e));
     return true;
 }
+
+// ── chunk B-2 ─────────────────────────────────────────────────────
+extern fn notify_active_remove(term: *types.Terminal, notif: *types.Notification) callconv(.c) void;
+extern fn notify_term_reaper(term: *types.Terminal) callconv(.c) ?*anyopaque;
+extern fn notify_conf_close_configured(term: *types.Terminal) callconv(.c) bool;
+extern fn notify_spawn_expand_close(term: *types.Terminal, id: [*:0]const u8, argc: *usize, argv: *?[*:null]?[*:0]u8) callconv(.c) bool;
+extern fn xsnprintf(buf: [*]u8, size: usize, fmt: [*:0]const u8, ...) callconv(.c) c_int;
+extern fn kill(pid: c_int, sig: c_int) callconv(.c) c_int;
+extern fn open(path: [*:0]const u8, flags: c_int, ...) callconv(.c) c_int;
+extern fn spawn(reaper: ?*anyopaque, cwd: ?[*:0]const u8, argv: ?[*:null]?[*:0]u8, stdin_fd: c_int, stdout_fd: c_int, stderr_fd: c_int, cb: ?*const fn (?*anyopaque, c_int, c_int, ?*anyopaque) callconv(.c) void, cb_data: ?*anyopaque, token: ?[*:0]const u8) callconv(.c) c_int;
+
+const SIGINT: c_int = 2;
+const O_RDONLY: c_int = 0;
+
+export fn notify_close(term: *types.Terminal, id: [*:0]const u8) callconv(.c) void {
+    var it = notify_active_first(term);
+    while (it) |notif| : (it = notify_active_next(term, notif)) {
+        const nid = notif.id orelse continue;
+        if (!std.mem.eql(u8, std.mem.span(nid), std.mem.span(id))) continue;
+
+        if (!notify_conf_close_configured(term)) {
+            if (notif.pid != 0) {
+                _ = kill(notif.pid, SIGINT);
+            }
+        } else {
+            if (notif.external_id == 0) return;
+
+            var external_id_buf: [16]u8 = undefined;
+            const n = xsnprintf(&external_id_buf, external_id_buf.len, "%u", notif.external_id);
+            external_id_buf[@intCast(n)] = 0;
+
+            var argv: ?[*:null]?[*:0]u8 = null;
+            var argc: usize = 0;
+            if (!notify_spawn_expand_close(term, @ptrCast(&external_id_buf), &argc, &argv)) return;
+
+            const devnull = open("/dev/null", O_RDONLY);
+            _ = spawn(notify_term_reaper(term), null, argv, devnull, -1, -1, null, null, null);
+            if (devnull >= 0) _ = close(devnull);
+
+            if (argv) |a| {
+                var i: usize = 0;
+                while (i < argc) : (i += 1) {
+                    if (a[i]) |s| free(@ptrCast(s));
+                }
+                free(@ptrCast(a));
+            }
+        }
+        return;
+    }
+}
