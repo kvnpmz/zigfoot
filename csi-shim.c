@@ -87,3 +87,12 @@ bool csi_get_url_ime_reenable_after_url_mode(struct terminal *t) {
 void csi_set_url_ime_reenable_after_url_mode(struct terminal *t, bool v) {
     t->url.ime_reenable_after_url_mode = v;
 }
+
+/* c32width is static inline in char32.h — no C symbol. Wrap it. */
+int csi_c32width(uint32_t c) {
+#if defined(FOOT_GRAPHEME_CLUSTERING)
+    return utf8proc_charwidth((utf8proc_int32_t)c);
+#else
+    return wcwidth((wchar_t)c);
+#endif
+}

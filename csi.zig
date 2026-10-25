@@ -413,7 +413,7 @@ extern fn sixel_destroy(sixel: *types.Sixel) callconv(.c) void;
 // same Zig type. These helpers avoid the @ptrCast dance.
 
 fn freeDamageList(list: *types.DamageList) void {
-    var it = list.head;
+    var it: ?*IntNode = @ptrCast(@alignCast(list.head));
     while (it) |node| {
         const next = node.next;
         free(@ptrCast(node));
@@ -681,5 +681,416 @@ export fn params_to_rectangular_area(
     top.* = term_row_rel_to_abs(term, rel_top);
     bottom.* = term_row_rel_to_abs(term, rel_bottom);
     return true;
+}
+
+// ─── Chunk C2: decrpm + decrqm ─────────────────────────────────────
+// DECRQM — DEC Private Mode Report. Returns the current state of a
+// DEC private mode as a DECRPM status code (0..4).
+
+const DecrpmStatus = enum(c_int) {
+    not_recognized = 0,
+    set = 1,
+    reset = 2,
+    permanently_set = 3,
+    permanently_reset = 4,
+};
+
+fn decrpm(enabled: bool) DecrpmStatus {
+    return if (enabled) .set else .reset;
+}
+
+// GRAPHEME_WIDTH_* enum values (from config.h)
+const GRAPHEME_WIDTH_DOUBLE: c_int = 2;
+
+extern fn csi_conf_grapheme_width_method(term: *types.Terminal) callconv(.c) c_int;
+
+export fn decrqm(term: *const types.Terminal, param: c_uint) callconv(.c) DecrpmStatus {
+    const t: *types.Terminal = @constCast(term);
+    return switch (param) {
+        1 => decrpm(term.cursor_keys_mode == .application),
+        5 => decrpm(term.reverse),
+        6 => decrpm(term.origin == .relative),
+        7 => decrpm(term.auto_margin),
+        9 => .permanently_reset,
+        12 => decrpm(term.cursor_blink.decset),
+        25 => decrpm(!term.hide_cursor),
+        45 => decrpm(term.reverse_wrap),
+        66 => decrpm(term.keypad_keys_mode == .application),
+        67 => .permanently_reset,
+        80 => decrpm(!sixel_get_scrolling(t)),
+        1000 => decrpm(term.mouse_tracking == .click),
+        1001 => .permanently_reset,
+        1002 => decrpm(term.mouse_tracking == .drag),
+        1003 => decrpm(term.mouse_tracking == .motion),
+        1004 => decrpm(term.focus_events),
+        1005 => .permanently_reset,
+        1006 => decrpm(term.mouse_reporting == .sgr),
+        1007 => decrpm(term.alt_scrolling),
+        1015 => decrpm(term.mouse_reporting == .urxvt),
+        1016 => decrpm(term.mouse_reporting == .sgr_pixels),
+        1034 => decrpm(term.meta.eight_bit),
+        1035 => decrpm(term.num_lock_modifier),
+        1036 => decrpm(term.meta.esc_prefix),
+        1042 => decrpm(term.bell_action_enabled),
+        47, 1047, 1049 => decrpm(term.grid == &term.alt),
+        1070 => decrpm(sixel_get_use_private_palette(t)),
+        2004 => decrpm(term.bracketed_paste),
+        2026 => decrpm(term.render.app_sync_updates.enabled),
+        2027 => if (csi_conf_grapheme_width_method(t) != GRAPHEME_WIDTH_DOUBLE)
+            .permanently_reset
+        else
+            decrpm(csi_grapheme_shaping(t)),
+        2031 => decrpm(term.report_theme_changes),
+        2033 => decrpm(term.visibility_reports),
+        2048 => decrpm(csi_size_notifications(t)),
+        8452 => decrpm(sixel_get_cursor_right_of_graphics(t)),
+        737769 => decrpm(term_ime_is_enabled(t)),
+        else => .not_recognized,
+    };
+}
+
+// ─── Chunk E1: csi_dispatch — helpers + externs ───────────────────
+
+// Cursor movement
+extern fn term_cursor_up(term: *types.Terminal, count: c_int) callconv(.c) void;
+extern fn term_cursor_down(term: *types.Terminal, count: c_int) callconv(.c) void;
+extern fn term_cursor_left(term: *types.Terminal, count: c_int) callconv(.c) void;
+extern fn term_cursor_right(term: *types.Terminal, count: c_int) callconv(.c) void;
+extern fn term_cursor_col(term: *types.Terminal, col: c_int) callconv(.c) void;
+
+// Print/erase/scroll
+extern fn term_print(term: *types.Terminal, wc: u32, width: c_int, insert: bool) callconv(.c) void;
+extern fn term_erase_scrollback(term: *types.Terminal) callconv(.c) void;
+extern fn term_scroll(term: *types.Terminal, amount: c_int) callconv(.c) void;
+extern fn term_scroll_reverse(term: *types.Terminal, amount: c_int) callconv(.c) void;
+extern fn term_scroll_partial(term: *types.Terminal, region: types.ScrollRegion, amount: c_int) callconv(.c) void;
+extern fn term_scroll_reverse_partial(term: *types.Terminal, region: types.ScrollRegion, amount: c_int) callconv(.c) void;
+
+// char32 / composed
+extern fn csi_c32width(c: u32) callconv(.c) c_int;
+extern fn composed_lookup(composed: ?*types.Composed, key: u32) callconv(.c) ?*types.Composed;
+
+// libc
+extern fn memmove(dst: ?*anyopaque, src: ?*const anyopaque, n: usize) callconv(.c) ?*anyopaque;
+extern fn snprintf(buf: [*]u8, n: usize, fmt: [*:0]const u8, ...) callconv(.c) c_int;
+
+// csi-shim.c config accessors
+extern fn csi_conf_tweak_sixel(term: *types.Terminal) callconv(.c) bool;
+extern fn csi_conf_security_osc52(term: *types.Terminal) callconv(.c) c_int;
+
+const OSC52_ENABLED: c_int = 3;
+const OSC52_COPY_ENABLED: c_int = 1;
+
+// CELL_COMB_CHARS_LO from terminal_types.zig
+const CELL_COMB_CHARS_LO: u32 = 0x0020_0000;
+
+// ── csi_dispatch ──────────────────────────────────────────────────
+export fn csi_dispatch(term: *types.Terminal, final: u8) callconv(.c) void {
+    switch (term.vt.private) {
+        0 => case0Dispatch(term, final),
+        else => {}, // TODO: cases '$', '>', '?', '!', '"', "'", '*', '+', '-', '=' as we fetch them
+    }
+}
+
+// ── case 0: the big inner switch on `final` ──────────────────────
+fn case0Dispatch(term: *types.Terminal, final: u8) void {
+    switch (final) {
+        'b' => blk: {
+            if (term.vt.last_printed != 0) {
+                const grid = term.grid orelse break :blk;
+                const max_count: usize = @intCast(grid.num_rows * @as(c_int, @intCast(term.cols)));
+                const count: c_int = @min(vtParamGet(term, 0, 1), @as(c_int, @intCast(max_count)));
+
+                var width: c_int = undefined;
+                if (term.vt.last_printed >= CELL_COMB_CHARS_LO) {
+                    const comp = composed_lookup(term.composed, term.vt.last_printed - CELL_COMB_CHARS_LO);
+                    if (comp) |c| {
+                        width = if (c.forced_width > 0) c.forced_width else c.width;
+                    } else {
+                        break :blk;
+                    }
+                } else {
+                    width = csi_c32width(term.vt.last_printed);
+                }
+
+                if (width > 0) {
+                    var i: c_int = 0;
+                    while (i < count) : (i += 1) {
+                        term_print(term, term.vt.last_printed, width, false);
+                    }
+                }
+            }
+        },
+
+        'c' => blk: {
+            if (vtParamGet(term, 0, 0) != 0) break :blk;
+
+            var reply: [32]u8 = undefined;
+            const has_sixel = csi_conf_tweak_sixel(term);
+            const osc52 = csi_conf_security_osc52(term);
+            const has_osc52 = (osc52 == OSC52_ENABLED or osc52 == OSC52_COPY_ENABLED);
+
+            const sixel_str: [*:0]const u8 = if (has_sixel) ";4" else "";
+            const osc52_str: [*:0]const u8 = if (has_osc52) ";52" else "";
+
+            const len = snprintf(&reply, reply.len, "\x1b[?62%s;22;28%sc", sixel_str, osc52_str);
+            if (len > 0) {
+                term_to_slave(term, &reply, @intCast(len));
+            }
+        },
+
+        'd' => {
+            const rel_row = vtParamGet(term, 0, 1) - 1;
+            const row = term_row_rel_to_abs(term, rel_row);
+            const grid = term.grid orelse return;
+            term_cursor_to(term, row, grid.cursor.point.col);
+        },
+
+        'm' => csi_sgr(term),
+
+        'A' => term_cursor_up(term, vtParamGet(term, 0, 1)),
+
+        'e', 'B' => term_cursor_down(term, vtParamGet(term, 0, 1)),
+
+        'a', 'C' => term_cursor_right(term, vtParamGet(term, 0, 1)),
+
+        'D' => term_cursor_left(term, vtParamGet(term, 0, 1)),
+
+        'E' => {
+            term_cursor_down(term, vtParamGet(term, 0, 1));
+            const grid = term.grid orelse return;
+            term_cursor_left(term, grid.cursor.point.col);
+        },
+
+        'F' => {
+            term_cursor_up(term, vtParamGet(term, 0, 1));
+            const grid = term.grid orelse return;
+            term_cursor_left(term, grid.cursor.point.col);
+        },
+
+        'g' => {
+            const param = vtParamGet(term, 0, 0);
+            switch (param) {
+                0 => {
+                    const grid = term.grid orelse return;
+                    var it: ?*IntNode = @ptrCast(@alignCast(term.tab_stops.head));
+                    while (it) |node| {
+                        const next: ?*IntNode = node.next;
+                        if (node.item == grid.cursor.point.col) {
+                            freeIntNode_remove(&term.tab_stops, node);
+                        } else if (node.item > grid.cursor.point.col) {
+                            break;
+                        }
+                        it = next;
+                    }
+                },
+                3 => freeIntList(&term.tab_stops),
+                else => {},
+            }
+        },
+
+        '`', 'G' => {
+            const col = @min(vtParamGet(term, 0, 1), term.cols) - 1;
+            term_cursor_col(term, col);
+        },
+
+        'f', 'H' => {
+            const rel_row = vtParamGet(term, 0, 1) - 1;
+            const row = term_row_rel_to_abs(term, rel_row);
+            const col = @min(vtParamGet(term, 1, 1), term.cols) - 1;
+            term_cursor_to(term, row, col);
+        },
+
+        'J' => {
+            const param = vtParamGet(term, 0, 0);
+            switch (param) {
+                0 => {
+                    const grid = term.grid orelse return;
+                    term_erase(term, grid.cursor.point.row, grid.cursor.point.col, term.rows - 1, term.cols - 1);
+                    grid.cursor.lcf = false;
+                },
+                1 => {
+                    const grid = term.grid orelse return;
+                    term_erase(term, 0, 0, grid.cursor.point.row, grid.cursor.point.col);
+                    grid.cursor.lcf = false;
+                },
+                2 => {
+                    term_erase(term, 0, 0, term.rows - 1, term.cols - 1);
+                    if (term.grid) |g| g.cursor.lcf = false;
+                },
+                3 => term_erase_scrollback(term),
+                else => {},
+            }
+        },
+
+        'K' => {
+            const param = vtParamGet(term, 0, 0);
+            switch (param) {
+                0 => {
+                    const grid = term.grid orelse return;
+                    term_erase(term, grid.cursor.point.row, grid.cursor.point.col, grid.cursor.point.row, term.cols - 1);
+                    grid.cursor.lcf = false;
+                },
+                1 => {
+                    const grid = term.grid orelse return;
+                    term_erase(term, grid.cursor.point.row, 0, grid.cursor.point.row, grid.cursor.point.col);
+                    grid.cursor.lcf = false;
+                },
+                2 => {
+                    const grid = term.grid orelse return;
+                    term_erase(term, grid.cursor.point.row, 0, grid.cursor.point.row, term.cols - 1);
+                    grid.cursor.lcf = false;
+                },
+                else => {},
+            }
+        },
+
+        'L' => blk: {
+            const grid = term.grid orelse break :blk;
+            if (grid.cursor.point.row < term.scroll_region.start or grid.cursor.point.row >= term.scroll_region.end)
+                break :blk;
+            const count = @min(vtParamGet(term, 0, 1), term.scroll_region.end - grid.cursor.point.row);
+            term_scroll_reverse_partial(term, .{ .start = grid.cursor.point.row, .end = term.scroll_region.end }, count);
+            grid.cursor.lcf = false;
+            grid.cursor.point.col = 0;
+        },
+
+        'M' => blk: {
+            const grid = term.grid orelse break :blk;
+            if (grid.cursor.point.row < term.scroll_region.start or grid.cursor.point.row >= term.scroll_region.end)
+                break :blk;
+            const count = @min(vtParamGet(term, 0, 1), term.scroll_region.end - grid.cursor.point.row);
+            term_scroll_partial(term, .{ .start = grid.cursor.point.row, .end = term.scroll_region.end }, count);
+            grid.cursor.lcf = false;
+            grid.cursor.point.col = 0;
+        },
+
+        'P' => blk: {
+            const grid = term.grid orelse break :blk;
+            const cur_row = grid.cur_row orelse break :blk;
+            const cells = cur_row.cells orelse break :blk;
+            const count = @min(vtParamGet(term, 0, 1), term.cols - grid.cursor.point.col);
+            const remaining = term.cols - (grid.cursor.point.col + count);
+            const col: usize = @intCast(grid.cursor.point.col);
+            const cnt: usize = @intCast(count);
+            const rem: usize = @intCast(remaining);
+            const cell_size = @sizeOf(types.Cell);
+            _ = memmove(&cells[col], &cells[col + cnt], rem * cell_size);
+            var c: usize = 0;
+            while (c < rem) : (c += 1) {
+                cells[col + c].attrs.clean = false;
+            }
+            cur_row.dirty = true;
+            term_erase(term, grid.cursor.point.row, grid.cursor.point.col + remaining, grid.cursor.point.row, term.cols - 1);
+            grid.cursor.lcf = false;
+        },
+
+        '@' => blk: {
+            const grid = term.grid orelse break :blk;
+            const cur_row = grid.cur_row orelse break :blk;
+            const cells = cur_row.cells orelse break :blk;
+            const count = @min(vtParamGet(term, 0, 1), term.cols - grid.cursor.point.col);
+            const remaining = term.cols - (grid.cursor.point.col + count);
+            const col: usize = @intCast(grid.cursor.point.col);
+            const cnt: usize = @intCast(count);
+            const rem: usize = @intCast(remaining);
+            const cell_size = @sizeOf(types.Cell);
+            _ = memmove(&cells[col + cnt], &cells[col], rem * cell_size);
+            var c: usize = 0;
+            while (c < rem) : (c += 1) {
+                cells[col + cnt + c].attrs.clean = false;
+            }
+            cur_row.dirty = true;
+            term_erase(term, grid.cursor.point.row, grid.cursor.point.col, grid.cursor.point.row, grid.cursor.point.col + count - 1);
+            grid.cursor.lcf = false;
+        },
+
+        'S' => {
+            const amount = @min(vtParamGet(term, 0, 1), term.scroll_region.end - term.scroll_region.start);
+            term_scroll(term, amount);
+        },
+
+        'T' => {
+            const amount = @min(vtParamGet(term, 0, 1), term.scroll_region.end - term.scroll_region.start);
+            term_scroll_reverse(term, amount);
+        },
+
+        'X' => blk: {
+            const grid = term.grid orelse break :blk;
+            const count = @min(vtParamGet(term, 0, 1), term.cols - grid.cursor.point.col);
+            term_erase(term, grid.cursor.point.row, grid.cursor.point.col, grid.cursor.point.row, grid.cursor.point.col + count - 1);
+            grid.cursor.lcf = false;
+        },
+
+        'I' => {
+            var count = vtParamGet(term, 0, 1);
+            const grid = term.grid orelse return;
+            var new_col = grid.cursor.point.col;
+            var it: ?*IntNode = @ptrCast(@alignCast(term.tab_stops.head));
+            while (it) |node| {
+                if (node.item > new_col) {
+                    count -= 1;
+                    if (count < 0) break;
+                    new_col = node.item;
+                }
+                it = node.next;
+            }
+            const lcf = grid.cursor.lcf;
+            term_cursor_right(term, new_col - grid.cursor.point.col);
+            if (term.grid) |g| g.cursor.lcf = lcf;
+        },
+
+        'Z' => {
+            var count = vtParamGet(term, 0, 1);
+            const grid = term.grid orelse return;
+            var new_col = grid.cursor.point.col;
+            var it: ?*IntNode = @ptrCast(@alignCast(term.tab_stops.tail));
+            while (it) |node| {
+                if (node.item < new_col) {
+                    count -= 1;
+                    if (count < 0) break;
+                    new_col = node.item;
+                }
+                it = node.prev;
+            }
+            term_cursor_left(term, grid.cursor.point.col - new_col);
+        },
+
+        // TODO: cases 'h', 'l' (DECSET/DECRST), 'n' (DECRQM), 'q', 'r', 's', 'u', 't', '>', etc.
+        // and the outer `private` branches ('$', '>', '?', ...)
+        // — will be added in chunk E2/E3.
+
+        else => {},
+    }
+}
+
+// ── Helpers for TllInt (tab_stops list) ──────────────────────────
+const IntNode = extern struct {
+    item: c_int,
+    prev: ?*IntNode,
+    next: ?*IntNode,
+};
+const IntList = types.TllInt;
+
+
+fn freeIntNode_remove(list: *IntList, node: *IntNode) void {
+    const prev = node.prev;
+    const next = node.next;
+    if (prev) |p| p.next = next else list.head = next;
+    if (next) |n| n.prev = prev else list.tail = prev;
+    free(@ptrCast(node));
+    list.length -= 1;
+}
+
+fn freeIntList(list: *IntList) void {
+    var it: ?*IntNode = @ptrCast(@alignCast(list.head));
+    while (it) |node| {
+        const next = node.next;
+        free(@ptrCast(node));
+        it = next;
+    }
+    list.length = 0;
+    list.head = null;
+    list.tail = null;
 }
 
