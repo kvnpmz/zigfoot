@@ -435,3 +435,237 @@ export fn notif_done(_reaper: ?*anyopaque, pid: c_int, _status: c_int, data: ?*a
         return;
     }
 }
+
+// ── chunk B-3b ────────────────────────────────────────────────────
+extern fn notify_active_push_back(term: *types.Terminal, notif: *types.Notification) callconv(.c) void;
+extern fn notify_active_back(term: *types.Terminal) callconv(.c) ?*types.Notification;
+extern fn notify_actions_first(notif: *types.Notification) callconv(.c) ?[*:0]const u8;
+extern fn notify_actions_next(notif: *types.Notification, prev: [*:0]const u8) callconv(.c) ?[*:0]const u8;
+extern fn notify_actions_len(notif: *types.Notification) callconv(.c) usize;
+extern fn notify_actions_zero(notif: *types.Notification) callconv(.c) void;
+extern fn notify_conf_command_configured(term: *types.Terminal) callconv(.c) bool;
+extern fn notify_conf_inhibit_when_focused(term: *types.Terminal) callconv(.c) bool;
+extern fn notify_conf_app_id(term: *types.Terminal) callconv(.c) ?[*:0]const u8;
+extern fn notify_spawn_expand_command(term: *types.Terminal, app_id: [*:0]const u8, window_title: [*:0]const u8, icon: [*:0]const u8, title: [*:0]const u8, body: [*:0]const u8, category: [*:0]const u8, urgency: [*:0]const u8, muted: [*:0]const u8, sound_name: [*:0]const u8, expire_time: [*:0]const u8, replace_id: [*:0]const u8, action_argument: [*:0]const u8, argc: *usize, argv: *?[*:null]?[*:0]u8) callconv(.c) bool;
+extern fn notify_term_window_title(term: *types.Terminal) callconv(.c) ?[*:0]const u8;
+extern fn notify_term_app_id(term: *types.Terminal) callconv(.c) ?[*:0]const u8;
+extern fn notify_term_kbd_focus(term: *types.Terminal) callconv(.c) bool;
+extern fn notify_pipe2(fds: [*]c_int, flags: c_int) callconv(.c) c_int;
+extern fn notify_fdm_add_stdout(fdm: *anyopaque, fd: c_int, term: *types.Terminal) callconv(.c) void;
+
+const O_NONBLOCK: c_int = 0x800;
+const NOTIFY_ALWAYS: types.NotifyWhen = .always;
+const NOTIFY_URGENCY_LOW: types.NotifyUrgency = .low;
+const NOTIFY_URGENCY_NORMAL: types.NotifyUrgency = .normal;
+
+export fn notify_notify(term: *types.Terminal, notif_in: *types.Notification) callconv(.c) bool {
+    var notif: *types.Notification = notif_in;
+    notif.pid = -1;
+    notif.stdout_fd = -1;
+    notif.icon_fd = -1;
+
+    if (!notify_conf_command_configured(term)) return false;
+
+    if ((notify_conf_inhibit_when_focused(term) or notif.when != NOTIFY_ALWAYS)
+        and notify_term_kbd_focus(term))
+    {
+        return false;
+    }
+
+    const app_id: [*:0]const u8 = if (notif.app_id) |a| a
+        else if (notify_term_app_id(term)) |a| a
+        else notify_conf_app_id(term) orelse "";
+
+    const title: [*:0]const u8 = if (notif.title) |t| t
+        else if (notif.body) |b| b else "";
+
+    const body: [*:0]const u8 = if (notif.title != null and notif.body != null) notif.body.? else "";
+
+    var icon_name_or_path: [*:0]const u8 = "";
+
+    if (notif.icon_cache_id) |cache_id| {
+        const count = notify_icon_count();
+        var i: usize = 0;
+        while (i < count) : (i += 1) {
+            const icon = notify_icon_at(term, i);
+            if (icon.id) |iid| {
+                if (std.mem.eql(u8, std.mem.span(iid), std.mem.span(cache_id))) {
+                    icon_name_or_path = icon.symbolic_name.?;
+                    break;
+                }
+            }
+        }
+    } else if (notif.icon_symbolic_name) |sn| {
+        icon_name_or_path = sn;
+    } else if (notif.icon_data_sz > 0) {
+        if (write_icon_file(@ptrCast(notif.icon_data.?), notif.icon_data_sz, &notif.icon_fd, &notif.icon_path, &notif.icon_symbolic_name)) {
+            icon_name_or_path = notif.icon_symbolic_name.?;
+        }
+    }
+
+    const track_notification = notif.focus or notif.report_activated or notif.may_be_programatically_closed;
+
+    var replaces_id: u32 = 0;
+    if (notif.id) |id| {
+        var it = notify_active_first(term);
+        while (it) |existing| : (it = notify_active_next(term, existing)) {
+            const eid = existing.id orelse continue;
+            if (existing.external_id != 0 and std.mem.eql(u8, std.mem.span(eid), std.mem.span(id))) {
+                replaces_id = existing.external_id;
+                existing.report_activated = false;
+                existing.report_closed = false;
+            }
+        }
+    }
+
+    var replaces_id_buf: [16]u8 = undefined;
+    const rn = xsnprintf(&replaces_id_buf, replaces_id_buf.len, "%u", replaces_id);
+    replaces_id_buf[@intCast(rn)] = 0;
+
+    const urgency_str: [*:0]const u8 = if (notif.urgency == NOTIFY_URGENCY_LOW) "low"
+        else if (notif.urgency == NOTIFY_URGENCY_NORMAL) "normal" else "critical";
+
+    var argv: ?[*:null]?[*:0]u8 = null;
+    var argc: usize = 0;
+    var action_argv: ?[*:null]?[*:0]u8 = null;
+    var action_argc: usize = 0;
+
+    var expire_time_buf: [16]u8 = undefined;
+    const en = xsnprintf(&expire_time_buf, expire_time_buf.len, "%d", notif.expire_time);
+    expire_time_buf[@intCast(en)] = 0;
+
+    if (notify_conf_action_arg_configured(term)) {
+        if (!expand_action_to_argv(term, "default", "Activate", &action_argc, &action_argv)) return false;
+
+        var action_idx: usize = 1;
+        var ait = notify_actions_first(notif);
+        while (ait) |item| : (ait = notify_actions_next(notif, item)) {
+            var name_buf: [16]u8 = undefined;
+            const nb = xsnprintf(&name_buf, name_buf.len, "%zu", action_idx);
+            action_idx += 1;
+            name_buf[@intCast(nb)] = 0;
+
+            if (!expand_action_to_argv(term, @ptrCast(&name_buf), item, &action_argc, &action_argv)) {
+                if (action_argv) |a| {
+                    var i: usize = 0;
+                    while (i < action_argc) : (i += 1) if (a[i]) |s| free(@ptrCast(s));
+                    free(@ptrCast(a));
+                }
+                return false;
+            }
+        }
+    }
+
+    const window_title = notify_term_window_title(term) orelse "";
+    const category: [*:0]const u8 = notif.category orelse "";
+    const muted_str: [*:0]const u8 = if (notif.muted) "true" else "false";
+    const sound_name: [*:0]const u8 = notif.sound_name orelse "";
+
+    if (!notify_spawn_expand_command(term,
+        app_id, window_title, icon_name_or_path, title, body, category,
+        urgency_str, muted_str, sound_name,
+        @ptrCast(&expire_time_buf), @ptrCast(&replaces_id_buf),
+        "${action-argument}", &argc, &argv))
+    {
+        return false;
+    }
+
+    // Post-process argv: replace ${action-argument} entry with action_argv entries
+    var i: usize = 0;
+    while (i < argc) : (i += 1) {
+        if (argv) |a| {
+            const s = a[i] orelse continue;
+            if (!std.mem.eql(u8, std.mem.span(s), "${action-argument}")) continue;
+
+            if (action_argc == 0) {
+                free(@ptrCast(s));
+                var j: usize = i;
+                while (j < argc) : (j += 1) a[j] = a[j + 1];
+                argc -= 1;
+            } else {
+                const new_size = (argc + action_argc) * @sizeOf(?[*:0]u8);
+                const new_ptr: [*]?[*:0]u8 = @ptrCast(@alignCast(xrealloc(@ptrCast(a), new_size) orelse return false));
+                argv = @ptrCast(new_ptr);
+
+                var j: usize = argc;
+                while (j > i) : (j -= 1) new_ptr[j + action_argc - 1] = new_ptr[j - 1];
+
+                free(@ptrCast(s));
+
+                var k: usize = 0;
+                while (k < action_argc) : (k += 1) {
+                    if (action_argv) |aa| new_ptr[i + k] = aa[k];
+                }
+                argc += action_argc;
+                argc -= 1;
+            }
+            break;
+        }
+    }
+
+    var stdout_fds: [2]c_int = .{ -1, -1 };
+    var track = track_notification;
+    if (track) {
+        if (notify_pipe2(&stdout_fds, O_CLOEXEC | O_NONBLOCK) < 0) {
+            track = false;
+        } else {
+            notify_active_push_back(term, notif);
+
+            notif.id = null;
+            notif.title = null;
+            notif.body = null;
+            notif.category = null;
+            notif.app_id = null;
+            notif.icon_cache_id = null;
+            notif.icon_symbolic_name = null;
+            notif.icon_data = null;
+            notif.icon_data_sz = 0;
+            notif.icon_path = null;
+            notif.sound_name = null;
+            notif.icon_fd = -1;
+            notif.stdout_fd = -1;
+
+            const new_notif = notify_active_back(term).?;
+            new_notif.button_count = @intCast(notify_actions_len(notif));
+            notify_actions_zero(notif);
+            notif = new_notif;
+        }
+    }
+
+    const fdm = notify_term_fdm(term).?;
+    if (stdout_fds[0] >= 0) {
+        notify_fdm_add_stdout(fdm, stdout_fds[0], term);
+    }
+
+    var ctx: ?*DoneContext = null;
+    if (track) {
+        ctx = @ptrCast(@alignCast(xmalloc(@sizeOf(DoneContext)) orelse return false));
+        ctx.?.wayl = notify_term_wayl(term) orelse @ptrFromInt(1);
+        ctx.?.term = term;
+    }
+
+    const devnull = open("/dev/null", O_RDONLY);
+    const reaper = notify_term_reaper(term);
+    const cb: ?*const fn (?*anyopaque, c_int, c_int, ?*anyopaque) callconv(.c) void =
+        if (track) @ptrCast(&notif_done) else null;
+    const pid = spawn(reaper, null, argv, devnull, stdout_fds[1], -1, cb, if (ctx) |c| @ptrCast(c) else null, null);
+
+    if (stdout_fds[1] >= 0) _ = close(stdout_fds[1]);
+    if (pid < 0 and stdout_fds[0] >= 0) _ = fdm_del(fdm, stdout_fds[0]);
+    if (devnull >= 0) _ = close(devnull);
+
+    if (argv) |a| {
+        var k: usize = 0;
+        while (k < argc) : (k += 1) if (a[k]) |s| free(@ptrCast(s));
+        free(@ptrCast(a));
+    }
+    if (action_argv) |a| {
+        var k: usize = 0;
+        while (k < action_argc) : (k += 1) if (a[k]) |s| free(@ptrCast(s));
+        free(@ptrCast(a));
+    }
+
+    notif.pid = pid;
+    notif.stdout_fd = stdout_fds[0];
+    return true;
+}
