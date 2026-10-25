@@ -129,3 +129,5 @@ notify_spawn_expand_close(struct terminal *term, const char *id,
         (const char *[]){"id"}, (const char *[]){id}, argc, argv);
 }
 struct reaper *notify_term_reaper(struct terminal *term) { return term->reaper; }
+
+// ── Chunk B-3a shim surface ───────────────────────────────────────

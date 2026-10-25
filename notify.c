@@ -29,6 +29,7 @@ void notify_icon_del(struct terminal *term, const char *id);
 bool fdm_notify_stdout(struct fdm *fdm, int fd, int events, void *data);
 bool expand_action_to_argv(struct terminal *term, const char *name, const char *label, size_t *argc, char ***argv);
 void notify_close(struct terminal *term, const char *id);
+void notif_done(struct reaper *reaper, pid_t pid, int status, void *data);
 void notify_close(struct terminal *term, const char *id);
 bool fdm_notify_stdout(struct fdm *fdm, int fd, int events, void *data);
 bool expand_action_to_argv(struct terminal *term, const char *name, const char *label, size_t *argc, char ***argv);
@@ -37,81 +38,6 @@ struct done_context {
     struct wayland *wayl;
     struct terminal *term;
 };
-
-static void
-notif_done(struct reaper *reaper, pid_t pid, int status, void *data)
-{
-    struct done_context *ctx = data;
-    const struct wayland *wayl = ctx->wayl;
-    const struct terminal *wanted_term = ctx->term;
-    free(ctx);
-
-    struct terminal *term = NULL;
-    tll_foreach(wayl->terms, it) {
-        if (it->item == wanted_term) {
-            term = it->item;
-            break;
-        }
-    }
-
-    if (term == NULL) {
-        LOG_WARN("notification closed, but the associated terminal instance is already gone");
-        return;
-    }
-
-    tll_foreach(term->active_notifications, it) {
-        struct notification *notif = &it->item;
-        if (notif->pid != pid)
-            continue;
-
-        LOG_DBG("notification %s closed",
-                notif->id != NULL ? notif->id : "<unset>");
-
-        if (notif->activated && notif->focus) {
-            if (notif->xdg_token == NULL) {
-                /* No token so request our own and let the compositor decide focus vs. urgency */
-                LOG_DBG("set window urgency on notification activation (no XDG token available)");
-                if (!wayl_win_set_urgent(term->window))
-                    LOG_WARN("cannot focus window: no activation token available");
-            } else {
-                LOG_DBG("focus window on notification activation: \"%s\"",
-                        notif->xdg_token);
-                wayl_activate(term->wl, term->window, notif->xdg_token);
-            }
-        }
-
-        if (notif->activated && notif->report_activated) {
-            LOG_DBG("sending notification activation event to client");
-
-            const char *id = notif->id != NULL ? notif->id : "0";
-
-            char button_nr[16] = {0};
-            if (notif->activated_button > 0) {
-                xsnprintf(
-                    button_nr, sizeof(button_nr), "%u", notif->activated_button);
-            }
-
-            char reply[7 + strlen(id) + 1 + strlen(button_nr) + 2 + 1];
-            size_t n = xsnprintf(
-                reply, sizeof(reply), "\033]99;i=%s;%s\033\\", id, button_nr);
-            term_to_slave(term, reply, n);
-        }
-
-        if (notif->report_closed) {
-            LOG_DBG("sending notification close event to client");
-
-            const char *id = notif->id != NULL ? notif->id : "0";
-            char reply[7 + strlen(id) + 1 + 7 + 1 + 2 + 1];
-            size_t n = xsnprintf(
-                reply, sizeof(reply), "\033]99;i=%s:p=close;\033\\", id);
-            term_to_slave(term, reply, n);
-        }
-
-        notify_free(term, notif);
-        tll_remove(term->active_notifications, it);
-        return;
-    }
-}
 
 bool
 notify_notify(struct terminal *term, struct notification *notif)

@@ -367,3 +367,71 @@ export fn notify_close(term: *types.Terminal, id: [*:0]const u8) callconv(.c) vo
         return;
     }
 }
+
+// ── chunk B-3a ────────────────────────────────────────────────────
+extern fn notify_wayl_terms_first(wayl: *anyopaque) callconv(.c) ?*types.Terminal;
+extern fn notify_wayl_terms_next(wayl: *anyopaque, prev: *types.Terminal) callconv(.c) ?*types.Terminal;
+extern fn notify_term_window(term: *types.Terminal) callconv(.c) ?*anyopaque;
+extern fn notify_term_wayl(term: *types.Terminal) callconv(.c) ?*anyopaque;
+extern fn wayl_win_set_urgent(window: *anyopaque) callconv(.c) bool;
+extern fn wayl_activate(wayl: *anyopaque, window: *anyopaque, token: [*:0]const u8) callconv(.c) void;
+extern fn term_to_slave(term: *types.Terminal, data: *const anyopaque, len: usize) callconv(.c) bool;
+
+const DoneContext = extern struct {
+    wayl: *anyopaque,
+    term: *types.Terminal,
+};
+
+export fn notif_done(_reaper: ?*anyopaque, pid: c_int, _status: c_int, data: ?*anyopaque) callconv(.c) void {
+    _ = _reaper;
+    _ = _status;
+    const ctx: *DoneContext = @ptrCast(@alignCast(data.?));
+    const wayl = ctx.wayl;
+    const wanted_term = ctx.term;
+    free(@ptrCast(ctx));
+
+    var term: ?*types.Terminal = null;
+    var tit = notify_wayl_terms_first(wayl);
+    while (tit) |t| : (tit = notify_wayl_terms_next(wayl, t)) {
+        if (t == wanted_term) { term = t; break; }
+    }
+
+    const found_term = term orelse return;
+
+    var it = notify_active_first(found_term);
+    while (it) |notif| : (it = notify_active_next(found_term, notif)) {
+        if (notif.pid != pid) continue;
+
+        if (notif.activated and notif.focus) {
+            const window = notify_term_window(found_term);
+            if (notif.xdg_token) |token| {
+                _ = wayl_activate(notify_term_wayl(found_term).?, window.?, token);
+            } else {
+                if (window) |w| _ = wayl_win_set_urgent(w);
+            }
+        }
+
+        const id_str: [*:0]const u8 = if (notif.id) |i| i else "0";
+
+        if (notif.activated and notif.report_activated) {
+            var button_nr_buf: [16]u8 = [_]u8{0} ** 16;
+            if (notif.activated_button > 0) {
+                const bn = xsnprintf(&button_nr_buf, button_nr_buf.len, "%u", notif.activated_button);
+                button_nr_buf[@intCast(bn)] = 0;
+            }
+            var reply: [128]u8 = undefined;
+            const n = xsnprintf(&reply, reply.len, "\x1b]99;i=%s;%s\x1b\\", id_str, @as([*:0]const u8, @ptrCast(&button_nr_buf)));
+            _ = term_to_slave(found_term, &reply, @intCast(n));
+        }
+
+        if (notif.report_closed) {
+            var reply: [128]u8 = undefined;
+            const n = xsnprintf(&reply, reply.len, "\x1b]99;i=%s:p=close;\x1b\\", id_str);
+            _ = term_to_slave(found_term, &reply, @intCast(n));
+        }
+
+        notify_free(found_term, notif);
+        notify_active_remove(found_term, notif);
+        return;
+    }
+}
