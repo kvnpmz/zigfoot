@@ -702,7 +702,7 @@ export fn osc_dispatch(term: *types.Terminal) callconv(.c) void {
                     return;
                 }
             }
-            osc_notify(term, string);
+            osc_notify_impl(term, string);
         },
         10, 11, 12, 17, 19 => {
             if (string[0] == '?' and string[1] == 0) {
@@ -839,7 +839,7 @@ export fn osc_dispatch(term: *types.Terminal) callconv(.c) void {
             }
             const prefix_len = @intFromPtr(param_brk.?) - @intFromPtr(string);
             if (std.mem.eql(u8, string[0..prefix_len], "notify")) {
-                osc_notify(term, @ptrCast(param_brk.? + 1));
+                osc_notify_impl(term, @ptrCast(param_brk.? + 1));
             } else {
                 unhandled(term);
             }
@@ -848,3 +848,30 @@ export fn osc_dispatch(term: *types.Terminal) callconv(.c) void {
     }
 }
 
+
+// ── chunk E-1: osc_notify ─────────────────────────────────────────
+extern fn osc_notify_utf8_valid(s: [*]const u8, len: usize) callconv(.c) bool;
+
+export fn osc_notify_impl(term: *types.Terminal, string: [*:0]u8) callconv(.c) void {
+    var ctx: ?[*:0]u8 = null;
+    const title = strtok_r(string, ";", &ctx);
+    if (title == null) return;
+    const t = title.?;
+    const msg = strtok_r(null, "\x00", &ctx);
+
+    if (!osc_notify_utf8_valid(t, strlen(t))) return;
+    if (msg) |m| {
+        if (!osc_notify_utf8_valid(m, strlen(m))) return;
+    }
+
+    const msgdup: ?[*:0]u8 = if (msg) |m| xstrdup(m) else null;
+
+    var notif: types.Notification = std.mem.zeroes(types.Notification);
+    notif.title = xstrdup(t);
+    notif.body = msgdup;
+    notif.expire_time = -1;
+    notif.focus = true;
+
+    _ = notify_notify(term, &notif);
+}
+extern fn notify_notify(term: *types.Terminal, notif: *types.Notification) callconv(.c) bool;

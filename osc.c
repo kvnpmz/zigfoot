@@ -1,5 +1,7 @@
 #include "osc.h"
 
+void osc_notify_impl(struct terminal *term, char *string);
+
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
@@ -36,60 +38,6 @@ void osc_to_clipboard(struct terminal *term, const char *target, const char *bas
 void osc_from_clipboard(struct terminal *term, const char *source);
 
 #define UNHANDLED() LOG_DBG("unhandled: OSC: %.*s", (int)term->vt.osc.idx, term->vt.osc.data)
-
-void
-osc_notify(struct terminal *term, char *string)
-{
-    /*
-     * The 'notify' perl extension
-     * (https://pub.phyks.me/scripts/urxvt/notify) is very simple:
-     *
-     * #!/usr/bin/perl
-     *
-     * sub on_osc_seq_perl {
-     *   my ($term, $osc, $resp) = @_;
-     *   if ($osc =~ /^notify;(\S+);(.*)$/) {
-     *     system("notify-send '$1' '$2'");
-     *   }
-     * }
-     *
-     * As can be seen, the notification text is not encoded in any
-     * way. The regex does a greedy match of the ';' separator. Thus,
-     * any extra ';' will end up being part of the title. There's no
-     * way to have a ';' in the message body.
-     *
-     * I've changed that behavior slightly in; we split the title from
-     * body on the *first* ';', allowing us to have semicolons in the
-     * message body, but *not* in the title.
-     */
-    char *ctx = NULL;
-    const char *title = strtok_r(string, ";", &ctx);
-    const char *msg = strtok_r(NULL, "\x00", &ctx);
-
-    if (title == NULL)
-        return;
-
-    if (mbsntoc32(NULL, title, strlen(title), 0) == (size_t)-1) {
-        LOG_WARN("%s: notification title is not valid UTF-8, ignoring", title);
-        return;
-    }
-
-    if (msg != NULL && mbsntoc32(NULL, msg, strlen(msg), 0) == (size_t)-1) {
-        LOG_WARN("%s: notification message is not valid UTF-8, ignoring", msg);
-        return;
-    }
-
-    char *msgdup = NULL;
-    if (msg != NULL)
-        msgdup = xstrdup(msg);
-
-    notify_notify(term, &(struct notification){
-        .title = xstrdup(title),
-        .body = msgdup,
-        .expire_time = -1,
-        .focus = true,
-    });
-}
 
 IGNORE_WARNING("-Wpedantic")
 static bool

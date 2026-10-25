@@ -1,6 +1,7 @@
 #include <stddef.h>
 #include <sys/epoll.h>
 #include "terminal.h"
+#include "char32.h"
 
 char **osc_term_cwd_ptr(struct terminal *term) {
     return &term->cwd;
@@ -13,6 +14,7 @@ char **osc_term_cwd_ptr(struct terminal *term) {
 #include <stddef.h>
 #include <tllist.h>
 #include "terminal.h"
+#include "char32.h"
 #include "wayland.h"
 #include "fdm.h"
 
@@ -77,3 +79,10 @@ bool osc_conf_colors_dark_use_custom_cursor(struct terminal *t) {
     return t->conf->colors_dark.use_custom.cursor;
 }
 
+
+/* ── Chunk E: notification helpers ─────────────────────────────── */
+bool
+osc_notify_utf8_valid(const char *s, size_t len)
+{
+    return mbsntoc32(NULL, s, len, 0) != (size_t)-1;
+}
