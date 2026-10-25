@@ -28,7 +28,7 @@ export fn notify_free(term: ?*types.Terminal, notif: *types.Notification) callco
     freePtr(notif.sound_name);
     freePtr(notif.xdg_token);
     if (notif.stdout_data) |d| free(@ptrCast(d));
-    // TODO(chunk B): tll_free_and_free(notif->actions, free)
+    notify_tll_free_and_free_actions(notif);
 
     if (notif.icon_path) |path| {
         _ = unlink(path);
@@ -99,4 +99,137 @@ export fn notify_icon_free(icon: *types.NotificationIcon) callconv(.c) void {
     icon.symbolic_name = null;
     icon.tmp_file_name = null;
     icon.tmp_file_fd = -1;
+}
+
+// ── notify-shim.c additions ───────────────────────────────────────
+extern fn notify_icon_at(term: *types.Terminal, idx: usize) callconv(.c) *types.NotificationIcon;
+extern fn notify_icon_count() callconv(.c) usize;
+extern fn notify_tll_free_and_free_actions(notif: *types.Notification) callconv(.c) void;
+
+// ── consume_stdout ────────────────────────────────────────────────
+export fn consume_stdout(notif: *types.Notification, eof: bool) callconv(.c) void {
+    const data_start = notif.stdout_data orelse {
+        return;
+    };
+    var data: [*]u8 = data_start;
+    var left: usize = notif.stdout_sz;
+    var line: [*]u8 = data;
+
+    while (left > 0) {
+        line = data;
+        var len: usize = left;
+
+        const idx = std.mem.indexOfScalar(u8, data[0..left], '\n');
+        const eol: ?[*]u8 = if (idx) |i| data + i else null;
+        if (eol) |e| {
+            e[0] = 0;
+            len = std.mem.len(@as([*:0]u8, @ptrCast(line)));
+            data = e + 1;
+        } else if (!eof) {
+            break;
+        }
+
+        var maybe_id: u32 = 0;
+        var maybe_button_nr: u32 = 0;
+
+        if ((notif.external_id == 0 and to_integer(line, len, &maybe_id)) or
+            (len > 3 and std.mem.eql(u8, line[0..3], "id=") and
+             to_integer(line + 3, len - 3, &maybe_id)))
+        {
+            notif.external_id = maybe_id;
+        } else if ((len == 7 and std.mem.eql(u8, line[0..7], "default")) or
+                   (len == 14 and std.mem.eql(u8, line[0..14], "action=default")))
+        {
+            notif.activated = true;
+        } else if (len > 7 and std.mem.eql(u8, line[0..7], "action=")) {
+            notif.activated = true;
+            if (to_integer(line + 7, len - 7, &maybe_button_nr)) {
+                notif.activated_button = maybe_button_nr;
+            }
+        } else if (notif.external_id > 0 and
+                   to_integer(line, len, &maybe_button_nr) and
+                   maybe_button_nr > 0 and
+                   maybe_button_nr <= notif.button_count)
+        {
+            notif.activated = true;
+            notif.activated_button = maybe_button_nr;
+        } else if (len > 9 and std.mem.eql(u8, line[0..9], "xdgtoken=")) {
+            notif.xdg_token = xstrndup(line + 9, len - 9);
+        }
+
+        left -= len + (if (eol != null) @as(usize, 1) else 0);
+    }
+
+    if (left > 0) {
+        std.mem.copyForwards(u8, notif.stdout_data.?[0..left], data[0..left]);
+    }
+
+    notif.stdout_sz = left;
+}
+
+extern fn xstrndup(s: [*]const u8, n: usize) callconv(.c) ?[*:0]u8;
+
+// ── add_icon ──────────────────────────────────────────────────────
+fn addIcon(
+    icon: *types.NotificationIcon,
+    id: [*:0]const u8,
+    symbolic_name: ?[*:0]const u8,
+    data: ?[*]const u8,
+    data_sz: usize,
+) void {
+    icon.id = xstrdup(id);
+    icon.symbolic_name = if (symbolic_name) |s| xstrdup(s) else null;
+    icon.tmp_file_name = null;
+    icon.tmp_file_fd = -1;
+
+    if (symbolic_name == null and data_sz > 0) {
+        _ = write_icon_file(
+            @ptrCast(data.?),
+            data_sz,
+            &icon.tmp_file_fd,
+            &icon.tmp_file_name,
+            &icon.symbolic_name,
+        );
+    }
+}
+
+// ── notify_icon_add ───────────────────────────────────────────────
+export fn notify_icon_add(
+    term: *types.Terminal,
+    id: [*:0]const u8,
+    symbolic_name: ?[*:0]const u8,
+    data: ?[*]const u8,
+    data_sz: usize,
+) callconv(.c) void {
+    const count = notify_icon_count();
+
+    var i: usize = 0;
+    while (i < count) : (i += 1) {
+        const icon = notify_icon_at(term, i);
+        if (icon.id == null) {
+            addIcon(icon, id, symbolic_name, data, data_sz);
+            return;
+        }
+    }
+
+    // Cache full — throw out first, shift left, add new at end
+    notify_icon_free(notify_icon_at(term, 0));
+    var j: usize = 0;
+    while (j < count - 1) : (j += 1) {
+        notify_icon_at(term, j).* = notify_icon_at(term, j + 1).*;
+    }
+    addIcon(notify_icon_at(term, count - 1), id, symbolic_name, data, data_sz);
+}
+
+// ── notify_icon_del ───────────────────────────────────────────────
+export fn notify_icon_del(term: *types.Terminal, id: [*:0]const u8) callconv(.c) void {
+    const count = notify_icon_count();
+    var i: usize = 0;
+    while (i < count) : (i += 1) {
+        const icon = notify_icon_at(term, i);
+        if (icon.id == null) continue;
+        if (!std.mem.eql(u8, std.mem.span(icon.id.?), std.mem.span(id))) continue;
+        notify_icon_free(icon);
+        return;
+    }
 }

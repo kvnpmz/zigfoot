@@ -24,6 +24,8 @@ void notify_free(struct terminal *term, struct notification *notif);
 void notify_icon_free(struct notification_icon *icon);
 bool write_icon_file(const void *data, size_t data_sz, int *fd, char **filename, char **symbolic_name);
 bool to_integer(const char *line, size_t len, uint32_t *res);
+void notify_icon_add(struct terminal *term, const char *id, const char *symbolic_name, const uint8_t *data, size_t data_sz);
+void notify_icon_del(struct terminal *term, const char *id);
 
 static void
 consume_stdout(struct notification *notif, bool eof)
@@ -616,83 +618,5 @@ notify_close(struct terminal *term, const char *id)
     }
 
     LOG_WARN("cannot close notification \"%s\": no such notification", id);
-}
-
-static void
-add_icon(struct notification_icon *icon, const char *id, const char *symbolic_name,
-         const uint8_t *data, size_t data_sz)
-{
-    icon->id = xstrdup(id);
-    icon->symbolic_name = symbolic_name != NULL ? xstrdup(symbolic_name) : NULL;
-    icon->tmp_file_name = NULL;
-    icon->tmp_file_fd = -1;
-
-    /*
-     * Dump in-line data to a temporary file. This allows us to pass
-     * the filename as a parameter to notification helpers
-     * (i.e. notify-send -i <path>).
-     *
-     * Optimization: since we always prefer (i.e. use) the symbolic
-     * name if present, there's no need to create a file on disk if we
-     * have a symbolic name.
-     */
-    if (symbolic_name == NULL && data_sz > 0) {
-        write_icon_file(
-            data, data_sz,
-            &icon->tmp_file_fd,
-            &icon->tmp_file_name,
-            &icon->symbolic_name);
-    }
-
-    LOG_DBG("added icon to cache: ID=%s: sym=%s, file=%s",
-            icon->id, icon->symbolic_name, icon->tmp_file_name);
-}
-
-void
-notify_icon_add(struct terminal *term, const char *id,
-                const char *symbolic_name, const uint8_t *data, size_t data_sz)
-{
-#if defined(_DEBUG)
-    for (size_t i = 0; i < ALEN(term->notification_icons); i++) {
-        struct notification_icon *icon = &term->notification_icons[i];
-        if (icon->id != NULL && streq(icon->id, id)) {
-            BUG("notification icon cache already contains \"%s\"", id);
-        }
-    }
-#endif
-
-    for (size_t i = 0; i < ALEN(term->notification_icons); i++) {
-        struct notification_icon *icon = &term->notification_icons[i];
-        if (icon->id == NULL) {
-            add_icon(icon, id, symbolic_name, data, data_sz);
-            return;
-        }
-    }
-
-    /* Cache full - throw out first entry, add new entry last */
-    notify_icon_free(&term->notification_icons[0]);
-    memmove(&term->notification_icons[0],
-            &term->notification_icons[1],
-            ((ALEN(term->notification_icons) - 1) *
-             sizeof(term->notification_icons[0])));
-
-    add_icon(
-        &term->notification_icons[ALEN(term->notification_icons) - 1],
-        id, symbolic_name, data, data_sz);
-}
-
-void
-notify_icon_del(struct terminal *term, const char *id)
-{
-    for (size_t i = 0; i < ALEN(term->notification_icons); i++) {
-        struct notification_icon *icon = &term->notification_icons[i];
-
-        if (icon->id == NULL || !streq(icon->id, id))
-            continue;
-
-        LOG_DBG("expelled %s from the notification icon cache", icon->id);
-        notify_icon_free(icon);
-        return;
-    }
 }
 
