@@ -20,88 +20,10 @@
 #include "xmalloc.h"
 #include "xsnprintf.h"
 
-void
-notify_free(struct terminal *term, struct notification *notif)
-{
-    if (notif->pid > 0)
-        fdm_del(term->fdm, notif->stdout_fd);
-
-    free(notif->id);
-    free(notif->title);
-    free(notif->body);
-    free(notif->category);
-    free(notif->app_id);
-    free(notif->icon_cache_id);
-    free(notif->icon_symbolic_name);
-    free(notif->icon_data);
-    free(notif->sound_name);
-    free(notif->xdg_token);
-    free(notif->stdout_data);
-
-    tll_free_and_free(notif->actions, free);
-
-    if (notif->icon_path != NULL) {
-        unlink(notif->icon_path);
-        free(notif->icon_path);
-
-        if (notif->icon_fd >= 0)
-            close(notif->icon_fd);
-    }
-
-    memset(notif, 0, sizeof(*notif));
-}
-
-static bool
-write_icon_file(const void *data, size_t data_sz, int *fd, char **filename,
-                char **symbolic_name)
-{
-    xassert(*filename == NULL);
-    xassert(*symbolic_name == NULL);
-
-    char name[64] = "/tmp/foot-notification-icon-XXXXXX";
-
-    *filename = NULL;
-    *symbolic_name = NULL;
-    *fd = mkostemp(name, O_CLOEXEC);
-
-    if (*fd < 0) {
-        LOG_ERRNO("failed to create temporary file for icon cache");
-        return false;
-    }
-
-    if (write(*fd, data, data_sz) != (ssize_t)data_sz) {
-        LOG_ERRNO("failed to write icon data to temporary file");
-        close(*fd);
-        *fd = -1;
-        return false;
-    }
-
-    LOG_DBG("wrote icon data to %s", name);
-    *filename = xstrdup(name);
-    *symbolic_name = xstrjoin("file://", *filename);
-    return true;
-}
-
-static bool
-to_integer(const char *line, size_t len, uint32_t *res)
-{
-    bool is_id = true;
-    uint32_t maybe_id = 0;
-
-    for (size_t i = 0; i < len; i++) {
-        char digit = line[i];
-        if (digit < '0' || digit > '9') {
-            is_id = false;
-            break;
-        }
-
-        maybe_id *= 10;
-        maybe_id += digit - '0';
-    }
-
-    *res = maybe_id;
-    return is_id;
-}
+void notify_free(struct terminal *term, struct notification *notif);
+void notify_icon_free(struct notification_icon *icon);
+bool write_icon_file(const void *data, size_t data_sz, int *fd, char **filename, char **symbolic_name);
+bool to_integer(const char *line, size_t len, uint32_t *res);
 
 static void
 consume_stdout(struct notification *notif, bool eof)
@@ -774,21 +696,3 @@ notify_icon_del(struct terminal *term, const char *id)
     }
 }
 
-void
-notify_icon_free(struct notification_icon *icon)
-{
-    if (icon->tmp_file_name != NULL) {
-        unlink(icon->tmp_file_name);
-        if (icon->tmp_file_fd >= 0)
-            close(icon->tmp_file_fd);
-    }
-
-    free(icon->id);
-    free(icon->symbolic_name);
-    free(icon->tmp_file_name);
-
-    icon->id = NULL;
-    icon->symbolic_name = NULL;
-    icon->tmp_file_name = NULL;
-    icon->tmp_file_fd = -1;
-}

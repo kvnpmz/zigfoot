@@ -689,3 +689,83 @@ pub const Terminal = extern struct {
     active_surface: TermSurface,
     render: Render,
 };
+
+// ── Notifications (mirrors notify.h) ──────────────────────────────
+
+pub const NotifyWhen = enum(c_int) {
+    always,
+    unfocused,
+    invisible,
+};
+
+pub const NotifyUrgency = enum(c_int) {
+    normal,
+    low,
+    critical,
+};
+
+pub const TllStr = extern struct {
+    head: ?*anyopaque,
+    tail: ?*anyopaque,
+    length: usize,
+};
+
+pub const Notification = extern struct {
+    id: ?[*:0]u8,
+    app_id: ?[*:0]u8,
+    title: ?[*:0]u8,
+    body: ?[*:0]u8,
+    category: ?[*:0]u8,
+
+    when: NotifyWhen,
+    urgency: NotifyUrgency,
+    expire_time: i32,
+
+    actions: TllStr,
+
+    icon_cache_id: ?[*:0]u8,
+    icon_symbolic_name: ?[*:0]u8,
+    icon_data: ?[*]u8,
+    icon_data_sz: usize,
+
+    focus: bool,
+    may_be_programatically_closed: bool,
+    report_activated: bool,
+    report_closed: bool,
+
+    muted: bool,
+    sound_name: ?[*:0]u8,
+
+    external_id: u32,
+    activated: bool,
+    button_count: u32,
+    activated_button: u32,
+    xdg_token: ?[*:0]u8,
+
+    pid: c_int,
+    stdout_fd: c_int,
+
+    stdout_data: ?[*]u8,
+    stdout_sz: usize,
+
+    icon_path: ?[*:0]u8,
+    icon_fd: c_int,
+};
+
+pub const NotificationIcon = extern struct {
+    id: ?[*:0]u8,
+    symbolic_name: ?[*:0]u8,
+    tmp_file_name: ?[*:0]u8,
+    tmp_file_fd: c_int,
+};
+
+comptime {
+    if (@sizeOf(Notification) != 192)
+        @compileError("Notification: sizeof mismatch with C struct notification");
+    if (@offsetOf(Notification, "icon_fd") != 184)
+        @compileError("Notification: icon_fd offset mismatch");
+    if (@sizeOf(NotificationIcon) != 32)
+        @compileError("NotificationIcon: sizeof mismatch");
+    if (@offsetOf(NotificationIcon, "tmp_file_fd") != 24)
+        @compileError("NotificationIcon: tmp_file_fd offset mismatch");
+}

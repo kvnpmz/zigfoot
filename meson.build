@@ -413,6 +413,14 @@ vt_obj = custom_target(
   command: [python, files('compile_zig.py'), '@INPUT@', '@OUTPUT@']
 )
 
+notify_obj = custom_target(
+  'notify_obj',
+  input: 'notify.zig',
+  depend_files: files('terminal_types.zig'),
+  output: 'notify.o',
+  command: [python, files('compile_zig.py'), '@INPUT@', '@OUTPUT@']
+)
+
 xmalloc_obj = custom_target(
   'xmalloc_obj',
   input: 'xmalloc.zig',
@@ -507,7 +515,7 @@ executable(
   'input.c', 'input.h',
   'key-binding.c', 'key-binding.h',
   'main.c',
-  'notify.c', 'notify.h',
+  notify_obj, 'notify.c', 'notify.h', 'notify-shim.c',
   'quirks.c', 'quirks.h',
   reaper_obj, 'reaper.h',
   'render.c', 'render.h',
