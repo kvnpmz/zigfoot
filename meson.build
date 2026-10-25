@@ -440,7 +440,7 @@ vtlib = static_library(
   base64_obj, 'base64.h',
   composed_obj, 'composed.h',
   cursor_shape_obj, 'cursor-shape.h',
-  'csi.c', csi_obj, 'csi.h',
+  csi_obj, 'csi.h',
   'csi-shim.c',
   dcs_obj, 'dcs.h',
   'dcs-shim.c',
