@@ -588,7 +588,7 @@ extern fn term_font_subpixel_changed(term: *types.Terminal) callconv(.c) void;
 extern fn wayl_win_alpha_changed(win: ?*anyopaque) callconv(.c) void;
 
 extern fn osc_notify(term: *types.Terminal, string: [*:0]u8) callconv(.c) void;
-extern fn kitty_notification(term: *types.Terminal, string: [*:0]u8) callconv(.c) void;
+
 extern fn kitty_text_size(term: *types.Terminal, string: [*:0]u8) callconv(.c) void;
 
 extern fn osc_theme_fg(term: *types.Terminal) callconv(.c) u32;
@@ -764,7 +764,7 @@ export fn osc_dispatch(term: *types.Terminal) callconv(.c) void {
         30 => {},
         52 => osc_selection(term, string),
         66 => kitty_text_size(term, string),
-        99 => kitty_notification(term, string),
+        99 => kitty_notification_impl(term, string),
         104 => {
             if (string[0] == 0) {
                 osc_theme_table_copy(term, &term.colors.table);
@@ -875,3 +875,418 @@ export fn osc_notify_impl(term: *types.Terminal, string: [*:0]u8) callconv(.c) v
     _ = notify_notify(term, &notif);
 }
 extern fn notify_notify(term: *types.Terminal, notif: *types.Notification) callconv(.c) bool;
+
+// ── chunk E-2: kitty_notification ─────────────────────────────────
+extern fn osc_kitty_notif_get(term: *types.Terminal) callconv(.c) *types.Notification;
+extern fn osc_kitty_osc_bel(term: *types.Terminal) callconv(.c) bool;
+extern fn osc_kitty_conf_inhibit_when_focused(term: *types.Terminal) callconv(.c) bool;
+extern fn osc_xstrjoin(a: [*:0]const u8, b: [*:0]const u8) callconv(.c) ?[*:0]u8;
+extern fn osc_xstrjoin3(a: [*:0]const u8, b: [*:0]const u8, c: [*:0]const u8) callconv(.c) ?[*:0]u8;
+extern fn osc_kitty_actions_push_back(notif: *types.Notification, s: [*:0]u8) callconv(.c) void;
+extern fn notify_free(term: *types.Terminal, notif: *types.Notification) callconv(.c) void;
+extern fn notify_close(term: *types.Terminal, id: [*:0]const u8) callconv(.c) void;
+extern fn notify_icon_add(term: *types.Terminal, id: [*:0]const u8, symbolic_name: ?[*:0]const u8, data: ?[*]const u8, data_sz: usize) callconv(.c) void;
+extern fn notify_icon_del(term: *types.Terminal, id: [*:0]const u8) callconv(.c) void;
+extern fn xasprintf(fmt: [*:0]const u8, ...) callconv(.c) ?[*:0]u8;
+extern fn strtol(s: [*:0]const u8, endptr: ?*[*:0]u8, base: c_int) callconv(.c) c_long;
+
+const INT32_MAX_C: c_long = 2147483647;
+const PAYLOAD_TITLE: c_int = 0;
+const PAYLOAD_BODY: c_int = 1;
+const PAYLOAD_CLOSE: c_int = 2;
+const PAYLOAD_ALIVE: c_int = 3;
+const PAYLOAD_ICON: c_int = 4;
+const PAYLOAD_BUTTON: c_int = 5;
+
+fn streqz(a: [*:0]const u8, b: [*:0]const u8) bool {
+    return std.mem.eql(u8, std.mem.span(a), std.mem.span(b));
+}
+
+fn verify_kitty_id_is_valid(id: [*:0]const u8) bool {
+    var i: usize = 0;
+    while (id[i] != 0) : (i += 1) {
+        const c = id[i];
+        const ok = (c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z') or
+                   (c >= '0' and c <= '9') or c == '_' or c == '-' or c == '+' or c == '.';
+        if (!ok) return false;
+    }
+    return true;
+}
+
+fn translateSoundName(s: [*:0]const u8) ?[*:0]const u8 {
+    const span = std.mem.span(s);
+    if (std.mem.eql(u8, span, "error")) return "dialog-error";
+    if (std.mem.eql(u8, span, "warn")) return "dialog-warning";
+    if (std.mem.eql(u8, span, "warning")) return "dialog-warning";
+    if (std.mem.eql(u8, span, "info")) return "dialog-information";
+    if (std.mem.eql(u8, span, "question")) return "dialog-question";
+    return null;
+}
+
+fn translateIconName(s: [*:0]const u8) ?[*:0]const u8 {
+    const span = std.mem.span(s);
+    if (std.mem.eql(u8, span, "error")) return "dialog-error";
+    if (std.mem.eql(u8, span, "warn")) return "dialog-warning";
+    if (std.mem.eql(u8, span, "warning")) return "dialog-warning";
+    if (std.mem.eql(u8, span, "info")) return "dialog-information";
+    if (std.mem.eql(u8, span, "question")) return "dialog-question";
+    if (std.mem.eql(u8, span, "help")) return "system-help";
+    if (std.mem.eql(u8, span, "file-manager")) return "system-file-manager";
+    if (std.mem.eql(u8, span, "system-monitor")) return "utilities-system-monitor";
+    if (std.mem.eql(u8, span, "text-editor")) return "text-editor";
+    return null;
+}
+
+export fn kitty_notification_impl(term: *types.Terminal, string: [*:0]u8) callconv(.c) void {
+    const payload_raw_ptr = strchr(string, ';') orelse return;
+    payload_raw_ptr[0] = 0;
+    const payload_raw: [*:0]u8 = payload_raw_ptr + 1;
+
+    var id: ?[*:0]u8 = null;
+    var app_id: ?[*:0]u8 = null;
+    var icon_cache_id: ?[*:0]u8 = null;
+    var symbolic_icon: ?[*:0]u8 = null;
+    var category: ?[*:0]u8 = null;
+    var sound_name: ?[*:0]u8 = null;
+    var payload: ?[*:0]u8 = null;
+
+    var focus = true;
+    var report_activated = false;
+    var report_closed = false;
+    var done = true;
+    var use_b64 = false;
+
+    var expire_time: i32 = -1;
+    var payload_size: usize = 0;
+    var payload_type: c_int = PAYLOAD_TITLE;
+
+    var when: types.NotifyWhen = .always;
+    var urgency: types.NotifyUrgency = .normal;
+
+    var have_a = false;
+    var have_c = false;
+    var have_o = false;
+    var have_u = false;
+    var have_w = false;
+
+    var ctx: ?[*:0]u8 = null;
+    var param = strtok_r(string, ":", &ctx);
+    while (param) |p| : (param = strtok_r(null, ":", &ctx)) {
+        if (p[0] == 0 or p[1] != '=') continue;
+        const value: [*:0]u8 = @ptrCast(p + 2);
+
+        switch (p[0]) {
+            'a' => {
+                have_a = true;
+                var a_ctx: ?[*:0]u8 = null;
+                var v = strtok_r(value, ",", &a_ctx);
+                while (v) |vv| : (v = strtok_r(null, ",", &a_ctx)) {
+                    var s = vv;
+                    const reverse = s[0] == '-';
+                    if (reverse) s += 1;
+                    if (streqz(s, "focus")) { focus = !reverse; }
+                    else if (streqz(s, "report")) { report_activated = !reverse; }
+                }
+            },
+            'c' => {
+                if (value[0] == '1' and value[1] == 0) { report_closed = true; }
+                else if (value[0] == '0' and value[1] == 0) { report_closed = false; }
+                have_c = true;
+            },
+            'd' => {
+                if (value[0] == '0' and value[1] == 0) { done = false; }
+                else if (value[0] == '1' and value[1] == 0) { done = true; }
+            },
+            'e' => {
+                if (value[0] == '0' and value[1] == 0) { use_b64 = false; }
+                else if (value[0] == '1' and value[1] == 0) { use_b64 = true; }
+            },
+            'i' => {
+                if (verify_kitty_id_is_valid(value)) {
+                    if (id) |o| free(@ptrCast(o));
+                    id = xstrdup(value);
+                }
+            },
+            'p' => {
+                if (streqz(value, "title")) { payload_type = PAYLOAD_TITLE; }
+                else if (streqz(value, "body")) { payload_type = PAYLOAD_BODY; }
+                else if (streqz(value, "close")) { payload_type = PAYLOAD_CLOSE; }
+                else if (streqz(value, "alive")) { payload_type = PAYLOAD_ALIVE; }
+                else if (streqz(value, "icon")) { payload_type = PAYLOAD_ICON; }
+                else if (streqz(value, "buttons")) { payload_type = PAYLOAD_BUTTON; }
+                else if (streqz(value, "?")) {
+                    const reply_id: [*:0]const u8 = if (id) |i| i else "0";
+                    const term_caps: [*:0]const u8 = if (osc_kitty_osc_bel(term)) "\x07" else "\x1b\\";
+                    var when_caps: [64]u8 = undefined;
+                    const base = "unfocused";
+                    @memcpy(when_caps[0..base.len], base);
+                    var wlen: usize = base.len;
+                    if (!osc_kitty_conf_inhibit_when_focused(term)) {
+                        const extra = ",always";
+                        @memcpy(when_caps[wlen..wlen + extra.len], extra);
+                        wlen += extra.len;
+                    }
+                    when_caps[wlen] = 0;
+                    var reply: [512]u8 = undefined;
+                    const n = xsnprintf(&reply, reply.len,
+                        "\x1b]99;i=%s:p=?;p=%s:a=%s:o=%s:u=%s:c=1:w=1:s=system,silent,error,warn,warning,info,question%s",
+                        reply_id,
+                        @as([*:0]const u8, "title,body,?,close,alive,icon,buttons"),
+                        @as([*:0]const u8, "focus,report"),
+                        @as([*:0]const u8, @ptrCast(&when_caps)),
+                        @as([*:0]const u8, "0,1,2"),
+                        term_caps);
+                    _ = term_to_slave(term, &reply, @intCast(n));
+                    if (id) |o| free(@ptrCast(o));
+                    if (app_id) |o| free(@ptrCast(o));
+                    if (icon_cache_id) |o| free(@ptrCast(o));
+                    if (symbolic_icon) |o| free(@ptrCast(o));
+                    if (payload) |o| free(@ptrCast(o));
+                    if (category) |o| free(@ptrCast(o));
+                    if (sound_name) |o| free(@ptrCast(o));
+                    return;
+                }
+            },
+            'o' => {
+                have_o = true;
+                if (streqz(value, "always")) { when = .always; }
+                else if (streqz(value, "unfocused")) { when = .unfocused; }
+                else if (streqz(value, "invisible")) { when = .invisible; }
+            },
+            'u' => {
+                have_u = true;
+                if (value[0] == '0' and value[1] == 0) { urgency = .low; }
+                else if (value[0] == '1' and value[1] == 0) { urgency = .normal; }
+                else if (value[0] == '2' and value[1] == 0) { urgency = .critical; }
+            },
+            'w' => {
+                __errno_location().* = 0;
+                var end: [*:0]u8 = undefined;
+                const timeout = strtol(value, &end, 10);
+                if (__errno_location().* == 0 and end[0] == 0 and timeout <= INT32_MAX_C) {
+                    expire_time = @intCast(timeout);
+                    have_w = true;
+                }
+            },
+            'f' => {
+                if (base64_decode(value, null)) |decoded| {
+                    if (app_id) |o| free(@ptrCast(o));
+                    app_id = @ptrCast(decoded);
+                }
+            },
+            't' => {
+                if (base64_decode(value, null)) |decoded| {
+                    const d: [*:0]u8 = @ptrCast(decoded);
+                    if (category) |old| {
+                        category = osc_xstrjoin3(old, ",", d);
+                        free(@ptrCast(d));
+                        free(@ptrCast(old));
+                    } else {
+                        category = d;
+                    }
+                }
+            },
+            's' => {
+                if (base64_decode(value, null)) |decoded| {
+                    const d: [*:0]u8 = @ptrCast(decoded);
+                    if (sound_name) |o| free(@ptrCast(o));
+                    sound_name = d;
+                    if (translateSoundName(d)) |tn| {
+                        free(@ptrCast(d));
+                        sound_name = xstrdup(tn);
+                    }
+                }
+            },
+            'g' => {
+                if (icon_cache_id) |o| free(@ptrCast(o));
+                icon_cache_id = xstrdup(value);
+            },
+            'n' => {
+                if (base64_decode(value, null)) |decoded| {
+                    const d: [*:0]u8 = @ptrCast(decoded);
+                    const need_replace = symbolic_icon == null or strlen(d) < strlen(symbolic_icon.?);
+                    if (need_replace) {
+                        if (symbolic_icon) |o| free(@ptrCast(o));
+                        symbolic_icon = d;
+                        if (translateIconName(d)) |tn| {
+                            free(@ptrCast(d));
+                            symbolic_icon = xstrdup(tn);
+                        }
+                    } else {
+                        free(@ptrCast(d));
+                    }
+                }
+            },
+            else => {},
+        }
+    }
+
+    if (use_b64) {
+        const raw: [*:0]const u8 = payload_raw;
+        if (base64_decode(raw, &payload_size)) |decoded| {
+            payload = @ptrCast(decoded);
+        } else {
+            if (id) |o| free(@ptrCast(o));
+            if (app_id) |o| free(@ptrCast(o));
+            if (icon_cache_id) |o| free(@ptrCast(o));
+            if (symbolic_icon) |o| free(@ptrCast(o));
+            if (payload) |o| free(@ptrCast(o));
+            if (category) |o| free(@ptrCast(o));
+            if (sound_name) |o| free(@ptrCast(o));
+            return;
+        }
+    } else {
+        payload = xstrdup(payload_raw);
+        if (payload) |p| payload_size = strlen(p);
+    }
+
+    const notif = osc_kitty_notif_get(term);
+
+    const same = (id == null and notif.id == null) or
+                 (id != null and notif.id != null and streqz(id.?, notif.id.?));
+    if (!same or !notif.may_be_programatically_closed) {
+        notify_free(term, notif);
+        notif.id = id;
+        notif.when = when;
+        notif.urgency = urgency;
+        notif.expire_time = expire_time;
+        notif.focus = focus;
+        notif.may_be_programatically_closed = true;
+        notif.report_activated = report_activated;
+        notif.report_closed = report_closed;
+        id = null;
+    }
+
+    if (have_a) { notif.focus = focus; notif.report_activated = report_activated; }
+    if (have_c) { notif.report_closed = report_closed; }
+    if (have_o) { notif.when = when; }
+    if (have_u) { notif.urgency = urgency; }
+    if (have_w) { notif.expire_time = expire_time; }
+
+    if (icon_cache_id) |ici| {
+        if (notif.icon_cache_id) |o| free(@ptrCast(o));
+        notif.icon_cache_id = ici;
+        icon_cache_id = null;
+    }
+    if (symbolic_icon) |si| {
+        if (notif.icon_symbolic_name) |o| free(@ptrCast(o));
+        notif.icon_symbolic_name = si;
+        symbolic_icon = null;
+    }
+    if (app_id) |ai| {
+        if (notif.app_id) |o| free(@ptrCast(o));
+        notif.app_id = ai;
+        app_id = null;
+    }
+    if (category) |cat| {
+        if (notif.category) |old| {
+            const new_cat = osc_xstrjoin3(old, ",", cat);
+            free(@ptrCast(old));
+            notif.category = new_cat;
+        } else {
+            notif.category = cat;
+            category = null;
+        }
+    }
+    if (sound_name) |sn| {
+        notif.muted = streqz(sn, "silent");
+        if (notif.muted or streqz(sn, "system")) {
+            if (notif.sound_name) |o| free(@ptrCast(o));
+            notif.sound_name = null;
+        } else {
+            if (notif.sound_name) |o| free(@ptrCast(o));
+            notif.sound_name = sn;
+            sound_name = null;
+        }
+    }
+
+    switch (payload_type) {
+        PAYLOAD_TITLE, PAYLOAD_BODY => {
+            const ptr: *?[*:0]u8 = if (payload_type == PAYLOAD_TITLE) &notif.title else &notif.body;
+            if (ptr.* == null) {
+                ptr.* = payload;
+                payload = null;
+            } else {
+                const old = ptr.*.?;
+                ptr.* = osc_xstrjoin(old, payload.?);
+                free(@ptrCast(old));
+            }
+        },
+        PAYLOAD_CLOSE, PAYLOAD_ALIVE => {},
+        PAYLOAD_ICON => {
+            if (notif.icon_data == null) {
+                notif.icon_data = @ptrCast(payload);
+                notif.icon_data_sz = payload_size;
+                payload = null;
+            } else {
+                const new_ptr: [*]u8 = @ptrCast(xrealloc(@ptrCast(notif.icon_data), notif.icon_data_sz + payload_size) orelse return);
+                @memcpy(new_ptr[notif.icon_data_sz..notif.icon_data_sz + payload_size], @as([*]const u8, @ptrCast(payload.?))[0..payload_size]);
+                notif.icon_data = new_ptr;
+                notif.icon_data_sz += payload_size;
+            }
+        },
+        PAYLOAD_BUTTON => {
+            var b_ctx: ?[*:0]u8 = null;
+            var button = strtok_r(payload.?, "\u{2028}", &b_ctx);
+            while (button) |b| : (button = strtok_r(null, "\u{2028}", &b_ctx)) {
+                if (b[0] != 0) osc_kitty_actions_push_back(notif, xstrdup(b).?);
+            }
+        },
+        else => {},
+    }
+
+    if (done) {
+        if (notif.icon_cache_id) |cache_id| {
+            if (notif.icon_symbolic_name != null or notif.icon_data != null) {
+                notify_icon_del(term, cache_id);
+                notify_icon_add(term, cache_id, notif.icon_symbolic_name, notif.icon_data, notif.icon_data_sz);
+                if (notif.icon_symbolic_name) |o| free(@ptrCast(o));
+                if (notif.icon_data) |o| free(@ptrCast(o));
+                notif.icon_symbolic_name = null;
+                notif.icon_data = null;
+                notif.icon_data_sz = 0;
+            }
+        }
+
+        if (payload_type == PAYLOAD_CLOSE) {
+            if (notif.id) |nid| notify_close(term, nid);
+        } else if (payload_type == PAYLOAD_ALIVE) {
+            var alive_ids: ?[*:0]u8 = null;
+            var ait = notify_active_first(term);
+            while (ait) |active| : (ait = notify_active_next(term, active)) {
+                const item_id: [*:0]const u8 = if (active.id) |x| x else "0";
+                if (alive_ids == null) {
+                    alive_ids = xstrdup(item_id);
+                } else {
+                    const nw = osc_xstrjoin3(alive_ids.?, ",", item_id);
+                    free(@ptrCast(alive_ids.?));
+                    alive_ids = nw;
+                }
+            }
+            const reply = xasprintf("\x1b]99;i=%s:p=alive;%s\x1b\\",
+                if (notif.id) |x| x else "0",
+                if (alive_ids) |x| x else "");
+            if (reply) |r| {
+                _ = term_to_slave(term, r, strlen(r));
+                free(@ptrCast(r));
+            }
+            if (alive_ids) |o| free(@ptrCast(o));
+        } else {
+            if (notif.title != null or notif.body != null) {
+                _ = notify_notify(term, notif);
+            }
+        }
+        notify_free(term, notif);
+    }
+
+    if (id) |o| free(@ptrCast(o));
+    if (app_id) |o| free(@ptrCast(o));
+    if (icon_cache_id) |o| free(@ptrCast(o));
+    if (symbolic_icon) |o| free(@ptrCast(o));
+    if (payload) |o| free(@ptrCast(o));
+    if (category) |o| free(@ptrCast(o));
+    if (sound_name) |o| free(@ptrCast(o));
+}
+extern fn xrealloc(ptr: ?*anyopaque, size: usize) callconv(.c) ?*anyopaque;
+extern fn notify_active_first(term: *types.Terminal) callconv(.c) ?*types.Notification;
+extern fn notify_active_next(term: *types.Terminal, prev: *types.Notification) callconv(.c) ?*types.Notification;

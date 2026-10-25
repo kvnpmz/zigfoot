@@ -2,6 +2,7 @@
 #include <sys/epoll.h>
 #include "terminal.h"
 #include "char32.h"
+#include "xmalloc.h"
 
 char **osc_term_cwd_ptr(struct terminal *term) {
     return &term->cwd;
@@ -15,6 +16,7 @@ char **osc_term_cwd_ptr(struct terminal *term) {
 #include <tllist.h>
 #include "terminal.h"
 #include "char32.h"
+#include "xmalloc.h"
 #include "wayland.h"
 #include "fdm.h"
 
@@ -85,4 +87,41 @@ bool
 osc_notify_utf8_valid(const char *s, size_t len)
 {
     return mbsntoc32(NULL, s, len, 0) != (size_t)-1;
+}
+
+/* ── Chunk E-2: kitty_notification helpers ─────────────────────── */
+struct notification *
+osc_kitty_notif_get(struct terminal *term)
+{
+    return &term->kitty_notification;
+}
+
+bool
+osc_kitty_osc_bel(struct terminal *term)
+{
+    return term->vt.osc.bel;
+}
+
+bool
+osc_kitty_conf_inhibit_when_focused(struct terminal *term)
+{
+    return term->conf->desktop_notifications.inhibit_when_focused;
+}
+
+char *
+osc_xstrjoin(const char *a, const char *b)
+{
+    return xstrjoin(a, b);
+}
+
+char *
+osc_xstrjoin3(const char *a, const char *b, const char *c)
+{
+    return xstrjoin3(a, b, c);
+}
+
+void
+osc_kitty_actions_push_back(struct notification *notif, char *s)
+{
+    tll_push_back(notif->actions, s);
 }
