@@ -589,7 +589,7 @@ extern fn wayl_win_alpha_changed(win: ?*anyopaque) callconv(.c) void;
 
 extern fn osc_notify(term: *types.Terminal, string: [*:0]u8) callconv(.c) void;
 
-extern fn kitty_text_size(term: *types.Terminal, string: [*:0]u8) callconv(.c) void;
+
 
 extern fn osc_theme_fg(term: *types.Terminal) callconv(.c) u32;
 extern fn osc_theme_bg(term: *types.Terminal) callconv(.c) u32;
@@ -763,7 +763,7 @@ export fn osc_dispatch(term: *types.Terminal) callconv(.c) void {
         22 => term_set_user_mouse_cursor(term, string),
         30 => {},
         52 => osc_selection(term, string),
-        66 => kitty_text_size(term, string),
+        66 => kitty_text_size_impl(term, string),
         99 => kitty_notification_impl(term, string),
         104 => {
             if (string[0] == 0) {
@@ -1290,3 +1290,112 @@ export fn kitty_notification_impl(term: *types.Terminal, string: [*:0]u8) callco
 extern fn xrealloc(ptr: ?*anyopaque, size: usize) callconv(.c) ?*anyopaque;
 extern fn notify_active_first(term: *types.Terminal) callconv(.c) ?*types.Notification;
 extern fn notify_active_next(term: *types.Terminal, prev: *types.Notification) callconv(.c) ?*types.Notification;
+
+// ── chunk E-3: kitty_text_size (OSC-66) ──────────────────────────
+extern fn ambstoc32(s: [*:0]const u8) callconv(.c) ?[*]u32;
+extern fn osc_c32len(s: [*]const u32) callconv(.c) usize;
+extern fn osc_conf_grapheme_width_method(term: *types.Terminal) callconv(.c) c_int;
+extern fn composed_key_from_chars(chars: [*]const u32, count: usize) callconv(.c) u32;
+extern fn composed_lookup_without_collision(root: ?*types.Composed, key: *u32, chars: [*]const u32, count: usize, last: u32, forced_width: c_int) callconv(.c) ?*types.Composed;
+extern fn composed_insert(root: *?*types.Composed, node: ?*types.Composed) callconv(.c) void;
+extern fn term_print(term: *types.Terminal, wc: u32, width: c_int, is_wide: bool) callconv(.c) void;
+
+const CELL_COMB_CHARS_LO: u32 = 0x00200000;
+const GRAPHEME_WIDTH_WCSWIDTH: c_int = 0;
+const GRAPHEME_WIDTH_MAX: c_int = 1;
+const GRAPHEME_WIDTH_DOUBLE: c_int = 2;
+
+export fn kitty_text_size_impl(term: *types.Terminal, string: [*:0]u8) callconv(.c) void {
+    const text_ptr = strchr(string, ';') orelse return;
+    text_ptr[0] = 0;
+    const text: [*:0]u8 = text_ptr + 1;
+
+    if (text[0] == 0) return;
+
+    const wchars = ambstoc32(text) orelse return;
+
+    var forced_width: c_int = 0;
+
+    var ctx: ?[*:0]u8 = null;
+    var param = strtok_r(string, ":", &ctx);
+    while (param) |p| : (param = strtok_r(null, ":", &ctx)) {
+        if (p[0] == 0 or p[1] != '=') continue;
+        const value: [*:0]u8 = @ptrCast(p + 2);
+
+        switch (p[0]) {
+            'w' => {
+                __errno_location().* = 0;
+                var end: [*:0]u8 = undefined;
+                const w = strtoul(value, &end, 10);
+                if (end[0] == 0 and __errno_location().* == 0 and w <= 7) {
+                    forced_width = @intCast(w);
+                }
+            },
+            else => {},
+        }
+    }
+
+    const len = osc_c32len(wchars);
+
+    if (forced_width == 0) {
+        var i: usize = 0;
+        while (i < len) : (i += 1) {
+            term_process_and_print_non_ascii(term, wchars[i]);
+        }
+        free(@ptrCast(wchars));
+        return;
+    }
+
+    var max_cp_width: usize = 0;
+    var all_cp_width: usize = 0;
+    var i: usize = 0;
+    while (i < len) : (i += 1) {
+        const cp_width: usize = @intCast(csi_c32width(wchars[i]));
+        all_cp_width += cp_width;
+        if (cp_width > max_cp_width) max_cp_width = cp_width;
+    }
+
+    var calculated_width: usize = 0;
+    const method = osc_conf_grapheme_width_method(term);
+    if (method == GRAPHEME_WIDTH_WCSWIDTH) calculated_width = all_cp_width
+    else if (method == GRAPHEME_WIDTH_MAX) calculated_width = max_cp_width
+    else if (method == GRAPHEME_WIDTH_DOUBLE) calculated_width = @min(max_cp_width, 2);
+
+    const width: usize = if (forced_width == 0) calculated_width else @intCast(forced_width);
+
+    var key = composed_key_from_chars(wchars, len);
+    const composed = composed_lookup_without_collision(
+        term.composed, &key, wchars, len - 1, wchars[len - 1], forced_width);
+
+    if (composed == null) {
+        const new_cc: *types.Composed = @ptrCast(@alignCast(xmalloc(@sizeOf(types.Composed)) orelse {
+            free(@ptrCast(wchars));
+            return;
+        }));
+        new_cc.chars = wchars;
+        new_cc.count = @intCast(len);
+        new_cc.key = key;
+        new_cc.width = @intCast(width);
+        new_cc.forced_width = @intCast(forced_width);
+
+        term.composed_count += 1;
+        composed_insert(&term.composed, new_cc);
+    } else if (composed.?.width == width) {
+        free(@ptrCast(wchars));
+    }
+
+    const final_composed = composed orelse blk: {
+        // should be filled by composed_insert re-read; fallback
+        break :blk term.composed.?;
+    };
+    _ = final_composed;
+
+    // Re-lookup since composed_insert may have rebalanced the tree
+    const found = composed_lookup_without_collision(
+        term.composed, &key, wchars, len - 1, wchars[len - 1], forced_width) orelse return;
+
+    const print_width: c_int = if (found.forced_width > 0) @intCast(found.forced_width) else @intCast(found.width);
+    term_print(term, CELL_COMB_CHARS_LO + found.key, print_width, false);
+}
+extern fn csi_c32width(c: u32) callconv(.c) c_int;
+extern fn term_process_and_print_non_ascii(term: *types.Terminal, wc: u32) callconv(.c) void;

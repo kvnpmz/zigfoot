@@ -125,3 +125,16 @@ osc_kitty_actions_push_back(struct notification *notif, char *s)
 {
     tll_push_back(notif->actions, s);
 }
+
+/* ── Chunk E-3: kitty_text_size helpers ─────────────────────────── */
+size_t
+osc_c32len(const uint32_t *s)
+{
+    return c32len((const char32_t *)s);
+}
+
+int
+osc_conf_grapheme_width_method(struct terminal *term)
+{
+    return (int)term->conf->tweak.grapheme_width_method;
+}
