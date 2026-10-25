@@ -515,7 +515,7 @@ executable(
   'input.c', 'input.h',
   'key-binding.c', 'key-binding.h',
   'main.c',
-  notify_obj, 'notify.c', 'notify.h', 'notify-shim.c',
+  notify_obj, 'notify.h', 'notify-shim.c',
   'quirks.c', 'quirks.h',
   reaper_obj, 'reaper.h',
   'render.c', 'render.h',
