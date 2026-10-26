@@ -1181,7 +1181,6 @@ export fn selection_update(
 // ── Chunk C4: dirty_cells + extend_* + extend + finalize + cancel + has_data ──
 // Ports selection.c lines 736-1070.
 
-extern fn selection_stop_scroll_timer(term: *types.Terminal) callconv(.c) void;
 extern fn search_selection_cancelled(term: *types.Terminal) callconv(.c) void;
 
 extern fn selection_seat_clipboard_data_offer(seat: ?*const anyopaque) callconv(.c) ?*anyopaque;
@@ -1582,4 +1581,125 @@ export fn selection_from_primary(
     term: *types.Terminal,
 ) callconv(.c) void {
     selection_shim_selection_from_primary(seat, term);
+}
+
+// ── Chunk F: unset + scroll timer ───────────────────────────────
+// Wire-protocol listeners and the clipboard_receive machinery stay in
+// selection.c as C glue. The `_c` implementations and all wl_* callbacks
+// remain there permanently.
+
+extern fn selection_shim_clipboard_unset(seat: ?*anyopaque) callconv(.c) void;
+extern fn selection_shim_primary_unset(seat: ?*anyopaque) callconv(.c) void;
+
+export fn selection_clipboard_unset(seat: ?*anyopaque) callconv(.c) void {
+    selection_shim_clipboard_unset(seat);
+}
+
+export fn selection_primary_unset(seat: ?*anyopaque) callconv(.c) void {
+    selection_shim_primary_unset(seat);
+}
+
+// fdm + timerfd externs
+const Fdm = anyopaque;
+const FdmHandler = *const fn (*Fdm, c_int, c_int, ?*anyopaque) callconv(.c) bool;
+
+extern fn fdm_add(fdm: *Fdm, fd: c_int, events: c_int, handler: FdmHandler, data: ?*anyopaque) callconv(.c) bool;
+extern fn fdm_del(fdm: *Fdm, fd: c_int) callconv(.c) bool;
+extern fn timerfd_create(clockid: c_int, flags: c_int) callconv(.c) c_int;
+extern fn timerfd_gettime(fd: c_int, curr: *types.Itimerspec) callconv(.c) c_int;
+extern fn timerfd_settime(fd: c_int, flags: c_int, new_value: *const types.Itimerspec, old_value: ?*types.Itimerspec) callconv(.c) c_int;
+extern fn read(fd: c_int, buf: *anyopaque, count: usize) callconv(.c) isize;
+extern fn close(fd: c_int) callconv(.c) c_int;
+extern fn __errno_location() callconv(.c) *c_int;
+
+extern fn cmd_scrollback_up(term: *types.Terminal, rows: u64) callconv(.c) void;
+extern fn cmd_scrollback_down(term: *types.Terminal, rows: u64) callconv(.c) void;
+
+const EPOLLIN: c_int = 0x001;
+const EPOLLHUP: c_int = 0x010;
+const EAGAIN: c_int = 11;
+const CLOCK_MONOTONIC: c_int = 1;
+const TFD_CLOEXEC: c_int = 0x80000;
+const TFD_NONBLOCK: c_int = 0x800;
+
+// SELECTION_SCROLL_* values from terminal.h
+
+fn fdm_scroll_timer(fdm_opaque: *Fdm, fd: c_int, events: c_int, data: ?*anyopaque) callconv(.c) bool {
+    _ = fdm_opaque;
+    if (events & EPOLLHUP != 0) return false;
+
+    const term: *types.Terminal = @ptrCast(@alignCast(data orelse return false));
+
+    var expiration_count: u64 = 0;
+    const ret = read(fd, &expiration_count, @sizeOf(u64));
+    if (ret < 0) {
+        if (__errno_location().* == EAGAIN) return true;
+        return false;
+    }
+
+    switch (term.selection.auto_scroll.direction) {
+        .not => return true,
+        .up => {
+            cmd_scrollback_up(term, expiration_count);
+            selection_update(term, term.selection.auto_scroll.col, 0);
+        },
+        .down => {
+            cmd_scrollback_down(term, expiration_count);
+            selection_update(term, term.selection.auto_scroll.col, term.rows - 1);
+        },
+    }
+    return true;
+}
+
+export fn selection_start_scroll_timer(
+    term: *types.Terminal,
+    interval_ns: c_int,
+    direction: c_int,
+    col: c_int,
+) callconv(.c) void {
+    if (!term.selection.ongoing) return;
+
+    if (term.selection.auto_scroll.fd < 0) {
+        const fd = timerfd_create(CLOCK_MONOTONIC, TFD_CLOEXEC | TFD_NONBLOCK);
+        if (fd < 0) {
+            selection_stop_scroll_timer(term);
+            return;
+        }
+
+        if (!fdm_add(@ptrCast(@alignCast(term.fdm orelse return)), fd, EPOLLIN, &fdm_scroll_timer, term)) {
+            _ = close(fd);
+            return;
+        }
+
+        term.selection.auto_scroll.fd = fd;
+    }
+
+    var timer: types.Itimerspec = undefined;
+    if (timerfd_gettime(term.selection.auto_scroll.fd, &timer) < 0) {
+        selection_stop_scroll_timer(term);
+        return;
+    }
+
+    if (timer.it_value.tv_sec == 0 and timer.it_value.tv_nsec == 0) {
+        timer.it_value.tv_nsec = 1;
+    }
+
+    timer.it_interval.tv_sec = @divTrunc(interval_ns, 1_000_000_000);
+    timer.it_interval.tv_nsec = @mod(interval_ns, 1_000_000_000);
+
+    if (timerfd_settime(term.selection.auto_scroll.fd, 0, &timer, null) < 0) {
+        selection_stop_scroll_timer(term);
+        return;
+    }
+
+    term.selection.auto_scroll.direction = @enumFromInt(direction);
+    term.selection.auto_scroll.col = col;
+}
+
+export fn selection_stop_scroll_timer(term: *types.Terminal) callconv(.c) void {
+    if (term.selection.auto_scroll.fd < 0) return;
+
+    _ = fdm_del(@ptrCast(@alignCast(term.fdm orelse return)), term.selection.auto_scroll.fd);
+    term.selection.auto_scroll.fd = -1;
+    term.selection.auto_scroll.direction = .not;
 }

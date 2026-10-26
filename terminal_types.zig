@@ -914,3 +914,14 @@ comptime {
     if (@offsetOf(Terminal, "render") != 3872)
         @compileError("Terminal: render offset drift");
 }
+
+
+pub const Timespec = extern struct {
+    tv_sec: i64,
+    tv_nsec: i64,
+};
+
+pub const Itimerspec = extern struct {
+    it_interval: Timespec,
+    it_value: Timespec,
+};
