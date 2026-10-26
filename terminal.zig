@@ -1,8 +1,6 @@
 const std = @import("std");
 const types = @import("terminal_types.zig");
-extern fn term_row_rel_to_abs(term: *const types.Terminal, row: c_int) c_int;
 extern fn term_update_ascii_printer(term: *types.Terminal) void;
-extern fn term_cursor_blink_update(term: *types.Terminal) void;
 extern fn render_refresh_csd(term: *types.Terminal) void;
 
 extern fn row(grid: *types.Grid, row_no: c_int) *types.Row;
@@ -328,4 +326,215 @@ export fn term_restore_cursor(
     term.bits_affecting_ascii_printer.value =
         if (term.charsets.set[@intCast(@intFromEnum(term.charsets.selected))] != .ascii) 1 else 0;
     term_update_ascii_printer(term);
+}
+
+// ── Chunk A: term_row_rel_to_abs + blink/flash timers ────────────
+
+extern fn render_overlay(term: *types.Terminal) callconv(.c) void;
+extern fn render_refresh(term: *types.Terminal) callconv(.c) void;
+extern fn fdm_add(fdm: *anyopaque, fd: c_int, events: c_int, handler: *const fn (*anyopaque, c_int, c_int, ?*anyopaque) callconv(.c) bool, data: ?*anyopaque) callconv(.c) bool;
+extern fn fdm_del(fdm: *anyopaque, fd: c_int) callconv(.c) bool;
+extern fn timerfd_create(clockid: c_int, flags: c_int) callconv(.c) c_int;
+extern fn timerfd_settime(fd: c_int, flags: c_int, new_value: *const types.Itimerspec, old_value: ?*types.Itimerspec) callconv(.c) c_int;
+extern fn read(fd: c_int, buf: *anyopaque, count: usize) callconv(.c) isize;
+extern fn close(fd: c_int) callconv(.c) c_int;
+extern fn __errno_location() callconv(.c) *c_int;
+extern fn terminal_shim_window_surface(term: *types.Terminal) callconv(.c) ?*anyopaque;
+extern fn terminal_shim_window_is_configured(term: *types.Terminal) callconv(.c) bool;
+extern fn terminal_shim_conf_cursor_blink_rate_ms(term: *types.Terminal) callconv(.c) c_int;
+extern fn terminal_shim_grid_row_in_view(grid: *types.Grid, row: c_int) callconv(.c) ?*types.Row;
+extern fn terminal_shim_wl_surface_commit(surf: ?*anyopaque) callconv(.c) void;
+
+const EPOLLIN: c_int = 0x001;
+const EPOLLHUP: c_int = 0x010;
+const EAGAIN: c_int = 11;
+const CLOCK_MONOTONIC: c_int = 1;
+const TFD_CLOEXEC: c_int = 0x80000;
+const TFD_NONBLOCK: c_int = 0x800;
+
+// blink state: BLINK_ON=0, BLINK_OFF=1 in C
+// cursor_blink state: CURSOR_BLINK_ON=0, CURSOR_BLINK_OFF=1
+const CURSOR_BLINK_ON: c_int = 0;
+const CURSOR_BLINK_OFF: c_int = 1;
+
+// ── term_row_rel_to_abs ─────────────────────────────────────────
+export fn term_row_rel_to_abs(term: *const types.Terminal, row_in: c_int) callconv(.c) c_int {
+    return switch (term.origin) {
+        .absolute => @min(row_in, term.rows - 1),
+        .relative => @min(row_in + term.scroll_region.start, term.scroll_region.end - 1),
+    };
+}
+
+// ── fdm_flash ───────────────────────────────────────────────────
+export fn fdm_flash(fdm_opaque: *anyopaque, fd: c_int, events: c_int, data: ?*anyopaque) callconv(.c) bool {
+    _ = fdm_opaque;
+    _ = fd;
+    if (events & EPOLLHUP != 0) return false;
+
+    const term: *types.Terminal = @ptrCast(@alignCast(data orelse return false));
+
+    var expiration_count: u64 = 0;
+    const ret = read(term.flash.fd, &expiration_count, @sizeOf(u64));
+    if (ret < 0) {
+        if (__errno_location().* == EAGAIN) return true;
+        return false;
+    }
+
+    term.flash.active = false;
+    render_overlay(term);
+
+    const surf = terminal_shim_window_surface(term);
+    if (surf) |s| terminal_shim_wl_surface_commit(s);
+    return true;
+}
+
+// ── fdm_blink ───────────────────────────────────────────────────
+fn fdm_blink(fdm_opaque: *anyopaque, fd: c_int, events: c_int, data: ?*anyopaque) callconv(.c) bool {
+    _ = fdm_opaque;
+    _ = fd;
+    if (events & EPOLLHUP != 0) return false;
+
+    const term: *types.Terminal = @ptrCast(@alignCast(data orelse return false));
+
+    var expiration_count: u64 = 0;
+    const ret = read(term.blink.fd, &expiration_count, @sizeOf(u64));
+    if (ret < 0) {
+        if (__errno_location().* == EAGAIN) return true;
+        return false;
+    }
+
+    term.blink.state = if (term.blink.state == .on) .off else .on;
+
+    var no_blinking_cells = true;
+    var r: c_int = 0;
+    while (r < term.rows) : (r += 1) {
+        const current_row = terminal_shim_grid_row_in_view(term.grid.?, r) orelse continue;
+        var col: c_int = 0;
+        while (col < term.cols) : (col += 1) {
+            const cell = &current_row.cells.?[@intCast(col)];
+            if (cell.attrs.blink) {
+                cell.attrs.clean = false;
+                current_row.dirty = true;
+                no_blinking_cells = false;
+            }
+        }
+    }
+
+    if (no_blinking_cells) {
+        term.blink.state = .on;
+        _ = fdm_del(term.fdm orelse return true, term.blink.fd);
+        term.blink.fd = -1;
+    } else {
+        render_refresh(term);
+    }
+    return true;
+}
+
+// ── term_arm_blink_timer ────────────────────────────────────────
+export fn term_arm_blink_timer(term: *types.Terminal) callconv(.c) void {
+    if (term.blink.fd >= 0) return;
+
+    const fd = timerfd_create(CLOCK_MONOTONIC, TFD_CLOEXEC | TFD_NONBLOCK);
+    if (fd < 0) return;
+
+    if (!fdm_add(term.fdm orelse return, fd, EPOLLIN, &fdm_blink, term)) {
+        _ = close(fd);
+        return;
+    }
+
+    const alarm: types.Itimerspec = .{
+        .it_value = .{ .tv_sec = 0, .tv_nsec = 500 * 1_000_000 },
+        .it_interval = .{ .tv_sec = 0, .tv_nsec = 500 * 1_000_000 },
+    };
+
+    if (timerfd_settime(fd, 0, &alarm, null) < 0) {
+        _ = fdm_del(term.fdm orelse return, fd);
+    }
+
+    term.blink.fd = fd;
+}
+
+// ── cursor_refresh ──────────────────────────────────────────────
+export fn cursor_refresh(term: *types.Terminal) callconv(.c) void {
+    if (!terminal_shim_window_is_configured(term)) return;
+    if (term.shutdown.in_progress) return;
+
+    const grid = term.grid.?;
+    const cur_row = grid.cur_row orelse return;
+    const col: usize = @intCast(grid.cursor.point.col);
+    cur_row.cells.?[col].attrs.clean = false;
+    cur_row.dirty = true;
+    render_refresh(term);
+}
+
+// ── fdm_cursor_blink ────────────────────────────────────────────
+fn fdm_cursor_blink(fdm_opaque: *anyopaque, fd: c_int, events: c_int, data: ?*anyopaque) callconv(.c) bool {
+    _ = fdm_opaque;
+    _ = fd;
+    if (events & EPOLLHUP != 0) return false;
+
+    const term: *types.Terminal = @ptrCast(@alignCast(data orelse return false));
+
+    var expiration_count: u64 = 0;
+    const ret = read(term.cursor_blink.fd, &expiration_count, @sizeOf(u64));
+    if (ret < 0) {
+        if (__errno_location().* == EAGAIN) return true;
+        return false;
+    }
+
+    term.cursor_blink.state = if (term.cursor_blink.state == CURSOR_BLINK_ON)
+        CURSOR_BLINK_OFF
+    else
+        CURSOR_BLINK_ON;
+
+    cursor_refresh(term);
+    return true;
+}
+
+// ── cursor_blink_rearm/disarm + term_cursor_blink_update ────────
+export fn cursor_blink_rearm_timer(term: *types.Terminal) callconv(.c) bool {
+    if (term.cursor_blink.fd < 0) {
+        const fd = timerfd_create(CLOCK_MONOTONIC, TFD_CLOEXEC | TFD_NONBLOCK);
+        if (fd < 0) return false;
+
+        if (!fdm_add(term.fdm orelse return false, fd, EPOLLIN, &fdm_cursor_blink, term)) {
+            _ = close(fd);
+            return false;
+        }
+        term.cursor_blink.fd = fd;
+    }
+
+    const rate_ms = terminal_shim_conf_cursor_blink_rate_ms(term);
+    const secs: i64 = @divTrunc(@as(i64, rate_ms), 1000);
+    const nsecs: i64 = @mod(@as(i64, rate_ms), 1000) * 1_000_000;
+
+    const timer: types.Itimerspec = .{
+        .it_value = .{ .tv_sec = secs, .tv_nsec = nsecs },
+        .it_interval = .{ .tv_sec = secs, .tv_nsec = nsecs },
+    };
+
+    if (timerfd_settime(term.cursor_blink.fd, 0, &timer, null) < 0) {
+        _ = fdm_del(term.fdm orelse return false, term.cursor_blink.fd);
+        term.cursor_blink.fd = -1;
+        return false;
+    }
+    return true;
+}
+
+export fn cursor_blink_disarm_timer(term: *types.Terminal) callconv(.c) bool {
+    _ = fdm_del(term.fdm orelse return true, term.cursor_blink.fd);
+    term.cursor_blink.fd = -1;
+    return true;
+}
+
+export fn term_cursor_blink_update(term: *types.Terminal) callconv(.c) void {
+    const enable = term.cursor_blink.decset or term.cursor_blink.deccsusr;
+    const activate = !term.shutdown.in_progress and enable and term.visual_focus;
+
+    if (activate and term.cursor_blink.fd < 0) {
+        term.cursor_blink.state = CURSOR_BLINK_ON;
+        _ = cursor_blink_rearm_timer(term);
+    } else if (!activate and term.cursor_blink.fd >= 0) {
+        _ = cursor_blink_disarm_timer(term);
+    }
 }

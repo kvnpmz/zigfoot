@@ -45,6 +45,15 @@
 #include "util.h"
 #include "vt.h"
 #include "xmalloc.h"
+
+/* Ported to terminal.zig — extern for C callers */
+extern bool fdm_flash(struct fdm *fdm, int fd, int events, void *data);
+extern void cursor_refresh(struct terminal *term);
+extern bool cursor_blink_rearm_timer(struct terminal *term);
+extern bool cursor_blink_disarm_timer(struct terminal *term);
+extern void term_arm_blink_timer(struct terminal *term);
+extern void term_cursor_blink_update(struct terminal *term);
+extern int term_row_rel_to_abs(const struct terminal *term, int row);
 #include "xsnprintf.h"
 
 #define PTMX_TIMING 0
@@ -236,7 +245,6 @@ del_utmp_record(const struct config *conf, struct reaper *reaper, int ptmx)
 static struct timespec last = {0};
 #endif
 
-static bool cursor_blink_rearm_timer(struct terminal *term);
 
 /* Externally visible, but not declared in terminal.h, to enable pgo
  * to call this function directly */
@@ -403,163 +411,11 @@ term_ptmx_resume(struct terminal *term)
         return false;
     return fdm_event_add(term->fdm, term->ptmx, EPOLLIN);
 }
-
-static bool
-fdm_flash(struct fdm *fdm, int fd, int events, void *data)
-{
-    if (events & EPOLLHUP)
-        return false;
-
-    struct terminal *term = data;
-    uint64_t expiration_count;
-    ssize_t ret = read(
-        term->flash.fd, &expiration_count, sizeof(expiration_count));
-
-    if (ret < 0) {
-        if (errno == EAGAIN)
-            return true;
-
-        LOG_ERRNO("failed to read flash timer");
-        return false;
-    }
-
-    LOG_DBG("flash timer expired %llu times",
-            (unsigned long long)expiration_count);
-
-    term->flash.active = false;
-    render_overlay(term);
-
-    // since the overlay surface is synced with the main window surface, we have
-    // to commit the main surface for the compositor to acknowledge the new
-    // overlay state.
-    wl_surface_commit(term->window->surface.surf);
-    return true;
-}
-
-static bool
-fdm_blink(struct fdm *fdm, int fd, int events, void *data)
-{
-    if (events & EPOLLHUP)
-        return false;
-
-    struct terminal *term = data;
-    uint64_t expiration_count;
-    ssize_t ret = read(
-        term->blink.fd, &expiration_count, sizeof(expiration_count));
-
-    if (ret < 0) {
-        if (errno == EAGAIN)
-            return true;
-
-        LOG_ERRNO("failed to read blink timer");
-        return false;
-    }
-
-    LOG_DBG("blink timer expired %llu times",
-            (unsigned long long)expiration_count);
-
-    /* Invert blink state */
-    term->blink.state = term->blink.state == BLINK_ON
-        ? BLINK_OFF : BLINK_ON;
-
-    /* Scan all visible cells and mark rows with blinking cells dirty */
-    bool no_blinking_cells = true;
-    for (int r = 0; r < term->rows; r++) {
-        struct row *row = grid_row_in_view(term->grid, r);
-        for (int col = 0; col < term->cols; col++) {
-            struct cell *cell = &row->cells[col];
-
-            if (cell->attrs.blink) {
-                cell->attrs.clean = 0;
-                row->dirty = true;
-                no_blinking_cells = false;
-            }
-        }
-    }
-
-    if (no_blinking_cells) {
-        LOG_DBG("disarming blink timer");
-
-        term->blink.state = BLINK_ON;
-        fdm_del(term->fdm, term->blink.fd);
-        term->blink.fd = -1;
-    } else
-        render_refresh(term);
-    return true;
-}
-
-void
-term_arm_blink_timer(struct terminal *term)
-{
-    if (term->blink.fd >= 0)
-        return;
-
-    LOG_DBG("arming blink timer");
-
-    int fd = timerfd_create(CLOCK_MONOTONIC, TFD_CLOEXEC | TFD_NONBLOCK);
-    if (fd < 0) {
-        LOG_ERRNO("failed to create blink timer FD");
-        return;
-    }
-
-    if (!fdm_add(term->fdm, fd, EPOLLIN, &fdm_blink, term)) {
-        close(fd);
-        return;
-    }
-
-    struct itimerspec alarm = {
-        .it_value = {.tv_sec = 0, .tv_nsec = 500 * 1000000},
-        .it_interval = {.tv_sec = 0, .tv_nsec = 500 * 1000000},
-    };
-
-    if (timerfd_settime(fd, 0, &alarm, NULL) < 0) {
-        LOG_ERRNO("failed to arm blink timer");
-        fdm_del(term->fdm, fd);
-    }
-
-    term->blink.fd = fd;
-}
-
-static void
-cursor_refresh(struct terminal *term)
-{
-    if (unlikely(!term->window->is_configured || term->shutdown.in_progress))
-        return;
-
-    term->grid->cur_row->cells[term->grid->cursor.point.col].attrs.clean = 0;
-    term->grid->cur_row->dirty = true;
-    render_refresh(term);
-}
-
-static bool
-fdm_cursor_blink(struct fdm *fdm, int fd, int events, void *data)
-{
-    if (events & EPOLLHUP)
-        return false;
-
-    struct terminal *term = data;
-    uint64_t expiration_count;
-    ssize_t ret = read(
-        term->cursor_blink.fd, &expiration_count, sizeof(expiration_count));
-
-    if (ret < 0) {
-        if (errno == EAGAIN)
-            return true;
-
-        LOG_ERRNO("failed to read cursor blink timer");
-        return false;
-    }
-
-    LOG_DBG("cursor blink timer expired %llu times",
-            (unsigned long long)expiration_count);
-
-    /* Invert blink state */
-    term->cursor_blink.state = term->cursor_blink.state == CURSOR_BLINK_ON
-        ? CURSOR_BLINK_OFF : CURSOR_BLINK_ON;
-
-    cursor_refresh(term);
-    return true;
-}
+/* fdm_flash: ported to terminal.zig */
+/* fdm_blink: ported to terminal.zig */
+/* term_arm_blink_timer: ported to terminal.zig */
+/* cursor_refresh: ported to terminal.zig */
+/* fdm_cursor_blink: ported to terminal.zig */
 
 static bool
 fdm_delayed_render(struct fdm *fdm, int fd, int events, void *data)
@@ -2728,84 +2584,10 @@ UNITTEST
     free(term.normal.rows);
     fdm_destroy(fdm);
 }
-
-int
-term_row_rel_to_abs(const struct terminal *term, int row)
-{
-    switch (term->origin) {
-    case ORIGIN_ABSOLUTE:
-        return min(row, term->rows - 1);
-
-    case ORIGIN_RELATIVE:
-        return min(row + term->scroll_region.start, term->scroll_region.end - 1);
-    }
-
-    BUG("Invalid cursor_origin value");
-    return -1;
-}
-
-static bool
-cursor_blink_rearm_timer(struct terminal *term)
-{
-    if (term->cursor_blink.fd < 0) {
-        int fd = timerfd_create(CLOCK_MONOTONIC, TFD_CLOEXEC | TFD_NONBLOCK);
-        if (fd < 0) {
-            LOG_ERRNO("failed to create cursor blink timer FD");
-            return false;
-        }
-
-        if (!fdm_add(term->fdm, fd, EPOLLIN, &fdm_cursor_blink, term)) {
-            close(fd);
-            return false;
-        }
-
-        term->cursor_blink.fd = fd;
-    }
-
-    const int rate_ms = term->conf->cursor.blink.rate_ms;
-    const long secs = rate_ms / 1000;
-    const long nsecs = (rate_ms % 1000) * 1000000;
-
-    const struct itimerspec timer = {
-        .it_value = {.tv_sec = secs, .tv_nsec = nsecs},
-        .it_interval = {.tv_sec = secs, .tv_nsec = nsecs},
-    };
-
-    if (timerfd_settime(term->cursor_blink.fd, 0, &timer, NULL) < 0) {
-        LOG_ERRNO("failed to arm cursor blink timer");
-        fdm_del(term->fdm, term->cursor_blink.fd);
-        term->cursor_blink.fd = -1;
-        return false;
-    }
-
-    return true;
-}
-
-static bool
-cursor_blink_disarm_timer(struct terminal *term)
-{
-    fdm_del(term->fdm, term->cursor_blink.fd);
-    term->cursor_blink.fd = -1;
-    return true;
-}
-
-void
-term_cursor_blink_update(struct terminal *term)
-{
-    bool enable = term->cursor_blink.decset || term->cursor_blink.deccsusr;
-    bool activate = !term->shutdown.in_progress && enable && term->visual_focus;
-
-    LOG_DBG("decset=%d, deccsrusr=%d, focus=%d, shutting-down=%d, enable=%d, activate=%d",
-            term->cursor_blink.decset, term->cursor_blink.deccsusr,
-            term->visual_focus, term->shutdown.in_progress,
-            enable, activate);
-
-    if (activate && term->cursor_blink.fd < 0) {
-        term->cursor_blink.state = CURSOR_BLINK_ON;
-        cursor_blink_rearm_timer(term);
-    } else if (!activate && term->cursor_blink.fd >= 0)
-        cursor_blink_disarm_timer(term);
-}
+/* term_row_rel_to_abs: ported to terminal.zig */
+/* cursor_blink_rearm_timer: ported to terminal.zig */
+/* cursor_blink_disarm_timer: ported to terminal.zig */
+/* term_cursor_blink_update: ported to terminal.zig */
 
 static bool
 selection_on_top_region(const struct terminal *term,
