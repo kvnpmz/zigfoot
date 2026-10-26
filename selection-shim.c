@@ -144,3 +144,50 @@ bool selection_shim_text_to_primary(
     primary->serial = serial;
     return true;
 }
+
+/* Chunk E: receive-path shims. These wrap the C-side clipboard_receive
+ * subsystem (pipe setup, fdm_receive, decode_one_uri, begin_receive_clipboard). */
+
+extern void selection_text_from_clipboard_c(
+    struct seat *seat, struct terminal *term, bool no_strip,
+    void (*cb)(char *data, size_t size, void *user),
+    void (*done)(void *user), void *user);
+
+extern void selection_text_from_primary_c(
+    struct seat *seat, struct terminal *term, bool no_strip,
+    void (*cb)(char *data, size_t size, void *user),
+    void (*done)(void *user), void *user);
+
+extern void selection_selection_from_clipboard_c(
+    struct seat *seat, struct terminal *term, uint32_t serial);
+
+extern void selection_selection_from_primary_c(
+    struct seat *seat, struct terminal *term);
+
+void selection_shim_text_from_clipboard(
+    struct seat *seat, struct terminal *term, bool no_strip,
+    void (*cb)(char *data, size_t size, void *user),
+    void (*done)(void *user), void *user)
+{
+    selection_text_from_clipboard_c(seat, term, no_strip, cb, done, user);
+}
+
+void selection_shim_text_from_primary(
+    struct seat *seat, struct terminal *term, bool no_strip,
+    void (*cb)(char *data, size_t size, void *user),
+    void (*done)(void *user), void *user)
+{
+    selection_text_from_primary_c(seat, term, no_strip, cb, done, user);
+}
+
+void selection_shim_selection_from_clipboard(
+    struct seat *seat, struct terminal *term, uint32_t serial)
+{
+    selection_selection_from_clipboard_c(seat, term, serial);
+}
+
+void selection_shim_selection_from_primary(
+    struct seat *seat, struct terminal *term)
+{
+    selection_selection_from_primary_c(seat, term);
+}

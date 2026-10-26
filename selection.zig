@@ -1525,3 +1525,61 @@ export fn selection_to_primary(
         if (text) |t| free(@ptrCast(t));
     }
 }
+
+// ── Chunk E: clipboard/primary receive (manager fns) ─────────────
+// Wire + fdm machinery remains C (selection-shim.c / selection.c _c impls).
+
+const ClipboardCb = *const fn (data: ?[*]u8, size: usize, user: ?*anyopaque) callconv(.c) void;
+const ClipboardDone = *const fn (user: ?*anyopaque) callconv(.c) void;
+
+extern fn selection_shim_text_from_clipboard(
+    seat: ?*anyopaque, term: *types.Terminal, no_strip: bool,
+    cb: ClipboardCb, done: ClipboardDone, user: ?*anyopaque,
+) callconv(.c) void;
+extern fn selection_shim_text_from_primary(
+    seat: ?*anyopaque, term: *types.Terminal, no_strip: bool,
+    cb: ClipboardCb, done: ClipboardDone, user: ?*anyopaque,
+) callconv(.c) void;
+extern fn selection_shim_selection_from_clipboard(
+    seat: ?*anyopaque, term: *types.Terminal, serial: u32,
+) callconv(.c) void;
+extern fn selection_shim_selection_from_primary(
+    seat: ?*anyopaque, term: *types.Terminal,
+) callconv(.c) void;
+
+export fn text_from_clipboard(
+    seat: ?*anyopaque,
+    term: *types.Terminal,
+    no_strip: bool,
+    cb: ClipboardCb,
+    done: ClipboardDone,
+    user: ?*anyopaque,
+) callconv(.c) void {
+    selection_shim_text_from_clipboard(seat, term, no_strip, cb, done, user);
+}
+
+export fn text_from_primary(
+    seat: ?*anyopaque,
+    term: *types.Terminal,
+    no_strip: bool,
+    cb: ClipboardCb,
+    done: ClipboardDone,
+    user: ?*anyopaque,
+) callconv(.c) void {
+    selection_shim_text_from_primary(seat, term, no_strip, cb, done, user);
+}
+
+export fn selection_from_clipboard(
+    seat: ?*anyopaque,
+    term: *types.Terminal,
+    serial: u32,
+) callconv(.c) void {
+    selection_shim_selection_from_clipboard(seat, term, serial);
+}
+
+export fn selection_from_primary(
+    seat: ?*anyopaque,
+    term: *types.Terminal,
+) callconv(.c) void {
+    selection_shim_selection_from_primary(seat, term);
+}

@@ -30,6 +30,16 @@
 #include "vt.h"
 #include "xmalloc.h"
 
+/* Ported to selection.zig — extern for C callers */
+extern void text_from_clipboard(struct seat *seat, struct terminal *term, bool no_strip,
+    void (*cb)(char *data, size_t size, void *user),
+    void (*done)(void *user), void *user);
+extern void text_from_primary(struct seat *seat, struct terminal *term, bool no_strip,
+    void (*cb)(char *data, size_t size, void *user),
+    void (*done)(void *user), void *user);
+extern void selection_from_clipboard(struct seat *seat, struct terminal *term, uint32_t serial);
+extern void selection_from_primary(struct seat *seat, struct terminal *term);
+
 /* Ported to selection.zig */
 extern struct coord selection_get_start(const struct terminal *term);
 extern struct coord selection_get_end(const struct terminal *term);
@@ -779,7 +789,7 @@ err:
 }
 
 void
-text_from_clipboard(struct seat *seat, struct terminal *term,
+selection_text_from_clipboard_c(struct seat *seat, struct terminal *term,
                     bool no_strip,
                     void (*cb)(char *data, size_t size, void *user),
                     void (*done)(void *user), void *user)
@@ -841,7 +851,7 @@ receive_offer_done(void *user)
 }
 
 void
-selection_from_clipboard(struct seat *seat, struct terminal *term, uint32_t serial)
+selection_selection_from_clipboard_c(struct seat *seat, struct terminal *term, uint32_t serial)
 {
     if (term->is_sending_paste_data) {
         /* We're already pasting... */
@@ -857,14 +867,14 @@ selection_from_clipboard(struct seat *seat, struct terminal *term, uint32_t seri
     if (term->bracketed_paste)
         term_paste_data_to_slave(term, "\033[200~", 6);
 
-    text_from_clipboard(
+    selection_text_from_clipboard_c(
         seat, term, false, &receive_offer, &receive_offer_done, term);
 }
 /* text_to_primary: ported to selection.zig */
 /* selection_to_primary: ported to selection.zig */
 
 void
-text_from_primary(
+selection_text_from_primary_c(
     struct seat *seat, struct terminal *term, bool no_strip,
     void (*cb)(char *data, size_t size, void *user),
     void (*done)(void *user), void *user)
@@ -908,7 +918,7 @@ text_from_primary(
 }
 
 void
-selection_from_primary(struct seat *seat, struct terminal *term)
+selection_selection_from_primary_c(struct seat *seat, struct terminal *term)
 {
     if (term->wl->primary_selection_device_manager == NULL)
         return;
@@ -926,7 +936,7 @@ selection_from_primary(struct seat *seat, struct terminal *term)
     if (term->bracketed_paste)
         term_paste_data_to_slave(term, "\033[200~", 6);
 
-    text_from_primary(
+    selection_text_from_primary_c(
         seat, term, false, &receive_offer, &receive_offer_done, term);
 }
 
