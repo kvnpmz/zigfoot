@@ -51,3 +51,4 @@ void terminal_shim_term_reset_grapheme_state(struct terminal *term) {
 int terminal_shim_conf_url_osc8_underline(struct terminal *term) {
     return term->conf->url.osc8_underline;
 }
+

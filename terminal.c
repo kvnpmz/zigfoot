@@ -47,6 +47,8 @@
 #include "xmalloc.h"
 
 /* Ported to terminal.zig — extern for C callers */
+
+/* Ported to terminal.zig — extern for C callers */
 extern void term_update_ascii_printer(struct terminal *term);
 extern void term_single_shift(struct terminal *term, enum charset_designator idx);
 
@@ -3241,6 +3243,7 @@ emoji_vs_compare(const void *_key, const void *_entry)
         return 0;
 }
 
+
 UNITTEST
 {
     /* Verify the emoji_vs list is sorted */
@@ -3255,7 +3258,6 @@ UNITTEST
     }
 }
 #endif
-
 void
 term_process_and_print_non_ascii(struct terminal *term, char32_t wc)
 {
@@ -3481,6 +3483,7 @@ out:
     if (width > 0)
         term_print(term, wc, width, insert_mode_disable);
 }
+
 
 enum term_surface
 term_surface_kind(const struct terminal *term, const struct wl_surface *surface)
