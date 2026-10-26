@@ -710,3 +710,209 @@ fn chunkC1_line_wise(term: *types.Terminal, row: c_int) void {
 
     selection_update(term, end.col, end.row);
 }
+
+// ── Chunk C2: pixman_region_for_coords_* + mark_selected_region ──
+// Ports selection.c lines 214-433.
+
+const PixmanBox32 = extern struct {
+    x1: i32,
+    y1: i32,
+    x2: i32,
+    y2: i32,
+};
+const PixmanRegion32 = extern struct {
+    extents: PixmanBox32,
+    data: ?*anyopaque,
+};
+
+extern fn pixman_region32_init(region: *PixmanRegion32) callconv(.c) void;
+extern fn pixman_region32_union_rect(
+    new_reg: *PixmanRegion32,
+    reg: *const PixmanRegion32,
+    x: c_int,
+    y: c_int,
+    width: c_uint,
+    height: c_uint,
+) callconv(.c) c_int;
+extern fn grid_row_sb_to_abs(grid: *const types.Grid, screen_rows: c_int, sb_rel_row: c_int) callconv(.c) c_int;
+
+fn pixman_region_for_coords_normal(
+    term: *const types.Terminal,
+    start: *const types.Coord,
+    end: *const types.Coord,
+) PixmanRegion32 {
+    var region: PixmanRegion32 = undefined;
+    pixman_region32_init(&region);
+
+    const rel_start_row = grid_row_abs_to_sb(term.grid.?, term.rows, start.row);
+    const rel_end_row = grid_row_abs_to_sb(term.grid.?, term.rows, end.row);
+
+    if (rel_start_row < rel_end_row) {
+        if (term.cols > start.col) {
+            _ = pixman_region32_union_rect(
+                &region,
+                &region,
+                start.col,
+                rel_start_row,
+                @intCast(term.cols - start.col),
+                1,
+            );
+        }
+        if (rel_start_row + 1 < rel_end_row) {
+            _ = pixman_region32_union_rect(
+                &region,
+                &region,
+                0,
+                rel_start_row + 1,
+                @intCast(term.cols),
+                @intCast(rel_end_row - rel_start_row - 1),
+            );
+        }
+        _ = pixman_region32_union_rect(
+            &region,
+            &region,
+            0,
+            rel_end_row,
+            @intCast(end.col + 1),
+            1,
+        );
+    } else if (rel_start_row > rel_end_row) {
+        if (term.cols > end.col) {
+            _ = pixman_region32_union_rect(
+                &region,
+                &region,
+                end.col,
+                rel_end_row,
+                @intCast(term.cols - end.col),
+                1,
+            );
+        }
+        if (rel_end_row + 1 < rel_start_row) {
+            _ = pixman_region32_union_rect(
+                &region,
+                &region,
+                0,
+                rel_end_row + 1,
+                @intCast(term.cols),
+                @intCast(rel_start_row - rel_end_row - 1),
+            );
+        }
+        _ = pixman_region32_union_rect(
+            &region,
+            &region,
+            0,
+            rel_start_row,
+            @intCast(start.col + 1),
+            1,
+        );
+    } else {
+        const start_col = @min(start.col, end.col);
+        const end_col = @max(start.col, end.col);
+        _ = pixman_region32_union_rect(
+            &region,
+            &region,
+            start_col,
+            rel_start_row,
+            @intCast(end_col + 1 - start_col),
+            1,
+        );
+    }
+
+    return region;
+}
+
+fn pixman_region_for_coords_block(
+    term: *const types.Terminal,
+    start: *const types.Coord,
+    end: *const types.Coord,
+) PixmanRegion32 {
+    var region: PixmanRegion32 = undefined;
+    pixman_region32_init(&region);
+
+    const rel_start_row = grid_row_abs_to_sb(term.grid.?, term.rows, start.row);
+    const rel_end_row = grid_row_abs_to_sb(term.grid.?, term.rows, end.row);
+
+    _ = pixman_region32_union_rect(
+        &region,
+        &region,
+        @min(start.col, end.col),
+        @min(rel_start_row, rel_end_row),
+        @intCast(@abs(start.col - end.col) + 1),
+        @intCast(@abs(rel_start_row - rel_end_row) + 1),
+    );
+
+    return region;
+}
+
+export fn pixman_region_for_coords(
+    term: *const types.Terminal,
+    start: *const types.Coord,
+    end: *const types.Coord,
+) callconv(.c) PixmanRegion32 {
+    return switch (term.selection.kind) {
+        .block => pixman_region_for_coords_block(term, start, end),
+        else => pixman_region_for_coords_normal(term, start, end),
+    };
+}
+
+const MarkSelectionVariant = enum(c_int) {
+    mark_and_dirty = 0,
+    unmark_and_dirty = 1,
+    mark_for_render = 2,
+};
+
+export fn mark_selected_region(
+    term: *types.Terminal,
+    boxes: [*]PixmanBox32,
+    count: usize,
+    mark_variant: MarkSelectionVariant,
+) callconv(.c) void {
+    const selected = mark_variant == .mark_and_dirty or mark_variant == .mark_for_render;
+    const dirty_cells = mark_variant == .mark_and_dirty or mark_variant == .unmark_and_dirty;
+    const highlight_empty =
+        mark_variant != .mark_for_render or term.selection.kind == .block;
+
+    var i: usize = 0;
+    while (i < count) : (i += 1) {
+        const box = &boxes[i];
+        const grid = term.grid.?;
+
+        const abs_row_start = grid_row_sb_to_abs(grid, term.rows, box.y1);
+
+        var r: c_int = abs_row_start;
+        var rel_r: c_int = box.y1;
+        while (rel_r < box.y2) : ({
+            r = (r + 1) & (grid.num_rows - 1);
+            rel_r += 1;
+        }) {
+            const row = grid.rows.?[@intCast(r)] orelse continue;
+
+            if (dirty_cells) row.dirty = true;
+
+            var c: c_int = box.x1;
+            var empty_count: c_int = 0;
+            while (c < box.x2) : (c += 1) {
+                const cell = &row.cells.?[@intCast(c)];
+
+                if ((cell.wc == 0 or cell.wc == CELL_SPACER) and !highlight_empty) {
+                    empty_count += 1;
+                    cell.attrs.clean = false;
+                    cell.attrs.selected = false;
+                    row.dirty = true;
+                    continue;
+                }
+
+                var j: c_int = 0;
+                while (j < empty_count + 1) : (j += 1) {
+                    const ecell = &row.cells.?[@intCast(c - j)];
+                    if (dirty_cells) {
+                        ecell.attrs.clean = false;
+                        row.dirty = true;
+                    }
+                    ecell.attrs.selected = selected;
+                }
+                empty_count = 0;
+            }
+        }
+    }
+}
