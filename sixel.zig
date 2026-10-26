@@ -1058,3 +1058,571 @@ export fn sixel_init(term: *types.Terminal, p1: c_int, p2: c_int, p3: c_int) cal
     count = 0;
     return if (pan == 1 and pad == 1) &sixel_put_ar_11 else &sixel_put_generic;
 }
+
+// ── Chunk D: overwrite family ────────────────────────────────────
+// Pixman extern declarations. `pixman_image_t` is an opaque union;
+// treat as anyopaque. `pixman_bool_t` = int, `pixman_op_t` = int,
+// `pixman_fixed_t`/`int16_t` per header.
+
+const PixmanImage = anyopaque;
+
+const PixmanColor = extern struct {
+    red: u16,
+    green: u16,
+    blue: u16,
+    alpha: u16,
+};
+
+const PixmanBox32 = extern struct {
+    x1: i32,
+    y1: i32,
+    x2: i32,
+    y2: i32,
+};
+
+const PixmanRegion32 = extern struct {
+    extents: PixmanBox32,
+    data: ?*anyopaque,
+};
+
+extern fn pixman_image_get_width(image: ?*PixmanImage) callconv(.c) c_int;
+extern fn pixman_image_get_height(image: ?*PixmanImage) callconv(.c) c_int;
+extern fn pixman_image_get_data(image: ?*PixmanImage) callconv(.c) ?[*]u32;
+extern fn pixman_image_composite32(
+    op: c_int,
+    src: ?*PixmanImage,
+    mask: ?*PixmanImage,
+    dest: ?*PixmanImage,
+    src_x: i32,
+    src_y: i32,
+    mask_x: i32,
+    mask_y: i32,
+    dest_x: i32,
+    dest_y: i32,
+    width: c_int,
+    height: c_int,
+) callconv(.c) void;
+extern fn pixman_image_create_solid_fill(color: *const PixmanColor) callconv(.c) ?*PixmanImage;
+extern fn pixman_image_create_bits_no_clear(
+    format: c_uint,
+    width: c_int,
+    height: c_int,
+    bits: ?*anyopaque,
+    rowstride_bytes: c_int,
+) callconv(.c) ?*PixmanImage;
+
+extern fn pixman_region32_init(region: *PixmanRegion32) callconv(.c) void;
+extern fn pixman_region32_init_rect(
+    region: *PixmanRegion32,
+    x: c_int,
+    y: c_int,
+    width: c_uint,
+    height: c_uint,
+) callconv(.c) void;
+extern fn pixman_region32_init_rects(
+    region: *PixmanRegion32,
+    boxes: [*]const PixmanBox32,
+    count: c_int,
+) callconv(.c) c_int;
+extern fn pixman_region32_fini(region: *PixmanRegion32) callconv(.c) void;
+extern fn pixman_region32_intersect(
+    new_reg: *PixmanRegion32,
+    reg1: *const PixmanRegion32,
+    reg2: *const PixmanRegion32,
+) callconv(.c) c_int;
+extern fn pixman_region32_subtract(
+    reg_d: *PixmanRegion32,
+    reg_m: *const PixmanRegion32,
+    reg_s: *const PixmanRegion32,
+) callconv(.c) c_int;
+extern fn pixman_region32_not_empty(region: *const PixmanRegion32) callconv(.c) c_int;
+extern fn pixman_region32_rectangles(
+    region: *const PixmanRegion32,
+    n_rects: *c_int,
+) callconv(.c) [*]PixmanBox32;
+
+const PIXMAN_OP_SRC: c_int = 0x01;
+const PIXMAN_OP_OVER_REVERSE: c_int = 0x04;
+
+// ── blend_new_image_over_old ─────────────────────────────────────
+fn blend_new_image_over_old(
+    term: *const types.Terminal,
+    six: *const types.Sixel,
+    six_rect: *PixmanRegion32,
+    row: c_int,
+    col: c_int,
+    pix: *?*PixmanImage,
+    opaque_out: *bool,
+) void {
+    const six_ofs_x: c_int = six.pos.col * six.cell_width;
+    const six_ofs_y: c_int = six.pos.row * six.cell_height;
+    const img_ofs_x: c_int = col * six.cell_width;
+    const img_ofs_y: c_int = row * six.cell_height;
+    const img_width: c_int = pixman_image_get_width(pix.*);
+    const img_height: c_int = pixman_image_get_height(pix.*);
+
+    var pix_rect: PixmanRegion32 = undefined;
+    pixman_region32_init_rect(
+        &pix_rect,
+        img_ofs_x,
+        img_ofs_y,
+        @intCast(img_width),
+        @intCast(img_height),
+    );
+
+    var intersection: PixmanRegion32 = undefined;
+    pixman_region32_init(&intersection);
+    _ = pixman_region32_intersect(&intersection, six_rect, &pix_rect);
+
+    var n_rects: c_int = -1;
+    const boxes = pixman_region32_rectangles(&intersection, &n_rects);
+
+    if (n_rects == 0) {
+        pixman_region32_fini(&intersection);
+        pixman_region32_fini(&pix_rect);
+        return;
+    }
+
+    const box = &boxes[0];
+
+    if (!opaque_out.*) {
+        pixman_image_composite32(
+            PIXMAN_OP_OVER_REVERSE,
+            @ptrCast(six.original.pix),
+            null,
+            pix.*,
+            box.x1 - six_ofs_x,
+            box.y1 - six_ofs_y,
+            0,
+            0,
+            box.x1 - img_ofs_x,
+            box.y1 - img_ofs_y,
+            box.x2 - box.x1,
+            box.y2 - box.y1,
+        );
+    }
+
+    const bounding_x: c_int = if (six_ofs_x + six.original.width > img_ofs_x + img_width)
+        @min(
+            six_ofs_x + six.original.width,
+            @divTrunc(box.x2 + six.cell_width - 1, six.cell_width) * six.cell_width,
+        )
+    else
+        box.x2;
+    const bounding_y: c_int = if (six_ofs_y + six.original.height > img_ofs_y + img_height)
+        @min(
+            six_ofs_y + six.original.height,
+            @divTrunc(box.y2 + six.cell_height - 1, six.cell_height) * six.cell_height,
+        )
+    else
+        box.y2;
+
+    const required_width: c_int = bounding_x - img_ofs_x;
+    const required_height: c_int = bounding_y - img_ofs_y;
+
+    const new_width: c_int = @max(img_width, required_width);
+    const new_height: c_int = @max(img_height, required_height);
+
+    if (new_width <= img_width and new_height <= img_height) {
+        pixman_region32_fini(&intersection);
+        pixman_region32_fini(&pix_rect);
+        return;
+    }
+
+    if (!six.@"opaque") {
+        opaque_out.* = false;
+    }
+
+    const stride: c_int = new_width * @sizeOf(u32);
+    const new_data: [*]u32 = @ptrCast(@alignCast(xmalloc(
+        @as(usize, @intCast(stride)) * @as(usize, @intCast(new_height)),
+    )));
+    const pix2: ?*PixmanImage = pixman_image_create_bits_no_clear(
+        @intCast(term.sixel.pixman_fmt),
+        new_width,
+        new_height,
+        new_data,
+        stride,
+    );
+
+    pixman_image_composite32(
+        PIXMAN_OP_SRC,
+        pix.*,
+        null,
+        pix2,
+        0, 0, 0, 0, 0, 0,
+        img_width,
+        img_height,
+    );
+
+    pixman_image_composite32(
+        PIXMAN_OP_SRC,
+        @ptrCast(six.original.pix),
+        null,
+        pix2,
+        box.x1 - six_ofs_x,
+        box.y2 - six_ofs_y,
+        0, 0,
+        box.x1 - img_ofs_x,
+        box.y2 - img_ofs_y,
+        bounding_x - box.x1,
+        bounding_y - box.y2,
+    );
+
+    pixman_image_composite32(
+        PIXMAN_OP_SRC,
+        @ptrCast(six.original.pix),
+        null,
+        pix2,
+        box.x2 - six_ofs_x,
+        box.y1 - six_ofs_y,
+        0, 0,
+        box.x2 - img_ofs_x,
+        box.y1 - img_ofs_y,
+        bounding_x - box.x2,
+        bounding_y - box.y1,
+    );
+
+    // Fill uninitialized regions with transparent
+    var uninitialized_boxes: [2]PixmanBox32 = .{
+        .{
+            .x1 = img_ofs_x + img_width,
+            .y1 = img_ofs_y,
+            .x2 = img_ofs_x + new_width,
+            .y2 = img_ofs_y + new_height,
+        },
+        .{
+            .x1 = img_ofs_x,
+            .y1 = img_ofs_y + img_height,
+            .x2 = img_ofs_x + new_width,
+            .y2 = img_ofs_y + new_height,
+        },
+    };
+    var uninitialized: PixmanRegion32 = undefined;
+    _ = pixman_region32_init_rects(&uninitialized, &uninitialized_boxes, 2);
+
+    var diff: PixmanRegion32 = undefined;
+    pixman_region32_init(&diff);
+    _ = pixman_region32_subtract(&diff, &uninitialized, six_rect);
+
+    if (pixman_region32_not_empty(&diff) != 0) {
+        var solid: PixmanColor = .{ .red = 0, .green = 0, .blue = 0, .alpha = 0 };
+        const src = pixman_image_create_solid_fill(&solid);
+
+        var cnt: c_int = -1;
+        const rects = pixman_region32_rectangles(&diff, &cnt);
+
+        var i: c_int = 0;
+        while (i < cnt) : (i += 1) {
+            const r = &rects[@intCast(i)];
+            pixman_image_composite32(
+                PIXMAN_OP_SRC,
+                src,
+                null,
+                pix2,
+                0, 0, 0, 0,
+                r.x1 - img_ofs_x,
+                r.y1 - img_ofs_y,
+                r.x2 - r.x1,
+                r.y2 - r.y1,
+            );
+        }
+
+        pixman_image_unref(src);
+        opaque_out.* = false;
+    }
+
+    pixman_region32_fini(&diff);
+    pixman_region32_fini(&uninitialized);
+
+    // Replace old pixmap with new
+    if (pix.*) |p| {
+        const old_data = pixman_image_get_data(p);
+        if (old_data) |d| free(@ptrCast(d));
+        pixman_image_unref(p);
+    }
+    pix.* = pix2;
+
+    pixman_region32_fini(&intersection);
+    pixman_region32_fini(&pix_rect);
+}
+
+// ── D2: sixel_overwrite + _sixel_overwrite_by_rectangle ─────────
+
+fn sixel_overwrite_internal(
+    term: *types.Terminal,
+    six: *types.Sixel,
+    row: c_int,
+    col: c_int,
+    height: c_int,
+    width: c_int,
+    pix: ?*?*PixmanImage,
+    opaque_out: ?*bool,
+) void {
+    var six_rect: PixmanRegion32 = undefined;
+    pixman_region32_init_rect(
+        &six_rect,
+        six.pos.col * six.cell_width,
+        six.pos.row * six.cell_height,
+        @intCast(six.original.width),
+        @intCast(six.original.height),
+    );
+
+    var overwrite_rect: PixmanRegion32 = undefined;
+    pixman_region32_init_rect(
+        &overwrite_rect,
+        col * six.cell_width,
+        row * six.cell_height,
+        @intCast(width * six.cell_width),
+        @intCast(height * six.cell_height),
+    );
+
+    if (pix != null) {
+        blend_new_image_over_old(term, six, &six_rect, row, col, pix.?, opaque_out.?);
+    }
+
+    var diff: PixmanRegion32 = undefined;
+    pixman_region32_init(&diff);
+    _ = pixman_region32_subtract(&diff, &six_rect, &overwrite_rect);
+
+    pixman_region32_fini(&six_rect);
+    pixman_region32_fini(&overwrite_rect);
+
+    var n_rects: c_int = -1;
+    const boxes = pixman_region32_rectangles(&diff, &n_rects);
+
+    var i: c_int = 0;
+    while (i < n_rects) : (i += 1) {
+        const box = &boxes[@intCast(i)];
+
+        // C: xassert(boxes[i].x1 % six->cell_width == 0);
+        //    xassert(boxes[i].y1 % six->cell_height == 0);
+
+        const new_col: c_int = @divTrunc(box.x1, six.cell_width);
+        const new_row: c_int = @divTrunc(box.y1, six.cell_height);
+
+        const new_width: c_int = box.x2 - box.x1;
+        const new_height: c_int = box.y2 - box.y1;
+
+        const new_data: [*]u32 = @ptrCast(@alignCast(xmalloc(
+            @as(usize, @intCast(new_width)) *
+            @as(usize, @intCast(new_height)) *
+            @sizeOf(u32),
+        )));
+        const old_data: [*]const u32 = @ptrCast(@alignCast(six.original.data));
+
+        const x_ofs: c_int = box.x1 - six.pos.col * six.cell_width;
+        const y_ofs: c_int = box.y1 - six.pos.row * six.cell_height;
+
+        var j: usize = 0;
+        while (j < @as(usize, @intCast(new_height))) : (j += 1) {
+            const dst_off: usize = j * @as(usize, @intCast(new_width));
+            const src_off: usize =
+                (@as(usize, @intCast(y_ofs)) + j) *
+                    @as(usize, @intCast(six.original.width)) +
+                @as(usize, @intCast(x_ofs));
+            @memcpy(
+                new_data[dst_off .. dst_off + @as(usize, @intCast(new_width))],
+                old_data[src_off .. src_off + @as(usize, @intCast(new_width))],
+            );
+        }
+
+        const new_pix: ?*PixmanImage = pixman_image_create_bits_no_clear(
+            @intCast(term.sixel.pixman_fmt),
+            new_width,
+            new_height,
+            new_data,
+            new_width * @sizeOf(u32),
+        );
+
+        const new_six: types.Sixel = .{
+            .pix = null,
+            .width = -1,
+            .height = -1,
+            .pos = .{ .col = new_col, .row = new_row },
+            .cols = @divTrunc(new_width + six.cell_width - 1, six.cell_width),
+            .rows = @divTrunc(new_height + six.cell_height - 1, six.cell_height),
+            .@"opaque" = six.@"opaque",
+            .cell_width = six.cell_width,
+            .cell_height = six.cell_height,
+            .original = .{
+                .data = @ptrCast(new_data),
+                .pix = @ptrCast(new_pix),
+                .width = new_width,
+                .height = new_height,
+            },
+            .scaled = .{
+                .data = null,
+                .pix = null,
+                .width = -1,
+                .height = -1,
+            },
+        };
+
+        sixel_insert(term, new_six);
+    }
+
+    pixman_region32_fini(&diff);
+}
+
+export fn _sixel_overwrite_by_rectangle(
+    term: *types.Terminal,
+    row: c_int,
+    col: c_int,
+    height: c_int,
+    width: c_int,
+    pix: ?*?*PixmanImage,
+    opaque_out: ?*bool,
+) callconv(.c) void {
+    const start: c_int = row;
+    const end: c_int = row + height - 1;
+
+    const scrollback_rel_start: c_int = grid_row_abs_to_sb(term.grid.?, term.rows, start);
+
+    var it = term.grid.?.sixel_images.head;
+    while (it) |node| {
+        const next_node = node.next;
+        const six = &node.item;
+
+        const six_start: c_int = six.pos.row;
+        const six_end: c_int = six_start + six.rows - 1;
+        const six_scrollback_rel_end: c_int = grid_row_abs_to_sb(
+            term.grid.?,
+            term.rows,
+            six_end,
+        );
+
+        if (six_scrollback_rel_end < scrollback_rel_start) {
+            break;
+        }
+
+        if ((start <= six_start and end >= six_start) or
+            (start <= six_end and end >= six_end) or
+            (start >= six_start and end <= six_end))
+        {
+            const col_start: c_int = six.pos.col;
+            const col_end: c_int = six.pos.col + six.cols - 1;
+
+            if ((col <= col_start and col + width - 1 >= col_start) or
+                (col <= col_end and col + width - 1 >= col_end) or
+                (col >= col_start and col + width - 1 <= col_end))
+            {
+                var to_be_erased: types.Sixel = six.*;
+                sixelListRemove(&term.grid.?.sixel_images, node);
+
+                sixel_overwrite_internal(term, &to_be_erased, start, col, height, width, pix, opaque_out);
+                sixel_erase(term, &to_be_erased);
+            }
+        }
+
+        it = next_node;
+    }
+}
+
+// ── D3: public overwrite wrappers ───────────────────────────────
+
+export fn sixel_overwrite_by_rectangle(
+    term: *types.Terminal,
+    row: c_int,
+    col: c_int,
+    height: c_int,
+    width: c_int,
+) callconv(.c) void {
+    const grid = term.grid.?;
+    if (sixelListLen(&grid.sixel_images) == 0) return;
+
+    const start: c_int = (grid.offset + row) & (grid.num_rows - 1);
+    const end: c_int = (start + height - 1) & (grid.num_rows - 1);
+    const wraps: bool = end < start;
+
+    if (wraps) {
+        const rows_to_wrap_around: c_int = grid.num_rows - start;
+        _sixel_overwrite_by_rectangle(term, start, col, rows_to_wrap_around, width, null, null);
+        _sixel_overwrite_by_rectangle(term, 0, col, height - rows_to_wrap_around, width, null, null);
+    } else {
+        _sixel_overwrite_by_rectangle(term, start, col, height, width, null, null);
+    }
+
+    term.bits_affecting_ascii_printer._.sixels =
+        sixelListLen(&term.grid.?.sixel_images) > 0;
+    term_update_ascii_printer(term);
+}
+
+export fn sixel_overwrite_by_row(
+    term: *types.Terminal,
+    _row: c_int,
+    col_in: c_int,
+    width_in: c_int,
+) callconv(.c) void {
+    var col: c_int = col_in;
+    var width: c_int = width_in;
+    _ = &col;
+
+    const grid = term.grid.?;
+    if (col + width > grid.num_cols) {
+        width = grid.num_cols - col;
+    }
+
+    if (sixelListLen(&grid.sixel_images) == 0) return;
+
+    const row: c_int = (grid.offset + _row) & (grid.num_rows - 1);
+    const scrollback_rel_row: c_int = grid_row_abs_to_sb(grid, term.rows, row);
+
+    var it = grid.sixel_images.head;
+    while (it) |node| {
+        const next_node = node.next;
+        const six = &node.item;
+        const six_start: c_int = six.pos.row;
+        const six_end: c_int = (six_start + six.rows - 1) & (grid.num_rows - 1);
+
+        const six_scrollback_rel_end: c_int = grid_row_abs_to_sb(grid, term.rows, six_end);
+
+        if (six_scrollback_rel_end < scrollback_rel_row) {
+            break;
+        }
+
+        if (row >= six_start and row <= six_end) {
+            const col_start: c_int = six.pos.col;
+            const col_end: c_int = six.pos.col + six.cols - 1;
+
+            if ((col <= col_start and col + width - 1 >= col_start) or
+                (col <= col_end and col + width - 1 >= col_end) or
+                (col >= col_start and col + width - 1 <= col_end))
+            {
+                var to_be_erased: types.Sixel = six.*;
+                sixelListRemove(&grid.sixel_images, node);
+
+                sixel_overwrite_internal(term, &to_be_erased, row, col, 1, width, null, null);
+                sixel_erase(term, &to_be_erased);
+            }
+        }
+
+        it = next_node;
+    }
+
+    term.bits_affecting_ascii_printer._.sixels =
+        sixelListLen(&term.grid.?.sixel_images) > 0;
+    term_update_ascii_printer(term);
+}
+
+export fn sixel_overwrite_at_cursor(term: *types.Terminal, width: c_int) callconv(.c) void {
+    const grid = term.grid.?;
+    if (sixelListLen(&grid.sixel_images) == 0) return;
+    sixel_overwrite_by_row(
+        term,
+        grid.cursor.point.row,
+        grid.cursor.point.col,
+        width,
+    );
+}
+
+export fn sixel_cell_size_changed(term: *types.Terminal) callconv(.c) void {
+    var it = term.normal.sixel_images.head;
+    while (it) |node| : (it = node.next) {
+        sixel_invalidate_cache(&node.item);
+    }
+    var it2 = term.alt.sixel_images.head;
+    while (it2) |node| : (it2 = node.next) {
+        sixel_invalidate_cache(&node.item);
+    }
+}
