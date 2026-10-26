@@ -538,3 +538,192 @@ export fn term_cursor_blink_update(term: *types.Terminal) callconv(.c) void {
         _ = cursor_blink_disarm_timer(term);
     }
 }
+
+// ── Chunk B: scroll family ──────────────────────────────────────
+// term_scroll_partial / term_scroll / term_scroll_reverse_partial /
+// term_scroll_reverse / term_linefeed / term_reverse_index.
+
+extern fn selection_cancel(term: *types.Terminal) callconv(.c) void;
+extern fn selection_on_rows(term: *const types.Terminal, start: c_int, end: c_int) callconv(.c) bool;
+extern fn selection_scroll_up(term: *types.Terminal, rows: c_int) callconv(.c) void;
+extern fn selection_scroll_down(term: *types.Terminal, rows: c_int) callconv(.c) void;
+extern fn selection_view_up(term: *types.Terminal, new_view: c_int) callconv(.c) void;
+extern fn selection_view_down(term: *types.Terminal, new_view: c_int) callconv(.c) void;
+
+extern fn sixel_scroll_up(term: *types.Terminal, rows: c_int) callconv(.c) void;
+extern fn sixel_scroll_down(term: *types.Terminal, rows: c_int) callconv(.c) void;
+
+extern fn grid_row_abs_to_sb(grid: *const types.Grid, screen_rows: c_int, abs_row: c_int) callconv(.c) c_int;
+extern fn grid_row_sb_to_abs(grid: *const types.Grid, screen_rows: c_int, sb_rel_row: c_int) callconv(.c) c_int;
+extern fn grid_swap_row(grid: *types.Grid, row_a: c_int, row_b: c_int) callconv(.c) void;
+extern fn grid_row_free(r: ?*types.Row) callconv(.c) void;
+
+extern fn terminal_shim_grid_row_and_alloc(grid: *types.Grid, row_no: c_int) callconv(.c) ?*types.Row;
+extern fn terminal_shim_grid_row_absolute(grid: *types.Grid, row_no: c_int) callconv(.c) c_int;
+extern fn terminal_shim_erase_line(term: *types.Terminal, row: *types.Row) callconv(.c) void;
+extern fn terminal_shim_grid_row(grid: *types.Grid, row_no: c_int) callconv(.c) ?*types.Row;
+extern fn terminal_shim_term_reset_grapheme_state(term: *types.Terminal) callconv(.c) void;
+
+extern fn cmd_scrollback_down(term: *types.Terminal, rows: u64) callconv(.c) void;
+
+fn selection_on_top_region(term: *const types.Terminal, region: types.ScrollRegion) bool {
+    return region.start > 0 and selection_on_rows(term, 0, region.start - 1);
+}
+
+fn selection_on_bottom_region(term: *const types.Terminal, region: types.ScrollRegion) bool {
+    return region.end < term.rows and selection_on_rows(term, region.end, term.rows - 1);
+}
+
+// DAMAGE_SCROLL / DAMAGE_SCROLL_REVERSE enum values from terminal.h
+const DAMAGE_SCROLL: types.DamageType = .scroll;
+const DAMAGE_SCROLL_REVERSE: types.DamageType = .scroll_reverse;
+
+export fn term_scroll_partial(
+    term: *types.Terminal,
+    region: types.ScrollRegion,
+    rows: c_int,
+) callconv(.c) void {
+    if (term.selection.coords.end.row >= 0) {
+        if (selection_on_top_region(term, region) or
+            selection_on_bottom_region(term, region))
+        {
+            selection_cancel(term);
+        } else {
+            selection_scroll_up(term, rows);
+        }
+    }
+
+    sixel_scroll_up(term, rows);
+
+    const view_sb_start_distance = grid_row_abs_to_sb(term.grid.?, term.rows, term.grid.?.view);
+
+    const view_follows = term.grid.?.view == term.grid.?.offset;
+    term.grid.?.offset += rows;
+    term.grid.?.offset &= term.grid.?.num_rows - 1;
+
+    if (view_follows) {
+        term_damage_scroll(term, DAMAGE_SCROLL, region, rows);
+        selection_view_down(term, term.grid.?.offset);
+        term.grid.?.view = term.grid.?.offset;
+    } else if (rows > view_sb_start_distance) {
+        const new_view = grid_row_sb_to_abs(term.grid.?, term.rows, 0);
+        selection_view_down(term, new_view);
+        cmd_scrollback_down(term, @intCast(rows - view_sb_start_distance));
+    }
+
+    var i: c_int = region.start - 1;
+    while (i >= 0) : (i -= 1) {
+        grid_swap_row(term.grid.?, i - rows, i);
+    }
+
+    i = term.rows - 1;
+    while (i >= region.end) : (i -= 1) {
+        grid_swap_row(term.grid.?, i - rows, i);
+    }
+
+    var r: c_int = region.end - rows;
+    while (r < region.end) : (r += 1) {
+        const current_row = terminal_shim_grid_row_and_alloc(term.grid.?, r) orelse continue;
+        terminal_shim_erase_line(term, current_row);
+    }
+
+    term.grid.?.cur_row = terminal_shim_grid_row(term.grid.?, term.grid.?.cursor.point.row);
+}
+
+export fn term_scroll(term: *types.Terminal, rows: c_int) callconv(.c) void {
+    term_scroll_partial(term, term.scroll_region, rows);
+}
+
+export fn term_scroll_reverse_partial(
+    term: *types.Terminal,
+    region: types.ScrollRegion,
+    rows: c_int,
+) callconv(.c) void {
+    if (term.selection.coords.end.row >= 0) {
+        if (selection_on_top_region(term, region) or
+            selection_on_bottom_region(term, region))
+        {
+            selection_cancel(term);
+        } else {
+            selection_scroll_down(term, rows);
+        }
+    }
+
+    var r: c_int = region.end - rows;
+    while (r < region.end) : (r += 1) {
+        const abs_r = terminal_shim_grid_row_absolute(term.grid.?, r);
+        const current_row = term.grid.?.rows.?[@intCast(abs_r)];
+
+        grid_row_free(current_row);
+        term.grid.?.rows.?[@intCast(abs_r)] = null;
+
+        // C: if (term->render.last_cursor.row == row) term->render.last_cursor.row = NULL;
+        // render.last_cursor.row is opaque here; shim later if needed.
+    }
+
+    sixel_scroll_down(term, rows);
+
+    const view_follows = term.grid.?.view == term.grid.?.offset;
+    term.grid.?.offset -= rows;
+    term.grid.?.offset += term.grid.?.num_rows;
+    term.grid.?.offset &= term.grid.?.num_rows - 1;
+
+    const view_sb_start_distance = grid_row_abs_to_sb(term.grid.?, term.rows, term.grid.?.view);
+    const offset_sb_start_distance = grid_row_abs_to_sb(term.grid.?, term.rows, term.grid.?.offset);
+
+    if (view_follows) {
+        term_damage_scroll(term, DAMAGE_SCROLL_REVERSE, region, rows);
+        selection_view_up(term, term.grid.?.offset);
+        term.grid.?.view = term.grid.?.offset;
+    } else if (view_sb_start_distance > offset_sb_start_distance) {
+        const new_view = term.grid.?.offset;
+        selection_view_up(term, new_view);
+        term.grid.?.view = new_view;
+    }
+
+    var i: c_int = region.end + rows;
+    while (i < term.rows + rows) : (i += 1) {
+        grid_swap_row(term.grid.?, i, i - rows);
+    }
+
+    i = 0 + rows;
+    while (i < region.start + rows) : (i += 1) {
+        grid_swap_row(term.grid.?, i, i - rows);
+    }
+
+    r = region.start;
+    while (r < region.start + rows) : (r += 1) {
+        const current_row = terminal_shim_grid_row_and_alloc(term.grid.?, r) orelse continue;
+        terminal_shim_erase_line(term, current_row);
+    }
+
+    if (view_sb_start_distance > offset_sb_start_distance) {
+        term_damage_view(term);
+    }
+
+    term.grid.?.cur_row = terminal_shim_grid_row(term.grid.?, term.grid.?.cursor.point.row);
+}
+
+export fn term_scroll_reverse(term: *types.Terminal, rows: c_int) callconv(.c) void {
+    term_scroll_reverse_partial(term, term.scroll_region, rows);
+}
+
+export fn term_linefeed(term: *types.Terminal) callconv(.c) void {
+    term.grid.?.cursor.lcf = false;
+
+    if (term.grid.?.cursor.point.row == term.scroll_region.end - 1) {
+        term_scroll(term, 1);
+    } else {
+        term_cursor_down(term, 1);
+    }
+
+    terminal_shim_term_reset_grapheme_state(term);
+}
+
+export fn term_reverse_index(term: *types.Terminal) callconv(.c) void {
+    if (term.grid.?.cursor.point.row == term.scroll_region.start) {
+        term_scroll_reverse(term, 1);
+    } else {
+        term_cursor_up(term, 1);
+    }
+}

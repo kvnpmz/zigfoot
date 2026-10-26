@@ -47,6 +47,14 @@
 #include "xmalloc.h"
 
 /* Ported to terminal.zig — extern for C callers */
+extern void term_scroll_partial(struct terminal *term, struct scroll_region region, int rows);
+extern void term_scroll(struct terminal *term, int rows);
+extern void term_scroll_reverse_partial(struct terminal *term, struct scroll_region region, int rows);
+extern void term_scroll_reverse(struct terminal *term, int rows);
+extern void term_linefeed(struct terminal *term);
+extern void term_reverse_index(struct terminal *term);
+
+/* Ported to terminal.zig — extern for C callers */
 extern bool fdm_flash(struct fdm *fdm, int fd, int events, void *data);
 extern void cursor_refresh(struct terminal *term);
 extern bool cursor_blink_rearm_timer(struct terminal *term);
@@ -1929,7 +1937,7 @@ erase_cell_range(struct terminal *term, struct row *row, int start, int end)
     }
 }
 
-static inline void
+void
 erase_line(struct terminal *term, struct row *row)
 {
     erase_cell_range(term, row, 0, term->cols - 1);
@@ -2588,215 +2596,15 @@ UNITTEST
 /* cursor_blink_rearm_timer: ported to terminal.zig */
 /* cursor_blink_disarm_timer: ported to terminal.zig */
 /* term_cursor_blink_update: ported to terminal.zig */
+/* selection_on_top_region: ported to terminal.zig */
+/* selection_on_bottom_region: ported to terminal.zig */
+/* term_scroll_partial: ported to terminal.zig */
+/* term_scroll: ported to terminal.zig */
+/* term_scroll_reverse_partial: ported to terminal.zig */
+/* term_scroll_reverse: ported to terminal.zig */
 
-static bool
-selection_on_top_region(const struct terminal *term,
-                        struct scroll_region region)
-{
-    return region.start > 0 &&
-        selection_on_rows(term, 0, region.start - 1);
-}
-
-static bool
-selection_on_bottom_region(const struct terminal *term,
-                           struct scroll_region region)
-{
-    return region.end < term->rows &&
-        selection_on_rows(term, region.end, term->rows - 1);
-}
-
-void
-term_scroll_partial(struct terminal *term, struct scroll_region region, int rows)
-{
-    LOG_DBG("scroll: rows=%d, region.start=%d, region.end=%d",
-            rows, region.start, region.end);
-
-    /* Verify scroll amount has been clamped */
-    xassert(rows <= region.end - region.start);
-
-    /* Cancel selections that cannot be scrolled */
-    if (unlikely(term->selection.coords.end.row >= 0)) {
-        /*
-         * Selection is (partly) inside either the top or bottom
-         * scrolling regions, or on (at least one) of the lines
-         * scrolled in (i.e. reused lines).
-         */
-        if (selection_on_top_region(term, region) ||
-            selection_on_bottom_region(term, region))
-        {
-            selection_cancel(term);
-        } else
-            selection_scroll_up(term, rows);
-    }
-
-    sixel_scroll_up(term, rows);
-
-    /* How many lines from the scrollback start is the current viewport? */
-    int view_sb_start_distance = grid_row_abs_to_sb(
-        term->grid, term->rows, term->grid->view);
-
-    bool view_follows = term->grid->view == term->grid->offset;
-    term->grid->offset += rows;
-    term->grid->offset &= term->grid->num_rows - 1;
-
-    if (likely(view_follows)) {
-        term_damage_scroll(term, DAMAGE_SCROLL, region, rows);
-        selection_view_down(term, term->grid->offset);
-        term->grid->view = term->grid->offset;
-    } else if (unlikely(rows > view_sb_start_distance)) {
-        /* Part of current view is being scrolled out */
-        int new_view = grid_row_sb_to_abs(term->grid, term->rows, 0);
-        selection_view_down(term, new_view);
-        cmd_scrollback_down(term, rows - view_sb_start_distance);
-    }
-
-    /* Top non-scrolling region. */
-    for (int i = region.start - 1; i >= 0; i--)
-        grid_swap_row(term->grid, i - rows, i);
-
-    /* Bottom non-scrolling region */
-    for (int i = term->rows - 1; i >= region.end; i--)
-        grid_swap_row(term->grid, i - rows, i);
-
-    /* Erase scrolled in lines */
-    for (int r = region.end - rows; r < region.end; r++) {
-        struct row *row = grid_row_and_alloc(term->grid, r);
-        erase_line(term, row);
-    }
-
-    term->grid->cur_row = grid_row(term->grid, term->grid->cursor.point.row);
-
-#if defined(_DEBUG)
-    for (int r = 0; r < term->rows; r++)
-        xassert(grid_row(term->grid, r) != NULL);
-#endif
-}
-
-void
-term_scroll(struct terminal *term, int rows)
-{
-    term_scroll_partial(term, term->scroll_region, rows);
-}
-
-void
-term_scroll_reverse_partial(struct terminal *term,
-                            struct scroll_region region, int rows)
-{
-    LOG_DBG("scroll reverse: rows=%d, region.start=%d, region.end=%d",
-            rows, region.start, region.end);
-
-    /* Verify scroll amount has been clamped */
-    xassert(rows <= region.end - region.start);
-
-    /* Cancel selections that cannot be scrolled */
-    if (unlikely(term->selection.coords.end.row >= 0)) {
-        /*
-         * Selection is (partly) inside either the top or bottom
-         * scrolling regions, or on (at least one) of the lines
-         * scrolled in (i.e. reused lines).
-         */
-        if (selection_on_top_region(term, region) ||
-            selection_on_bottom_region(term, region))
-        {
-            selection_cancel(term);
-        } else
-            selection_scroll_down(term, rows);
-    }
-
-    /* Unallocate scrolled out lines */
-    for (int r = region.end - rows; r < region.end; r++) {
-        const int abs_r = grid_row_absolute(term->grid, r);
-        struct row *row = term->grid->rows[abs_r];
-
-        grid_row_free(row);
-        term->grid->rows[abs_r] = NULL;
-
-        if (term->render.last_cursor.row == row)
-            term->render.last_cursor.row = NULL;
-    }
-
-    sixel_scroll_down(term, rows);
-
-    const bool view_follows = term->grid->view == term->grid->offset;
-    term->grid->offset -= rows;
-    term->grid->offset += term->grid->num_rows;
-    term->grid->offset &= term->grid->num_rows - 1;
-
-    /* How many lines from the scrollback start is the current viewport? */
-    const int view_sb_start_distance = grid_row_abs_to_sb(
-        term->grid, term->rows, term->grid->view);
-    const int offset_sb_start_distance = grid_row_abs_to_sb(
-        term->grid, term->rows, term->grid->offset);
-
-    xassert(term->grid->offset >= 0);
-    xassert(term->grid->offset < term->grid->num_rows);
-
-    if (view_follows) {
-        term_damage_scroll(term, DAMAGE_SCROLL_REVERSE, region, rows);
-        selection_view_up(term, term->grid->offset);
-        term->grid->view = term->grid->offset;
-    } else if (unlikely(view_sb_start_distance > offset_sb_start_distance)) {
-        /* Part of current view is being scrolled out */
-        int new_view = term->grid->offset;
-        selection_view_up(term, new_view);
-        term->grid->view = new_view;
-    }
-
-    /* Bottom non-scrolling region */
-    for (int i = region.end + rows; i < term->rows + rows; i++)
-        grid_swap_row(term->grid, i, i - rows);
-
-    /* Top non-scrolling region */
-    for (int i = 0 + rows; i < region.start + rows; i++)
-        grid_swap_row(term->grid, i, i - rows);
-
-    /* Erase scrolled in lines */
-    for (int r = region.start; r < region.start + rows; r++) {
-        struct row *row = grid_row_and_alloc(term->grid, r);
-        erase_line(term, row);
-    }
-
-    if (unlikely(view_sb_start_distance > offset_sb_start_distance))
-        term_damage_view(term);
-
-    term->grid->cur_row = grid_row(term->grid, term->grid->cursor.point.row);
-
-#if defined(_DEBUG)
-    for (int r = 0; r < term->rows; r++)
-        xassert(grid_row(term->grid, r) != NULL);
-    for (int r = 0; r < term->rows; r++)
-        xassert(grid_row_in_view(term->grid, r) != NULL);
-#endif
-}
-
-void
-term_scroll_reverse(struct terminal *term, int rows)
-{
-    term_scroll_reverse_partial(term, term->scroll_region, rows);
-}
-
-
-void
-term_linefeed(struct terminal *term)
-{
-    term->grid->cursor.lcf = false;
-
-    if (term->grid->cursor.point.row == term->scroll_region.end - 1)
-        term_scroll(term, 1);
-    else
-        term_cursor_down(term, 1);
-
-    term_reset_grapheme_state(term);
-}
-
-void
-term_reverse_index(struct terminal *term)
-{
-    if (term->grid->cursor.point.row == term->scroll_region.start)
-        term_scroll_reverse(term, 1);
-    else
-        term_cursor_up(term, 1);
-}
+/* term_linefeed: ported to terminal.zig */
+/* term_reverse_index: ported to terminal.zig */
 
 
 

@@ -23,3 +23,27 @@ struct row *terminal_shim_grid_row_in_view(struct grid *grid, int row) {
 void terminal_shim_wl_surface_commit(struct wl_surface *surf) {
     wl_surface_commit(surf);
 }
+
+#include "grid.h"
+
+struct row *terminal_shim_grid_row_and_alloc(struct grid *grid, int row_no) {
+    return grid_row_and_alloc(grid, row_no);
+}
+
+int terminal_shim_grid_row_absolute(struct grid *grid, int row_no) {
+    return grid_row_absolute(grid, row_no);
+}
+
+extern void erase_line(struct terminal *term, struct row *row);
+
+void terminal_shim_erase_line(struct terminal *term, struct row *row) {
+    erase_line(term, row);
+}
+
+struct row *terminal_shim_grid_row(struct grid *grid, int row_no) {
+    return grid_row(grid, row_no);
+}
+
+void terminal_shim_term_reset_grapheme_state(struct terminal *term) {
+    term_reset_grapheme_state(term);
+}
