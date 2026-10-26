@@ -47,3 +47,7 @@ struct row *terminal_shim_grid_row(struct grid *grid, int row_no) {
 void terminal_shim_term_reset_grapheme_state(struct terminal *term) {
     term_reset_grapheme_state(term);
 }
+
+int terminal_shim_conf_url_osc8_underline(struct terminal *term) {
+    return term->conf->url.osc8_underline;
+}

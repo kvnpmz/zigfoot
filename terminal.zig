@@ -727,3 +727,223 @@ export fn term_reverse_index(term: *types.Terminal) callconv(.c) void {
         term_cursor_up(term, 1);
     }
 }
+
+// ── Chunk C1: term_erase / term_fill / term_print / print_spacer ─
+// Hot path. Depends on grid row access, URI/underline ranges,
+// linewrap/insert helpers (all still C), and sixel_overwrite_* (Zig).
+
+extern fn erase_cell_range(term: *types.Terminal, row: *types.Row, start: c_int, end: c_int) callconv(.c) void;
+extern fn print_linewrap(term: *types.Terminal) callconv(.c) void;
+extern fn print_insert(term: *types.Terminal, width: c_int) callconv(.c) void;
+
+extern fn grid_row_uri_range_put(row: *types.Row, col: c_int, uri: [*:0]const u8, id: u64) callconv(.c) void;
+extern fn grid_row_uri_range_erase(row: *types.Row, start: c_int, end: c_int) callconv(.c) void;
+extern fn grid_row_underline_range_put(row: *types.Row, col: c_int, range: types.UnderlineRangeData) callconv(.c) void;
+extern fn grid_row_underline_range_erase(row: *types.Row, start: c_int, end: c_int) callconv(.c) void;
+
+extern fn sixel_overwrite_by_row(term: *types.Terminal, row: c_int, col: c_int, width: c_int) callconv(.c) void;
+extern fn sixel_overwrite_by_rectangle(term: *types.Terminal, row: c_int, col: c_int, height: c_int, width: c_int) callconv(.c) void;
+extern fn sixel_overwrite_at_cursor(term: *types.Terminal, width: c_int) callconv(.c) void;
+
+extern fn terminal_shim_conf_url_osc8_underline(term: *types.Terminal) callconv(.c) c_int;
+
+// OSC8_UNDERLINE_ALWAYS = 0, OSC8_UNDERLINE_URL_MODE = 1 (from config.h)
+const OSC8_UNDERLINE_ALWAYS: c_int = 0;
+const OSC8_UNDERLINE_URL_MODE: c_int = 1;
+
+// UNDERLINE_SINGLE = 0, COLOR_DEFAULT = 0 (from terminal_types)
+const UNDERLINE_SINGLE: c_int = 0;
+
+
+export fn term_erase(
+    term: *types.Terminal,
+    start_row: c_int,
+    start_col: c_int,
+    end_row: c_int,
+    end_col: c_int,
+) callconv(.c) void {
+    if (start_row == end_row) {
+        const current_row = terminal_shim_grid_row(term.grid.?, start_row) orelse return;
+        erase_cell_range(term, current_row, start_col, end_col);
+        sixel_overwrite_by_row(term, start_row, start_col, end_col - start_col + 1);
+        return;
+    }
+
+    const row0 = terminal_shim_grid_row(term.grid.?, start_row) orelse return;
+    erase_cell_range(term, row0, start_col, term.cols - 1);
+    sixel_overwrite_by_row(term, start_row, start_col, term.cols - start_col);
+
+    var r: c_int = start_row + 1;
+    while (r < end_row) : (r += 1) {
+        const current_row = terminal_shim_grid_row(term.grid.?, r) orelse continue;
+        terminal_shim_erase_line(term, current_row);
+    }
+    sixel_overwrite_by_rectangle(term, start_row + 1, 0, end_row - start_row, term.cols);
+
+    const row_end = terminal_shim_grid_row(term.grid.?, end_row) orelse return;
+    erase_cell_range(term, row_end, 0, end_col);
+    sixel_overwrite_by_row(term, end_row, 0, end_col + 1);
+}
+
+export fn print_spacer(term: *types.Terminal, col: c_int, remaining: c_int) callconv(.c) void {
+    const current_row = term.grid.?.cur_row orelse return;
+    const cell = &current_row.cells.?[@intCast(col)];
+    cell.wc = CELL_SPACER_CONST + @as(u32, @intCast(remaining));
+    cell.attrs = std.mem.zeroes(types.Attributes);
+}
+
+const CELL_SPACER_CONST: u32 = 0x00200000 + 0x3fffffff + 1;
+
+export fn term_fill(
+    term: *types.Terminal,
+    r: c_int,
+    c: c_int,
+    data: u8,
+    count: usize,
+    use_sgr_attrs: bool,
+) callconv(.c) void {
+    const current_row = terminal_shim_grid_row(term.grid.?, r) orelse return;
+    current_row.dirty = true;
+
+    const attrs = if (use_sgr_attrs) term.vt.attrs else std.mem.zeroes(types.Attributes);
+
+    const osc8_underline = terminal_shim_conf_url_osc8_underline(term);
+
+    var i: usize = 0;
+    while (i < count) : (i += 1) {
+        const cell = &current_row.cells.?[@intCast(c + @as(c_int, @intCast(i)))];
+
+        cell.wc = data;
+        cell.attrs = attrs;
+
+        if (use_sgr_attrs and term.vt.osc8.uri != null) {
+            grid_row_uri_range_put(
+                current_row,
+                c,
+                @ptrCast(term.vt.osc8.uri.?),
+                term.vt.osc8.id,
+            );
+
+            if (osc8_underline == OSC8_UNDERLINE_ALWAYS) {
+                cell.attrs.url = true;
+            }
+        }
+
+        if (use_sgr_attrs and
+            (term.vt.underline.style > UNDERLINE_SINGLE or
+            term.vt.underline.color_src != .default))
+        {
+            grid_row_underline_range_put(current_row, c, term.vt.underline);
+        }
+    }
+
+    if (current_row.extra != null) {
+        if (term.vt.osc8.uri != null) {
+            grid_row_uri_range_erase(
+                current_row,
+                c,
+                c + @as(c_int, @intCast(count)) - 1,
+            );
+        }
+
+        if (term.vt.underline.style <= UNDERLINE_SINGLE and
+            term.vt.underline.color_src == .default)
+        {
+            grid_row_underline_range_erase(
+                current_row,
+                c,
+                c + @as(c_int, @intCast(count)) - 1,
+            );
+        }
+    }
+}
+
+export fn term_print(
+    term: *types.Terminal,
+    wc_in: u32,
+    width: c_int,
+    insert_mode_disable: bool,
+) callconv(.c) void {
+    var wc = wc_in;
+
+    const grid = term.grid.?;
+
+    if (term.charsets.set[@intCast(@intFromEnum(term.charsets.selected))] == .graphic and
+        wc >= 0x60 and wc <= 0x7e)
+    {
+        const vt100_0 = [31]u32{
+            0x25C6, 0x2592, 0x2409, 0x240C, 0x240D, 0x240A, 0x00B0, 0x00B1,
+            0x2424, 0x240B, 0x2518, 0x2510, 0x250C, 0x2514, 0x253C, 0x23BA,
+            0x23BB, 0x2500, 0x23BC, 0x23BD, 0x251C, 0x2524, 0x2534, 0x252C,
+            0x2502, 0x2264, 0x2265, 0x03C0, 0x2260, 0x00A3, 0x00B7,
+        };
+        wc = vt100_0[wc - 0x60];
+    }
+
+    print_linewrap(term);
+    if (!insert_mode_disable) print_insert(term, width);
+
+    var col = grid.cursor.point.col;
+
+    if (width > 1 and term.auto_margin and col + width > term.cols) {
+        var i: c_int = col;
+        while (i < term.cols) : (i += 1) {
+            print_spacer(term, i, 0);
+        }
+        grid.cursor.lcf = true;
+        print_linewrap(term);
+        col = 0;
+    }
+
+    sixel_overwrite_at_cursor(term, width);
+
+    const current_row = grid.cur_row orelse return;
+    current_row.dirty = true;
+    current_row.linebreak = true;
+
+    const cell = &current_row.cells.?[@intCast(col)];
+    cell.wc = wc;
+    term.vt.last_printed = wc;
+    cell.attrs = term.vt.attrs;
+
+    if (term.vt.osc8.uri != null) {
+        const osc8_underline = terminal_shim_conf_url_osc8_underline(term);
+        var i: c_int = 0;
+        while (i < width and (col + i) < term.cols) : (i += 1) {
+            grid_row_uri_range_put(
+                current_row,
+                col + i,
+                @ptrCast(term.vt.osc8.uri.?),
+                term.vt.osc8.id,
+            );
+        }
+        if (osc8_underline == OSC8_UNDERLINE_ALWAYS) {
+            cell.attrs.url = true;
+        }
+    } else if (current_row.extra != null) {
+        grid_row_uri_range_erase(current_row, col, col + width - 1);
+    }
+
+    if (term.vt.underline.style > UNDERLINE_SINGLE or
+        term.vt.underline.color_src != .default)
+    {
+        grid_row_underline_range_put(current_row, col, term.vt.underline);
+    } else if (current_row.extra != null) {
+        grid_row_underline_range_erase(current_row, col, col + width - 1);
+    }
+
+    var i: c_int = 1;
+    while (i < width and (col + 1) < term.cols) : (i += 1) {
+        col += 1;
+        print_spacer(term, col, width - i);
+    }
+
+    col += 1;
+    if (col >= term.cols) {
+        grid.cursor.lcf = true;
+        col -= 1;
+    }
+
+    grid.cursor.point.col = col;
+    term.vt.codepoint_merging_ok = true;
+}

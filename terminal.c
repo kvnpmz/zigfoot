@@ -47,6 +47,12 @@
 #include "xmalloc.h"
 
 /* Ported to terminal.zig — extern for C callers */
+extern void term_erase(struct terminal *term, int start_row, int start_col, int end_row, int end_col);
+extern void term_fill(struct terminal *term, int r, int c, uint8_t data, size_t count, bool use_sgr_attrs);
+extern void term_print(struct terminal *term, char32_t wc, int width, bool insert_mode_disable);
+extern void print_spacer(struct terminal *term, int col, int remaining);
+
+/* Ported to terminal.zig — extern for C callers */
 extern void term_scroll_partial(struct terminal *term, struct scroll_region region, int rows);
 extern void term_scroll(struct terminal *term, int rows);
 extern void term_scroll_reverse_partial(struct terminal *term, struct scroll_region region, int rows);
@@ -1912,7 +1918,7 @@ term_destroy(struct terminal *term)
     return ret;
 }
 
-static inline void
+void
 erase_cell_range(struct terminal *term, struct row *row, int start, int end)
 {
     xassert(start < term->cols);
@@ -2349,35 +2355,7 @@ term_font_baseline(const struct terminal *term)
     return term->font_y_ofs + line_height - glyph_top_y - font->descent;
 }
 
-
-void
-term_erase(struct terminal *term, int start_row, int start_col,
-           int end_row, int end_col)
-{
-    xassert(start_row <= end_row);
-    xassert(start_col <= end_col || start_row < end_row);
-
-    if (start_row == end_row) {
-        struct row *row = grid_row(term->grid, start_row);
-        erase_cell_range(term, row, start_col, end_col);
-        sixel_overwrite_by_row(term, start_row, start_col, end_col - start_col + 1);
-        return;
-    }
-
-    xassert(end_row > start_row);
-
-    erase_cell_range(
-        term, grid_row(term->grid, start_row), start_col, term->cols - 1);
-    sixel_overwrite_by_row(term, start_row, start_col, term->cols - start_col);
-
-    for (int r = start_row + 1; r < end_row; r++)
-        erase_line(term, grid_row(term->grid, r));
-    sixel_overwrite_by_rectangle(
-        term, start_row + 1, 0, end_row - start_row, term->cols);
-
-    erase_cell_range(term, grid_row(term->grid, end_row), 0, end_col);
-    sixel_overwrite_by_row(term, end_row, 0, end_col + 1);
-}
+/* term_erase: ported to terminal.zig */
 
 void
 term_erase_scrollback(struct terminal *term)
@@ -3171,7 +3149,7 @@ term_disable_app_sync_updates(struct terminal *term)
         &(struct itimerspec){{0}}, NULL);
 }
 
-static inline void
+void
 print_linewrap(struct terminal *term)
 {
     if (likely(!term->grid->cursor.lcf)) {
@@ -3200,7 +3178,7 @@ print_linewrap(struct terminal *term)
     term->grid->cursor.point.col = 0;
 }
 
-static inline void
+void
 print_insert(struct terminal *term, int width)
 {
     if (likely(!term->insert_mode))
@@ -3221,16 +3199,7 @@ print_insert(struct terminal *term, int width)
         row->cells[i].attrs.clean = 0;
 }
 
-static void
-print_spacer(struct terminal *term, int col, int remaining)
-{
-    struct grid *grid = term->grid;
-    struct row *row = grid->cur_row;
-    struct cell *cell = &row->cells[col];
-
-    cell->wc = CELL_SPACER + remaining;
-    cell->attrs = (struct attributes){0};
-}
+/* print_spacer: ported to terminal.zig */
 
 /*
  * Puts a character on the grid. Coordinates are in screen coordinates
@@ -3243,159 +3212,8 @@ print_spacer(struct terminal *term, int col, int remaining)
  *
  * Limitations:
  *   - double width characters not supported
- */
-void
-term_fill(struct terminal *term, int r, int c, uint8_t data, size_t count,
-    bool use_sgr_attrs)
-{
-    struct row *row = grid_row(term->grid, r);
-    row->dirty = true;
-
-    xassert(c + count <= term->cols);
-
-    struct attributes attrs = use_sgr_attrs
-        ? term->vt.attrs
-        : (struct attributes){0};
-
-    const struct cell *last = &row->cells[c + count];
-    for (struct cell *cell = &row->cells[c]; cell < last; cell++) {
-        cell->wc = data;
-        cell->attrs = attrs;
-
-        /* TODO: why do we print the URI here, and then erase it below? */
-        if (unlikely(use_sgr_attrs && term->vt.osc8.uri != NULL)) {
-            grid_row_uri_range_put(row, c, term->vt.osc8.uri, term->vt.osc8.id);
-
-            switch (term->conf->url.osc8_underline) {
-            case OSC8_UNDERLINE_ALWAYS:
-                cell->attrs.url = true;
-                break;
-
-            case OSC8_UNDERLINE_URL_MODE:
-                break;
-            }
-        }
-
-        if (unlikely(use_sgr_attrs &&
-                     (term->vt.underline.style > UNDERLINE_SINGLE ||
-                      term->vt.underline.color_src != COLOR_DEFAULT)))
-        {
-            grid_row_underline_range_put(row, c, term->vt.underline);
-        }
-    }
-
-    if (unlikely(row->extra != NULL)) {
-        if (likely(term->vt.osc8.uri != NULL))
-            grid_row_uri_range_erase(row, c, c + count - 1);
-
-        if (likely(term->vt.underline.style <= UNDERLINE_SINGLE &&
-                   term->vt.underline.color_src == COLOR_DEFAULT))
-        {
-            /* No extended/styled underlines active, so erase any such
-               attributes at the target columns */
-            grid_row_underline_range_erase(row, c, c + count - 1);
-        }
-    }
-}
-
-void
-term_print(struct terminal *term, char32_t wc, int width, bool insert_mode_disable)
-{
-    xassert(width > 0);
-
-    struct grid *grid = term->grid;
-
-    if (unlikely(term->charsets.set[term->charsets.selected] == CHARSET_GRAPHIC) &&
-        wc >= 0x60 && wc <= 0x7e)
-    {
-        /* 0x60 - 0x7e */
-        static const char32_t vt100_0[] = {
-            U'◆', U'▒', U'␉', U'␌', U'␍', U'␊', U'°', U'±', /* ` - g */
-            U'␤', U'␋', U'┘', U'┐', U'┌', U'└', U'┼', U'⎺', /* h - o */
-            U'⎻', U'─', U'⎼', U'⎽', U'├', U'┤', U'┴', U'┬', /* p - w */
-            U'│', U'≤', U'≥', U'π', U'≠', U'£', U'·',       /* x - ~ */
-        };
-
-        xassert(width == 1);
-        wc = vt100_0[wc - 0x60];
-    }
-
-    print_linewrap(term);
-    if (!insert_mode_disable)
-        print_insert(term, width);
-
-    int col = grid->cursor.point.col;
-
-    if (unlikely(width > 1) && likely(term->auto_margin) &&
-        col + width > term->cols)
-    {
-        /* Multi-column character that doesn't fit on current line -
-         * pad with spacers */
-        for (size_t i = col; i < term->cols; i++)
-            print_spacer(term, i, 0);
-
-        /* And force a line-wrap */
-        grid->cursor.lcf = 1;
-        print_linewrap(term);
-        col = 0;
-    }
-
-    sixel_overwrite_at_cursor(term, width);
-
-    /* *Must* get current cell *after* linewrap+insert */
-    struct row *row = grid->cur_row;
-    row->dirty = true;
-    row->linebreak = true;
-
-    struct cell *cell = &row->cells[col];
-    cell->wc = term->vt.last_printed = wc;
-    cell->attrs = term->vt.attrs;
-
-    if (unlikely(term->vt.osc8.uri != NULL)) {
-        for (int i = 0; i < width && (col + i) < term->cols; i++) {
-            grid_row_uri_range_put(
-                row, col + i, term->vt.osc8.uri, term->vt.osc8.id);
-        }
-
-        switch (term->conf->url.osc8_underline) {
-        case OSC8_UNDERLINE_ALWAYS:
-            cell->attrs.url = true;
-            break;
-
-        case OSC8_UNDERLINE_URL_MODE:
-            break;
-        }
-    } else if (row->extra != NULL)
-        grid_row_uri_range_erase(row, col, col + width - 1);
-
-    if (unlikely(term->vt.underline.style > UNDERLINE_SINGLE ||
-                 term->vt.underline.color_src != COLOR_DEFAULT))
-    {
-        grid_row_underline_range_put(row, col, term->vt.underline);
-    } else if (row->extra != NULL)
-        grid_row_underline_range_erase(row, col, col + width - 1);
-
-    /* Advance cursor the 'additional' columns while dirty:ing the cells */
-    for (int i = 1; i < width && (col + 1) < term->cols; i++) {
-        col++;
-        print_spacer(term, col, width - i);
-    }
-
-    xassert(col < term->cols);
-
-    /* Advance cursor */
-    if (unlikely(++col >= term->cols)) {
-        grid->cursor.lcf = true;
-        col--;
-    } else
-        xassert(!grid->cursor.lcf);
-
-    grid->cursor.point.col = col;
-
-#if defined(FOOT_GRAPHEME_CLUSTERING)
-    term->vt.codepoint_merging_ok = true;
-#endif
-}
+ *//* term_fill: ported to terminal.zig */
+/* term_print: ported to terminal.zig */
 
 static void
 ascii_printer_generic(struct terminal *term, char32_t wc)
