@@ -1,6 +1,5 @@
 const std = @import("std");
 const types = @import("terminal_types.zig");
-extern fn term_update_ascii_printer(term: *types.Terminal) void;
 extern fn render_refresh_csd(term: *types.Terminal) void;
 
 extern fn row(grid: *types.Grid, row_no: c_int) *types.Row;
@@ -946,4 +945,71 @@ export fn term_print(
 
     grid.cursor.point.col = col;
     term.vt.codepoint_merging_ok = true;
+}
+
+// ── Chunk C2a: ascii printers + term_update_ascii_printer + term_single_shift
+
+const AsciiPrinter = *const fn (*types.Terminal, u32) callconv(.c) void;
+
+fn ascii_printer_generic(term: *types.Terminal, wc: u32) callconv(.c) void {
+    term_print(term, wc, 1, false);
+}
+
+fn ascii_printer_fast(term: *types.Terminal, wc: u32) callconv(.c) void {
+    const grid = term.grid.?;
+
+    print_linewrap(term);
+
+    var col: c_int = grid.cursor.point.col;
+    const uri_start = col;
+
+    const current_row = grid.cur_row orelse return;
+    current_row.dirty = true;
+    current_row.linebreak = true;
+
+    const cell = &current_row.cells.?[@intCast(col)];
+    cell.wc = wc;
+    term.vt.last_printed = wc;
+    cell.attrs = term.vt.attrs;
+
+    col += 1;
+    if (col >= term.cols) {
+        grid.cursor.lcf = true;
+        col -= 1;
+    }
+
+    grid.cursor.point.col = col;
+    term.vt.codepoint_merging_ok = true;
+
+    if (current_row.extra != null) {
+        grid_row_uri_range_erase(current_row, uri_start, uri_start);
+        grid_row_underline_range_erase(current_row, uri_start, uri_start);
+    }
+}
+
+fn ascii_printer_single_shift(term: *types.Terminal, wc: u32) callconv(.c) void {
+    ascii_printer_generic(term, wc);
+    term.charsets.selected = term.charsets.saved;
+
+    term.bits_affecting_ascii_printer._.charset =
+        term.charsets.set[@intCast(@intFromEnum(term.charsets.selected))] != .ascii;
+    term_update_ascii_printer(term);
+}
+
+export fn term_update_ascii_printer(term: *types.Terminal) callconv(.c) void {
+    const new_printer: AsciiPrinter = if (term.bits_affecting_ascii_printer.value != 0)
+        &ascii_printer_generic
+    else
+        &ascii_printer_fast;
+
+    term.ascii_printer = @ptrCast(new_printer);
+}
+
+export fn term_single_shift(
+    term: *types.Terminal,
+    idx: types.CharsetDesignator,
+) callconv(.c) void {
+    term.charsets.saved = term.charsets.selected;
+    term.charsets.selected = idx;
+    term.ascii_printer = @ptrCast(&ascii_printer_single_shift);
 }

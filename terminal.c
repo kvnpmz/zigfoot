@@ -47,6 +47,10 @@
 #include "xmalloc.h"
 
 /* Ported to terminal.zig — extern for C callers */
+extern void term_update_ascii_printer(struct terminal *term);
+extern void term_single_shift(struct terminal *term, enum charset_designator idx);
+
+/* Ported to terminal.zig — extern for C callers */
 extern void term_erase(struct terminal *term, int start_row, int start_col, int end_row, int end_col);
 extern void term_fill(struct terminal *term, int r, int c, uint8_t data, size_t count, bool use_sgr_attrs);
 extern void term_print(struct terminal *term, char32_t wc, int width, bool insert_mode_disable);
@@ -3214,94 +3218,11 @@ print_insert(struct terminal *term, int width)
  *   - double width characters not supported
  *//* term_fill: ported to terminal.zig */
 /* term_print: ported to terminal.zig */
-
-static void
-ascii_printer_generic(struct terminal *term, char32_t wc)
-{
-    term_print(term, wc, 1, false);
-}
-
-static void
-ascii_printer_fast(struct terminal *term, char32_t wc)
-{
-    struct grid *grid = term->grid;
-
-    xassert(term->charsets.set[term->charsets.selected] == CHARSET_ASCII);
-    xassert(!term->insert_mode);
-    xassert(tll_length(grid->sixel_images) == 0);
-
-    print_linewrap(term);
-
-    /* *Must* get current cell *after* linewrap+insert */
-    int col = grid->cursor.point.col;
-    const int uri_start = col;
-
-    struct row *row = grid->cur_row;
-    row->dirty = true;
-    row->linebreak = true;
-
-    struct cell *cell = &row->cells[col];
-    cell->wc = term->vt.last_printed = wc;
-    cell->attrs = term->vt.attrs;
-
-    /* Advance cursor */
-    if (unlikely(++col >= term->cols)) {
-        xassert(col == term->cols);
-        grid->cursor.lcf = true;
-        col--;
-    } else
-        xassert(!grid->cursor.lcf);
-
-    grid->cursor.point.col = col;
-#if defined(FOOT_GRAPHEME_CLUSTERING)
-    term->vt.codepoint_merging_ok = true;
-#endif
-
-    if (unlikely(row->extra != NULL)) {
-        grid_row_uri_range_erase(row, uri_start, uri_start);
-        grid_row_underline_range_erase(row, uri_start, uri_start);
-    }
-}
-
-static void
-ascii_printer_single_shift(struct terminal *term, char32_t wc)
-{
-    ascii_printer_generic(term, wc);
-    term->charsets.selected = term->charsets.saved;
-
-    term->bits_affecting_ascii_printer.charset =
-        term->charsets.set[term->charsets.selected] != CHARSET_ASCII;
-    term_update_ascii_printer(term);
-}
-
-void
-term_update_ascii_printer(struct terminal *term)
-{
-    _Static_assert(sizeof(term->bits_affecting_ascii_printer) == sizeof(uint8_t), "bad size");
-
-    void (*new_printer)(struct terminal *term, char32_t wc) =
-        unlikely(term->bits_affecting_ascii_printer.value != 0)
-            ? &ascii_printer_generic
-            : &ascii_printer_fast;
-
-#if defined(_DEBUG) && LOG_ENABLE_DBG
-    if (term->ascii_printer != new_printer) {
-        LOG_DBG("switching ASCII printer %s -> %s",
-                term->ascii_printer == &ascii_printer_fast ? "fast" : "generic",
-                new_printer == &ascii_printer_fast ? "fast" : "generic");
-    }
-#endif
-
-    term->ascii_printer = new_printer;
-}
-
-void
-term_single_shift(struct terminal *term, enum charset_designator idx)
-{
-    term->charsets.saved = term->charsets.selected;
-    term->charsets.selected = idx;
-    term->ascii_printer = &ascii_printer_single_shift;
-}
+/* ascii_printer_generic: ported to terminal.zig */
+/* ascii_printer_fast: ported to terminal.zig */
+/* ascii_printer_single_shift: ported to terminal.zig */
+/* term_update_ascii_printer: ported to terminal.zig */
+/* term_single_shift: ported to terminal.zig */
 
 #if defined(FOOT_GRAPHEME_CLUSTERING)
 static int
