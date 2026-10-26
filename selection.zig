@@ -613,7 +613,6 @@ export fn selection_find_line_boundary_right(term: *types.Terminal, pos: *types.
 // ── Chunk C1: selection_start ────────────────────────────────────
 // Ports selection.c lines 89-212.
 
-extern fn selection_update(term: *types.Terminal, col: c_int, row: c_int) callconv(.c) void;
 
 export fn selection_start(
     term: *types.Terminal,
@@ -915,4 +914,261 @@ export fn mark_selected_region(
             }
         }
     }
+}
+
+// ── Chunk C3: selection_modify + set_pivot + selection_update ────
+// Ports selection.c lines 435-734.
+
+extern fn pixman_region32_subtract(
+    reg_d: *PixmanRegion32,
+    reg_m: *const PixmanRegion32,
+    reg_s: *const PixmanRegion32,
+) callconv(.c) c_int;
+extern fn pixman_region32_fini(region: *PixmanRegion32) callconv(.c) void;
+extern fn pixman_region32_rectangles(
+    region: *const PixmanRegion32,
+    n_rects: *c_int,
+) callconv(.c) [*]PixmanBox32;
+extern fn render_refresh(term: *types.Terminal) callconv(.c) void;
+
+export fn selection_modify(
+    term: *types.Terminal,
+    start: types.Coord,
+    end: types.Coord,
+) callconv(.c) void {
+    var previous_selection: PixmanRegion32 = undefined;
+    if (term.selection.coords.end.row >= 0) {
+        previous_selection = pixman_region_for_coords(
+            term,
+            &term.selection.coords.start,
+            &term.selection.coords.end,
+        );
+    } else {
+        pixman_region32_init(&previous_selection);
+    }
+
+    var current_selection = pixman_region_for_coords(term, &start, &end);
+
+    var no_longer_selected: PixmanRegion32 = undefined;
+    pixman_region32_init(&no_longer_selected);
+    _ = pixman_region32_subtract(&no_longer_selected, &previous_selection, &current_selection);
+
+    var newly_selected: PixmanRegion32 = undefined;
+    pixman_region32_init(&newly_selected);
+    _ = pixman_region32_subtract(&newly_selected, &current_selection, &previous_selection);
+
+    var n_rects: c_int = -1;
+    var boxes = pixman_region32_rectangles(&no_longer_selected, &n_rects);
+    mark_selected_region(term, boxes, @intCast(n_rects), .unmark_and_dirty);
+
+    boxes = pixman_region32_rectangles(&newly_selected, &n_rects);
+    mark_selected_region(term, boxes, @intCast(n_rects), .mark_and_dirty);
+
+    pixman_region32_fini(&newly_selected);
+    pixman_region32_fini(&no_longer_selected);
+    pixman_region32_fini(&current_selection);
+    pixman_region32_fini(&previous_selection);
+
+    term.selection.coords.start = start;
+    term.selection.coords.end = end;
+    render_refresh(term);
+}
+
+export fn set_pivot_point_for_block_and_char_wise(
+    term: *types.Terminal,
+    start: types.Coord,
+    new_direction: types.SelectionDirection,
+) callconv(.c) void {
+    const pivot_start = &term.selection.pivot.start;
+    const pivot_end = &term.selection.pivot.end;
+
+    pivot_start.* = start;
+
+    while (true) {
+        const grid = term.grid.?;
+        const r = grid.rows.?[@intCast(pivot_start.row & (grid.num_rows - 1))] orelse break;
+        const c = r.cells.?[@intCast(pivot_start.col)];
+
+        if (c.wc < CELL_SPACER) break;
+
+        if (pivot_start.col == 0) break;
+        pivot_start.col -= 1;
+    }
+
+    pivot_end.* = pivot_start.*;
+
+    if (new_direction == .right) {
+        var keep_going = true;
+        while (keep_going) {
+            const grid = term.grid.?;
+            const r = grid.rows.?[@intCast(pivot_end.row & (grid.num_rows - 1))] orelse break;
+            const wc: u32 = r.cells.?[@intCast(pivot_end.col)].wc;
+
+            keep_going = wc >= CELL_SPACER;
+
+            if (pivot_end.col == 0) {
+                if (pivot_end.row - term.grid.?.view <= 0) break;
+                pivot_end.col = term.cols - 1;
+                pivot_end.row -= 1;
+            } else {
+                pivot_end.col -= 1;
+            }
+        }
+    } else {
+        var keep_going = true;
+        while (keep_going) {
+            const grid = term.grid.?;
+            const r = grid.rows.?[@intCast(pivot_start.row & (grid.num_rows - 1))] orelse break;
+            const wc: u32 = if (pivot_start.col < term.cols - 1)
+                r.cells.?[@intCast(pivot_start.col + 1)].wc
+            else
+                0;
+
+            keep_going = wc >= CELL_SPACER;
+
+            if (pivot_start.col >= term.cols - 1) {
+                if (pivot_start.row - term.grid.?.view >= term.rows - 1) break;
+                pivot_start.col = 0;
+                pivot_start.row += 1;
+            } else {
+                pivot_start.col += 1;
+            }
+        }
+    }
+}
+
+export fn selection_update(
+    term: *types.Terminal,
+    col: c_int,
+    row: c_int,
+) callconv(.c) void {
+    if (term.selection.coords.start.row < 0) return;
+    if (!term.selection.ongoing) return;
+
+    var new_start = term.selection.coords.start;
+    var new_end: types.Coord = .{ .col = col, .row = term.grid.?.view + row };
+
+    if (!(new_end.row == new_start.row and new_end.col == new_start.col)) {
+        var new_direction = term.selection.direction;
+
+        const pivot_start = &term.selection.pivot.start;
+        const pivot_end = &term.selection.pivot.end;
+
+        if (term.selection.kind == .block) {
+            if (new_end.col >= pivot_start.col) {
+                new_direction = .right;
+            } else {
+                new_direction = .left;
+            }
+
+            if (term.selection.direction == .undir) {
+                set_pivot_point_for_block_and_char_wise(term, pivot_start.*, new_direction);
+            }
+
+            if (new_direction == .left) {
+                new_start = pivot_end.*;
+            } else {
+                new_start = pivot_start.*;
+            }
+            term.selection.direction = new_direction;
+        } else {
+            if (new_end.row < pivot_start.row or
+                (new_end.row == pivot_start.row and new_end.col < pivot_start.col))
+            {
+                new_direction = .left;
+            } else {
+                new_direction = .right;
+            }
+
+            if (term.selection.direction != new_direction) {
+                if (term.selection.direction == .undir and pivot_end.row < 0) {
+                    set_pivot_point_for_block_and_char_wise(term, pivot_start.*, new_direction);
+                }
+
+                if (new_direction == .left) {
+                    new_start = pivot_end.*;
+                } else {
+                    new_start = pivot_start.*;
+                }
+                term.selection.direction = new_direction;
+            }
+        }
+    }
+
+    switch (term.selection.kind) {
+        .char_wise, .block => {},
+        .word_wise => {
+            switch (term.selection.direction) {
+                .left => {
+                    new_end = .{ .col = col, .row = term.grid.?.view + row };
+                    selection_find_word_boundary_left(term, &new_end, term.selection.spaces_only);
+                },
+                .right => {
+                    new_end = .{ .col = col, .row = term.grid.?.view + row };
+                    selection_find_word_boundary_right(term, &new_end, term.selection.spaces_only, true);
+                },
+                .undir => {},
+            }
+        },
+        .quote_wise => {},
+        .line_wise => {
+            switch (term.selection.direction) {
+                .left => {
+                    var end: types.Coord = .{ .col = 0, .row = row };
+                    selection_find_line_boundary_left(term, &end);
+                    new_end = .{ .col = end.col, .row = term.grid.?.view + end.row };
+                },
+                .right => {
+                    var end: types.Coord = .{ .col = col, .row = row };
+                    selection_find_line_boundary_right(term, &end);
+                    new_end = .{ .col = end.col, .row = term.grid.?.view + end.row };
+                },
+                .undir => {},
+            }
+        },
+        .none => {},
+    }
+
+    const grid = term.grid.?;
+    const start_row_idx: usize = @intCast(new_start.row & (grid.num_rows - 1));
+    const end_row_idx: usize = @intCast(new_end.row & (grid.num_rows - 1));
+
+    const row_start = grid.rows.?[start_row_idx] orelse return;
+    const row_end = grid.rows.?[end_row_idx] orelse return;
+
+    // Pull CELL_SPACER start/end back into the multi-cell char
+    while (row_start.cells.?[@intCast(new_start.col)].wc == CELL_SPACER) {
+        new_start.col -= 1;
+    }
+    while (row_end.cells.?[@intCast(new_end.col)].wc == CELL_SPACER) {
+        new_end.col -= 1;
+    }
+
+    if (new_start.row < new_end.row or
+        (new_start.row == new_end.row and new_start.col <= new_end.col))
+    {
+        while (new_start.col >= 1 and
+            row_start.cells.?[@intCast(new_start.col)].wc >= CELL_SPACER)
+        {
+            new_start.col -= 1;
+        }
+        while (new_end.col < term.cols - 1 and
+            row_end.cells.?[@intCast(new_end.col + 1)].wc > CELL_SPACER)
+        {
+            new_end.col += 1;
+        }
+    } else {
+        while (new_end.col >= 1 and
+            row_end.cells.?[@intCast(new_end.col)].wc >= CELL_SPACER)
+        {
+            new_end.col -= 1;
+        }
+        while (new_start.col < term.cols - 1 and
+            row_start.cells.?[@intCast(new_start.col + 1)].wc > CELL_SPACER)
+        {
+            new_start.col += 1;
+        }
+    }
+
+    selection_modify(term, new_start, new_end);
 }
