@@ -48,3 +48,16 @@ void sixel_geometry_report_current(struct terminal *term);
 void sixel_geometry_reset(struct terminal *term);
 void sixel_geometry_set(struct terminal *term, unsigned width, unsigned height);
 void sixel_geometry_report_max(struct terminal *term);
+
+/* Zig-exported internals not part of the public sixel.h API.
+ * (formerly file-local in sixel.c) */
+void _sixel_overwrite_by_rectangle(
+    struct terminal *term, int row, int col, int height, int width,
+    pixman_image_t **pix, bool *opaque);
+void sixel_insert(struct terminal *term, struct sixel sixel);
+void sixel_erase(struct terminal *term, struct sixel *sixel);
+void sixel_invalidate_cache(struct sixel *sixel);
+uint32_t color_decode_srgb(
+    const struct terminal *term, uint16_t r, uint16_t g, uint16_t b);
+void sixel_put_generic(struct terminal *term, uint8_t c);
+void sixel_put_ar_11(struct terminal *term, uint8_t c);

@@ -463,7 +463,7 @@ vtlib = static_library(
   'macros.h',
   osc_obj, 'osc.h',
   'osc-shim.c',
-  'sixel.c', sixel_obj, 'sixel.h',
+  sixel_obj, 'sixel.h',
   'sixel-shim.c',
   vt_obj, 'vt.h',
   'vt-shim.c',

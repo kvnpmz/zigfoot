@@ -1626,3 +1626,429 @@ export fn sixel_cell_size_changed(term: *types.Terminal) callconv(.c) void {
         sixel_invalidate_cache(&node.item);
     }
 }
+
+// ── Chunk E: sync_cache + reflow + unhook ────────────────────────
+
+extern fn term_linefeed(term: *types.Terminal) callconv(.c) void;
+extern fn term_cursor_to(term: *types.Terminal, row: c_int, col: c_int) callconv(.c) void;
+extern fn render_refresh(term: *types.Terminal) callconv(.c) void;
+
+// pixman_fixed_t = int32_t (16.16 fixed point)
+const PixmanTransform = extern struct {
+    matrix: [3][3]i32,
+};
+const PixmanFTransform = extern struct {
+    m: [3][3]f64,
+};
+
+extern fn pixman_f_transform_init_scale(t: *PixmanFTransform, sx: f64, sy: f64) callconv(.c) void;
+extern fn pixman_transform_from_pixman_f_transform(
+    t: *PixmanTransform,
+    ft: *const PixmanFTransform,
+) callconv(.c) c_int;
+extern fn pixman_image_set_transform(
+    image: ?*PixmanImage,
+    transform: ?*const PixmanTransform,
+) callconv(.c) c_int;
+extern fn pixman_image_set_filter(
+    image: ?*PixmanImage,
+    filter: c_int,
+    filter_params: ?[*]const i32,
+    n_filter_params: c_int,
+) callconv(.c) void;
+
+const PIXMAN_FILTER_BILINEAR: c_int = 4;
+
+export fn sixel_sync_cache(term: *const types.Terminal, six: *types.Sixel) callconv(.c) void {
+    if (six.pix != null) {
+        return;
+    }
+
+    if (six.cell_width == term.cell_width and six.cell_height == term.cell_height) {
+        six.pix = six.original.pix;
+        six.width = six.original.width;
+        six.height = six.original.height;
+    } else {
+        const width_ratio: f64 =
+            @as(f64, @floatFromInt(term.cell_width)) / @as(f64, @floatFromInt(six.cell_width));
+        const height_ratio: f64 =
+            @as(f64, @floatFromInt(term.cell_height)) / @as(f64, @floatFromInt(six.cell_height));
+
+        var scale: PixmanFTransform = undefined;
+        pixman_f_transform_init_scale(&scale, 1.0 / width_ratio, 1.0 / height_ratio);
+
+        var scale32: PixmanTransform = undefined;
+        _ = pixman_transform_from_pixman_f_transform(&scale32, &scale);
+
+        _ = pixman_image_set_transform(
+            @ptrCast(six.original.pix),
+            &scale32,
+        );
+        pixman_image_set_filter(
+            @ptrCast(six.original.pix),
+            PIXMAN_FILTER_BILINEAR,
+            null,
+            0,
+        );
+
+        const scaled_width: c_int = @intFromFloat(@as(f64, @floatFromInt(six.original.width)) * width_ratio);
+        const scaled_height: c_int = @intFromFloat(@as(f64, @floatFromInt(six.original.height)) * height_ratio);
+        const scaled_stride: c_int = scaled_width * @sizeOf(u32);
+
+        const scaled_data: [*]u8 = @ptrCast(@alignCast(xmalloc(
+            @as(usize, @intCast(scaled_height)) *
+            @as(usize, @intCast(scaled_stride)),
+        )));
+        const scaled_pix: ?*PixmanImage = pixman_image_create_bits_no_clear(
+            @intCast(term.sixel.pixman_fmt),
+            scaled_width,
+            scaled_height,
+            @ptrCast(scaled_data),
+            scaled_stride,
+        );
+
+        pixman_image_composite32(
+            PIXMAN_OP_SRC,
+            @ptrCast(six.original.pix),
+            null,
+            scaled_pix,
+            0, 0, 0, 0,
+            0, 0,
+            scaled_width,
+            scaled_height,
+        );
+
+        _ = pixman_image_set_transform(@ptrCast(six.original.pix), null);
+
+        six.scaled.data = @ptrCast(scaled_data);
+        six.scaled.pix = @ptrCast(scaled_pix);
+        six.pix = @ptrCast(scaled_pix);
+        six.scaled.width = scaled_width;
+        six.width = scaled_width;
+        six.scaled.height = scaled_height;
+        six.height = scaled_height;
+    }
+}
+
+export fn sixel_reflow_grid(term: *types.Terminal, grid: *types.Grid) callconv(.c) void {
+    // Swap term.grid to `grid` temporarily
+    const active_grid: *types.Grid = term.grid.?;
+    term.grid = grid;
+
+    // Collect current sixels into a temporary list (preserving order)
+    var copy_head: ?*types.SixelNode = null;
+    var copy_tail: ?*types.SixelNode = null;
+    var copy_len: usize = 0;
+    var it = grid.sixel_images.head;
+    while (it) |node| {
+        const new_node = @as(*types.SixelNode, @ptrCast(@alignCast(xmalloc(@sizeOf(types.SixelNode)))));
+        new_node.* = .{
+            .item = node.item,
+            .prev = copy_tail,
+            .next = null,
+        };
+        if (copy_tail) |t| {
+            t.next = new_node;
+        } else {
+            copy_head = new_node;
+        }
+        copy_tail = new_node;
+        copy_len += 1;
+        it = node.next;
+    }
+    var copy: types.SixelList = .{
+        .head = copy_head,
+        .tail = copy_tail,
+        .length = copy_len,
+    };
+
+    // Free the real list's nodes (not items — items are now in `copy`)
+    sixelListFree(&grid.sixel_images);
+
+    // Iterate copy in reverse (from tail to head)
+    var cur = copy.tail;
+    while (cur) |node| {
+        const prev_node = node.prev;
+
+        const start: c_int = node.item.pos.row;
+        const end: c_int = (start + node.item.rows - 1) & (grid.num_rows - 1);
+
+        var destroyed = false;
+
+        if (end < start) {
+            sixel_destroy(&node.item);
+            destroyed = true;
+        } else if (node.item.rows > grid.num_rows) {
+            sixel_destroy(&node.item);
+            destroyed = true;
+        } else {
+            // Drop sixels that now cross scrollback end border
+            var last_row: c_int = -1;
+            var j: c_int = 0;
+            while (j < node.item.rows) : (j += 1) {
+                const row_no = grid_row_abs_to_sb(term.grid.?, term.rows, node.item.pos.row + j);
+                if (last_row != -1 and last_row >= row_no) {
+                    sixel_destroy(&node.item);
+                    destroyed = true;
+                    break;
+                }
+                last_row = row_no;
+            }
+        }
+
+        if (!destroyed) {
+            var pix_opt: ?*PixmanImage = @ptrCast(node.item.original.pix);
+            var opaque_tmp: bool = node.item.@"opaque";
+
+            _sixel_overwrite_by_rectangle(
+                term,
+                node.item.pos.row,
+                node.item.pos.col,
+                node.item.rows,
+                node.item.cols,
+                &pix_opt,
+                &opaque_tmp,
+            );
+
+            const new_pix_ptr: ?*anyopaque = @ptrCast(pix_opt);
+            if (node.item.original.data != @as(?*anyopaque, @ptrCast(pixman_image_get_data(pix_opt)))) {
+                node.item.original.data = @ptrCast(pixman_image_get_data(pix_opt));
+                node.item.original.width = pixman_image_get_width(pix_opt);
+                node.item.original.height = pixman_image_get_height(pix_opt);
+                node.item.cols = @divTrunc(node.item.original.width + node.item.cell_width - 1, node.item.cell_width);
+                node.item.rows = @divTrunc(node.item.original.height + node.item.cell_height - 1, node.item.cell_height);
+                sixel_invalidate_cache(&node.item);
+            }
+            node.item.original.pix = new_pix_ptr;
+            node.item.@"opaque" = opaque_tmp;
+
+            sixel_insert(term, node.item);
+        }
+
+        cur = prev_node;
+    }
+
+    sixelListFree(&copy);
+    term.grid = active_grid;
+}
+
+export fn sixel_reflow(term: *types.Terminal) callconv(.c) void {
+    var i: usize = 0;
+    while (i < 2) : (i += 1) {
+        const grid: *types.Grid = if (i == 0) &term.normal else &term.alt;
+        sixel_reflow_grid(term, grid);
+    }
+}
+
+export fn sixel_unhook(term: *types.Terminal) callconv(.c) void {
+    if (term.sixel.pos.row < term.sixel.image.height and
+        term.sixel.pos.row + 6 * term.sixel.pan >= term.sixel.image.height)
+    {
+        term.sixel.image.height = term.sixel.image.alloc_height;
+    }
+
+    if (term.sixel.pos.col > 0) {
+        const bits: c_int = @bitSizeOf(c_uint);
+        const leading_zeroes: c_int = if (term.sixel.image.bottom_pixel == 0)
+            bits
+        else
+            @intCast(@clz(@as(u32, term.sixel.image.bottom_pixel)));
+        const rows_to_trim: c_int = leading_zeroes + 6 - bits;
+
+        if (term.sixel.pos.row + 6 * term.sixel.pan >= term.sixel.image.alloc_height) {
+            const trimmed_height: c_int =
+                term.sixel.image.alloc_height - rows_to_trim * term.sixel.pan;
+
+            if (term.sixel.transparent_bg) {
+                term.sixel.image.height = trimmed_height;
+            } else {
+                if (trimmed_height > term.sixel.image.height) {
+                    term.sixel.image.height = trimmed_height;
+                }
+            }
+        }
+
+        term.sixel.pos.row += 6 * term.sixel.pan;
+        term.sixel.pos.row -= rows_to_trim * term.sixel.pan;
+    }
+
+    var pixel_row_idx: c_int = 0;
+    var pixel_rows_left: c_int = term.sixel.image.height;
+    const stride: c_int = term.sixel.image.width * @sizeOf(u32);
+
+    const do_scroll: bool = types.sixelGetScrolling(term);
+
+    var rows_avail: c_int = if (do_scroll)
+        @divTrunc(term.sixel.image.height + term.cell_height - 1, term.cell_height)
+    else
+        term.scroll_region.end;
+
+    var start_row: c_int = if (do_scroll) term.grid.?.cursor.point.row else 0;
+    const start_col: c_int = if (do_scroll) term.grid.?.cursor.point.col else 0;
+
+    const rows_needed: c_int =
+        @divTrunc(term.sixel.image.height + term.cell_height - 1, term.cell_height);
+
+    var free_image_data: bool = true;
+
+    while (pixel_rows_left > 0 and
+        rows_avail > 0 and
+        rows_needed <= term.grid.?.num_rows)
+    {
+        const cur_row: c_int = (term.grid.?.offset + start_row) & (term.grid.?.num_rows - 1);
+        const rows_left_until_wrap_around: c_int = term.grid.?.num_rows - cur_row;
+        const usable_rows: c_int = @min(rows_avail, rows_left_until_wrap_around);
+
+        const pixel_rows_avail: c_int = usable_rows * term.cell_height;
+
+        const width: c_int = term.sixel.image.width;
+        const height: c_int = @min(pixel_rows_left, pixel_rows_avail);
+
+        var img_data: [*]u32 = undefined;
+        if (pixel_row_idx == 0 and height == pixel_rows_left) {
+            img_data = term.sixel.image.data.?;
+            free_image_data = false;
+        } else {
+            const alloc_size: usize =
+                @as(usize, @intCast(height)) * @as(usize, @intCast(stride));
+            img_data = @ptrCast(@alignCast(xmalloc(alloc_size)));
+            const src_bytes: [*]const u8 = @ptrCast(term.sixel.image.data.?);
+            const src_off: usize = @as(usize, @intCast(pixel_row_idx)) * @as(usize, @intCast(stride));
+            const dst_bytes: [*]u8 = @ptrCast(img_data);
+            @memcpy(dst_bytes[0..alloc_size], src_bytes[src_off .. src_off + alloc_size]);
+        }
+
+        var image: types.Sixel = .{
+            .pix = null,
+            .width = -1,
+            .height = -1,
+            .rows = @divTrunc(height + term.cell_height - 1, term.cell_height),
+            .cols = @divTrunc(width + term.cell_width - 1, term.cell_width),
+            .pos = .{ .col = start_col, .row = cur_row },
+            .@"opaque" = !term.sixel.transparent_bg,
+            .cell_width = term.cell_width,
+            .cell_height = term.cell_height,
+            .original = .{
+                .data = @ptrCast(img_data),
+                .pix = null,
+                .width = width,
+                .height = height,
+            },
+            .scaled = .{
+                .data = null,
+                .pix = null,
+                .width = -1,
+                .height = -1,
+            },
+        };
+
+        const new_pix = pixman_image_create_bits_no_clear(
+            @intCast(term.sixel.pixman_fmt),
+            image.original.width,
+            image.original.height,
+            @ptrCast(img_data),
+            stride,
+        );
+        image.original.pix = @ptrCast(new_pix);
+
+        pixel_row_idx += height;
+        pixel_rows_left -= height;
+        rows_avail -= image.rows;
+
+        if (do_scroll) {
+            const linefeed_count: c_int = if (rows_avail == 0)
+                @max(0, image.rows - 1)
+            else
+                image.rows;
+
+            var i: c_int = 0;
+            while (i < linefeed_count) : (i += 1) {
+                term_linefeed(term);
+            }
+
+            if (rows_avail == 0) {
+                var row: c_int = term.grid.?.cursor.point.row;
+
+                const pixel_rows: c_int = if (pixel_rows_left > 0)
+                    image.original.height
+                else
+                    term.sixel.pos.row;
+                const term_rows: c_int =
+                    @divTrunc(pixel_rows + term.cell_height - 1, term.cell_height);
+
+                row -= (image.rows - term_rows);
+
+                const new_col: c_int = if (types.sixelGetCursorRightOfGraphics(term))
+                    @min(image.pos.col + image.cols, term.cols - 1)
+                else
+                    image.pos.col;
+                term_cursor_to(term, @max(0, row), new_col);
+            }
+
+            term.sixel.pos.row -= image.original.height;
+        }
+
+        // Dirty touched cells
+        var ii: c_int = 0;
+        while (ii < image.rows) : (ii += 1) {
+            const r = term.grid.?.rows.?[@intCast(cur_row + ii)] orelse continue;
+            r.dirty = true;
+
+            const col_end = @min(image.pos.col + image.cols, term.cols);
+            var cc: c_int = image.pos.col;
+            while (cc < col_end) : (cc += 1) {
+                r.cells.?[@intCast(cc)].attrs.clean = false;
+            }
+        }
+
+        var pix_opt: ?*PixmanImage = new_pix;
+        var opaque_tmp: bool = image.@"opaque";
+
+        _sixel_overwrite_by_rectangle(
+            term,
+            image.pos.row,
+            image.pos.col,
+            image.rows,
+            image.cols,
+            &pix_opt,
+            &opaque_tmp,
+        );
+
+        if (image.original.data != @as(?*anyopaque, @ptrCast(pixman_image_get_data(pix_opt)))) {
+            image.original.data = @ptrCast(pixman_image_get_data(pix_opt));
+            image.original.width = pixman_image_get_width(pix_opt);
+            image.original.height = pixman_image_get_height(pix_opt);
+            image.cols = @divTrunc(image.original.width + image.cell_width - 1, image.cell_width);
+            image.rows = @divTrunc(image.original.height + image.cell_height - 1, image.cell_height);
+            sixel_invalidate_cache(&image);
+        }
+        image.original.pix = @ptrCast(pix_opt);
+        image.@"opaque" = opaque_tmp;
+
+        sixel_insert(term, image);
+
+        if (do_scroll) {
+            start_row = term.grid.?.cursor.point.row;
+        } else {
+            start_row -= image.rows;
+        }
+    }
+
+    if (free_image_data) {
+        if (term.sixel.image.data) |d| free(@ptrCast(d));
+    }
+
+    term.sixel.image.data = null;
+    term.sixel.image.p = null;
+    term.sixel.image.width = 0;
+    term.sixel.image.height = 0;
+    term.sixel.pos = .{ .col = 0, .row = 0 };
+
+    if (term.sixel.private_palette) |p| free(@ptrCast(p));
+    term.sixel.private_palette = null;
+
+    term.bits_affecting_ascii_printer._.sixels =
+        sixelListLen(&term.grid.?.sixel_images) > 0;
+    term_update_ascii_printer(term);
+    render_refresh(term);
+}
