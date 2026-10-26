@@ -609,3 +609,104 @@ export fn selection_find_line_boundary_right(term: *types.Terminal, pos: *types.
         pos.row = next_row;
     }
 }
+
+// ── Chunk C1: selection_start ────────────────────────────────────
+// Ports selection.c lines 89-212.
+
+extern fn selection_update(term: *types.Terminal, col: c_int, row: c_int) callconv(.c) void;
+
+export fn selection_start(
+    term: *types.Terminal,
+    col: c_int,
+    row: c_int,
+    kind: types.SelectionKind,
+    spaces_only: bool,
+) callconv(.c) void {
+    selection_cancel(term);
+
+    term.selection.kind = kind;
+    term.selection.ongoing = true;
+    term.selection.spaces_only = spaces_only;
+
+    switch (kind) {
+        .char_wise, .block => {
+            term.selection.coords.start = .{ .col = col, .row = term.grid.?.view + row };
+            term.selection.coords.end = .{ .col = -1, .row = -1 };
+
+            term.selection.pivot.start = term.selection.coords.start;
+            term.selection.pivot.end = term.selection.coords.end;
+        },
+        .word_wise => {
+            var start: types.Coord = .{ .col = col, .row = term.grid.?.view + row };
+            var end: types.Coord = .{ .col = col, .row = term.grid.?.view + row };
+            selection_find_word_boundary_left(term, &start, spaces_only);
+            selection_find_word_boundary_right(term, &end, spaces_only, true);
+
+            term.selection.coords.start = start;
+            term.selection.pivot.start = term.selection.coords.start;
+            term.selection.pivot.end = end;
+
+            selection_update(term, end.col, end.row - term.grid.?.view);
+        },
+        .quote_wise => {
+            var start: types.Coord = .{ .col = col, .row = row };
+            var end: types.Coord = .{ .col = col, .row = row };
+
+            var quote_char: u32 = 0;
+            var found_left = selection_find_quote_left(term, &start, &quote_char);
+            var found_right = selection_find_quote_right(term, &end, quote_char);
+
+            if (found_left and !found_right) {
+                if (quote_char == '\'') {
+                    quote_char = '"';
+                } else if (quote_char == '"') {
+                    quote_char = '\'';
+                }
+
+                found_left = selection_find_quote_left(term, &start, &quote_char);
+                found_right = selection_find_quote_right(term, &end, quote_char);
+            }
+
+            if (found_left and found_right) {
+                term.selection.coords.start = .{
+                    .col = start.col,
+                    .row = term.grid.?.view + start.row,
+                };
+                term.selection.pivot.start = term.selection.coords.start;
+                term.selection.pivot.end = .{
+                    .col = end.col,
+                    .row = term.grid.?.view + end.row,
+                };
+                term.selection.kind = .word_wise;
+                selection_update(term, end.col, end.row);
+                return;
+            }
+            // Fallthrough to line_wise
+            term.selection.kind = .line_wise;
+            chunkC1_line_wise(term, row);
+        },
+        .line_wise => {
+            chunkC1_line_wise(term, row);
+        },
+        .none => {},
+    }
+}
+
+fn chunkC1_line_wise(term: *types.Terminal, row: c_int) void {
+    var start: types.Coord = .{ .col = 0, .row = row };
+    var end: types.Coord = .{ .col = term.cols - 1, .row = row };
+    selection_find_line_boundary_left(term, &start);
+    selection_find_line_boundary_right(term, &end);
+
+    term.selection.coords.start = .{
+        .col = start.col,
+        .row = term.grid.?.view + start.row,
+    };
+    term.selection.pivot.start = term.selection.coords.start;
+    term.selection.pivot.end = .{
+        .col = end.col,
+        .row = term.grid.?.view + end.row,
+    };
+
+    selection_update(term, end.col, end.row);
+}
