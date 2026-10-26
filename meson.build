@@ -485,7 +485,7 @@ vtlib = static_library(
 pgolib = static_library(
   'pgolib',
   grid_obj, terminal_obj, 'grid.h',
-  'selection.c', selection_obj, 'selection.h',
+  'selection.c', selection_obj, 'selection.h', 'selection-shim.c',
   'terminal.c', 'terminal.h',
   emoji_variation_sequences,
   wl_proto_src + wl_proto_headers,

@@ -313,3 +313,299 @@ export fn selection_to_text(term: *const types.Terminal) callconv(.c) ?[*:0]u8 {
     const ok = extract_finish(ctx, &text, null);
     return if (ok) text else null;
 }
+
+// ── Chunk B: word/quote/line boundary finders ────────────────────
+// Ports selection.c lines 74-395.
+
+extern fn selection_conf_word_delimiters(term: *const types.Terminal) callconv(.c) ?[*]const u32;
+extern fn selection_grid_row_in_view(grid: *types.Grid, row_no: c_int) callconv(.c) ?*types.Row;
+
+export fn selection_find_word_boundary_left(
+    term: *const types.Terminal,
+    pos: *types.Coord,
+    spaces_only: bool,
+) callconv(.c) void {
+    const grid = term.grid.?;
+
+    pos.row &= grid.num_rows - 1;
+
+    const delims = selection_conf_word_delimiters(term);
+
+    const r = grid.rows.?[@intCast(pos.row)] orelse return;
+    var c: u32 = r.cells.?[@intCast(pos.col)].wc;
+
+    while (c >= CELL_SPACER) {
+        if (pos.col == 0) return;
+        pos.col -= 1;
+        c = r.cells.?[@intCast(pos.col)].wc;
+    }
+
+    if (c >= CELL_COMB_CHARS_LO and c <= CELL_COMB_CHARS_HI) {
+        const comp = composed_lookup(term.composed, c - CELL_COMB_CHARS_LO);
+        if (comp) |cp| {
+            c = cp.chars.?[0];
+        }
+    }
+
+    const initial_is_space: bool = c == 0 or isc32space(c);
+    const initial_is_delim: bool =
+        !initial_is_space and !isword(c, spaces_only, delims);
+    const initial_is_word: bool =
+        c != 0 and isword(c, spaces_only, delims);
+
+    while (true) {
+        var next_col: c_int = pos.col - 1;
+        var next_row: c_int = pos.row;
+
+        var row = grid.rows.?[@intCast(next_row)] orelse return;
+
+        // Linewrap
+        if (next_col < 0) {
+            next_col = term.cols - 1;
+            next_row = (next_row - 1 + grid.num_rows) & (grid.num_rows - 1);
+
+            if (grid_row_abs_to_sb(grid, term.rows, next_row) == term.grid.?.num_rows - 1 or
+                grid.rows.?[@intCast(next_row)] == null)
+            {
+                break;
+            }
+
+            row = grid.rows.?[@intCast(next_row)] orelse return;
+
+            if (row.linebreak) break;
+        }
+
+        c = row.cells.?[@intCast(next_col)].wc;
+        while (c >= CELL_SPACER) {
+            next_col -= 1;
+            if (next_col < 0) return;
+            c = row.cells.?[@intCast(next_col)].wc;
+        }
+
+        if (c >= CELL_COMB_CHARS_LO and c <= CELL_COMB_CHARS_HI) {
+            const comp = composed_lookup(term.composed, c - CELL_COMB_CHARS_LO);
+            if (comp) |cp| {
+                c = cp.chars.?[0];
+            }
+        }
+
+        const is_space: bool = c == 0 or isc32space(c);
+        const is_delim: bool = !is_space and !isword(c, spaces_only, delims);
+        const is_word: bool = c != 0 and isword(c, spaces_only, delims);
+
+        if (initial_is_space and !is_space) break;
+        if (initial_is_delim and !is_delim) break;
+        if (initial_is_word and !is_word) break;
+
+        pos.col = next_col;
+        pos.row = next_row;
+    }
+}
+
+export fn selection_find_word_boundary_right(
+    term: *const types.Terminal,
+    pos: *types.Coord,
+    spaces_only: bool,
+    stop_on_space_to_word_boundary: bool,
+) callconv(.c) void {
+    const grid = term.grid.?;
+
+    pos.row &= grid.num_rows - 1;
+
+    const delims = selection_conf_word_delimiters(term);
+
+    const r = grid.rows.?[@intCast(pos.row)] orelse return;
+    var c: u32 = r.cells.?[@intCast(pos.col)].wc;
+
+    while (c >= CELL_SPACER) {
+        if (pos.col == 0) return;
+        pos.col -= 1;
+        c = r.cells.?[@intCast(pos.col)].wc;
+    }
+
+    if (c >= CELL_COMB_CHARS_LO and c <= CELL_COMB_CHARS_HI) {
+        const comp = composed_lookup(term.composed, c - CELL_COMB_CHARS_LO);
+        if (comp) |cp| {
+            c = cp.chars.?[0];
+        }
+    }
+
+    const initial_is_space: bool = c == 0 or isc32space(c);
+    const initial_is_delim: bool =
+        !initial_is_space and !isword(c, spaces_only, delims);
+    const initial_is_word: bool =
+        c != 0 and isword(c, spaces_only, delims);
+    var have_seen_word: bool = initial_is_word;
+
+    while (true) {
+        var next_col: c_int = pos.col;
+        var next_row: c_int = pos.row;
+
+        var row = term.grid.?.rows.?[@intCast(next_row)] orelse return;
+
+        while (true) {
+            next_col += 1;
+            if (next_col >= term.cols) {
+                if (row.linebreak) return;
+
+                next_col = 0;
+                next_row = (next_row + 1) & (grid.num_rows - 1);
+
+                if (grid_row_abs_to_sb(grid, term.rows, next_row) == 0) {
+                    return;
+                }
+                row = grid.rows.?[@intCast(next_row)] orelse return;
+            }
+
+            c = row.cells.?[@intCast(next_col)].wc;
+            if (c < CELL_SPACER) break;
+        }
+
+        if (c >= CELL_COMB_CHARS_LO and c <= CELL_COMB_CHARS_HI) {
+            const comp = composed_lookup(term.composed, c - CELL_COMB_CHARS_LO);
+            if (comp) |cp| {
+                c = cp.chars.?[0];
+            }
+        }
+
+        const is_space: bool = c == 0 or isc32space(c);
+        const is_delim: bool = !is_space and !isword(c, spaces_only, delims);
+        const is_word: bool = c != 0 and isword(c, spaces_only, delims);
+
+        if (stop_on_space_to_word_boundary) {
+            if (initial_is_space and !is_space) break;
+            if (initial_is_delim and !is_delim) break;
+        } else {
+            if (initial_is_space and ((have_seen_word and is_space) or is_delim)) break;
+            if (initial_is_delim and ((have_seen_word and is_delim) or is_space)) break;
+        }
+        if (initial_is_word and !is_word) break;
+
+        have_seen_word = is_word;
+
+        pos.col = next_col;
+        pos.row = next_row;
+    }
+}
+
+export fn selection_find_quote_left(
+    term: *types.Terminal,
+    pos: *types.Coord,
+    quote_char: *u32,
+) callconv(.c) bool {
+    var row = selection_grid_row_in_view(term.grid.?, pos.row) orelse return false;
+    var wc: u32 = row.cells.?[@intCast(pos.col)].wc;
+
+    const is_quote = if (quote_char.* == 0)
+        (wc == '"' or wc == '\'')
+    else
+        wc == quote_char.*;
+
+    if (is_quote) return false;
+
+    var next_row: c_int = pos.row;
+    var next_col: c_int = pos.col;
+
+    while (true) {
+        next_col -= 1;
+        if (next_col < 0) {
+            next_col = term.cols - 1;
+            next_row -= 1;
+            if (next_row < 0) return false;
+
+            row = selection_grid_row_in_view(term.grid.?, next_row) orelse return false;
+            if (row.linebreak) return false;
+        }
+
+        wc = row.cells.?[@intCast(next_col)].wc;
+
+        const matches = if (quote_char.* == 0)
+            (wc == '"' or wc == '\'')
+        else
+            wc == quote_char.*;
+
+        if (matches) {
+            if (next_col + 1 == term.cols) {
+                pos.row = next_row + 1;
+                pos.col = 0;
+            } else {
+                pos.row = next_row;
+                pos.col = next_col + 1;
+            }
+            quote_char.* = wc;
+            return true;
+        }
+    }
+}
+
+export fn selection_find_quote_right(
+    term: *types.Terminal,
+    pos: *types.Coord,
+    quote_char: u32,
+) callconv(.c) bool {
+    if (quote_char == 0) return false;
+
+    var row = selection_grid_row_in_view(term.grid.?, pos.row) orelse return false;
+    var wc: u32 = row.cells.?[@intCast(pos.col)].wc;
+    if (wc == quote_char) return false;
+
+    var next_row: c_int = pos.row;
+    var next_col: c_int = pos.col;
+
+    while (true) {
+        next_col += 1;
+        if (next_col >= term.cols) {
+            next_col = 0;
+            next_row += 1;
+            if (next_row >= term.rows) return false;
+
+            if (row.linebreak) return false;
+
+            row = selection_grid_row_in_view(term.grid.?, next_row) orelse return false;
+        }
+
+        wc = row.cells.?[@intCast(next_col)].wc;
+        if (wc == quote_char) {
+            if (next_col == 0) {
+                pos.row = next_row - 1;
+                pos.col = term.cols - 1;
+            } else {
+                pos.row = next_row;
+                pos.col = next_col - 1;
+            }
+            return true;
+        }
+    }
+}
+
+export fn selection_find_line_boundary_left(term: *types.Terminal, pos: *types.Coord) callconv(.c) void {
+    var next_row: c_int = pos.row;
+    pos.col = 0;
+
+    while (true) {
+        next_row -= 1;
+        if (next_row < 0) return;
+
+        const row = selection_grid_row_in_view(term.grid.?, next_row) orelse return;
+        if (row.linebreak) return;
+
+        pos.col = 0;
+        pos.row = next_row;
+    }
+}
+
+export fn selection_find_line_boundary_right(term: *types.Terminal, pos: *types.Coord) callconv(.c) void {
+    var next_row: c_int = pos.row;
+    pos.col = term.cols - 1;
+
+    while (true) {
+        const row = selection_grid_row_in_view(term.grid.?, next_row) orelse return;
+        if (row.linebreak) return;
+
+        next_row += 1;
+        if (next_row >= term.rows) return;
+
+        pos.col = term.cols - 1;
+        pos.row = next_row;
+    }
+}
