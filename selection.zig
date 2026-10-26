@@ -50,7 +50,6 @@ extern fn grid_row_abs_to_sb_precalc_sb_start(
 ) callconv(.c) c_int;
 
 // selection_cancel: ported later (chunk C), forward-declare
-extern fn selection_cancel(term: *types.Terminal) callconv(.c) void;
 
 // ── bounded ──────────────────────────────────────────────────────
 fn bounded(grid: *const types.Grid, coord_in: types.Coord) types.Coord {
@@ -924,6 +923,11 @@ extern fn pixman_region32_subtract(
     reg_m: *const PixmanRegion32,
     reg_s: *const PixmanRegion32,
 ) callconv(.c) c_int;
+extern fn pixman_region32_intersect(
+    new_reg: *PixmanRegion32,
+    reg1: *const PixmanRegion32,
+    reg2: *const PixmanRegion32,
+) callconv(.c) c_int;
 extern fn pixman_region32_fini(region: *PixmanRegion32) callconv(.c) void;
 extern fn pixman_region32_rectangles(
     region: *const PixmanRegion32,
@@ -1171,4 +1175,298 @@ export fn selection_update(
     }
 
     selection_modify(term, new_start, new_end);
+}
+
+// ── Chunk C4: dirty_cells + extend_* + extend + finalize + cancel + has_data ──
+// Ports selection.c lines 736-1070.
+
+extern fn selection_stop_scroll_timer(term: *types.Terminal) callconv(.c) void;
+extern fn search_selection_cancelled(term: *types.Terminal) callconv(.c) void;
+extern fn selection_to_primary(seat: ?*anyopaque, term: *types.Terminal, serial: u32) callconv(.c) void;
+extern fn selection_to_clipboard(seat: ?*anyopaque, term: *types.Terminal, serial: u32) callconv(.c) void;
+
+extern fn selection_seat_clipboard_data_offer(seat: ?*const anyopaque) callconv(.c) ?*anyopaque;
+extern fn selection_seat_primary_data_offer(seat: ?*const anyopaque) callconv(.c) ?*anyopaque;
+
+// SelectionTarget enum values (from config.h: SELECTION_TARGET_NONE=0, PRIMARY=1, CLIPBOARD=2, BOTH=3)
+extern fn selection_conf_selection_target(term: *const types.Terminal) callconv(.c) c_int;
+
+export fn selection_dirty_cells(term: *types.Terminal) callconv(.c) void {
+    if (term.selection.coords.start.row < 0 or term.selection.coords.end.row < 0) return;
+
+    var selection_region = pixman_region_for_coords(
+        term,
+        &term.selection.coords.start,
+        &term.selection.coords.end,
+    );
+
+    var view_start: types.Coord = .{ .col = 0, .row = term.grid.?.view };
+    var view_end: types.Coord = .{ .col = term.cols - 1, .row = term.grid.?.view + term.rows - 1 };
+    var view_region = pixman_region_for_coords(term, &view_start, &view_end);
+
+    var visible_and_selected: PixmanRegion32 = undefined;
+    pixman_region32_init(&visible_and_selected);
+    _ = pixman_region32_intersect(&visible_and_selected, &selection_region, &view_region);
+
+    var n_rects: c_int = -1;
+    const boxes = pixman_region32_rectangles(&visible_and_selected, &n_rects);
+    mark_selected_region(term, boxes, @intCast(n_rects), .mark_for_render);
+
+    pixman_region32_fini(&visible_and_selected);
+    pixman_region32_fini(&view_region);
+    pixman_region32_fini(&selection_region);
+}
+
+fn selection_extend_normal(
+    term: *types.Terminal,
+    col: c_int,
+    row: c_int,
+    new_kind: types.SelectionKind,
+) void {
+    var start: *types.Coord = &term.selection.coords.start;
+    var end: *types.Coord = &term.selection.coords.end;
+
+    const rel_row = grid_row_abs_to_sb(term.grid.?, term.rows, row);
+    var rel_start_row = grid_row_abs_to_sb(term.grid.?, term.rows, start.row);
+    var rel_end_row = grid_row_abs_to_sb(term.grid.?, term.rows, end.row);
+
+    if (rel_start_row > rel_end_row or
+        (rel_start_row == rel_end_row and start.col > end.col))
+    {
+        const tmp = start;
+        start = end;
+        end = tmp;
+
+        const tmp_row = rel_start_row;
+        rel_start_row = rel_end_row;
+        rel_end_row = tmp_row;
+    }
+
+    var new_start: types.Coord = undefined;
+    var new_end: types.Coord = undefined;
+    var direction: types.SelectionDirection = undefined;
+
+    if (rel_row < rel_start_row or
+        (rel_row == rel_start_row and col < start.col))
+    {
+        new_start = end.*;
+        new_end = .{ .col = col, .row = row };
+        direction = .left;
+    } else if (rel_row > rel_end_row or
+        (rel_row == rel_end_row and col > end.col))
+    {
+        new_start = start.*;
+        new_end = .{ .col = col, .row = row };
+        direction = .right;
+    } else {
+        const linear = rel_row * term.cols + col;
+        if (@abs(linear - (rel_start_row * term.cols + start.col)) <
+            @abs(linear - (rel_end_row * term.cols + end.col)))
+        {
+            new_start = end.*;
+            new_end = .{ .col = col, .row = row };
+            direction = .left;
+        } else {
+            new_start = start.*;
+            new_end = .{ .col = col, .row = row };
+            direction = .right;
+        }
+    }
+
+    const spaces_only = term.selection.spaces_only;
+
+    switch (term.selection.kind) {
+        .char_wise => {
+            set_pivot_point_for_block_and_char_wise(term, new_start, direction);
+        },
+        .word_wise => {
+            var pivot_start: types.Coord = .{ .col = new_start.col, .row = new_start.row };
+            var pivot_end: types.Coord = pivot_start;
+            selection_find_word_boundary_left(term, &pivot_start, spaces_only);
+            selection_find_word_boundary_right(term, &pivot_end, spaces_only, true);
+            term.selection.pivot.start = pivot_start;
+            term.selection.pivot.end = pivot_end;
+        },
+        .quote_wise => {},
+        .line_wise => {
+            var pivot_start: types.Coord = .{ .col = new_start.col, .row = new_start.row - term.grid.?.view };
+            var pivot_end: types.Coord = pivot_start;
+            selection_find_line_boundary_left(term, &pivot_start);
+            selection_find_line_boundary_right(term, &pivot_end);
+            term.selection.pivot.start = .{ .col = pivot_start.col, .row = term.grid.?.view + pivot_start.row };
+            term.selection.pivot.end = .{ .col = pivot_end.col, .row = term.grid.?.view + pivot_end.row };
+        },
+        .block, .none => {},
+    }
+
+    term.selection.kind = new_kind;
+    term.selection.direction = direction;
+    selection_modify(term, new_start, new_end);
+}
+
+fn selection_extend_block(term: *types.Terminal, col: c_int, row: c_int) void {
+    const start = &term.selection.coords.start;
+    const end = &term.selection.coords.end;
+
+    const rel_start_row = grid_row_abs_to_sb(term.grid.?, term.rows, start.row);
+    const rel_end_row = grid_row_abs_to_sb(term.grid.?, term.rows, end.row);
+
+    const top_left: types.Coord = .{
+        .row = if (rel_start_row < rel_end_row) start.row else end.row,
+        .col = @min(start.col, end.col),
+    };
+    const top_right: types.Coord = .{
+        .row = top_left.row,
+        .col = @max(start.col, end.col),
+    };
+    const bottom_left: types.Coord = .{
+        .row = if (rel_start_row > rel_end_row) start.row else end.row,
+        .col = @min(start.col, end.col),
+    };
+    const bottom_right: types.Coord = .{
+        .row = bottom_left.row,
+        .col = @max(start.col, end.col),
+    };
+
+    const rel_row = grid_row_abs_to_sb(term.grid.?, term.rows, row);
+    const rel_top_row = grid_row_abs_to_sb(term.grid.?, term.rows, top_left.row);
+    const rel_bottom_row = grid_row_abs_to_sb(term.grid.?, term.rows, bottom_left.row);
+
+    var new_start: types.Coord = undefined;
+    var new_end: types.Coord = undefined;
+
+    if (rel_row <= rel_top_row or
+        @abs(rel_row - rel_top_row) < @abs(rel_row - rel_bottom_row))
+    {
+        if (@abs(col - top_left.col) < @abs(col - top_right.col)) {
+            new_start = bottom_right;
+            new_end = .{ .col = col, .row = row };
+        } else {
+            new_start = bottom_left;
+            new_end = .{ .col = col, .row = row };
+        }
+    } else {
+        if (@abs(col - bottom_left.col) < @abs(col - bottom_right.col)) {
+            new_start = top_right;
+            new_end = .{ .col = col, .row = row };
+        } else {
+            new_start = top_left;
+            new_end = .{ .col = col, .row = row };
+        }
+    }
+
+    const direction: types.SelectionDirection = if (col > new_start.col) .right else .left;
+    set_pivot_point_for_block_and_char_wise(term, new_start, direction);
+    term.selection.direction = direction;
+    selection_modify(term, new_start, new_end);
+}
+
+export fn selection_extend(
+    seat: ?*anyopaque,
+    term: *types.Terminal,
+    col: c_int,
+    row_in: c_int,
+    new_kind: types.SelectionKind,
+) callconv(.c) void {
+    _ = seat;
+    var row: c_int = row_in;
+
+    if (term.selection.coords.start.row < 0 or term.selection.coords.end.row < 0) return;
+    if (term.selection.kind == .block and new_kind != .block) return;
+
+    term.selection.ongoing = true;
+    row += term.grid.?.view;
+
+    if ((row == term.selection.coords.start.row and col == term.selection.coords.start.col) or
+        (row == term.selection.coords.end.row and col == term.selection.coords.end.col))
+    {
+        return;
+    }
+
+    switch (term.selection.kind) {
+        .none => {},
+        .char_wise, .word_wise, .quote_wise, .line_wise => {
+            selection_extend_normal(term, col, row, new_kind);
+        },
+        .block => {
+            selection_extend_block(term, col, row);
+        },
+    }
+}
+
+export fn selection_finalize(seat: ?*anyopaque, term: *types.Terminal, serial: u32) callconv(.c) void {
+    if (!term.selection.ongoing) return;
+
+    selection_stop_scroll_timer(term);
+    term.selection.ongoing = false;
+
+    if (term.selection.coords.start.row < 0 or term.selection.coords.end.row < 0) return;
+
+    term.selection.coords.start.row &= term.grid.?.num_rows - 1;
+    term.selection.coords.end.row &= term.grid.?.num_rows - 1;
+
+    const target = selection_conf_selection_target(term);
+    switch (target) {
+        0 => {}, // SELECTION_TARGET_NONE
+        1 => selection_to_primary(seat, term, serial),
+        2 => selection_to_clipboard(seat, term, serial),
+        3 => {
+            selection_to_primary(seat, term, serial);
+            selection_to_clipboard(seat, term, serial);
+        },
+        else => {},
+    }
+}
+
+fn unmark_selected(
+    term: *types.Terminal,
+    row: *types.Row,
+    cell: *types.Cell,
+    row_no: c_int,
+    col: c_int,
+    data: ?*anyopaque,
+) callconv(.c) bool {
+    _ = term;
+    _ = row_no;
+    _ = col;
+    _ = data;
+    if (!cell.attrs.selected) return true;
+
+    row.dirty = true;
+    cell.attrs.selected = false;
+    cell.attrs.clean = false;
+    return true;
+}
+
+export fn selection_cancel(term: *types.Terminal) callconv(.c) void {
+    selection_stop_scroll_timer(term);
+
+    if (term.selection.coords.start.row >= 0 and term.selection.coords.end.row >= 0) {
+        foreach_selected(
+            term,
+            term.selection.coords.start,
+            term.selection.coords.end,
+            &unmark_selected,
+            null,
+        );
+        render_refresh(term);
+    }
+
+    term.selection.kind = .none;
+    term.selection.coords.start = .{ .col = -1, .row = -1 };
+    term.selection.coords.end = .{ .col = -1, .row = -1 };
+    term.selection.pivot.start = .{ .col = -1, .row = -1 };
+    term.selection.pivot.end = .{ .col = -1, .row = -1 };
+    term.selection.direction = .undir;
+    term.selection.ongoing = false;
+
+    search_selection_cancelled(term);
+}
+
+export fn selection_clipboard_has_data(seat: ?*const anyopaque) callconv(.c) bool {
+    return selection_seat_clipboard_data_offer(seat) != null;
+}
+
+export fn selection_primary_has_data(seat: ?*const anyopaque) callconv(.c) bool {
+    return selection_seat_primary_data_offer(seat) != null;
 }
