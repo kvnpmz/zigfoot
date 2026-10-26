@@ -688,6 +688,77 @@ pub const Terminal = extern struct {
     kbd_focus: bool,
     active_surface: TermSurface,
     render: Render,
+    interactive_resizing: extern struct {
+        grid: ?*Grid,
+        old_screen_rows: c_int,
+        old_cols: c_int,
+        old_hide_cursor: c_int,
+        new_rows: c_int,
+        selection_coords: Range,
+    },
+    sixel: extern struct {
+        state: SixelState,
+        pos: Coord,
+        color_idx: c_int,
+        private_palette: ?[*]u32,
+        shared_palette: ?[*]u32,
+        palette: ?[*]u32,
+        color: u32,
+        image: extern struct {
+            data: ?[*]u32,
+            p: ?[*]u32,
+            width: c_int,
+            height: c_int,
+            alloc_height: c_int,
+            bottom_pixel: c_uint,
+        },
+        pan: c_int,
+        pad: c_int,
+        // C bit-fields: `bool scrolling:1; bool use_private_palette:1; bool cursor_right_of_graphics:1;`
+        // occupy 1 byte. Expose accessors rather than direct field access.
+        _sixel_flags: u8,
+        params: [5]c_uint,
+        param: c_uint,
+        param_idx: c_uint,
+        repeat_count: c_uint,
+        transparent_bg: bool,
+        linear_blending: bool,
+        use_10bit: bool,
+        pixman_fmt: c_int,
+        palette_size: c_uint,
+        max_width: c_uint,
+        max_height: c_uint,
+    },
+    url: extern struct {
+        list: UrlList,
+        keys: [5]u32,
+        show_uri_on_jump_label: bool,
+        grid_snapshot: ?*Grid,
+        ime_reenable_after_url_mode: bool,
+        launch: ?*const anyopaque,
+    },
+    ime_enabled: bool,
+    unicode_mode: extern struct {
+        active: bool,
+        count: c_int,
+        character: u32,
+    },
+    shutdown: extern struct {
+        in_progress: bool,
+        client_has_terminated: bool,
+        terminate_timeout_fd: c_int,
+        exit_status: c_int,
+        next_signal: c_int,
+        cb: ?*const anyopaque,
+        cb_data: ?*anyopaque,
+    },
+    kitty_notification: Notification,
+    active_notifications: TllNotification,
+    notification_icons: [32]NotificationIcon,
+    foot_exe: ?[*:0]u8,
+    cwd: ?[*:0]u8,
+    grapheme_shaping: bool,
+    size_notifications: bool,
 };
 
 // ── Notifications (mirrors notify.h) ──────────────────────────────
@@ -768,4 +839,78 @@ comptime {
         @compileError("NotificationIcon: sizeof mismatch");
     if (@offsetOf(NotificationIcon, "tmp_file_fd") != 24)
         @compileError("NotificationIcon: tmp_file_fd offset mismatch");
+}
+
+pub const SixelState = enum(c_int) {
+    DECSIXEL = 0,
+    DECGRA = 1,
+    DECGRI = 2,
+    DECGCI = 3,
+};
+
+pub const UrlAction = enum(c_int) {
+    COPY = 0,
+    LAUNCH = 1,
+    PERSISTENT = 2,
+};
+
+pub const Url = extern struct {
+    id: u64,
+    url: ?[*:0]u8,
+    key: ?[*]u32,
+    range: Range,
+    action: UrlAction,
+    url_mode_dont_change_url_attr: bool,
+    osc8: bool,
+    duplicate: bool,
+};
+
+pub const UrlNode = extern struct {
+    item: Url,
+    prev: ?*UrlNode,
+    next: ?*UrlNode,
+};
+
+pub const UrlList = extern struct {
+    head: ?*UrlNode,
+    tail: ?*UrlNode,
+    length: usize,
+};
+
+pub const NotificationNode = extern struct {
+    item: Notification,
+    prev: ?*NotificationNode,
+    next: ?*NotificationNode,
+};
+
+pub const TllNotification = extern struct {
+    head: ?*NotificationNode,
+    tail: ?*NotificationNode,
+    length: usize,
+};
+
+
+// Sixel bit-field accessors (C: bool scrolling:1; bool use_private_palette:1; bool cursor_right_of_graphics:1)
+pub inline fn sixelGetScrolling(t: *const Terminal) bool {
+    return (t.sixel._sixel_flags & 0x01) != 0;
+}
+pub inline fn sixelSetScrolling(t: *Terminal, v: bool) void {
+    if (v) t.sixel._sixel_flags |= 0x01 else t.sixel._sixel_flags &= ~@as(u8, 0x01);
+}
+pub inline fn sixelGetUsePrivatePalette(t: *const Terminal) bool {
+    return (t.sixel._sixel_flags & 0x02) != 0;
+}
+pub inline fn sixelSetUsePrivatePalette(t: *Terminal, v: bool) void {
+    if (v) t.sixel._sixel_flags |= 0x02 else t.sixel._sixel_flags &= ~@as(u8, 0x02);
+}
+pub inline fn sixelGetCursorRightOfGraphics(t: *const Terminal) bool {
+    return (t.sixel._sixel_flags & 0x04) != 0;
+}
+pub inline fn sixelSetCursorRightOfGraphics(t: *Terminal, v: bool) void {
+    if (v) t.sixel._sixel_flags |= 0x04 else t.sixel._sixel_flags &= ~@as(u8, 0x04);
+}
+
+comptime {
+    if (@offsetOf(Terminal, "render") != 3872)
+        @compileError("Terminal: render offset drift");
 }

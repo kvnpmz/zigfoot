@@ -86,3 +86,56 @@ uint32_t *sixel_get_shared_palette(struct terminal *t) {
 void sixel_set_shared_palette(struct terminal *t, uint32_t *p) {
     t->sixel.shared_palette = p;
 }
+
+/* ── Shims for sixel_init / color_decode_srgb / later chunks ──── */
+/* These wrap fields of struct wayland, struct config, struct
+ * buffer_chain that are still opaque to Zig. */
+
+#include "wayland.h"
+#include "shm.h"
+
+bool sixel_wayl_do_linear_blending(struct terminal *t) {
+    return wayl_do_linear_blending(t->wl, t->conf);
+}
+
+/* Return the raw enum value; Zig compares to hardcoded SHM_BITS_10 (=1)
+ * and SHM_BITS_8 (=0) constants. */
+int sixel_shm_chain_bit_depth(struct terminal *t) {
+    return (int)shm_chain_bit_depth(t->render.chains.grid);
+}
+
+bool sixel_wl_have_argb2101010(struct terminal *t) {
+    return t->wl->shm_have_argb2101010;
+}
+
+bool sixel_wl_have_abgr2101010(struct terminal *t) {
+    return t->wl->shm_have_abgr2101010;
+}
+
+/* Number of entries in the default sixel palette config
+ * (ALEN(term->conf->colors_dark.sixel)). */
+size_t sixel_conf_sixel_palette_entries(struct terminal *t) {
+    return sizeof(t->conf->colors_dark.sixel) / sizeof(t->conf->colors_dark.sixel[0]);
+}
+
+/* Copy up to `max` entries of the configured sixel palette to dst. */
+void sixel_conf_sixel_palette_copy(struct terminal *t, uint32_t *dst, size_t max) {
+    const size_t n = sixel_conf_sixel_palette_entries(t);
+    const size_t cnt = n < max ? n : max;
+    for (size_t i = 0; i < cnt; i++)
+        dst[i] = t->conf->colors_dark.sixel[i];
+}
+
+/* pixman format constants (enum values from pixman.h). */
+unsigned sixel_pixman_fmt_a8r8g8b8(void) {
+    return (unsigned)PIXMAN_a8r8g8b8;
+}
+unsigned sixel_pixman_fmt_a2r10g10b10(void) {
+    return (unsigned)PIXMAN_a2r10g10b10;
+}
+unsigned sixel_pixman_fmt_a2b10g10r10(void) {
+    return (unsigned)PIXMAN_a2b10g10r10;
+}
+int sixel_pixman_type_argb(void) {
+    return PIXMAN_TYPE_ARGB;
+}
