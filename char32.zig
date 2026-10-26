@@ -138,3 +138,22 @@ export fn ac32tombs(src: [*c]const u32) callconv(.c) ?[*]u8 {
 
     return ret;
 }
+
+extern fn utf8proc_charwidth(c: i32) callconv(.c) c_int;
+extern fn wcwidth(c: u32) callconv(.c) c_int;
+
+export fn c32width(c: u32) callconv(.c) c_int {
+    // FOOT_GRAPHEME_CLUSTERING is always enabled per meson
+    return utf8proc_charwidth(@intCast(c));
+}
+
+export fn c32swidth(s: [*]const u32, n: usize) callconv(.c) c_int {
+    var width: c_int = 0;
+    var i: usize = 0;
+    while (i < n) : (i += 1) {
+        const w = c32width(s[i]);
+        if (w < 0) return -1;
+        width += w;
+    }
+    return width;
+}
