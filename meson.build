@@ -363,6 +363,14 @@ grid_obj = custom_target(
   command: [python, files('compile_zig.py'), '@INPUT@', '@OUTPUT@']
 )
 
+selection_obj = custom_target(
+  'selection_obj',
+  input: 'selection.zig',
+  depend_files: files('terminal_types.zig'),
+  output: 'selection.o',
+  command: [python, files('compile_zig.py'), '@INPUT@', '@OUTPUT@']
+)
+
 
 terminal_obj = custom_target(
   '',
@@ -477,7 +485,7 @@ vtlib = static_library(
 pgolib = static_library(
   'pgolib',
   grid_obj, terminal_obj, 'grid.h',
-  'selection.c', 'selection.h',
+  'selection.c', selection_obj, 'selection.h',
   'terminal.c', 'terminal.h',
   emoji_variation_sequences,
   wl_proto_src + wl_proto_headers,

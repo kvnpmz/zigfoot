@@ -30,6 +30,21 @@
 #include "vt.h"
 #include "xmalloc.h"
 
+/* Ported to selection.zig */
+extern struct coord selection_get_start(const struct terminal *term);
+extern struct coord selection_get_end(const struct terminal *term);
+extern bool selection_on_rows(const struct terminal *term, int row_start, int row_end);
+extern void selection_scroll_up(struct terminal *term, int rows);
+extern void selection_scroll_down(struct terminal *term, int rows);
+extern void selection_view_up(struct terminal *term, int new_view);
+extern void selection_view_down(struct terminal *term, int new_view);
+extern char *selection_to_text(const struct terminal *term);
+
+/* Ported to selection.zig */
+typedef bool (*foreach_selected_cb_t)(struct terminal *term, struct row *row, struct cell *cell, int row_no, int col, void *data);
+extern void foreach_selected(struct terminal *term, struct coord start, struct coord end, foreach_selected_cb_t cb, void *data);
+extern bool extract_one_const_wrapper(struct terminal *term, struct row *row, struct cell *cell, int row_no, int col, void *data);
+
 static const char *const mime_type_map[] = {
     [DATA_OFFER_MIME_UNSET] = NULL,
     [DATA_OFFER_MIME_TEXT_PLAIN] = "text/plain",
@@ -40,306 +55,19 @@ static const char *const mime_type_map[] = {
     [DATA_OFFER_MIME_TEXT_STRING] = "STRING",
     [DATA_OFFER_MIME_TEXT_UTF8_STRING] = "UTF8_STRING",
 };
-
-static inline struct coord
-bounded(const struct grid *grid, struct coord coord)
-{
-    coord.row &= grid->num_rows - 1;
-    return coord;
-}
-
-struct coord
-selection_get_start(const struct terminal *term)
-{
-    if (term->selection.coords.start.row < 0)
-        return term->selection.coords.start;
-    return bounded(term->grid, term->selection.coords.start);
-}
-
-struct coord
-selection_get_end(const struct terminal *term)
-{
-    if (term->selection.coords.end.row < 0)
-        return term->selection.coords.end;
-    return bounded(term->grid, term->selection.coords.end);
-}
-
-bool
-selection_on_rows(const struct terminal *term, int row_start, int row_end)
-{
-    xassert(term->selection.coords.end.row >= 0);
-
-    LOG_DBG("on rows: %d-%d, range: %d-%d (offset=%d)",
-            term->selection.coords.start.row, term->selection.coords.end.row,
-            row_start, row_end, term->grid->offset);
-
-    row_start += term->grid->offset;
-    row_end += term->grid->offset;
-    xassert(row_end >= row_start);
-
-    const struct coord *start = &term->selection.coords.start;
-    const struct coord *end = &term->selection.coords.end;
-
-    const struct grid *grid = term->grid;
-    const int sb_start = grid->offset + term->rows;
-
-    /* Use scrollback relative coords when checking for overlap */
-    const int rel_row_start =
-        grid_row_abs_to_sb_precalc_sb_start(grid, sb_start, row_start);
-    const int rel_row_end =
-        grid_row_abs_to_sb_precalc_sb_start(grid, sb_start, row_end);
-    int rel_sel_start =
-        grid_row_abs_to_sb_precalc_sb_start(grid, sb_start, start->row);
-    int rel_sel_end =
-        grid_row_abs_to_sb_precalc_sb_start(grid, sb_start, end->row);
-
-    if (rel_sel_start > rel_sel_end) {
-        int tmp = rel_sel_start;
-        rel_sel_start = rel_sel_end;
-        rel_sel_end = tmp;
-    }
-
-    if ((rel_row_start <= rel_sel_start && rel_row_end >= rel_sel_start) ||
-        (rel_row_start <= rel_sel_end && rel_row_end >= rel_sel_end))
-    {
-        /* The range crosses one of the selection boundaries */
-        return true;
-    }
-
-    if (rel_row_start >= rel_sel_start && rel_row_end <= rel_sel_end)
-        return true;
-
-    return false;
-}
-
-void
-selection_scroll_up(struct terminal *term, int rows)
-{
-    xassert(term->selection.coords.end.row >= 0);
-
-    const int rel_row_start =
-        grid_row_abs_to_sb(term->grid, term->rows, term->selection.coords.start.row);
-    const int rel_row_end =
-        grid_row_abs_to_sb(term->grid, term->rows, term->selection.coords.end.row);
-    const int actual_start = min(rel_row_start, rel_row_end);
-
-    if (actual_start - rows < 0) {
-        /* Part of the selection will be scrolled out, cancel it */
-        selection_cancel(term);
-    }
-}
-
-void
-selection_scroll_down(struct terminal *term, int rows)
-{
-    xassert(term->selection.coords.end.row >= 0);
-
-    const struct grid *grid = term->grid;
-    const struct range *sel = &term->selection.coords;
-
-    const int screen_end =
-        grid_row_abs_to_sb(grid, term->rows, grid->offset + term->rows - 1);
-    const int rel_row_start =
-        grid_row_abs_to_sb(term->grid, term->rows, sel->start.row);
-    const int rel_row_end =
-        grid_row_abs_to_sb(term->grid, term->rows, sel->end.row);
-    const int actual_end = max(rel_row_start, rel_row_end);
-
-    if (actual_end > screen_end - rows) {
-        /* Part of the selection will be scrolled out, cancel it */
-        selection_cancel(term);
-    }
-}
-
-void
-selection_view_up(struct terminal *term, int new_view)
-{
-    if (likely(term->selection.coords.start.row < 0))
-        return;
-
-    if (likely(new_view < term->grid->view))
-        return;
-
-    term->selection.coords.start.row += term->grid->num_rows;
-    if (term->selection.coords.end.row >= 0)
-        term->selection.coords.end.row += term->grid->num_rows;
-}
-
-void
-selection_view_down(struct terminal *term, int new_view)
-{
-    if (likely(term->selection.coords.start.row < 0))
-        return;
-
-    if (likely(new_view > term->grid->view))
-        return;
-
-    term->selection.coords.start.row &= term->grid->num_rows - 1;
-    if (term->selection.coords.end.row >= 0)
-        term->selection.coords.end.row &= term->grid->num_rows - 1;
-}
-
-static void
-foreach_selected_normal(
-    struct terminal *term, struct coord _start, struct coord _end,
-    bool (*cb)(struct terminal *term, struct row *row, struct cell *cell,
-               int row_no, int col, void *data),
-    void *data)
-{
-    const struct coord *start = &_start;
-    const struct coord *end = &_end;
-
-    const int grid_rows = term->grid->num_rows;
-
-    /* Start/end rows, relative to the scrollback start */
-    /* Start/end rows, relative to the scrollback start */
-    const int rel_start_row =
-        grid_row_abs_to_sb(term->grid, term->rows, start->row);
-    const int rel_end_row =
-        grid_row_abs_to_sb(term->grid, term->rows, end->row);
-
-    int start_row, end_row;
-    int start_col, end_col;
-
-    if (rel_start_row < rel_end_row) {
-        start_row = start->row;
-        start_col = start->col;
-        end_row = end->row;
-        end_col = end->col;
-    } else if (rel_start_row > rel_end_row) {
-        start_row = end->row;
-        start_col = end->col;
-        end_row = start->row;
-        end_col = start->col;
-    } else {
-        start_row = end_row = start->row;
-        start_col = min(start->col, end->col);
-        end_col = max(start->col, end->col);
-    }
-
-    start_row &= (grid_rows - 1);
-    end_row &= (grid_rows - 1);
-
-    for (int r = start_row; r != end_row; r = (r + 1) & (grid_rows - 1)) {
-        struct row *row = term->grid->rows[r];
-        xassert(row != NULL);
-
-        for (int c = start_col; c <= term->cols - 1; c++) {
-            if (!cb(term, row, &row->cells[c], r, c, data))
-                return;
-        }
-
-        start_col = 0;
-    }
-
-    /* Last, partial row */
-    struct row *row = term->grid->rows[end_row];
-    xassert(row != NULL);
-
-    for (int c = start_col; c <= end_col; c++) {
-        if (!cb(term, row, &row->cells[c], end_row, c, data))
-            return;
-    }
-}
-
-static void
-foreach_selected_block(
-    struct terminal *term, struct coord _start, struct coord _end,
-    bool (*cb)(struct terminal *term, struct row *row, struct cell *cell,
-               int row_no, int col, void *data),
-    void *data)
-{
-    const struct coord *start = &_start;
-    const struct coord *end = &_end;
-
-    const int grid_rows = term->grid->num_rows;
-
-    /* Start/end rows, relative to the scrollback start */
-    const int rel_start_row =
-        grid_row_abs_to_sb(term->grid, term->rows, start->row);
-    const int rel_end_row =
-        grid_row_abs_to_sb(term->grid, term->rows, end->row);
-
-    struct coord top_left = {
-        .row = (rel_start_row < rel_end_row
-                ? start->row : end->row) & (grid_rows - 1),
-        .col = min(start->col, end->col),
-    };
-
-    struct coord bottom_right = {
-        .row = (rel_start_row > rel_end_row
-                ? start->row : end->row) & (grid_rows - 1),
-        .col = max(start->col, end->col),
-    };
-
-    int r = top_left.row;
-    while (true) {
-        struct row *row = term->grid->rows[r];
-        xassert(row != NULL);
-
-        for (int c = top_left.col; c <= bottom_right.col; c++) {
-            if (!cb(term, row, &row->cells[c], r, c, data))
-                return;
-        }
-
-        if (r == bottom_right.row)
-            break;
-
-        r++;
-        r &= grid_rows - 1;
-    }
-}
-
-static void
-foreach_selected(
-    struct terminal *term, struct coord start, struct coord end,
-    bool (*cb)(struct terminal *term, struct row *row, struct cell *cell, int row_no, int col, void *data),
-    void *data)
-{
-    switch (term->selection.kind) {
-    case SELECTION_CHAR_WISE:
-    case SELECTION_WORD_WISE:
-    case SELECTION_QUOTE_WISE:
-    case SELECTION_LINE_WISE:
-        foreach_selected_normal(term, start, end, cb, data);
-        return;
-
-    case SELECTION_BLOCK:
-        foreach_selected_block(term, start, end, cb, data);
-        return;
-
-    case SELECTION_NONE:
-        break;
-    }
-
-    BUG("Invalid selection kind");
-}
-
-static bool
-extract_one_const_wrapper(struct terminal *term,
-                          struct row *row, struct cell *cell,
-                          int row_no, int col, void *data)
-{
-    return extract_one(term, row, cell, col, data);
-}
-
-char *
-selection_to_text(const struct terminal *term)
-{
-    if (term->selection.coords.end.row == -1)
-        return NULL;
-
-    struct extraction_context *ctx = extract_begin(term->selection.kind, true);
-    if (ctx == NULL)
-        return NULL;
-
-    foreach_selected(
-        (struct terminal *)term, term->selection.coords.start, term->selection.coords.end,
-        &extract_one_const_wrapper, ctx);
-
-    char *text;
-    return extract_finish(ctx, &text, NULL) ? text : NULL;
-}
+/* bounded: ported to selection.zig */
+/* selection_get_start: ported to selection.zig */
+/* selection_get_end: ported to selection.zig */
+/* selection_on_rows: ported to selection.zig */
+/* selection_scroll_up: ported to selection.zig */
+/* selection_scroll_down: ported to selection.zig */
+/* selection_view_up: ported to selection.zig */
+/* selection_view_down: ported to selection.zig */
+/* foreach_selected_normal: ported to selection.zig */
+/* foreach_selected_block: ported to selection.zig */
+/* foreach_selected: ported to selection.zig */
+/* extract_one_const_wrapper: ported to selection.zig */
+/* selection_to_text: ported to selection.zig */
 
 /* Coordinates are in *absolute* row numbers (NOT view local) */
 void
