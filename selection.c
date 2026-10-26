@@ -396,7 +396,7 @@ action(void *data, struct wl_data_source *wl_data_source, uint32_t dnd_action)
     //LOG_DBG("DnD action: %u", dnd_action);
 }
 
-static const struct wl_data_source_listener data_source_listener = {
+const struct wl_data_source_listener data_source_listener = {
     .target = &target,
     .send = &send,
     .cancelled = &cancelled,
@@ -431,69 +431,12 @@ primary_cancelled(void *data,
     primary->text = NULL;
 }
 
-static const struct zwp_primary_selection_source_v1_listener primary_selection_source_listener = {
+const struct zwp_primary_selection_source_v1_listener primary_selection_source_listener = {
     .send = &primary_send,
     .cancelled = &primary_cancelled,
 };
-
-bool
-text_to_clipboard(struct seat *seat, struct terminal *term, char *text, uint32_t serial)
-{
-    if (text == NULL || text[0] == '\0')
-        return false;
-
-    xassert(serial != 0);
-
-    struct wl_clipboard *clipboard = &seat->clipboard;
-
-    if (clipboard->data_source != NULL) {
-        /* Kill previous data source */
-        xassert(clipboard->serial != 0);
-        wl_data_device_set_selection(seat->data_device, NULL, clipboard->serial);
-        wl_data_source_destroy(clipboard->data_source);
-        free(clipboard->text);
-
-        clipboard->data_source = NULL;
-        clipboard->serial = 0;
-        clipboard->text = NULL;
-    }
-
-    clipboard->data_source
-        = wl_data_device_manager_create_data_source(term->wl->data_device_manager);
-
-    if (clipboard->data_source == NULL) {
-        LOG_ERR("failed to create clipboard data source");
-        return false;
-    }
-
-    clipboard->text = text;
-
-    /* Configure source */
-    wl_data_source_offer(clipboard->data_source, mime_type_map[DATA_OFFER_MIME_TEXT_UTF8]);
-    wl_data_source_offer(clipboard->data_source, mime_type_map[DATA_OFFER_MIME_TEXT_PLAIN]);
-    wl_data_source_offer(clipboard->data_source, mime_type_map[DATA_OFFER_MIME_TEXT_TEXT]);;
-    wl_data_source_offer(clipboard->data_source, mime_type_map[DATA_OFFER_MIME_TEXT_STRING]);
-    wl_data_source_offer(clipboard->data_source, mime_type_map[DATA_OFFER_MIME_TEXT_UTF8_STRING]);
-
-    wl_data_source_add_listener(clipboard->data_source, &data_source_listener, seat);
-    wl_data_device_set_selection(seat->data_device, clipboard->data_source, serial);
-
-    /* Needed when sending the selection to other client */
-    clipboard->serial = serial;
-    return true;
-}
-
-void
-selection_to_clipboard(struct seat *seat, struct terminal *term, uint32_t serial)
-{
-    if (term->selection.coords.start.row < 0 || term->selection.coords.end.row < 0)
-        return;
-
-    /* Get selection as a string */
-    char *text = selection_to_text(term);
-    if (!text_to_clipboard(seat, term, text, serial))
-        free(text);
-}
+/* text_to_clipboard: ported to selection.zig */
+/* selection_to_clipboard: ported to selection.zig */
 
 struct clipboard_receive {
     int read_fd;
@@ -917,73 +860,8 @@ selection_from_clipboard(struct seat *seat, struct terminal *term, uint32_t seri
     text_from_clipboard(
         seat, term, false, &receive_offer, &receive_offer_done, term);
 }
-
-bool
-text_to_primary(struct seat *seat, struct terminal *term, char *text, uint32_t serial)
-{
-    if (text == NULL || text[0] == '\0')
-        return false;
-
-    if (term->wl->primary_selection_device_manager == NULL)
-        return false;
-
-    xassert(serial != 0);
-
-    struct wl_primary *primary = &seat->primary;
-
-    /* TODO: somehow share code with the clipboard equivalent */
-    if (seat->primary.data_source != NULL) {
-        /* Kill previous data source */
-
-        xassert(primary->serial != 0);
-        zwp_primary_selection_device_v1_set_selection(
-            seat->primary_selection_device, NULL, primary->serial);
-        zwp_primary_selection_source_v1_destroy(primary->data_source);
-        free(primary->text);
-
-        primary->data_source = NULL;
-        primary->serial = 0;
-        primary->text = NULL;
-    }
-
-    primary->data_source
-        = zwp_primary_selection_device_manager_v1_create_source(
-            term->wl->primary_selection_device_manager);
-
-    if (primary->data_source == NULL) {
-        LOG_ERR("failed to create clipboard data source");
-        return false;
-    }
-
-    /* Get selection as a string */
-    primary->text = text;
-
-    /* Configure source */
-    zwp_primary_selection_source_v1_offer(primary->data_source, mime_type_map[DATA_OFFER_MIME_TEXT_UTF8]);
-    zwp_primary_selection_source_v1_offer(primary->data_source, mime_type_map[DATA_OFFER_MIME_TEXT_PLAIN]);
-    zwp_primary_selection_source_v1_offer(primary->data_source, mime_type_map[DATA_OFFER_MIME_TEXT_TEXT]);
-    zwp_primary_selection_source_v1_offer(primary->data_source, mime_type_map[DATA_OFFER_MIME_TEXT_STRING]);
-    zwp_primary_selection_source_v1_offer(primary->data_source, mime_type_map[DATA_OFFER_MIME_TEXT_UTF8_STRING]);
-
-    zwp_primary_selection_source_v1_add_listener(primary->data_source, &primary_selection_source_listener, seat);
-    zwp_primary_selection_device_v1_set_selection(seat->primary_selection_device, primary->data_source, serial);
-
-    /* Needed when sending the selection to other client */
-    primary->serial = serial;
-    return true;
-}
-
-void
-selection_to_primary(struct seat *seat, struct terminal *term, uint32_t serial)
-{
-    if (term->wl->primary_selection_device_manager == NULL)
-        return;
-
-    /* Get selection as a string */
-    char *text = selection_to_text(term);
-    if (!text_to_primary(seat, term, text, serial))
-        free(text);
-}
+/* text_to_primary: ported to selection.zig */
+/* selection_to_primary: ported to selection.zig */
 
 void
 text_from_primary(

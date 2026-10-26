@@ -12,6 +12,7 @@ const CELL_COMB_CHARS_HI: u32 = CELL_COMB_CHARS_LO + 0x3fffffff;
 const CELL_SPACER: u32 = CELL_COMB_CHARS_HI + 1;
 
 // isword: still in C (misc.h)
+extern fn free(ptr: ?*anyopaque) callconv(.c) void;
 extern fn isword(wc: u32, spaces_only: bool, delimiters: ?[*]const u32) callconv(.c) bool;
 // isc32space: static inline in char32.h -> port inline here
 fn isc32space(c: u32) bool {
@@ -1182,8 +1183,6 @@ export fn selection_update(
 
 extern fn selection_stop_scroll_timer(term: *types.Terminal) callconv(.c) void;
 extern fn search_selection_cancelled(term: *types.Terminal) callconv(.c) void;
-extern fn selection_to_primary(seat: ?*anyopaque, term: *types.Terminal, serial: u32) callconv(.c) void;
-extern fn selection_to_clipboard(seat: ?*anyopaque, term: *types.Terminal, serial: u32) callconv(.c) void;
 
 extern fn selection_seat_clipboard_data_offer(seat: ?*const anyopaque) callconv(.c) ?*anyopaque;
 extern fn selection_seat_primary_data_offer(seat: ?*const anyopaque) callconv(.c) ?*anyopaque;
@@ -1469,4 +1468,60 @@ export fn selection_clipboard_has_data(seat: ?*const anyopaque) callconv(.c) boo
 
 export fn selection_primary_has_data(seat: ?*const anyopaque) callconv(.c) bool {
     return selection_seat_primary_data_offer(seat) != null;
+}
+
+// ── Chunk D: clipboard/primary send (manager fns) ────────────────
+// The wayland wire protocol is delegated to selection-shim.c.
+// Receive-side (text_from_*, selection_from_*) is chunk E and not
+// ported yet — those stay C.
+
+extern fn selection_shim_text_to_clipboard(
+    seat: ?*anyopaque, term: *types.Terminal, text: ?[*:0]u8, serial: u32,
+) callconv(.c) bool;
+extern fn selection_shim_text_to_primary(
+    seat: ?*anyopaque, term: *types.Terminal, text: ?[*:0]u8, serial: u32,
+) callconv(.c) bool;
+
+export fn text_to_clipboard(
+    seat: ?*anyopaque,
+    term: *types.Terminal,
+    text: ?[*:0]u8,
+    serial: u32,
+) callconv(.c) bool {
+    return selection_shim_text_to_clipboard(seat, term, text, serial);
+}
+
+export fn text_to_primary(
+    seat: ?*anyopaque,
+    term: *types.Terminal,
+    text: ?[*:0]u8,
+    serial: u32,
+) callconv(.c) bool {
+    return selection_shim_text_to_primary(seat, term, text, serial);
+}
+
+export fn selection_to_clipboard(
+    seat: ?*anyopaque,
+    term: *types.Terminal,
+    serial: u32,
+) callconv(.c) void {
+    if (term.selection.coords.start.row < 0 or term.selection.coords.end.row < 0) return;
+
+    const text = selection_to_text(term);
+    if (!text_to_clipboard(seat, term, text, serial)) {
+        if (text) |t| free(@ptrCast(t));
+    }
+}
+
+export fn selection_to_primary(
+    seat: ?*anyopaque,
+    term: *types.Terminal,
+    serial: u32,
+) callconv(.c) void {
+    // C checks wl->primary_selection_device_manager == NULL; the shim also
+    // does that check, so we defer the guard to it.
+    const text = selection_to_text(term);
+    if (!text_to_primary(seat, term, text, serial)) {
+        if (text) |t| free(@ptrCast(t));
+    }
 }
