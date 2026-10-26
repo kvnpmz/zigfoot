@@ -760,3 +760,301 @@ export fn sixel_put_ar_11(term_opaque: ?*anyopaque, c: u8) callconv(.c) void {
     }
     count += 1;
 }
+
+// ── Chunk C: destroy / erase / insert / scroll / init ────────────
+// Ports sixel.c lines 167-450, plus sixel_init.
+// verify_* functions from C are #if defined(_DEBUG) — empty in
+// release builds, so we omit them and their calls entirely.
+
+extern fn pixman_image_unref(image: ?*anyopaque) callconv(.c) void;
+extern fn grid_row_abs_to_sb(grid: *const types.Grid, screen_rows: c_int, abs_row: c_int) callconv(.c) c_int;
+extern fn term_update_ascii_printer(term: *types.Terminal) callconv(.c) void;
+extern fn sixel_conf_colors_dark_sixel_ptr(term: *types.Terminal) callconv(.c) [*]const u32;
+
+// ── tll helpers for SixelList ────────────────────────────────────
+fn sixelListLen(list: *const types.SixelList) usize {
+    return list.length;
+}
+
+fn sixelListPushBack(list: *types.SixelList, item: types.Sixel) void {
+    const node = @as(*types.SixelNode, @ptrCast(@alignCast(xmalloc(@sizeOf(types.SixelNode)))));
+    node.* = .{
+        .item = item,
+        .prev = list.tail,
+        .next = null,
+    };
+    if (list.tail) |t| {
+        t.next = node;
+    } else {
+        list.head = node;
+    }
+    list.tail = node;
+    list.length += 1;
+}
+
+fn sixelListInsertBefore(list: *types.SixelList, before: *types.SixelNode, item: types.Sixel) void {
+    const node = @as(*types.SixelNode, @ptrCast(@alignCast(xmalloc(@sizeOf(types.SixelNode)))));
+    node.* = .{
+        .item = item,
+        .prev = before.prev,
+        .next = before,
+    };
+    if (before.prev) |p| {
+        p.next = node;
+    } else {
+        list.head = node;
+    }
+    before.prev = node;
+    list.length += 1;
+}
+
+fn sixelListRemove(list: *types.SixelList, node: *types.SixelNode) void {
+    if (node.prev) |p| {
+        p.next = node.next;
+    } else {
+        list.head = node.next;
+    }
+    if (node.next) |n| {
+        n.prev = node.prev;
+    } else {
+        list.tail = node.prev;
+    }
+    list.length -= 1;
+    free(@ptrCast(node));
+}
+
+fn sixelListFree(list: *types.SixelList) void {
+    var it = list.head;
+    while (it) |node| {
+        const next = node.next;
+        free(@ptrCast(node));
+        it = next;
+    }
+    list.head = null;
+    list.tail = null;
+    list.length = 0;
+}
+
+// ── destroy / invalidate cache ───────────────────────────────────
+export fn sixel_invalidate_cache(six: *types.Sixel) callconv(.c) void {
+    if (six.scaled.pix) |p| pixman_image_unref(p);
+    if (six.scaled.data) |d| free(d);
+    six.scaled.pix = null;
+    six.scaled.data = null;
+    six.scaled.width = -1;
+    six.scaled.height = -1;
+
+    six.pix = null;
+    six.width = -1;
+    six.height = -1;
+}
+
+export fn sixel_destroy(six: *types.Sixel) callconv(.c) void {
+    sixel_invalidate_cache(six);
+
+    if (six.original.pix) |p| pixman_image_unref(p);
+    if (six.original.data) |d| free(d);
+    six.original.pix = null;
+    six.original.data = null;
+}
+
+export fn sixel_destroy_all(term: *types.Terminal) callconv(.c) void {
+    var it = term.normal.sixel_images.head;
+    while (it) |node| : (it = node.next) {
+        sixel_destroy(&node.item);
+    }
+    var it2 = term.alt.sixel_images.head;
+    while (it2) |node| : (it2 = node.next) {
+        sixel_destroy(&node.item);
+    }
+    sixelListFree(&term.normal.sixel_images);
+    sixelListFree(&term.alt.sixel_images);
+}
+
+export fn sixel_erase(term: *types.Terminal, six: *types.Sixel) callconv(.c) void {
+    const grid = term.grid.?;
+    const mask: c_int = grid.num_rows - 1;
+
+    var i: c_int = 0;
+    while (i < six.rows) : (i += 1) {
+        const r: c_int = (six.pos.row + i) & mask;
+        const row = grid.rows.?[@intCast(r)] orelse continue;
+        row.dirty = true;
+
+        const col_end = @min(six.pos.col + six.cols, term.cols);
+        var c: c_int = six.pos.col;
+        while (c < col_end) : (c += 1) {
+            row.cells.?[@intCast(c)].attrs.clean = false;
+        }
+    }
+    sixel_destroy(six);
+}
+
+// ── insert / scroll ──────────────────────────────────────────────
+export fn sixel_insert(term: *types.Terminal, six_in: types.Sixel) callconv(.c) void {
+    var six = six_in;
+    const grid = term.grid.?;
+    const end_row = grid_row_abs_to_sb(grid, term.rows, six.pos.row + six.rows - 1);
+
+    var it = grid.sixel_images.head;
+    while (it) |node| : (it = node.next) {
+        const rebased = grid_row_abs_to_sb(
+            grid,
+            term.rows,
+            node.item.pos.row + node.item.rows - 1,
+        );
+        if (rebased < end_row) {
+            sixelListInsertBefore(&grid.sixel_images, node, six);
+            return;
+        }
+    }
+    sixelListPushBack(&grid.sixel_images, six);
+    _ = &six;
+}
+
+export fn sixel_scroll_up(term: *types.Terminal, rows: c_int) callconv(.c) void {
+    const grid = term.grid.?;
+    if (sixelListLen(&grid.sixel_images) == 0) return;
+
+    var it = grid.sixel_images.tail;
+    while (it) |node| {
+        const prev = node.prev;
+        const six = &node.item;
+        const six_start = grid_row_abs_to_sb(grid, term.rows, six.pos.row);
+        if (six_start < rows) {
+            sixel_erase(term, six);
+            sixelListRemove(&grid.sixel_images, node);
+        }
+        it = prev;
+    }
+
+    term.bits_affecting_ascii_printer._.sixels =
+        sixelListLen(&grid.sixel_images) > 0;
+    term_update_ascii_printer(term);
+}
+
+export fn sixel_scroll_down(term: *types.Terminal, rows: c_int) callconv(.c) void {
+    const grid = term.grid.?;
+    if (sixelListLen(&grid.sixel_images) == 0) return;
+
+    // xassert(grid.num_rows >= rows);
+
+    var it = grid.sixel_images.head;
+    while (it) |node| {
+        const next = node.next;
+        const six = &node.item;
+        const six_end = grid_row_abs_to_sb(
+            grid,
+            term.rows,
+            six.pos.row + six.rows - 1,
+        );
+        if (six_end >= grid.num_rows - rows) {
+            sixel_erase(term, six);
+            sixelListRemove(&grid.sixel_images, node);
+        } else {
+            break;
+        }
+        it = next;
+    }
+
+    term.bits_affecting_ascii_printer._.sixels =
+        sixelListLen(&grid.sixel_images) > 0;
+    term_update_ascii_printer(term);
+}
+
+// ── sixel_init ───────────────────────────────────────────────────
+// Returns a put-handler fn ptr chosen by pan/pad.
+// ABI: `sixel_put` = void (*)(struct terminal *, uint8_t).
+export fn sixel_init(term: *types.Terminal, p1: c_int, p2: c_int, p3: c_int) callconv(.c)
+    ?*const fn (?*anyopaque, u8) callconv(.c) void
+{
+    _ = p3;
+
+    // C: xassert(term->sixel.image.data == NULL);
+    // C: xassert(term->sixel.palette_size <= SIXEL_MAX_COLORS);
+
+    const pad: c_int = 1;
+    const pan: c_int = if (p1 == 2) 5
+        else if (p1 == 3 or p1 == 4) 3
+        else if (p1 == 7 or p1 == 8 or p1 == 9) 1
+        else 2;
+
+    term.sixel.state = .DECSIXEL;
+    term.sixel.pos = .{ .col = 0, .row = 0 };
+    term.sixel.color_idx = 0;
+    term.sixel.pan = pan;
+    term.sixel.pad = pad;
+    term.sixel.param = 0;
+    term.sixel.param_idx = 0;
+    @memset(&term.sixel.params, 0);
+    term.sixel.transparent_bg = (p2 == 1);
+    term.sixel.image.data = null;
+    term.sixel.image.p = null;
+    term.sixel.image.width = 0;
+    term.sixel.image.height = 0;
+    term.sixel.image.alloc_height = 0;
+    term.sixel.image.bottom_pixel = 0;
+    term.sixel.linear_blending = sixel_wayl_do_linear_blending(term);
+    term.sixel.pixman_fmt = @intCast(sixel_pixman_fmt_a8r8g8b8());
+
+    // SHM_BITS_10 = 1 in shm.h enum
+    if (sixel_shm_chain_bit_depth(term) >= 1) {
+        if (sixel_wl_have_argb2101010(term)) {
+            term.sixel.use_10bit = true;
+            term.sixel.pixman_fmt = @intCast(sixel_pixman_fmt_a2r10g10b10());
+        } else if (sixel_wl_have_abgr2101010(term)) {
+            term.sixel.use_10bit = true;
+            term.sixel.pixman_fmt = @intCast(sixel_pixman_fmt_a2b10g10r10());
+        }
+    }
+
+    const conf_entries = sixel_conf_sixel_palette_entries(term);
+    const palette_size: usize = term.sixel.palette_size;
+    const active_palette_entries: usize = @min(conf_entries, palette_size);
+
+    if (types.sixelGetUsePrivatePalette(term)) {
+        // C: xassert(term->sixel.private_palette == NULL);
+        const new_pal: [*]u32 = @ptrCast(@alignCast(xcalloc(
+            term.sixel.palette_size,
+            @sizeOf(u32),
+        )));
+        term.sixel.private_palette = new_pal;
+        sixel_conf_sixel_palette_copy(term, new_pal, active_palette_entries);
+
+        if (term.sixel.linear_blending or term.sixel.use_10bit) {
+            var i: usize = 0;
+            while (i < active_palette_entries) : (i += 1) {
+                const v = new_pal[i];
+                const rr: u16 = @intCast((v >> 16) & 0xff);
+                const gg: u16 = @intCast((v >> 8) & 0xff);
+                const bb: u16 = @intCast(v & 0xff);
+                new_pal[i] = color_decode_srgb(term, rr, gg, bb);
+            }
+        }
+        term.sixel.palette = new_pal;
+    } else {
+        if (term.sixel.shared_palette == null) {
+            const new_pal: [*]u32 = @ptrCast(@alignCast(xcalloc(
+                term.sixel.palette_size,
+                @sizeOf(u32),
+            )));
+            term.sixel.shared_palette = new_pal;
+            sixel_conf_sixel_palette_copy(term, new_pal, active_palette_entries);
+
+            if (term.sixel.linear_blending or term.sixel.use_10bit) {
+                var i: usize = 0;
+                while (i < active_palette_entries) : (i += 1) {
+                    const v = new_pal[i];
+                    const rr: u16 = @intCast((v >> 16) & 0xff);
+                    const gg: u16 = @intCast((v >> 8) & 0xff);
+                    const bb: u16 = @intCast(v & 0xff);
+                    new_pal[i] = color_decode_srgb(term, rr, gg, bb);
+                }
+            }
+        }
+        term.sixel.palette = term.sixel.shared_palette;
+    }
+
+    count = 0;
+    return if (pan == 1 and pad == 1) &sixel_put_ar_11 else &sixel_put_generic;
+}

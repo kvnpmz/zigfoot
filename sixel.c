@@ -26,204 +26,27 @@ void sixel_geometry_set(struct terminal *term, unsigned width, unsigned height);
 void sixel_geometry_report_max(struct terminal *term);
 
 
+/* Ported to sixel.zig — extern for C callers */
+extern void sixel_insert(struct terminal *term, struct sixel sixel);
+extern void sixel_erase(struct terminal *term, struct sixel *sixel);
+extern void sixel_invalidate_cache(struct sixel *sixel);
+
 /* Ported to sixel.zig */
 extern uint32_t color_decode_srgb(const struct terminal *term, uint16_t r, uint16_t g, uint16_t b);
 extern void sixel_put_generic(struct terminal *term, uint8_t c);
 extern void sixel_put_ar_11(struct terminal *term, uint8_t c);
 
-static size_t count;
 
 /* sixel_put_*: ported to sixel.zig */
 
 /* color_decode_srgb: ported to sixel.zig */
 
 /* sixel_fini: ported to sixel.zig */
-
-sixel_put
-sixel_init(struct terminal *term, int p1, int p2, int p3)
-{
-    /*
-     * P1: pixel aspect ratio
-     *  - 0,1   - 2:1
-     *  - 2     - 5:1
-     *  - 3,4   - 3:1
-     *  - 5,6   - 2:1
-     *  - 7,8,9 - 1:1
-     *
-     * P2: background color mode
-     *  - 0|2: empty pixels use current background color
-     *  - 1:   empty pixels remain at their current color (i.e. transparent)
-     * P3: horizontal grid size - ignored
-     */
-
-    xassert(term->sixel.image.data == NULL);
-    xassert(term->sixel.palette_size <= SIXEL_MAX_COLORS);
-
-    /* Default aspect ratio is 2:1 */
-    const int pad = 1;
-    const int pan =
-        (p1 == 2) ? 5 :
-        (p1 == 3 || p1 == 4) ? 3 :
-        (p1 == 7 || p1 == 8 || p1 == 9) ? 1 : 2;
-
-    LOG_DBG("initializing sixel with "
-            "p1=%d (pan=%d, pad=%d, aspect-ratio=%d:%d), "
-            "p2=%d (transparent=%s), "
-            "p3=%d (ignored)",
-            p1, pan, pad, pan, pad, p2, p2 == 1 ? "yes" : "no", p3);
-
-    term->sixel.state = SIXEL_DECSIXEL;
-    term->sixel.pos = (struct coord){0, 0};
-    term->sixel.color_idx = 0;
-    term->sixel.pan = pan;
-    term->sixel.pad = pad;
-    term->sixel.param = 0;
-    term->sixel.param_idx = 0;
-    memset(term->sixel.params, 0, sizeof(term->sixel.params));
-    term->sixel.transparent_bg = p2 == 1;
-    term->sixel.image.data = NULL;
-    term->sixel.image.p = NULL;
-    term->sixel.image.width = 0;
-    term->sixel.image.height = 0;
-    term->sixel.image.alloc_height = 0;
-    term->sixel.image.bottom_pixel = 0;
-    term->sixel.linear_blending = wayl_do_linear_blending(term->wl, term->conf);
-    term->sixel.pixman_fmt = PIXMAN_a8r8g8b8;
-
-    /*
-     * Use higher-precision sixel surfaces if we're using
-     * higher-precision window surfaces.
-     *
-     * This is to a) get more accurate colors when doing gamma-correct
-     * blending, and b) use the same pixman format as the main
-     * surfaces, for (hopefully) better performance.
-     *
-     * For now, don't support 16-bit surfaces (too much sixel logic
-     * that assumes 32-bit pixels).
-     */
-    if (shm_chain_bit_depth(term->render.chains.grid) >= SHM_BITS_10) {
-        if (term->wl->shm_have_argb2101010) {
-            term->sixel.use_10bit = true;
-            term->sixel.pixman_fmt = PIXMAN_a2r10g10b10;
-        }
-
-        else if (term->wl->shm_have_abgr2101010) {
-            term->sixel.use_10bit = true;
-            term->sixel.pixman_fmt = PIXMAN_a2b10g10r10;
-        }
-    }
-
-    const size_t active_palette_entries = min(
-            ALEN(term->conf->colors_dark.sixel), term->sixel.palette_size);
-
-    if (term->sixel.use_private_palette) {
-        xassert(term->sixel.private_palette == NULL);
-        term->sixel.private_palette = xcalloc(
-            term->sixel.palette_size, sizeof(term->sixel.private_palette[0]));
-
-        memcpy(
-            term->sixel.private_palette, term->conf->colors_dark.sixel,
-            active_palette_entries * sizeof(term->sixel.private_palette[0]));
-
-        if (term->sixel.linear_blending || term->sixel.use_10bit) {
-            for (size_t i = 0; i < active_palette_entries; i++) {
-                uint8_t r = (term->sixel.private_palette[i] >> 16) & 0xff;
-                uint8_t g = (term->sixel.private_palette[i] >> 8) & 0xff;
-                uint8_t b = (term->sixel.private_palette[i] >> 0) & 0xff;
-                term->sixel.private_palette[i] = color_decode_srgb(term, r, g, b);
-            }
-        }
-
-        term->sixel.palette = term->sixel.private_palette;
-    } else {
-        if (term->sixel.shared_palette == NULL) {
-            term->sixel.shared_palette = xcalloc(
-                term->sixel.palette_size, sizeof(term->sixel.shared_palette[0]));
-
-            memcpy(
-                term->sixel.shared_palette, term->conf->colors_dark.sixel,
-                active_palette_entries * sizeof(term->sixel.shared_palette[0]));
-
-            if (term->sixel.linear_blending || term->sixel.use_10bit) {
-                for (size_t i = 0; i < active_palette_entries; i++) {
-                    uint8_t r = (term->sixel.shared_palette[i] >> 16) & 0xff;
-                    uint8_t g = (term->sixel.shared_palette[i] >> 8) & 0xff;
-                    uint8_t b = (term->sixel.shared_palette[i] >> 0) & 0xff;
-                    term->sixel.shared_palette[i] = color_decode_srgb(term, r, g, b);
-                }
-            }
-        } else {
-            /* Shared palette - do *not* reset palette for new sixels */
-        }
-
-        term->sixel.palette = term->sixel.shared_palette;
-    }
-
-    count = 0;
-    return pan == 1 && pad == 1 ? &sixel_put_ar_11 : &sixel_put_generic;
-}
-
-static void
-sixel_invalidate_cache(struct sixel *sixel)
-{
-    if (sixel->scaled.pix != NULL)
-        pixman_image_unref(sixel->scaled.pix);
-
-    free(sixel->scaled.data);
-    sixel->scaled.pix = NULL;
-    sixel->scaled.data = NULL;
-    sixel->scaled.width = -1;
-    sixel->scaled.height = -1;
-
-    sixel->pix = NULL;
-    sixel->width = -1;
-    sixel->height = -1;
-}
-
-void
-sixel_destroy(struct sixel *sixel)
-{
-    sixel_invalidate_cache(sixel);
-
-    if (sixel->original.pix != NULL)
-        pixman_image_unref(sixel->original.pix);
-
-    free(sixel->original.data);
-    sixel->original.pix = NULL;
-    sixel->original.data = NULL;
-}
-
-void
-sixel_destroy_all(struct terminal *term)
-{
-    tll_foreach(term->normal.sixel_images, it)
-        sixel_destroy(&it->item);
-    tll_foreach(term->alt.sixel_images, it)
-        sixel_destroy(&it->item);
-    tll_free(term->normal.sixel_images);
-    tll_free(term->alt.sixel_images);
-}
-
-static void
-sixel_erase(struct terminal *term, struct sixel *sixel)
-{
-    for (int i = 0; i < sixel->rows; i++) {
-        int r = (sixel->pos.row + i) & (term->grid->num_rows - 1);
-
-        struct row *row = term->grid->rows[r];
-        if (row == NULL) {
-            /* A resize/reflow may cause row to now be unallocated */
-            continue;
-        }
-
-        row->dirty = true;
-
-        for (int c = sixel->pos.col; c < min(sixel->pos.col + sixel->cols, term->cols); c++)
-            row->cells[c].attrs.clean = 0;
-    }
-
-    sixel_destroy(sixel);
-}
+/* sixel_init: ported to sixel.zig */
+/* sixel_invalidate_cache: ported to sixel.zig */
+/* sixel_destroy: ported to sixel.zig */
+/* sixel_destroy_all: ported to sixel.zig */
+/* sixel_erase: ported to sixel.zig */
 
 /*
  * Verify the sixels are sorted correctly.
@@ -361,93 +184,9 @@ verify_sixels(const struct terminal *term)
     verify_no_overlap(term);
     verify_list_order(term);
 }
-
-static void
-sixel_insert(struct terminal *term, struct sixel sixel)
-{
-    int end_row = grid_row_abs_to_sb(
-        term->grid, term->rows, sixel.pos.row + sixel.rows - 1);
-
-    tll_foreach(term->grid->sixel_images, it) {
-        int rebased = grid_row_abs_to_sb(
-            term->grid, term->rows, it->item.pos.row + it->item.rows - 1);
-
-        if (rebased < end_row) {
-            tll_insert_before(term->grid->sixel_images, it, sixel);
-            goto out;
-        }
-    }
-
-    tll_push_back(term->grid->sixel_images, sixel);
-
-out:
-#if defined(LOG_ENABLE_DBG) && LOG_ENABLE_DBG
-    LOG_DBG("sixel list after insertion:");
-    tll_foreach(term->grid->sixel_images, it) {
-        LOG_DBG("  rows=%d+%d", it->item.pos.row, it->item.rows);
-    }
-#endif
-    verify_sixels(term);
-}
-
-void
-sixel_scroll_up(struct terminal *term, int rows)
-{
-    if (likely(tll_length(term->grid->sixel_images) == 0))
-        return;
-
-    tll_rforeach(term->grid->sixel_images, it) {
-        struct sixel *six = &it->item;
-
-        int six_start = grid_row_abs_to_sb(term->grid, term->rows, six->pos.row);
-
-        if (six_start < rows) {
-            sixel_erase(term, six);
-            tll_remove(term->grid->sixel_images, it);
-        } else {
-            /*
-             * Unfortunately, we cannot break here.
-             *
-             * The sixels are sorted on their *end* row. This means
-             * there may be a sixel with a top row that will be
-             * scrolled out *anywhere* in the list (think of a huuuuge
-             * sixel that covers the entire scrollback)
-             */
-            //break;
-        }
-    }
-
-    term->bits_affecting_ascii_printer.sixels =
-        tll_length(term->grid->sixel_images) > 0;
-    term_update_ascii_printer(term);
-    verify_sixels(term);
-}
-
-void
-sixel_scroll_down(struct terminal *term, int rows)
-{
-    if (likely(tll_length(term->grid->sixel_images) == 0))
-        return;
-
-    xassert(term->grid->num_rows >= rows);
-
-    tll_foreach(term->grid->sixel_images, it) {
-        struct sixel *six = &it->item;
-
-        int six_end = grid_row_abs_to_sb(
-            term->grid, term->rows, six->pos.row + six->rows - 1);
-        if (six_end >= term->grid->num_rows - rows) {
-            sixel_erase(term, six);
-            tll_remove(term->grid->sixel_images, it);
-        } else
-            break;
-    }
-
-    term->bits_affecting_ascii_printer.sixels =
-        tll_length(term->grid->sixel_images) > 0;
-    term_update_ascii_printer(term);
-    verify_sixels(term);
-}
+/* sixel_insert: ported to sixel.zig */
+/* sixel_scroll_up: ported to sixel.zig */
+/* sixel_scroll_down: ported to sixel.zig */
 
 static void
 blend_new_image_over_old(const struct terminal *term,
