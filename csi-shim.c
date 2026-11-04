@@ -1,6 +1,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <stddef.h>
+#include <wchar.h>   /* wcwidth(), used when FOOT_GRAPHEME_CLUSTERING is off */
 #include "terminal.h"
 #include "config.h"
 

@@ -159,6 +159,10 @@ if utf8proc.found()
   add_project_arguments('-DFOOT_GRAPHEME_CLUSTERING=1', language: 'c')
 endif
 
+# Passed to compile_zig.py for Zig modules that mirror a clustering-gated
+# C code path (char32.zig's c32width()).
+grapheme_clustering_zig = utf8proc.found() ? 'true' : 'false'
+
 if pixman.version().version_compare('>=0.46.0')
   add_project_arguments('-DHAVE_PIXMAN_RGBA_16', language: 'c')
 endif
@@ -277,7 +281,10 @@ char32_obj = custom_target(
   'char32_obj',
   input: 'char32.zig',
   output: 'char32.o',
-  command: [python, files('compile_zig.py'), '@INPUT@', '@OUTPUT@']
+  command: [
+    python, files('compile_zig.py'), '@INPUT@', '@OUTPUT@',
+    grapheme_clustering_zig,
+  ],
 )
 
 
@@ -377,7 +384,10 @@ terminal_obj = custom_target(
   input: 'terminal.zig',
   depend_files: files('terminal_types.zig'),
   output: 'terminal.o',
-  command: [python, files('compile_zig.py'), '@INPUT@', '@OUTPUT@']
+  command: [
+    python, files('compile_zig.py'), '@INPUT@', '@OUTPUT@',
+    grapheme_clustering_zig,
+  ],
 )
 
 

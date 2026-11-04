@@ -1,4 +1,5 @@
 const std = @import("std");
+const build_options = @import("build_options");
 
 extern fn xmalloc(size: usize) callconv(.c) ?*anyopaque;
 extern fn xrealloc(ptr: ?*anyopaque, size: usize) callconv(.c) ?*anyopaque;
@@ -140,11 +141,16 @@ export fn ac32tombs(src: [*c]const u32) callconv(.c) ?[*]u8 {
 }
 
 extern fn utf8proc_charwidth(c: i32) callconv(.c) c_int;
-extern fn wcwidth(c: u32) callconv(.c) c_int;
+extern fn wcwidth(wc: i32) callconv(.c) c_int;
 
 export fn c32width(c: u32) callconv(.c) c_int {
-    // FOOT_GRAPHEME_CLUSTERING is always enabled per meson
-    return utf8proc_charwidth(@intCast(c));
+    // Mirrors char32.h: utf8proc when grapheme clustering is enabled,
+    // plain wcwidth() otherwise. The condition is comptime so the unused
+    // branch (and its extern reference) is dropped from the object.
+    if (comptime build_options.grapheme_clustering)
+        return utf8proc_charwidth(@bitCast(c));
+
+    return wcwidth(@bitCast(c));
 }
 
 export fn c32swidth(s: [*]const u32, n: usize) callconv(.c) c_int {

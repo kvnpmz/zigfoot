@@ -1,4 +1,5 @@
 const std = @import("std");
+const build_options = @import("build_options");
 const types = @import("terminal_types.zig");
 extern fn render_refresh_csd(term: *types.Terminal) void;
 
@@ -1077,8 +1078,13 @@ export fn term_process_and_print_non_ascii(
     var width: c_int = c32width(wc);
     var insert_mode_disable = false;
 
-    const grapheme_clustering =
-        term.grapheme_shaping and term.vt.codepoint_merging_ok;
+    // Mirrors the FOOT_GRAPHEME_CLUSTERING guards in terminal.c: when
+    // clustering is compiled out, the predicate is a constant false and
+    // the utf8proc call below is dropped (it isn't linked in that config).
+    const grapheme_clustering = if (comptime build_options.grapheme_clustering)
+        term.grapheme_shaping and term.vt.codepoint_merging_ok
+    else
+        false;
 
     out: {
         const grid = term.grid.?;
@@ -1121,16 +1127,18 @@ export fn term_process_and_print_non_ascii(
             key = composed_key_from_key(base, wc);
         }
 
-        if (grapheme_clustering) {
-            // Check if we're on a grapheme cluster break
-            if (utf8proc_grapheme_break_stateful(
-                @bitCast(last),
-                @bitCast(wc),
-                &term.vt.grapheme_state,
-            ) != 0)
-            {
-                termResetGraphemeState(term);
-                break :out;
+        if (comptime build_options.grapheme_clustering) {
+            if (grapheme_clustering) {
+                // Check if we're on a grapheme cluster break
+                if (utf8proc_grapheme_break_stateful(
+                    @bitCast(last),
+                    @bitCast(wc),
+                    &term.vt.grapheme_state,
+                ) != 0)
+                {
+                    termResetGraphemeState(term);
+                    break :out;
+                }
             }
         }
 
@@ -1241,13 +1249,15 @@ export fn term_process_and_print_non_ascii(
                 new_cc.width = @intCast(@min(grapheme_width + width, 2));
 
                 // Handle VS-15 and VS-16 variation selectors
-                if (grapheme_clustering and
-                    (wc == 0xfe0e or wc == 0xfe0f) and
-                    new_cc.count == 2)
-                {
-                    const forced = terminal_shim_emoji_vs_width(chars[0], wc);
-                    if (forced >= 0)
-                        new_cc.width = @intCast(forced);
+                if (comptime build_options.grapheme_clustering) {
+                    if (grapheme_clustering and
+                        (wc == 0xfe0e or wc == 0xfe0f) and
+                        new_cc.count == 2)
+                    {
+                        const forced = terminal_shim_emoji_vs_width(chars[0], wc);
+                        if (forced >= 0)
+                            new_cc.width = @intCast(forced);
+                    }
                 }
             },
 
