@@ -557,7 +557,16 @@ test "Render layout matches C probe" {
     try t.expectEqual(@as(usize, 64), @offsetOf(Render, "margins"));
 
     try t.expectEqual(@as(usize, 3872), @offsetOf(Terminal, "render"));
-    try t.expectEqual(@as(usize, 4408), @sizeOf(Terminal));
+    try t.expectEqual(@as(usize, 5976), @sizeOf(Terminal));
+
+    // Fields after the opaque `_font_state` block. These were 8 bytes low
+    // while `_font_state` was [104]u8, which silently corrupted selection
+    // state and made the `term_erase_scrollback` UNITTEST abort at startup.
+    try t.expectEqual(@as(usize, 3712), @offsetOf(Terminal, "selection"));
+    try t.expectEqual(@as(usize, 3768), @offsetOf(Terminal, "is_searching"));
+    try t.expectEqual(@as(usize, 3776), @offsetOf(Terminal, "search"));
+    try t.expectEqual(@as(usize, 4592), @offsetOf(Terminal, "url"));
+    try t.expectEqual(@as(usize, 5968), @offsetOf(Terminal, "grapheme_shaping"));
     try t.expectEqual(@as(usize, 160), @offsetOf(Render, "workers"));
     try t.expectEqual(@as(usize, 440), @offsetOf(Render, "last_cursor"));
     try t.expectEqual(@as(usize, 512), @offsetOf(Render, "search_glyph_offset"));
@@ -610,7 +619,18 @@ pub const Terminal = extern struct {
     tab_stops: TllInt,
     composed_count: usize,
     composed: ?*Composed,
-    _font_state: [104]u8 = undefined,
+    // Mirrors terminal.h (112 bytes):
+    //   struct { bool is_armed; int lower_fd; int upper_fd; } delayed_render_timer;
+    //   struct fcft_font *fonts[4];
+    //   struct config_font *font_sizes[4];
+    //   struct pt_or_px font_line_height;
+    //   float font_dpi, font_dpi_before_unmap;
+    //   bool font_is_sized_by_dpi;
+    //   int16_t font_x_ofs, font_y_ofs, font_baseline;
+    //   enum fcft_subpixel font_subpixel;
+    // NB: was [104]u8 — 8 bytes short, which shifted `selection` and
+    // `is_searching` 8 bytes too low (see the ABI test at the bottom).
+    _font_state: [112]u8 = undefined,
     custom_glyphs: extern struct {
         box_drawing: ?*anyopaque,
         braille: ?*anyopaque,
@@ -667,7 +687,8 @@ pub const Terminal = extern struct {
         },
     },
     is_searching: bool,
-    _search_pad: [15]u8 = undefined,
+    // Pads is_searching up to `search` (C: 7 bytes of natural padding).
+    _search_pad: [7]u8 = undefined,
     search: extern struct {
         buf: ?[*]u32,
         len: usize,
