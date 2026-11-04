@@ -52,3 +52,82 @@ int terminal_shim_conf_url_osc8_underline(struct terminal *term) {
     return term->conf->url.osc8_underline;
 }
 
+
+/* ── term_process_and_print_non_ascii() support ──────────────────── */
+
+#include <stdlib.h>
+
+#include "config.h"
+#include "emoji-variation-sequences.h"
+
+int
+terminal_shim_conf_grapheme_width_method(const struct terminal *term)
+{
+    return term->conf->tweak.grapheme_width_method;
+}
+
+uint32_t
+terminal_shim_precompose(struct terminal *term, uint32_t base, uint32_t wc,
+                         bool *base_from_primary,
+                         bool *comb_from_primary,
+                         bool *pre_from_primary)
+{
+    if (term->fonts[0] == NULL) {
+        *base_from_primary = false;
+        *comb_from_primary = false;
+        *pre_from_primary = false;
+        return (uint32_t)-1;
+    }
+
+    return fcft_precompose(
+        term->fonts[0], base, wc,
+        base_from_primary, comb_from_primary, pre_from_primary);
+}
+
+#if defined(FOOT_GRAPHEME_CLUSTERING)
+static int
+emoji_vs_compare(const void *_key, const void *_entry)
+{
+    const struct emoji_vs *key = _key;
+    const struct emoji_vs *entry = _entry;
+
+    uint32_t cp = key->start;
+
+    if (cp < entry->start)
+        return -1;
+    else if (cp > entry->end)
+        return 1;
+    else
+        return 0;
+}
+#endif
+
+/*
+ * Returns the forced grapheme width for a VS-15 (1) / VS-16 (2)
+ * variation selector sequence, or -1 if the base character isn't in the
+ * table (or isn't followed by a supported variation selector).
+ */
+int
+terminal_shim_emoji_vs_width(uint32_t cp, uint32_t wc)
+{
+#if defined(FOOT_GRAPHEME_CLUSTERING)
+    const struct emoji_vs *vs =
+        bsearch(
+            &(struct emoji_vs){.start = cp},
+            emoji_vs, sizeof(emoji_vs) / sizeof(emoji_vs[0]),
+            sizeof(struct emoji_vs),
+            &emoji_vs_compare);
+
+    if (vs != NULL) {
+        if (wc == 0xfe0e && vs->vs15)
+            return 1;
+        if (wc == 0xfe0f && vs->vs16)
+            return 2;
+    }
+#else
+    (void)cp;
+    (void)wc;
+#endif
+
+    return -1;
+}

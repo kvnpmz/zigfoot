@@ -1013,3 +1013,259 @@ export fn term_single_shift(
     term.charsets.selected = idx;
     term.ascii_printer = @ptrCast(&ascii_printer_single_shift);
 }
+
+// ── Non-ASCII printing ────────────────────────────────────────────
+//
+// Ported from terminal.c: term_process_and_print_non_ascii().
+//
+// C machinery still required, and thus shimmed:
+//   - fcft_precompose()                 (term->fonts is opaque here)
+//   - conf->tweak.grapheme_width_method (struct config isn't mirrored)
+//   - emoji_vs[] VS-15/VS-16 table      (generated at build time)
+
+const CELL_COMB_CHARS_LO: u32 = 0x0020_0000;
+const CELL_COMB_CHARS_HI: u32 = CELL_COMB_CHARS_LO + 0x3fff_ffff;
+const CELL_SPACER: u32 = CELL_COMB_CHARS_HI + 1;
+
+const GRAPHEME_WIDTH_WCSWIDTH: c_int = 0;
+const GRAPHEME_WIDTH_DOUBLE: c_int = 1;
+const GRAPHEME_WIDTH_MAX: c_int = 2;
+
+const LOG_CLASS_WARNING: c_int = 2;
+
+extern fn c32width(c: u32) c_int;
+extern fn utf8proc_grapheme_break_stateful(state1: i32, state2: i32, state: *i32) c_int;
+
+extern fn composed_lookup(root: ?*types.Composed, key: u32) ?*types.Composed;
+extern fn composed_key_from_key(prev_key: u32, next_char: u32) u32;
+extern fn composed_lookup_without_collision(
+    root: ?*types.Composed,
+    key: *u32,
+    prefix_text: [*c]const u32,
+    prefix_len: usize,
+    wc: u32,
+    forced_width: c_int,
+) ?*types.Composed;
+extern fn composed_insert(root: *?*types.Composed, node: ?*types.Composed) void;
+
+extern fn xmalloc(size: usize) ?*anyopaque;
+extern fn log_msg(
+    class: c_int,
+    module: [*:0]const u8,
+    file: [*:0]const u8,
+    lineno: c_int,
+    fmt: [*:0]const u8,
+    ...
+) void;
+
+extern fn terminal_shim_precompose(
+    term: *types.Terminal,
+    base: u32,
+    wc: u32,
+    base_from_primary: *bool,
+    comb_from_primary: *bool,
+    pre_from_primary: *bool,
+) u32;
+extern fn terminal_shim_conf_grapheme_width_method(term: *const types.Terminal) c_int;
+extern fn terminal_shim_emoji_vs_width(cp: u32, wc: u32) c_int;
+
+export fn term_process_and_print_non_ascii(
+    term: *types.Terminal,
+    wc_in: u32,
+) callconv(.c) void {
+    var wc = wc_in;
+    var width: c_int = c32width(wc);
+    var insert_mode_disable = false;
+
+    const grapheme_clustering =
+        term.grapheme_shaping and term.vt.codepoint_merging_ok;
+
+    out: {
+        const grid = term.grid.?;
+
+        if (!(grid.cursor.point.col > 0 and
+            (grapheme_clustering or (width == 0 and wc >= 0x300))))
+        {
+            termResetGraphemeState(term);
+            break :out;
+        }
+
+        var col: c_int = grid.cursor.point.col;
+        if (!grid.cursor.lcf)
+            col -= 1;
+
+        // Skip past spacers
+        const current_row = grid.cur_row.?;
+        const cells = current_row.cells.?;
+        while (cells[@intCast(col)].wc >= CELL_SPACER and col > 0)
+            col -= 1;
+
+        std.debug.assert(col >= 0 and col < term.cols);
+
+        var base: u32 = cells[@intCast(col)].wc;
+        var last: u32 = base;
+
+        // Is base cell already a cluster?
+        const composed: ?*types.Composed = if (base >= CELL_COMB_CHARS_LO and
+            base <= CELL_COMB_CHARS_HI)
+            composed_lookup(term.composed, base - CELL_COMB_CHARS_LO)
+        else
+            null;
+
+        var key: u32 = undefined;
+        if (composed) |cc| {
+            base = cc.chars.?[0];
+            last = cc.chars.?[cc.count - 1];
+            key = composed_key_from_key(cc.key, wc);
+        } else {
+            key = composed_key_from_key(base, wc);
+        }
+
+        if (grapheme_clustering) {
+            // Check if we're on a grapheme cluster break
+            if (utf8proc_grapheme_break_stateful(
+                @bitCast(last),
+                @bitCast(wc),
+                &term.vt.grapheme_state,
+            ) != 0)
+            {
+                termResetGraphemeState(term);
+                break :out;
+            }
+        }
+
+        const base_width = c32width(base);
+        if (base_width <= 0)
+            break :out;
+
+        grid.cursor.point.col = col;
+        grid.cursor.lcf = false;
+        insert_mode_disable = true;
+
+        if (composed == null) {
+            var base_from_primary: bool = undefined;
+            var comb_from_primary: bool = undefined;
+            var pre_from_primary: bool = undefined;
+
+            const precomposed = terminal_shim_precompose(
+                term,
+                base,
+                wc,
+                &base_from_primary,
+                &comb_from_primary,
+                &pre_from_primary,
+            );
+
+            const precomposed_width = c32width(precomposed);
+
+            // Only use the pre-composed character if:
+            //
+            //  1. we *have* a pre-composed character
+            //  2. the width matches the base characters width
+            //  3. it's in the primary font, OR one of the base or
+            //     combining characters are *not* from the primary font
+            if (precomposed != 0xffff_ffff and
+                precomposed_width == base_width and
+                (pre_from_primary or !base_from_primary or !comb_from_primary))
+            {
+                wc = precomposed;
+                width = precomposed_width;
+                termResetGraphemeState(term);
+                break :out;
+            }
+        }
+
+        var wanted_count: usize = if (composed) |cc| @as(usize, cc.count) + 1 else 2;
+        if (wanted_count > 255) {
+            std.debug.assert(composed != null);
+            // This is going to break anyway...
+            wanted_count -= 1;
+        }
+
+        std.debug.assert(wanted_count <= 255);
+
+        // Check if we already have a match for the entire compose chain
+        const cc = composed_lookup_without_collision(
+            term.composed,
+            &key,
+            if (composed) |c| c.chars.? else @as([*c]const u32, @ptrCast(&base)),
+            if (composed) |c| @as(usize, c.count) else 1,
+            wc,
+            0,
+        );
+
+        if (cc) |match| {
+            // We *do* have a match!
+            wc = CELL_COMB_CHARS_LO + match.key;
+            width = match.width;
+            break :out;
+        }
+
+        if (term.composed_count >= @as(usize, CELL_COMB_CHARS_HI - CELL_COMB_CHARS_LO)) {
+            // We reached our maximum number of allowed composed
+            // character chains. Fall through here and print the
+            // current zero-width character to the current cell.
+            log_msg(
+                LOG_CLASS_WARNING,
+                "terminal",
+                "terminal.zig",
+                0,
+                "maximum number of composed characters reached",
+            );
+            termResetGraphemeState(term);
+            break :out;
+        }
+
+        // Allocate new chain
+        const new_cc: *types.Composed = @ptrCast(@alignCast(xmalloc(@sizeOf(types.Composed)) orelse unreachable));
+        const chars: [*]u32 = @ptrCast(@alignCast(xmalloc(wanted_count * @sizeOf(u32)) orelse unreachable));
+
+        new_cc.chars = chars;
+        new_cc.key = key;
+        new_cc.count = @intCast(wanted_count);
+        chars[0] = base;
+        chars[wanted_count - 1] = wc;
+        new_cc.forced_width = if (composed) |c| c.forced_width else 0;
+
+        if (composed) |c| {
+            const src: [*]const u32 = c.chars.?;
+            @memcpy(chars[1 .. wanted_count - 1], src[1 .. wanted_count - 1]);
+        }
+
+        const grapheme_width: c_int = if (composed) |c| c.width else base_width;
+
+        switch (terminal_shim_conf_grapheme_width_method(term)) {
+            GRAPHEME_WIDTH_MAX => new_cc.width = @intCast(@max(grapheme_width, width)),
+
+            GRAPHEME_WIDTH_DOUBLE => {
+                new_cc.width = @intCast(@min(grapheme_width + width, 2));
+
+                // Handle VS-15 and VS-16 variation selectors
+                if (grapheme_clustering and
+                    (wc == 0xfe0e or wc == 0xfe0f) and
+                    new_cc.count == 2)
+                {
+                    const forced = terminal_shim_emoji_vs_width(chars[0], wc);
+                    if (forced >= 0)
+                        new_cc.width = @intCast(forced);
+                }
+            },
+
+            GRAPHEME_WIDTH_WCSWIDTH => new_cc.width = @intCast(grapheme_width + width),
+
+            else => unreachable,
+        }
+
+        term.composed_count += 1;
+        composed_insert(&term.composed, new_cc);
+
+        wc = CELL_COMB_CHARS_LO + new_cc.key;
+        width = if (new_cc.forced_width > 0) new_cc.forced_width else new_cc.width;
+
+        std.debug.assert(wc >= CELL_COMB_CHARS_LO);
+        std.debug.assert(wc <= CELL_COMB_CHARS_HI);
+    }
+
+    if (width > 0)
+        term_print(term, wc, width, insert_mode_disable);
+}
