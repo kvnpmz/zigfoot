@@ -583,6 +583,15 @@ test "Render layout matches C probe" {
     try t.expectEqual(terminal_size, @sizeOf(Terminal));
     try t.expectEqual(terminal_grid_offset, @offsetOf(Terminal, "grid"));
 
+    // Early fields: `bits_affecting_ascii_printer` is a 1-byte union in C.
+    // It was modeled as a 6-byte bool struct, which pushed slave/ptmx 4
+    // bytes down and made Zig read ptmx as 0 (term_to_slave wrote to fd 0).
+    try t.expectEqual(@as(usize, 1), @sizeOf(@FieldType(Terminal, "bits_affecting_ascii_printer")));
+    try t.expectEqual(@as(usize, 32), @offsetOf(Terminal, "bits_affecting_ascii_printer"));
+    try t.expectEqual(@as(usize, 36), @offsetOf(Terminal, "slave"));
+    try t.expectEqual(@as(usize, 40), @offsetOf(Terminal, "ptmx"));
+    try t.expectEqual(@as(usize, 48), @offsetOf(Terminal, "vt"));
+
     // Fields after the opaque `_font_state` block. These were 8 bytes low
     // while `_font_state` was [104]u8, which silently corrupted selection
     // state and made the `term_erase_scrollback` UNITTEST abort at startup.
@@ -597,20 +606,29 @@ test "Render layout matches C probe" {
     try t.expectEqual(@as(usize, 520), @offsetOf(Render, "input_time"));
 }
 
+// C: union { struct { bool sixels:1, osc8:1, underline_style:1,
+// underline_color:1, insert_mode:1, charset:1; }; uint8_t value; }.
+// The bitfields are LSB-first on GCC/x86-64 (verified with a C probe);
+// a packed struct keeps the existing `._.field` accessors working while
+// occupying exactly one byte. A plain bool struct is 6 bytes and shifted
+// `slave`/`ptmx` by 4 bytes.
+pub const AsciiPrinterBits = packed struct(u8) {
+    sixels: bool = false,
+    osc8: bool = false,
+    underline_style: bool = false,
+    underline_color: bool = false,
+    insert_mode: bool = false,
+    charset: bool = false,
+    _padding: u2 = 0,
+};
+
 pub const Terminal = extern struct {
     fdm: ?*anyopaque,
     reaper: ?*anyopaque,
     conf: ?*const anyopaque,
     ascii_printer: ?*const anyopaque,
     bits_affecting_ascii_printer: extern union {
-        _: extern struct {
-            sixels: bool,
-            osc8: bool,
-            underline_style: bool,
-            underline_color: bool,
-            insert_mode: bool,
-            charset: bool,
-        },
+        _: AsciiPrinterBits,
         value: u8,
     },
     slave: c_int,
