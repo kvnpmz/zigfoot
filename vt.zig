@@ -66,6 +66,8 @@ const STATE_UTF8_42: c_int = 18;
 const STATE_UTF8_43: c_int = 19;
 
 fn term_reset_grapheme_state(term: *types.Terminal) void {
+    // `term_reset_grapheme_state()` is a no-op without utf8proc (terminal.h);
+    // the call site is compiled out instead.
     term.vt.grapheme_state = 0;
     term.vt.codepoint_merging_ok = false;
 }
@@ -155,7 +157,8 @@ export fn action_execute(term: *types.Terminal, c: u8) callconv(.c) void {
 }
 
 export fn action_print(term: *types.Terminal, c: u8) callconv(.c) void {
-    term_reset_grapheme_state(term);
+    if (comptime types.grapheme_clustering)
+        term_reset_grapheme_state(term);
     vt_call_ascii_printer(term, c);
 }
 

@@ -1,4 +1,23 @@
 const std = @import("std");
+const build_options = @import("build_options");
+
+/// Mirrors `#if defined(FOOT_GRAPHEME_CLUSTERING)` in `struct vt`
+/// (terminal.h). Must match the C build's `-DFOOT_GRAPHEME_CLUSTERING`.
+pub const grapheme_clustering = build_options.grapheme_clustering;
+
+// Expected C layout, verified with a probe compiled with the exact meson
+// flags in both configurations (`-Dgrapheme-clustering=disabled` drops
+// `grapheme_state`/`codepoint_merging_ok` from `struct vt`).
+const vt_size: usize = if (grapheme_clustering) 1792 else 1784;
+const vt_utf8_offset: usize = if (grapheme_clustering) 16 else 8;
+const terminal_size: usize = if (grapheme_clustering) 5976 else 5968;
+const terminal_grid_offset: usize = if (grapheme_clustering) 1840 else 1832;
+const terminal_render_offset: usize = if (grapheme_clustering) 3872 else 3864;
+const terminal_selection_offset: usize = if (grapheme_clustering) 3712 else 3704;
+const terminal_is_searching_offset: usize = if (grapheme_clustering) 3768 else 3760;
+const terminal_search_offset: usize = if (grapheme_clustering) 3776 else 3768;
+const terminal_url_offset: usize = if (grapheme_clustering) 4592 else 4584;
+const terminal_grapheme_shaping_offset: usize = if (grapheme_clustering) 5968 else 5960;
 
 pub const ColorSource = enum(c_int) {
     default,
@@ -399,9 +418,12 @@ pub const VtParam = extern struct {
 pub const Vt = extern struct {
     state: c_int,
     last_printed: u32,
-    grapheme_state: i32,
-    codepoint_merging_ok: bool,
-    _pad0: [3]u8 = undefined,
+    // `#if defined(FOOT_GRAPHEME_CLUSTERING)` in terminal.h. Zero-sized in
+    // the disabled layout, where `utf8` moves down to offset 8 (Vt: 1784
+    // bytes instead of 1792).
+    grapheme_state: if (grapheme_clustering) i32 else u0,
+    codepoint_merging_ok: if (grapheme_clustering) bool else u0,
+    _pad0: if (grapheme_clustering) [3]u8 else u0 = undefined,
     utf8: u32,
     params: extern struct {
         idx: u8,
@@ -462,7 +484,8 @@ test "layout matches C probe (probe_layout.c)" {
     try t.expectEqual(@as(usize, 16), @sizeOf(Damage));
     try t.expectEqual(@as(usize, 88), @sizeOf(VtSubparams));
     try t.expectEqual(@as(usize, 96), @sizeOf(VtParam));
-    try t.expectEqual(@as(usize, 1792), @sizeOf(Vt));
+    try t.expectEqual(vt_size, @sizeOf(Vt));
+    try t.expectEqual(vt_utf8_offset, @offsetOf(Vt, "utf8"));
     try t.expectEqual(@as(usize, 32), @sizeOf(DamageNode));
 }
 
@@ -556,17 +579,18 @@ test "Render layout matches C probe" {
     try t.expectEqual(@as(usize, 536), @sizeOf(Render));
     try t.expectEqual(@as(usize, 64), @offsetOf(Render, "margins"));
 
-    try t.expectEqual(@as(usize, 3872), @offsetOf(Terminal, "render"));
-    try t.expectEqual(@as(usize, 5976), @sizeOf(Terminal));
+    try t.expectEqual(terminal_render_offset, @offsetOf(Terminal, "render"));
+    try t.expectEqual(terminal_size, @sizeOf(Terminal));
+    try t.expectEqual(terminal_grid_offset, @offsetOf(Terminal, "grid"));
 
     // Fields after the opaque `_font_state` block. These were 8 bytes low
     // while `_font_state` was [104]u8, which silently corrupted selection
     // state and made the `term_erase_scrollback` UNITTEST abort at startup.
-    try t.expectEqual(@as(usize, 3712), @offsetOf(Terminal, "selection"));
-    try t.expectEqual(@as(usize, 3768), @offsetOf(Terminal, "is_searching"));
-    try t.expectEqual(@as(usize, 3776), @offsetOf(Terminal, "search"));
-    try t.expectEqual(@as(usize, 4592), @offsetOf(Terminal, "url"));
-    try t.expectEqual(@as(usize, 5968), @offsetOf(Terminal, "grapheme_shaping"));
+    try t.expectEqual(terminal_selection_offset, @offsetOf(Terminal, "selection"));
+    try t.expectEqual(terminal_is_searching_offset, @offsetOf(Terminal, "is_searching"));
+    try t.expectEqual(terminal_search_offset, @offsetOf(Terminal, "search"));
+    try t.expectEqual(terminal_url_offset, @offsetOf(Terminal, "url"));
+    try t.expectEqual(terminal_grapheme_shaping_offset, @offsetOf(Terminal, "grapheme_shaping"));
     try t.expectEqual(@as(usize, 160), @offsetOf(Render, "workers"));
     try t.expectEqual(@as(usize, 440), @offsetOf(Render, "last_cursor"));
     try t.expectEqual(@as(usize, 512), @offsetOf(Render, "search_glyph_offset"));
@@ -932,7 +956,7 @@ pub inline fn sixelSetCursorRightOfGraphics(t: *Terminal, v: bool) void {
 }
 
 comptime {
-    if (@offsetOf(Terminal, "render") != 3872)
+    if (@offsetOf(Terminal, "render") != terminal_render_offset)
         @compileError("Terminal: render offset drift");
 }
 

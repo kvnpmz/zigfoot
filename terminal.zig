@@ -7,8 +7,15 @@ extern fn row(grid: *types.Grid, row_no: c_int) *types.Row;
 extern fn rowInView(grid: *types.Grid, row_no: c_int) *types.Row;
 
 fn termResetGraphemeState(term: *types.Terminal) void {
-    term.vt.grapheme_state = 0;
-    term.vt.codepoint_merging_ok = false;
+    // Without utf8proc the fields don't exist in `struct vt` and C's
+    // term_reset_grapheme_state() is a no-op; keep `term` "used" so the
+    // helper still compiles in that configuration.
+    if (comptime build_options.grapheme_clustering) {
+        term.vt.grapheme_state = 0;
+        term.vt.codepoint_merging_ok = false;
+    } else {
+        _ = @intFromPtr(term);
+    }
 }
 
 export fn term_cursor_to(
@@ -945,7 +952,8 @@ export fn term_print(
     }
 
     grid.cursor.point.col = col;
-    term.vt.codepoint_merging_ok = true;
+    if (comptime build_options.grapheme_clustering)
+        term.vt.codepoint_merging_ok = true;
 }
 
 // ── Chunk C2a: ascii printers + term_update_ascii_printer + term_single_shift
@@ -980,7 +988,8 @@ fn ascii_printer_fast(term: *types.Terminal, wc: u32) callconv(.c) void {
     }
 
     grid.cursor.point.col = col;
-    term.vt.codepoint_merging_ok = true;
+    if (comptime build_options.grapheme_clustering)
+        term.vt.codepoint_merging_ok = true;
 
     if (current_row.extra != null) {
         grid_row_uri_range_erase(current_row, uri_start, uri_start);

@@ -367,7 +367,10 @@ grid_obj = custom_target(
   input: 'grid.zig',
   depend_files: files('terminal_types.zig', 'composed.zig'),
   output: 'grid.o',
-  command: [python, files('compile_zig.py'), '@INPUT@', '@OUTPUT@']
+  command: [
+    python, files('compile_zig.py'), '@INPUT@', '@OUTPUT@',
+    grapheme_clustering_zig,
+  ]
 )
 
 selection_obj = custom_target(
@@ -375,7 +378,10 @@ selection_obj = custom_target(
   input: 'selection.zig',
   depend_files: files('terminal_types.zig'),
   output: 'selection.o',
-  command: [python, files('compile_zig.py'), '@INPUT@', '@OUTPUT@']
+  command: [
+    python, files('compile_zig.py'), '@INPUT@', '@OUTPUT@',
+    grapheme_clustering_zig,
+  ]
 )
 
 
@@ -396,7 +402,10 @@ csi_obj = custom_target(
   input: 'csi.zig',
   depend_files: files('terminal_types.zig'),
   output: 'csi.o',
-  command: [python, files('compile_zig.py'), '@INPUT@', '@OUTPUT@']
+  command: [
+    python, files('compile_zig.py'), '@INPUT@', '@OUTPUT@',
+    grapheme_clustering_zig,
+  ]
 )
 
 dcs_obj = custom_target(
@@ -404,7 +413,10 @@ dcs_obj = custom_target(
   input: 'dcs.zig',
   depend_files: files('terminal_types.zig'),
   output: 'dcs.o',
-  command: [python, files('compile_zig.py'), '@INPUT@', '@OUTPUT@']
+  command: [
+    python, files('compile_zig.py'), '@INPUT@', '@OUTPUT@',
+    grapheme_clustering_zig,
+  ]
 )
 
 osc_obj = custom_target(
@@ -412,7 +424,10 @@ osc_obj = custom_target(
   input: 'osc.zig',
   depend_files: files('terminal_types.zig'),
   output: 'osc.o',
-  command: [python, files('compile_zig.py'), '@INPUT@', '@OUTPUT@']
+  command: [
+    python, files('compile_zig.py'), '@INPUT@', '@OUTPUT@',
+    grapheme_clustering_zig,
+  ]
 )
 
 sixel_obj = custom_target(
@@ -420,7 +435,10 @@ sixel_obj = custom_target(
   input: 'sixel.zig',
   depend_files: files('terminal_types.zig'),
   output: 'sixel.o',
-  command: [python, files('compile_zig.py'), '@INPUT@', '@OUTPUT@']
+  command: [
+    python, files('compile_zig.py'), '@INPUT@', '@OUTPUT@',
+    grapheme_clustering_zig,
+  ]
 )
 
 vt_obj = custom_target(
@@ -428,7 +446,10 @@ vt_obj = custom_target(
   input: 'vt.zig',
   depend_files: files('terminal_types.zig'),
   output: 'vt.o',
-  command: [python, files('compile_zig.py'), '@INPUT@', '@OUTPUT@']
+  command: [
+    python, files('compile_zig.py'), '@INPUT@', '@OUTPUT@',
+    grapheme_clustering_zig,
+  ]
 )
 
 notify_obj = custom_target(
@@ -436,7 +457,10 @@ notify_obj = custom_target(
   input: 'notify.zig',
   depend_files: files('terminal_types.zig'),
   output: 'notify.o',
-  command: [python, files('compile_zig.py'), '@INPUT@', '@OUTPUT@']
+  command: [
+    python, files('compile_zig.py'), '@INPUT@', '@OUTPUT@',
+    grapheme_clustering_zig,
+  ]
 )
 
 xmalloc_obj = custom_target(
