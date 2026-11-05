@@ -109,7 +109,8 @@ add_utmp_record(const struct config *conf, struct reaper *reaper, int ptmx)
 #endif
 }
 
-static bool
+/* Externally visible for terminal.zig (was static) */
+bool
 del_utmp_record(const struct config *conf, struct reaper *reaper, int ptmx)
 {
 #if defined(UTMP_DEL)
@@ -138,155 +139,8 @@ static struct timespec last = {0};
 #endif
 
 
-/* Externally visible, but not declared in terminal.h, to enable pgo
- * to call this function directly */
-bool
-fdm_ptmx(struct fdm *fdm, int fd, int events, void *data)
-{
-    struct terminal *term = data;
-
-    const bool pollin = events & EPOLLIN;
-    const bool pollout = events & EPOLLOUT;
-    const bool hup = events & EPOLLHUP;
-
-    if (pollout) {
-        if (!fdm_ptmx_out(fdm, fd, events, data))
-            return false;
-    }
-
-    /* Prevent blinking while typing */
-    if (term->cursor_blink.fd >= 0) {
-        term->cursor_blink.state = CURSOR_BLINK_ON;
-        cursor_blink_rearm_timer(term);
-    }
-
-    if (unlikely(term->interactive_resizing.grid != NULL)) {
-        /*
-         * Don't consume PTMX while we're doing an interactive resize,
-         * since the 'normal' grid we're currently using is a
-         * temporary one - all changes done to it will be lost when
-         * the interactive resize ends.
-         */
-        return true;
-    }
-
-    uint8_t buf[24 * 1024];
-    const size_t max_iterations = !hup ? 10 : SIZE_MAX;
-
-    for (size_t i = 0; i < max_iterations && pollin; i++) {
-        xassert(pollin);
-        ssize_t count = read(term->ptmx, buf, sizeof(buf));
-
-        if (count < 0) {
-            if (errno == EAGAIN || errno == EIO) {
-                /*
-                 * EAGAIN: no more to read - FDM will trigger us again
-                 * EIO: assume PTY was closed - we already have, or will get, a EPOLLHUP
-                 */
-                break;
-            }
-
-            LOG_ERRNO("failed to read from pseudo terminal");
-            return false;
-        } else if (count == 0) {
-            /* Reached end-of-file */
-            break;
-        }
-
-        xassert(term->interactive_resizing.grid == NULL);
-        vt_from_slave(term, buf, count);
-    }
-
-    if (!term->render.app_sync_updates.enabled) {
-        /*
-         * We likely need to re-render. But, we don't want to do it
-         * immediately. Often, a single client update is done through
-         * multiple writes. This could lead to us rendering one frame with
-         * "intermediate" state.
-         *
-         * For example, we might end up rendering a frame
-         * where the client just erased a line, while in the
-         * next frame, the client wrote to the same line. This
-         * causes screen "flickering".
-         *
-         * Mitigate by always incuring a small delay before
-         * rendering the next frame. This gives the client
-         * some time to finish the operation (and thus gives
-         * us time to receive the last writes before doing any
-         * actual rendering).
-         *
-         * We incur this delay *every* time we receive
-         * input. To ensure we don't delay rendering
-         * indefinitely, we start a second timer that is only
-         * reset when we render.
-         *
-         * Note that when the client is producing data at a
-         * very high pace, we're rate limited by the wayland
-         * compositor anyway. The delay we introduce here only
-         * has any effect when the renderer is idle.
-         */
-        uint64_t lower_ns = term->conf->tweak.delayed_render_lower_ns;
-        uint64_t upper_ns = term->conf->tweak.delayed_render_upper_ns;
-
-        if (lower_ns > 0 && upper_ns > 0) {
-#if PTMX_TIMING
-            struct timespec now;
-
-            clock_gettime(CLOCK_MONOTONIC, &now);
-            if (last.tv_sec > 0 || last.tv_nsec > 0) {
-                struct timespec diff;
-
-                timespec_sub(&now, &last, &diff);
-                LOG_INFO("waited %lds %ldns for more input",
-                         (long)diff.tv_sec, diff.tv_nsec);
-            }
-            last = now;
-#endif
-
-            xassert(lower_ns < 1000000000);
-            xassert(upper_ns < 1000000000);
-            xassert(upper_ns > lower_ns);
-
-            timerfd_settime(
-                term->delayed_render_timer.lower_fd, 0,
-                &(struct itimerspec){.it_value = {.tv_nsec = lower_ns}},
-                NULL);
-
-            /* Second timeout - only reset when we render. Set to one
-             * frame (assuming 60Hz) */
-            if (!term->delayed_render_timer.is_armed) {
-                timerfd_settime(
-                    term->delayed_render_timer.upper_fd, 0,
-                    &(struct itimerspec){.it_value = {.tv_nsec = upper_ns}},
-                    NULL);
-                term->delayed_render_timer.is_armed = true;
-            }
-        } else
-            render_refresh(term);
-    }
-
-    if (hup) {
-        del_utmp_record(term->conf, term->reaper, term->ptmx);
-        fdm_del(fdm, fd);
-        term->ptmx = -1;
-
-        /*
-         * Normally, we do *not* want to shutdown when the PTY is
-         * closed. Instead, we want to wait for the client application
-         * to exit.
-         *
-         * However, when we're using a pre-existing PTY (the --pty
-         * option), there _is_ no client application. That is, foot
-         * does *not* fork+exec anything, and thus the only way to
-         * shutdown is to wait for the PTY to be closed.
-         */
-        if (term->slave < 0 && !term->conf->hold_at_exit) {
-            term_shutdown(term);
-        }
-    }
-
-    return true;
-}
+/* fdm_ptmx: ported to terminal.zig */
+extern bool fdm_ptmx(struct fdm *fdm, int fd, int events, void *data);
 
 /* term_ptmx_pause: ported to terminal.zig */
 /* term_ptmx_resume: ported to terminal.zig */

@@ -131,3 +131,34 @@ terminal_shim_emoji_vs_width(uint32_t cp, uint32_t wc)
 
     return -1;
 }
+
+/* ── fdm_ptmx() support ──────────────────────────────────────────── */
+
+/* delayed_render_timer lives in the opaque _font_state block */
+int terminal_shim_delayed_render_lower_fd(struct terminal *term) {
+    return term->delayed_render_timer.lower_fd;
+}
+
+int terminal_shim_delayed_render_upper_fd(struct terminal *term) {
+    return term->delayed_render_timer.upper_fd;
+}
+
+bool terminal_shim_delayed_render_is_armed(struct terminal *term) {
+    return term->delayed_render_timer.is_armed;
+}
+
+void terminal_shim_delayed_render_set_armed(struct terminal *term, bool armed) {
+    term->delayed_render_timer.is_armed = armed;
+}
+
+uint32_t terminal_shim_conf_delayed_render_lower_ns(struct terminal *term) {
+    return term->conf->tweak.delayed_render_lower_ns;
+}
+
+uint32_t terminal_shim_conf_delayed_render_upper_ns(struct terminal *term) {
+    return term->conf->tweak.delayed_render_upper_ns;
+}
+
+bool terminal_shim_conf_hold_at_exit(struct terminal *term) {
+    return term->conf->hold_at_exit;
+}

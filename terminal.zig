@@ -1532,3 +1532,150 @@ export fn term_ptmx_resume(term: *types.Terminal) callconv(.c) bool {
         return false;
     return fdm_event_add(term.fdm orelse return false, term.ptmx, EPOLLIN);
 }
+
+// ── ptmx: chunk P2 — fdm_ptmx
+
+const EIO: c_int = 5;
+const PTMX_READ_BUFFER_SIZE: usize = 24 * 1024;
+
+extern fn term_shutdown(term: *types.Terminal) callconv(.c) void;
+extern fn vt_from_slave(term: *types.Terminal, data: [*]const u8, len: usize) callconv(.c) void;
+extern fn del_utmp_record(
+    conf: ?*const anyopaque,
+    reaper: ?*anyopaque,
+    ptmx: c_int,
+) callconv(.c) bool;
+extern fn terminal_shim_delayed_render_lower_fd(term: *types.Terminal) callconv(.c) c_int;
+extern fn terminal_shim_delayed_render_upper_fd(term: *types.Terminal) callconv(.c) c_int;
+extern fn terminal_shim_delayed_render_is_armed(term: *types.Terminal) callconv(.c) bool;
+extern fn terminal_shim_delayed_render_set_armed(term: *types.Terminal, armed: bool) callconv(.c) void;
+extern fn terminal_shim_conf_delayed_render_lower_ns(term: *types.Terminal) callconv(.c) u32;
+extern fn terminal_shim_conf_delayed_render_upper_ns(term: *types.Terminal) callconv(.c) u32;
+extern fn terminal_shim_conf_hold_at_exit(term: *types.Terminal) callconv(.c) bool;
+
+// PTMX_TIMING is 0 in terminal.c; the timing instrumentation is omitted
+// until that build-time option exists in build_options.
+export fn fdm_ptmx(
+    fdm: ?*anyopaque,
+    fd: c_int,
+    events: c_int,
+    data: ?*anyopaque,
+) callconv(.c) bool {
+    const term: *types.Terminal = @ptrCast(@alignCast(data orelse return false));
+
+    const pollin = (events & EPOLLIN) != 0;
+    const pollout = (events & EPOLLOUT) != 0;
+    const hup = (events & EPOLLHUP) != 0;
+
+    if (pollout) {
+        if (!fdm_ptmx_out(fdm, fd, events, data))
+            return false;
+    }
+
+    // Prevent blinking while typing
+    if (term.cursor_blink.fd >= 0) {
+        term.cursor_blink.state = CURSOR_BLINK_ON;
+        _ = cursor_blink_rearm_timer(term);
+    }
+
+    if (term.interactive_resizing.grid != null) {
+        // Don't consume PTMX while we're doing an interactive resize,
+        // since the 'normal' grid we're currently using is a temporary
+        // one - all changes done to it will be lost when the interactive
+        // resize ends.
+        return true;
+    }
+
+    var buf: [PTMX_READ_BUFFER_SIZE]u8 = undefined;
+    const max_iterations: usize = if (!hup) 10 else std.math.maxInt(usize);
+
+    var i: usize = 0;
+    while (i < max_iterations and pollin) : (i += 1) {
+        const count = read(term.ptmx, &buf, buf.len);
+
+        if (count < 0) {
+            const errnum = __errno_location().*;
+            if (errnum == EAGAIN or errnum == EIO) {
+                // EAGAIN: no more to read - FDM will trigger us again
+                // EIO: assume PTY was closed - we already have, or will
+                // get, a EPOLLHUP
+                break;
+            }
+
+            log_errno(
+                LOG_CLASS_ERROR,
+                "terminal",
+                "terminal.zig",
+                @as(c_int, @intCast(@src().line)),
+                "failed to read from pseudo terminal",
+            );
+            return false;
+        } else if (count == 0) {
+            // Reached end-of-file
+            break;
+        }
+
+        std.debug.assert(term.interactive_resizing.grid == null);
+        vt_from_slave(term, &buf, @intCast(count));
+    }
+
+    if (!term.render.app_sync_updates.enabled) {
+        // See the C version for why we delay: batching client updates
+        // avoids rendering "intermediate" frames. The lower timeout is
+        // re-armed on every read; the upper one only when we render.
+        const lower_ns = terminal_shim_conf_delayed_render_lower_ns(term);
+        const upper_ns = terminal_shim_conf_delayed_render_upper_ns(term);
+
+        if (lower_ns > 0 and upper_ns > 0) {
+            std.debug.assert(lower_ns < 1_000_000_000);
+            std.debug.assert(upper_ns < 1_000_000_000);
+            std.debug.assert(upper_ns > lower_ns);
+
+            _ = timerfd_settime(
+                terminal_shim_delayed_render_lower_fd(term),
+                0,
+                &types.Itimerspec{
+                    .it_value = .{ .tv_sec = 0, .tv_nsec = @intCast(lower_ns) },
+                    .it_interval = .{ .tv_sec = 0, .tv_nsec = 0 },
+                },
+                null,
+            );
+
+            // Second timeout - only reset when we render. Set to one
+            // frame (assuming 60Hz)
+            if (!terminal_shim_delayed_render_is_armed(term)) {
+                _ = timerfd_settime(
+                    terminal_shim_delayed_render_upper_fd(term),
+                    0,
+                    &types.Itimerspec{
+                        .it_value = .{ .tv_sec = 0, .tv_nsec = @intCast(upper_ns) },
+                        .it_interval = .{ .tv_sec = 0, .tv_nsec = 0 },
+                    },
+                    null,
+                );
+                terminal_shim_delayed_render_set_armed(term, true);
+            }
+        } else {
+            render_refresh(term);
+        }
+    }
+
+    if (hup) {
+        _ = del_utmp_record(term.conf, term.reaper, term.ptmx);
+        if (fdm) |f|
+            _ = fdm_del(f, fd);
+        term.ptmx = -1;
+
+        // Normally, we do *not* want to shutdown when the PTY is closed.
+        // Instead, we want to wait for the client application to exit.
+        //
+        // However, when we're using a pre-existing PTY (the --pty
+        // option), there _is_ no client application. That is, foot does
+        // *not* fork+exec anything, and thus the only way to shutdown is
+        // to wait for the PTY to be closed.
+        if (term.slave < 0 and !terminal_shim_conf_hold_at_exit(term))
+            term_shutdown(term);
+    }
+
+    return true;
+}
