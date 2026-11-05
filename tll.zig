@@ -17,6 +17,8 @@ extern fn free(ptr: ?*anyopaque) callconv(.c) void;
 
 pub fn Tll(comptime T: type) type {
     return extern struct {
+        const Self = @This();
+
         head: ?*Node = null,
         tail: ?*Node = null,
         length: usize = 0,
@@ -153,7 +155,7 @@ pub fn Tll(comptime T: type) type {
 
         // ── Iteration ─────────────────────────────────────────────
         pub const Iterator = struct {
-            list: *@This(),
+            list: *Self,
             current: ?*Node,
             next_cached: ?*Node,
             // Prev pointer cached to detect removal-during-iteration.
@@ -176,7 +178,7 @@ pub fn Tll(comptime T: type) type {
         };
 
         pub const ForeachIter = struct {
-            list: *@This(),
+            list: *Self,
             it: ?*Node,
             it_next: ?*Node,
 
@@ -198,7 +200,7 @@ pub fn Tll(comptime T: type) type {
         }
 
         pub const RForeachIter = struct {
-            list: *@This(),
+            list: *Self,
             it: ?*Node,
             it_prev: ?*Node,
 
