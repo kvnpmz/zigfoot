@@ -1288,3 +1288,247 @@ export fn term_process_and_print_non_ascii(
     if (width > 0)
         term_print(term, wc, width, insert_mode_disable);
 }
+
+// ── ptmx: chunk P1 — slave write buffers, term_to_slave, ptmx pause/resume
+
+const tll = @import("tll.zig");
+
+const PtmxBuffer = extern struct {
+    data: ?*anyopaque,
+    len: usize,
+    idx: usize,
+};
+
+const PtmxBufferList = tll.Tll(PtmxBuffer);
+
+const AsyncWriteStatus = enum(c_int) {
+    done = 0,
+    remain = 1,
+    err = 2,
+};
+
+const LOG_CLASS_ERROR: c_int = 1;
+const EPOLLOUT: c_int = 0x004;
+
+extern fn async_write(fd: c_int, data: ?*const anyopaque, len: usize, idx: *usize) callconv(.c) AsyncWriteStatus;
+extern fn fdm_event_add(fdm: *anyopaque, fd: c_int, events: c_int) callconv(.c) bool;
+extern fn fdm_event_del(fdm: *anyopaque, fd: c_int, events: c_int) callconv(.c) bool;
+extern fn free(ptr: ?*anyopaque) callconv(.c) void;
+extern fn log_errno(
+    class: c_int,
+    module: [*:0]const u8,
+    file: [*:0]const u8,
+    lineno: c_int,
+    fmt: [*:0]const u8,
+    ...
+) callconv(.c) void;
+
+inline fn ptmxBuffers(term: *types.Terminal) *PtmxBufferList {
+    return @ptrCast(&term.ptmx_buffers);
+}
+
+inline fn ptmxPasteBuffers(term: *types.Terminal) *PtmxBufferList {
+    return @ptrCast(&term.ptmx_paste_buffers);
+}
+
+fn enqueueDataForSlave(
+    data: ?*const anyopaque,
+    len: usize,
+    offset: usize,
+    buffer_list: *PtmxBufferList,
+) void {
+    // C: xmemdup() + tll_push_back()
+    const copy = xmalloc(len) orelse unreachable;
+    if (len > 0) {
+        @memcpy(
+            @as([*]u8, @ptrCast(copy))[0..len],
+            @as([*]const u8, @ptrCast(data.?))[0..len],
+        );
+    }
+
+    buffer_list.pushBack(.{ .data = copy, .len = len, .idx = offset });
+}
+
+fn dataToSlave(
+    term: *types.Terminal,
+    data: ?*const anyopaque,
+    len: usize,
+    buffer_list: *PtmxBufferList,
+) bool {
+    // Try a synchronous write first. If we fail to write everything,
+    // switch to asynchronous.
+    var async_idx: usize = 0;
+
+    switch (async_write(term.ptmx, data, len, &async_idx)) {
+        .remain => {
+            // Switch to asynchronous mode; let FDM write the remaining data
+            if (!fdm_event_add(term.fdm orelse return false, term.ptmx, EPOLLOUT))
+                return false;
+            enqueueDataForSlave(data, len, async_idx, buffer_list);
+            return true;
+        },
+
+        .done => return true,
+
+        .err => {
+            log_errno(
+                LOG_CLASS_ERROR,
+                "terminal",
+                "terminal.zig",
+                @as(c_int, @intCast(@src().line)),
+                "failed to synchronously write %zu bytes to slave",
+                len,
+            );
+            return false;
+        },
+    }
+}
+
+export fn term_paste_data_to_slave(
+    term: *types.Terminal,
+    data: ?*const anyopaque,
+    len: usize,
+) callconv(.c) bool {
+    std.debug.assert(term.is_sending_paste_data);
+
+    if (term.ptmx < 0) {
+        // We're probably in "hold"
+        return false;
+    }
+
+    const paste_buffers = ptmxPasteBuffers(term);
+    if (paste_buffers.len() > 0) {
+        // Don't even try to send data *now* if there's queued up data,
+        // since that would result in events arriving out of order.
+        enqueueDataForSlave(data, len, 0, paste_buffers);
+        return true;
+    }
+
+    return dataToSlave(term, data, len, paste_buffers);
+}
+
+export fn term_to_slave(
+    term: *types.Terminal,
+    data: ?*const anyopaque,
+    len: usize,
+) callconv(.c) bool {
+    if (term.ptmx < 0) {
+        // We're probably in "hold"
+        return false;
+    }
+
+    const buffers = ptmxBuffers(term);
+    const paste_buffers = ptmxPasteBuffers(term);
+
+    if (buffers.len() > 0 or
+        term.is_sending_paste_data or
+        paste_buffers.len() > 0)
+    {
+        // Don't even try to send data *now* if there's queued up data,
+        // since that would result in events arriving out of order.
+        //
+        // Furthermore, if we're currently sending paste data to the
+        // client, do *not* mix that stream with other events
+        // (https://codeberg.org/dnkl/foot/issues/101).
+        enqueueDataForSlave(data, len, 0, buffers);
+        return true;
+    }
+
+    return dataToSlave(term, data, len, buffers);
+}
+
+const FlushResult = enum { flushed, remain, err };
+
+// C macro `write_one_buffer` in fdm_ptmx_out()
+fn flushOneBuffer(
+    term: *types.Terminal,
+    buffer_list: *PtmxBufferList,
+    node: *PtmxBufferList.Node,
+) FlushResult {
+    switch (async_write(term.ptmx, node.item.data, node.item.len, &node.item.idx)) {
+        .done => {
+            free(node.item.data);
+            buffer_list.removeNode(node);
+            return .flushed;
+        },
+
+        .remain => {
+            // to_slave() updated node.item.idx
+            return .remain;
+        },
+
+        .err => {
+            log_errno(
+                LOG_CLASS_ERROR,
+                "terminal",
+                "terminal.zig",
+                @as(c_int, @intCast(@src().line)),
+                "failed to asynchronously write %zu bytes to slave",
+                node.item.len - node.item.idx,
+            );
+            return .err;
+        },
+    }
+}
+
+export fn fdm_ptmx_out(
+    fdm: ?*anyopaque,
+    fd: c_int,
+    events: c_int,
+    data: ?*anyopaque,
+) callconv(.c) bool {
+    _ = fdm;
+    _ = fd;
+    _ = events;
+
+    const term: *types.Terminal = @ptrCast(@alignCast(data orelse return false));
+
+    const buffers = ptmxBuffers(term);
+    const paste_buffers = ptmxPasteBuffers(term);
+
+    // If there is no queued data, then we shouldn't be in asynchronous mode
+    std.debug.assert(buffers.len() > 0 or paste_buffers.len() > 0);
+
+    var it = paste_buffers.foreach();
+    while (it.next()) |node| {
+        switch (flushOneBuffer(term, paste_buffers, node)) {
+            .flushed => {},
+            .remain => return true,
+            .err => return false,
+        }
+    }
+
+    // If we get here, *all* paste data buffers were successfully flushed
+
+    if (!term.is_sending_paste_data) {
+        var it_normal = buffers.foreach();
+        while (it_normal.next()) |node| {
+            switch (flushOneBuffer(term, buffers, node)) {
+                .flushed => {},
+                .remain => return true,
+                .err => return false,
+            }
+        }
+    }
+
+    // If we get here, *all* buffers were successfully flushed. Or, we're
+    // still sending paste data, in which case we do *not* want to send the
+    // "normal" queued up data. In both cases, we want to *disable* the FDM
+    // callback since otherwise we'd just be called right away again, with
+    // nothing to write.
+    if (term.fdm) |f|
+        _ = fdm_event_del(f, term.ptmx, EPOLLOUT);
+    return true;
+}
+
+export fn term_ptmx_pause(term: *types.Terminal) callconv(.c) bool {
+    if (term.ptmx < 0)
+        return false;
+    return fdm_event_del(term.fdm orelse return false, term.ptmx, EPOLLIN);
+}
+
+export fn term_ptmx_resume(term: *types.Terminal) callconv(.c) bool {
+    if (term.ptmx < 0)
+        return false;
+    return fdm_event_add(term.fdm orelse return false, term.ptmx, EPOLLIN);
+}

@@ -80,148 +80,18 @@ extern int term_row_rel_to_abs(const struct terminal *term, int row);
 
 #define PTMX_TIMING 0
 
-static void
-enqueue_data_for_slave(const void *data, size_t len, size_t offset,
-                       ptmx_buffer_list_t *buffer_list)
-{
-    struct ptmx_buffer queued = {
-        .data = xmemdup(data, len),
-        .len = len,
-        .idx = offset,
-    };
-    tll_push_back(*buffer_list, queued);
-}
+/* Ported to terminal.zig — extern for C callers */
+extern bool term_to_slave(struct terminal *term, const void *data, size_t len);
+extern bool term_paste_data_to_slave(struct terminal *term, const void *data, size_t len);
+extern bool term_ptmx_pause(struct terminal *term);
+extern bool term_ptmx_resume(struct terminal *term);
+extern bool fdm_ptmx_out(struct fdm *fdm, int fd, int events, void *data);
 
-static bool
-data_to_slave(struct terminal *term, const void *data, size_t len,
-              ptmx_buffer_list_t *buffer_list)
-{
-    /*
-     * Try a synchronous write first. If we fail to write everything,
-     * switch to asynchronous.
-     */
-
-    size_t async_idx = 0;
-    switch (async_write(term->ptmx, data, len, &async_idx)) {
-    case ASYNC_WRITE_REMAIN:
-        /* Switch to asynchronous mode; let FDM write the remaining data */
-        if (!fdm_event_add(term->fdm, term->ptmx, EPOLLOUT))
-            return false;
-        enqueue_data_for_slave(data, len, async_idx, buffer_list);
-        return true;
-
-    case ASYNC_WRITE_DONE:
-        return true;
-
-    case ASYNC_WRITE_ERR:
-        LOG_ERRNO("failed to synchronously write %zu bytes to slave", len);
-        return false;
-    }
-
-    BUG("Unexpected async_write() return value");
-    return false;
-}
-
-bool
-term_paste_data_to_slave(struct terminal *term, const void *data, size_t len)
-{
-    xassert(term->is_sending_paste_data);
-
-    if (term->ptmx < 0) {
-        /* We're probably in "hold" */
-        return false;
-    }
-
-    if (tll_length(term->ptmx_paste_buffers) > 0) {
-        /* Don't even try to send data *now* if there's queued up
-         * data, since that would result in events arriving out of
-         * order. */
-        enqueue_data_for_slave(data, len, 0, &term->ptmx_paste_buffers);
-        return true;
-    }
-
-    return data_to_slave(term, data, len, &term->ptmx_paste_buffers);
-}
-
-bool
-term_to_slave(struct terminal *term, const void *data, size_t len)
-{
-    if (term->ptmx < 0) {
-        /* We're probably in "hold" */
-        return false;
-    }
-
-    if (unlikely(tll_length(term->ptmx_buffers) > 0 ||
-                 term->is_sending_paste_data ||
-                 tll_length(term->ptmx_paste_buffers) > 0))
-    {
-        /*
-         * Don't even try to send data *now* if there's queued up
-         * data, since that would result in events arriving out of
-         * order.
-         *
-         * Furthermore, if we're currently sending paste data to the
-         * client, do *not* mix that stream with other events
-         * (https://codeberg.org/dnkl/foot/issues/101).
-         */
-        enqueue_data_for_slave(data, len, 0, &term->ptmx_buffers);
-        return true;
-    }
-
-    return data_to_slave(term, data, len, &term->ptmx_buffers);
-}
-
-static bool
-fdm_ptmx_out(struct fdm *fdm, int fd, int events, void *data)
-{
-    struct terminal *term = data;
-
-    /* If there is no queued data, then we shouldn't be in asynchronous mode */
-    xassert(tll_length(term->ptmx_buffers) > 0 ||
-           tll_length(term->ptmx_paste_buffers) > 0);
-
-    /* Writes a single buffer, returns if not all of it could be written */
-#define write_one_buffer(buffer_list)                                   \
-    {                                                                   \
-        switch (async_write(term->ptmx, it->item.data, it->item.len, &it->item.idx)) { \
-        case ASYNC_WRITE_DONE:                                          \
-            free(it->item.data);                                        \
-            tll_remove(buffer_list, it);                                \
-            break;                                                      \
-        case ASYNC_WRITE_REMAIN:                                        \
-            /* to_slave() updated it->item.idx */                       \
-            return true;                                                \
-        case ASYNC_WRITE_ERR:                                           \
-            LOG_ERRNO("failed to asynchronously write %zu bytes to slave", \
-                      it->item.len - it->item.idx);                     \
-            return false;                                               \
-        }                                                               \
-    }
-
-    tll_foreach(term->ptmx_paste_buffers, it)
-        write_one_buffer(term->ptmx_paste_buffers);
-
-    /* If we get here, *all* paste data buffers were successfully
-     * flushed */
-
-    if (!term->is_sending_paste_data) {
-        tll_foreach(term->ptmx_buffers, it)
-            write_one_buffer(term->ptmx_buffers);
-    }
-
-    /*
-     * If we get here, *all* buffers were successfully flushed.
-     *
-     * Or, we're still sending paste data, in which case we do *not*
-     * want to send the "normal" queued up data
-     *
-     * In both cases, we want to *disable* the FDM callback since
-     * otherwise we'd just be called right away again, with nothing to
-     * write.
-     */
-    fdm_event_del(term->fdm, term->ptmx, EPOLLOUT);
-    return true;
-}
+/* enqueue_data_for_slave: ported to terminal.zig */
+/* data_to_slave: ported to terminal.zig */
+/* term_paste_data_to_slave: ported to terminal.zig */
+/* term_to_slave: ported to terminal.zig */
+/* fdm_ptmx_out: ported to terminal.zig */
 
 static bool
 add_utmp_record(const struct config *conf, struct reaper *reaper, int ptmx)
@@ -418,21 +288,8 @@ fdm_ptmx(struct fdm *fdm, int fd, int events, void *data)
     return true;
 }
 
-bool
-term_ptmx_pause(struct terminal *term)
-{
-    if (term->ptmx < 0)
-        return false;
-    return fdm_event_del(term->fdm, term->ptmx, EPOLLIN);
-}
-
-bool
-term_ptmx_resume(struct terminal *term)
-{
-    if (term->ptmx < 0)
-        return false;
-    return fdm_event_add(term->fdm, term->ptmx, EPOLLIN);
-}
+/* term_ptmx_pause: ported to terminal.zig */
+/* term_ptmx_resume: ported to terminal.zig */
 /* fdm_flash: ported to terminal.zig */
 /* fdm_blink: ported to terminal.zig */
 /* term_arm_blink_timer: ported to terminal.zig */

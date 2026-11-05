@@ -388,7 +388,7 @@ selection_obj = custom_target(
 terminal_obj = custom_target(
   '',
   input: 'terminal.zig',
-  depend_files: files('terminal_types.zig'),
+  depend_files: files('terminal_types.zig', 'tll.zig'),
   output: 'terminal.o',
   command: [
     python, files('compile_zig.py'), '@INPUT@', '@OUTPUT@',
