@@ -97,6 +97,8 @@
   the process of shutting down ([#2487][2487]).
 * Not responding to an OSC-52 query if clipboard source has no data
   ([#2493][2493]).
+* `spawn-terminal` not using the command line options from the
+  original instance ([#1622][1622]).
 
 [2432]: https://codeberg.org/dnkl/foot/pulls/2432
 [2467]: https://codeberg.org/dnkl/foot/issues/2467
@@ -104,6 +106,7 @@
 [2483]: https://codeberg.org/dnkl/foot/issues/2483
 [2487]: https://codeberg.org/dnkl/foot/issues/2487
 [2493]: https://codeberg.org/dnkl/foot/issues/2493
+[1622]: https://codeberg.org/dnkl/foot/issues/1622
 
 
 ### Security
