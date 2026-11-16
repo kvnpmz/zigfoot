@@ -95,12 +95,15 @@
   selection direction ([#2483][2483]).
 * Crash in `xdg_output_handle_done()` if called when a terminal is in
   the process of shutting down ([#2487][2487]).
+* Not responding to an OSC-52 query if clipboard source has no data
+  ([#2493][2493]).
 
 [2432]: https://codeberg.org/dnkl/foot/pulls/2432
 [2467]: https://codeberg.org/dnkl/foot/issues/2467
 [2482]: https://codeberg.org/dnkl/foot/pulls/2482
 [2483]: https://codeberg.org/dnkl/foot/issues/2483
 [2487]: https://codeberg.org/dnkl/foot/issues/2487
+[2493]: https://codeberg.org/dnkl/foot/issues/2493
 
 
 ### Security
