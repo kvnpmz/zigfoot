@@ -47,7 +47,7 @@ steps:
       - apk add musl-dev linux-headers meson ninja gcc clang scdoc ncurses
       - apk add libxkbcommon-dev pixman-dev freetype-dev fontconfig-dev harfbuzz-dev utf8proc-dev
       - apk add wayland-dev wayland-protocols
-      - apk add git
+      - apk add git python3 zig
       - apk add check-dev
       - apk add ttf-hack font-noto-emoji
 
@@ -104,7 +104,7 @@ steps:
       - apk add musl-dev linux-headers meson ninja gcc clang scdoc ncurses
       - apk add libxkbcommon-dev pixman-dev freetype-dev fontconfig-dev harfbuzz-dev utf8proc-dev
       - apk add wayland-dev wayland-protocols
-      - apk add git
+      - apk add git python3 zig
       - apk add check-dev
       - apk add ttf-hack font-noto-emoji
 
@@ -137,3 +137,34 @@ steps:
       - ./foot --version
       - ./footclient --version
       - cd ../..
+
+  - name: zig
+    when:
+      - event: [manual, pull_request]
+      - event: [push, tag]
+        branch: [master, releases/*]
+    depends_on: [subprojects]
+    image: alpine:edge
+    commands:
+      - apk update
+      - apk add musl-dev linux-headers meson ninja gcc clang scdoc ncurses
+      - apk add libxkbcommon-dev pixman-dev freetype-dev fontconfig-dev harfbuzz-dev utf8proc-dev
+      - apk add wayland-dev wayland-protocols
+      - apk add git python3 zig weston ttf-hack font-noto-emoji
+
+      - zig version
+      # compile_zig.py enforces the Zig series this branch targets.
+      - |
+        for cfg in enabled disabled; do
+          dir=bld/zig-$cfg
+          meson setup "$dir" --buildtype=debug -Dgrapheme-clustering=$cfg
+          ninja -v -C "$dir"
+          meson test -C "$dir" --print-errorlogs
+          ./"$dir"/foot --version
+          scripts/smoke.sh ./"$dir"/foot
+        done
+      # Release mode must build and pass the same tests.
+      - meson setup bld/zig-release --buildtype=release -Dgrapheme-clustering=enabled -Dime=disabled
+      - ninja -v -C bld/zig-release
+      - meson test -C bld/zig-release --print-errorlogs
+      - ./bld/zig-release/foot --version
