@@ -161,7 +161,31 @@ with a temp config, and real window launches (headless weston if needed).
 Verified locally: debug/grapheme-on, debug/grapheme-off, and release builds
 all build, `meson test` is 4/4 green, and the smoke test passes.
 
-## 5. Phase 1 — Finish the in-flight modules (2–3 weeks)
+## 5. Phase 1 — Finish the in-flight modules (2 weeks unblocked + 2 weeks after Phase 2)
+
+Phase 1 is roughly **4× Phase 0**, and it splits cleanly in two:
+
+| Part | Content | ~C lines left | Effort | Blocked on |
+|---|---|---|---|---|
+| **1a** | T1–T7, S1, S2 | ~1.7k | 8–10 days | nothing — shims suffice |
+| **1b** | T8–T11, S3 | ~2.1k | 10–12 days | Phase 2 `config` (T9/T10/T11), Phase 3 `wayland` (T8/S3), `render`/`slave` (T11) |
+
+Phase 0 was 4 commits and ~600 lines of *infrastructure* (probe, tests, CI,
+smoke script) with no behaviour ported. Phase 1a alone is ~1.7k lines of
+*behaviour* in ~10 commits, each of which must keep `terminal.c` compiling and
+the smoke test green. So yes: longer, and the tail of Phase 1 cannot be
+finished in Phase 1 at all — it is a Phase 2/3 deliverable by construction.
+
+**Progress:** T1 ✅ `term_erase_scrollback` (the existing C `UNITTEST` in
+`terminal.c` now exercises the Zig port), T2 ✅ `rows_to_text` +
+`term_scrollback_to_text` / `term_view_to_text` / `term_command_output_to_text`
+(covered by the new headless harness, `tests/test-terminal.c`, which links the
+real code through `footlib` — everything except `main.c` — so no wayland, pty or
+config file is needed). Next: T3.
+
+Order of work inside 1a: **~~T1 → T2~~ → T3 → T4 → T5 → T6 → T7 → S2 → S1**, i.e.
+cheapest and most testable first, and `T2` early because the text-extraction
+helpers become the primary assertion surface for every later chunk.
 
 Follow the established chunk style: one function group per commit, C body
 deleted and replaced by an `extern` prototype, new shims listed in the commit
@@ -196,10 +220,11 @@ and DnD plumbing:
 
 **Recommendation:** do S1/S2 now with thin wl shims; leave S3 for Phase 3.
 
-**Exit criteria for Phase 1:** `terminal.c` contains only T8–T11 (blocked on
-other modules), `selection.c` only S3; the headless harness covers cursor
-movement, erase, scroll, print, and selection; zero new opaque blobs without a
-tracked TODO.
+**Exit criteria for Phase 1a:** `terminal.c` contains only T8–T11 and
+`selection.c` only S3, each carrying a `/* TODO(phase2/3): blocked on <module> */`
+marker; the headless harness covers cursor movement, erase, scroll, print, text
+extraction and selection; zero new opaque blobs without a tracked TODO; every
+new chunk has at least one Zig unittest or harness assertion.
 
 ---
 

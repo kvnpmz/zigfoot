@@ -593,8 +593,13 @@ if get_option('b_pgo') == 'generate'
   )
 endif
 
-executable(
-  'foot',
+foot_deps = [math, threads, libepoll, pixman, wayland_client, wayland_cursor,
+             xkb, fontconfig, utf8proc, tllist, fcft]
+
+# Everything except main.c, so tests can link the real code and supply their
+# own main().
+footlib = static_library(
+  'footlib',
   async_obj, 'async.h',
   'box-drawing.c', 'box-drawing.h',
   'config.c', 'config.h',
@@ -605,7 +610,6 @@ executable(
   'ime.c', 'ime.h',
   'input.c', 'input.h',
   'key-binding.c', 'key-binding.h',
-  'main.c',
   notify_obj, 'notify.h', 'notify-shim.c',
   'quirks.c', 'quirks.h',
   reaper_obj, 'reaper.h',
@@ -622,9 +626,15 @@ executable(
   'wayland.c', 'wayland.h', 'shm-formats.h',
   'xkbcommon-vmod.h',
   srgb_funcs, wl_proto_src + wl_proto_headers, version,
-  dependencies: [math, threads, libepoll, pixman, wayland_client, wayland_cursor, xkb, fontconfig, utf8proc,
-                 tllist, fcft],
-  link_with: pgolib,
+  dependencies: foot_deps,
+  link_with: pgolib)
+
+executable(
+  'foot',
+  'main.c',
+  wl_proto_src + wl_proto_headers,
+  dependencies: foot_deps,
+  link_with: footlib,
   install: true)
 
 executable(

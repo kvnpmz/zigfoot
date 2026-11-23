@@ -551,6 +551,8 @@ export fn term_cursor_blink_update(term: *types.Terminal) callconv(.c) void {
 // term_scroll_reverse / term_linefeed / term_reverse_index.
 
 extern fn selection_cancel(term: *types.Terminal) callconv(.c) void;
+extern fn selection_get_start(term: *const types.Terminal) callconv(.c) types.Coord;
+extern fn selection_get_end(term: *const types.Terminal) callconv(.c) types.Coord;
 extern fn selection_on_rows(term: *const types.Terminal, start: c_int, end: c_int) callconv(.c) bool;
 extern fn selection_scroll_up(term: *types.Terminal, rows: c_int) callconv(.c) void;
 extern fn selection_scroll_down(term: *types.Terminal, rows: c_int) callconv(.c) void;
@@ -1675,6 +1677,294 @@ export fn fdm_ptmx(
         // to wait for the PTY to be closed.
         if (term.slave < 0 and !terminal_shim_conf_hold_at_exit(term))
             term_shutdown(term);
+    }
+
+    return true;
+}
+
+//
+// Chunk T1 — term_erase_scrollback
+//
+
+extern fn sixel_destroy(sixel: *types.Sixel) callconv(.c) void;
+
+// grid.h: grid_row_absolute() and grid_row_absolute_in_view() are static
+// inline in C, so they cannot be called from here; mirror them instead.
+fn gridRowAbsolute(grid: *const types.Grid, row_no: c_int) c_int {
+    return (grid.offset + row_no) & (grid.num_rows - 1);
+}
+
+fn gridRowAbsoluteInView(grid: *const types.Grid, row_no: c_int) c_int {
+    return (grid.view + row_no) & (grid.num_rows - 1);
+}
+
+/// Range check a (rel_start, rel_end) span against the scrollback span
+/// (rel_sb_start, rel_sb_end). Rows are relative to the scrollback start, so a
+/// higher number means further *down* in the scrollback.
+fn spanTouchesScrollback(
+    rel_start: c_int,
+    rel_end: c_int,
+    rel_sb_start: c_int,
+    rel_sb_end: c_int,
+) bool {
+    if (rel_start < 0 or rel_end < 0)
+        return false;
+
+    return (rel_start <= rel_sb_start and rel_end >= rel_sb_start) or
+        (rel_start <= rel_sb_end and rel_end >= rel_sb_end) or
+        (rel_start >= rel_sb_start and rel_end <= rel_sb_end);
+}
+
+/// tll_remove(): unlink *and* free the node (this matches tllist.h).
+fn sixelListRemove(list: *types.SixelList, node: *types.SixelNode) void {
+    std.debug.assert(list.length > 0);
+
+    if (node.prev) |prev| prev.next = node.next else list.head = node.next;
+    if (node.next) |next| next.prev = node.prev else list.tail = node.prev;
+    list.length -= 1;
+
+    std.c.free(node);
+}
+
+export fn term_erase_scrollback(term: *types.Terminal) void {
+    const grid = term.grid.?;
+    const num_rows = grid.num_rows;
+    const mask = num_rows - 1;
+
+    const scrollback_history_size = num_rows - term.rows;
+    if (scrollback_history_size == 0)
+        return;
+
+    const start = (grid.offset + term.rows) & mask;
+    const end = (grid.offset - 1) & mask;
+
+    const rel_start = grid_row_abs_to_sb(grid, term.rows, start);
+    const rel_end = grid_row_abs_to_sb(grid, term.rows, end);
+
+    const sel_start = selection_get_start(term).row;
+    const sel_end = selection_get_end(term).row;
+
+    if (sel_end >= 0) {
+        // Cancel the selection if it touches any of the rows in the
+        // scrollback, since we can't have it reference soon-to-be-deleted
+        // rows.
+        const rel_sel_start = grid_row_abs_to_sb(grid, term.rows, sel_start);
+        const rel_sel_end = grid_row_abs_to_sb(grid, term.rows, sel_end);
+
+        if (spanTouchesScrollback(rel_sel_start, rel_sel_end, rel_start, rel_end))
+            selection_cancel(term);
+    }
+
+    var it = grid.sixel_images.head;
+    while (it) |node| {
+        // Cache the next node: removing `node` frees it.
+        const next = node.next;
+        const six = &node.item;
+
+        const six_start = grid_row_abs_to_sb(grid, term.rows, six.pos.row);
+        const six_end = grid_row_abs_to_sb(
+            grid,
+            term.rows,
+            six.pos.row + six.rows - 1,
+        );
+
+        if (spanTouchesScrollback(six_start, six_end, rel_start, rel_end)) {
+            sixel_destroy(six);
+            sixelListRemove(&grid.sixel_images, node);
+        }
+
+        it = next;
+    }
+
+    var i = start;
+    while (true) : (i = (i + 1) & mask) {
+        if (grid.rows.?[@intCast(i)]) |r| {
+            if (term.render.last_cursor.row == r)
+                term.render.last_cursor.row = null;
+
+            grid_row_free(r);
+            grid.rows.?[@intCast(i)] = null;
+        }
+
+        if (i == end)
+            break;
+    }
+
+    grid.view = grid.offset;
+
+    if (comptime @import("builtin").mode == .Debug) {
+        // Every row in view must still exist (C guarded this with _DEBUG).
+        var r: c_int = 0;
+        while (r < term.rows) : (r += 1) {
+            const in_view = gridRowAbsoluteInView(grid, r);
+            std.debug.assert(grid.rows.?[@intCast(in_view)] != null);
+        }
+    }
+
+    term_damage_view(term);
+}
+
+//
+// Chunk T2 — text extraction
+//
+
+const SELECTION_NONE: c_int = 0;
+
+extern fn extract_begin(kind: c_int, strip_trailing_empty: bool) callconv(.c) ?*anyopaque;
+extern fn extract_one(
+    term: *const types.Terminal,
+    row: *const types.Row,
+    cell: *const types.Cell,
+    col: c_int,
+    context: *anyopaque,
+) callconv(.c) bool;
+extern fn extract_finish(context: *anyopaque, text: *?[*:0]u8, len: *usize) callconv(.c) bool;
+
+fn rowsToText(
+    term: *const types.Terminal,
+    start: c_int,
+    end: c_int,
+    col_start_initial: c_int,
+    col_end: c_int,
+    text: *?[*:0]u8,
+    len: *usize,
+) bool {
+    const ctx = extract_begin(SELECTION_NONE, true) orelse return false;
+
+    const grid = term.grid.?;
+    const grid_rows = grid.num_rows;
+    const rows = grid.rows.?;
+
+    var r = start;
+    var col_start = col_start_initial;
+
+    while (true) {
+        const r_row = rows[@intCast(r)] orelse {
+            std.debug.assert(false); // xassert(row != NULL)
+            return extract_finish(ctx, text, len);
+        };
+
+        const c_end = if (r == end) col_end else term.cols;
+
+        var c = col_start;
+        while (c < c_end) : (c += 1) {
+            const cell = &r_row.cells.?[@intCast(c)];
+            if (!extract_one(term, r_row, cell, c, ctx))
+                return extract_finish(ctx, text, len);
+        }
+
+        if (r == end)
+            break;
+
+        r = (r + 1) & (grid_rows - 1);
+        col_start = 0;
+    }
+
+    return extract_finish(ctx, text, len);
+}
+
+export fn term_scrollback_to_text(
+    term: *const types.Terminal,
+    text: *?[*:0]u8,
+    len: *usize,
+) bool {
+    const grid = term.grid.?;
+    const grid_rows = grid.num_rows;
+
+    var start = (grid.offset + term.rows) & (grid_rows - 1);
+    var end = (grid.offset + term.rows - 1) & (grid_rows - 1);
+
+    std.debug.assert(start >= 0 and start < grid_rows);
+    std.debug.assert(end >= 0 and end < grid_rows);
+
+    // If the scrollback isn't full yet, this may be NULL, so scan forward
+    // until we find the first non-NULL row.
+    const rows = grid.rows.?;
+    while (rows[@intCast(start)] == null) {
+        start += 1;
+        start &= grid_rows - 1;
+    }
+
+    while (rows[@intCast(end)] == null) {
+        end -= 1;
+        if (end < 0)
+            end += grid.num_rows;
+    }
+
+    return rowsToText(term, start, end, 0, term.cols, text, len);
+}
+
+export fn term_view_to_text(
+    term: *const types.Terminal,
+    text: *?[*:0]u8,
+    len: *usize,
+) bool {
+    const start = gridRowAbsoluteInView(term.grid.?, 0);
+    const end = gridRowAbsoluteInView(term.grid.?, term.rows - 1);
+    return rowsToText(term, start, end, 0, term.cols, text, len);
+}
+
+export fn term_command_output_to_text(
+    term: *const types.Terminal,
+    text: *?[*:0]u8,
+    len: *usize,
+) bool {
+    var start_row: c_int = -1;
+    var end_row: c_int = -1;
+    var start_col: c_int = -1;
+    var end_col: c_int = -1;
+
+    const grid = term.grid.?;
+    const rows = grid.rows.?;
+    const sb_end = gridRowAbsolute(grid, term.rows - 1);
+    const sb_start = (sb_end + 1) & (grid.num_rows - 1);
+    var r = sb_end;
+
+    while (start_row < 0) {
+        const cmd_row = rows[@intCast(r)] orelse break;
+
+        if (cmd_row.shell_integration.cmd_end >= 0) {
+            end_row = r;
+            end_col = cmd_row.shell_integration.cmd_end;
+        }
+
+        if (end_row >= 0 and cmd_row.shell_integration.cmd_start >= 0) {
+            start_row = r;
+            start_col = cmd_row.shell_integration.cmd_start;
+        }
+
+        if (r == sb_start)
+            break;
+
+        r = (r - 1 + grid.num_rows) & (grid.num_rows - 1);
+    }
+
+    if (start_row < 0)
+        return false;
+
+    const ret = rowsToText(term, start_row, end_row, start_col, end_col, text, len);
+    if (!ret)
+        return false;
+
+    // If the FTCS_COMMAND_FINISHED marker was emitted at the *first* column,
+    // then the *entire* previous line is part of the command output,
+    // including the newline. rowsToText() doesn't extract the column the
+    // marker was emitted at, so the extracted text won't end with a newline;
+    // compensate for that here. If end_col != 0 the output only covers a
+    // partial row, and we must *not* append a newline.
+    if (end_col > 0)
+        return true;
+
+    const next_to_last_row = (end_row - 1 + grid.num_rows) & (grid.num_rows - 1);
+    const prev_row = rows[@intCast(next_to_last_row)] orelse return true;
+
+    // Add newline if the last row has a hard linebreak
+    if (prev_row.linebreak) {
+        const new_text = std.c.realloc(@ptrCast(text.*), len.* + 2) orelse return true;
+        text.* = @ptrCast(new_text);
+        len.* += 1;
+        text.*.?[len.* - 1] = '\n';
+        text.*.?[len.*] = 0;
     }
 
     return true;
