@@ -228,6 +228,31 @@ version = custom_target(
   command: [env, 'LC_ALL=C', generate_version_sh, meson.project_version(), '@CURRENT_SOURCE_DIR@', '@OUTPUT@'])
 
 python = find_program('python3', native: true)
+
+# ABI probe: compile the real C headers and emit the layout as Zig constants.
+# terminal_types.zig imports `c_layout` and compares every mirrored struct
+# against it at compile time (see `expectAbi`).
+abi_probe = executable(
+  'abi_probe',
+  'abi_probe.c',
+  wl_proto_headers,
+  dependencies: [libepoll, pixman, fcft, tllist, wayland_client, xkb, utf8proc],
+)
+
+c_layout = custom_target(
+  'c_layout',
+  output: 'c_layout.zig',
+  command: [abi_probe, '@OUTPUT@'],
+  build_by_default: true,
+)
+
+zig_test_options = configuration_data()
+zig_test_options.set('grapheme_clustering', grapheme_clustering_zig)
+zig_test_build_options = configure_file(
+  input: 'zig_test_build_options.zig.in',
+  output: 'zig_test_build_options.zig',
+  configuration: zig_test_options)
+
 generate_builtin_terminfo_py = files('scripts/generate-builtin-terminfo.py')
 foot_terminfo = files('foot.info')
 builtin_terminfo = custom_target(
@@ -259,6 +284,7 @@ composed_obj = custom_target(
   'composed_obj',
   input: 'composed.zig',
   output: 'composed.o',
+  depends: c_layout,
   command: [python, files('compile_zig.py'), '@INPUT@', '@OUTPUT@']
 )
 
@@ -266,6 +292,7 @@ base64_obj = custom_target(
   'base64_obj',
   input: 'base64.zig',
   output: 'base64.o',
+  depends: c_layout,
   command: [python, files('compile_zig.py'), '@INPUT@', '@OUTPUT@']
 )
 
@@ -273,6 +300,7 @@ xsnprintf_obj = custom_target(
   'xsnprintf_obj',
   input: 'xsnprintf.zig',
   output: 'xsnprintf.o',
+  depends: c_layout,
   command: [python, files('compile_zig.py'), '@INPUT@', '@OUTPUT@']
 )
 
@@ -281,6 +309,7 @@ char32_obj = custom_target(
   'char32_obj',
   input: 'char32.zig',
   output: 'char32.o',
+  depends: c_layout,
   command: [
     python, files('compile_zig.py'), '@INPUT@', '@OUTPUT@',
     grapheme_clustering_zig,
@@ -292,6 +321,7 @@ hsl_obj = custom_target(
   'hsl_obj',
   input: 'hsl.zig',
   output: 'hsl.o',
+  depends: c_layout,
   command: [python, files('compile_zig.py'), '@INPUT@', '@OUTPUT@']
 )
 
@@ -300,6 +330,7 @@ uri_obj = custom_target(
   'uri_obj',
   input: 'uri.zig',
   output: 'uri.o',
+  depends: c_layout,
   command: [python, files('compile_zig.py'), '@INPUT@', '@OUTPUT@']
 )
 
@@ -309,6 +340,7 @@ async_obj = custom_target(
   'async_obj',
   input: 'async.zig',
   output: 'async.o',
+  depends: c_layout,
   command: [python, files('compile_zig.py'), '@INPUT@', '@OUTPUT@']
 )
 
@@ -316,6 +348,7 @@ cursor_shape_obj = custom_target(
   'cursor_shape_obj',
   input: 'cursor-shape.zig',
   output: 'cursor-shape.o',
+  depends: c_layout,
   command: [python, files('compile_zig.py'), '@INPUT@', '@OUTPUT@']
 )
 
@@ -323,6 +356,7 @@ fdm_obj = custom_target(
   'fdm_obj',
   input: 'fdm.zig',
   output: 'fdm.o',
+  depends: c_layout,
   command: [python, files('compile_zig.py'), '@INPUT@', '@OUTPUT@']
 )
 
@@ -330,6 +364,7 @@ misc_obj = custom_target(
   'misc_obj',
   input: 'misc.zig',
   output: 'misc.o',
+  depends: c_layout,
   command: [python, files('compile_zig.py'), '@INPUT@', '@OUTPUT@']
 )
 
@@ -337,6 +372,7 @@ reaper_obj = custom_target(
   'reaper_obj',
   input: 'reaper.zig',
   output: 'reaper.o',
+  depends: c_layout,
   command: [python, files('compile_zig.py'), '@INPUT@', '@OUTPUT@']
 )
 
@@ -345,6 +381,7 @@ spawn_template_obj = custom_target(
   'spawn_template_obj',
   input: 'spawn_template.zig',
   output: 'spawn_template.o',
+  depends: c_layout,
   command: [python, files('compile_zig.py'), '@INPUT@', '@OUTPUT@']
 )
 
@@ -352,6 +389,7 @@ spawn_obj = custom_target(
   'spawn_obj',
   input: 'spawn.zig',
   output: 'spawn.o',
+  depends: c_layout,
   command: [python, files('compile_zig.py'), '@INPUT@', '@OUTPUT@']
 )
 
@@ -359,6 +397,7 @@ tokenize_obj = custom_target(
   'tokenize_obj',
   input: 'tokenize.zig',
   output: 'tokenize.o',
+  depends: c_layout,
   command: [python, files('compile_zig.py'), '@INPUT@', '@OUTPUT@']
 )
 
@@ -367,6 +406,7 @@ grid_obj = custom_target(
   input: 'grid.zig',
   depend_files: files('terminal_types.zig', 'composed.zig'),
   output: 'grid.o',
+  depends: c_layout,
   command: [
     python, files('compile_zig.py'), '@INPUT@', '@OUTPUT@',
     grapheme_clustering_zig,
@@ -378,6 +418,7 @@ selection_obj = custom_target(
   input: 'selection.zig',
   depend_files: files('terminal_types.zig'),
   output: 'selection.o',
+  depends: c_layout,
   command: [
     python, files('compile_zig.py'), '@INPUT@', '@OUTPUT@',
     grapheme_clustering_zig,
@@ -390,6 +431,7 @@ terminal_obj = custom_target(
   input: 'terminal.zig',
   depend_files: files('terminal_types.zig', 'tll.zig'),
   output: 'terminal.o',
+  depends: c_layout,
   command: [
     python, files('compile_zig.py'), '@INPUT@', '@OUTPUT@',
     grapheme_clustering_zig,
@@ -402,6 +444,7 @@ csi_obj = custom_target(
   input: 'csi.zig',
   depend_files: files('terminal_types.zig'),
   output: 'csi.o',
+  depends: c_layout,
   command: [
     python, files('compile_zig.py'), '@INPUT@', '@OUTPUT@',
     grapheme_clustering_zig,
@@ -413,6 +456,7 @@ dcs_obj = custom_target(
   input: 'dcs.zig',
   depend_files: files('terminal_types.zig'),
   output: 'dcs.o',
+  depends: c_layout,
   command: [
     python, files('compile_zig.py'), '@INPUT@', '@OUTPUT@',
     grapheme_clustering_zig,
@@ -424,6 +468,7 @@ osc_obj = custom_target(
   input: 'osc.zig',
   depend_files: files('terminal_types.zig'),
   output: 'osc.o',
+  depends: c_layout,
   command: [
     python, files('compile_zig.py'), '@INPUT@', '@OUTPUT@',
     grapheme_clustering_zig,
@@ -435,6 +480,7 @@ sixel_obj = custom_target(
   input: 'sixel.zig',
   depend_files: files('terminal_types.zig'),
   output: 'sixel.o',
+  depends: c_layout,
   command: [
     python, files('compile_zig.py'), '@INPUT@', '@OUTPUT@',
     grapheme_clustering_zig,
@@ -446,6 +492,7 @@ vt_obj = custom_target(
   input: 'vt.zig',
   depend_files: files('terminal_types.zig'),
   output: 'vt.o',
+  depends: c_layout,
   command: [
     python, files('compile_zig.py'), '@INPUT@', '@OUTPUT@',
     grapheme_clustering_zig,
@@ -457,6 +504,7 @@ notify_obj = custom_target(
   input: 'notify.zig',
   depend_files: files('terminal_types.zig'),
   output: 'notify.o',
+  depends: c_layout,
   command: [
     python, files('compile_zig.py'), '@INPUT@', '@OUTPUT@',
     grapheme_clustering_zig,
@@ -467,6 +515,7 @@ xmalloc_obj = custom_target(
   'xmalloc_obj',
   input: 'xmalloc.zig',
   output: 'xmalloc.o',
+  depends: c_layout,
   command: [python, files('compile_zig.py'), '@INPUT@', '@OUTPUT@']
 )
 
@@ -664,6 +713,15 @@ subdir('icons')
 subdir('utils')
 
 if (get_option('tests'))
+  zig_test_script = files('scripts/zig_test.py')
+  gen_abi_probe_script = files('scripts/gen_abi_probe.py')
+
+  # Modules with `test` blocks. Third element: extra zig test flags.
+  zig_test_modules = [
+    ['terminal_types', files('terminal_types.zig'), []],
+    ['grid', files('grid.zig'), ['-lpixman-1']],
+  ]
+
   subdir('tests')
 endif
 

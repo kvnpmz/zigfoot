@@ -1433,14 +1433,14 @@ fn caseGreater(term: *types.Terminal, final: u8) void {
         'u' => { // kitty kbd push
             const flags: u32 = @intCast(vtParamGet(term, 0, 0) & KITTY_KBD_SUPPORTED);
             const grid = term.grid orelse return;
-            var idx = grid.kitty_kbd_idx;
-            if (idx + 1 >= grid.kitty_kbd_flags.len) {
+            var idx = grid.kitty_kbd.idx;
+            if (idx + 1 >= grid.kitty_kbd.flags.len) {
                 idx = 0;
             } else {
                 idx += 1;
             }
-            grid.kitty_kbd_flags[idx] = @intCast(flags);
-            grid.kitty_kbd_idx = idx;
+            grid.kitty_kbd.flags[idx] = @intCast(flags);
+            grid.kitty_kbd.idx = idx;
         },
         'q' => blk: { // XTVERSION
             if (vtParamGet(term, 0, 0) != 0) break :blk;
@@ -1462,18 +1462,18 @@ fn caseGreater(term: *types.Terminal, final: u8) void {
 fn caseLess(term: *types.Terminal, final: u8) void {
     if (final != 'u') return;
     const grid = term.grid orelse return;
-    const count: c_int = @min(vtParamGet(term, 0, 1), @as(c_int, @intCast(grid.kitty_kbd_flags.len)));
-    var idx = grid.kitty_kbd_idx;
+    const count: c_int = @min(vtParamGet(term, 0, 1), @as(c_int, @intCast(grid.kitty_kbd.flags.len)));
+    var idx = grid.kitty_kbd.idx;
     var i: c_int = 0;
     while (i < count) : (i += 1) {
-        grid.kitty_kbd_flags[idx] = 0;
+        grid.kitty_kbd.flags[idx] = 0;
         if (idx == 0) {
-            idx = @intCast(grid.kitty_kbd_flags.len - 1);
+            idx = @intCast(grid.kitty_kbd.flags.len - 1);
         } else {
             idx -= 1;
         }
     }
-    grid.kitty_kbd_idx = idx;
+    grid.kitty_kbd.idx = idx;
 }
 
 // ── case ' ' — DECSCUSR cursor style ──────────────────────────────
@@ -1516,11 +1516,11 @@ fn caseEquals(term: *types.Terminal, final: u8) void {
             const flag_set: u32 = @intCast(vtParamGet(term, 0, 0) & KITTY_KBD_SUPPORTED);
             const mode = vtParamGet(term, 1, 1);
             const grid = term.grid orelse return;
-            const idx = grid.kitty_kbd_idx;
+            const idx = grid.kitty_kbd.idx;
             switch (mode) {
-                1 => grid.kitty_kbd_flags[idx] = @intCast(flag_set),
-                2 => grid.kitty_kbd_flags[idx] |= @intCast(flag_set),
-                3 => grid.kitty_kbd_flags[idx] &= ~@as(types.KittyKbdFlags, @intCast(flag_set)),
+                1 => grid.kitty_kbd.flags[idx] = @intCast(flag_set),
+                2 => grid.kitty_kbd.flags[idx] |= @intCast(flag_set),
+                3 => grid.kitty_kbd.flags[idx] &= ~@as(types.KittyKbdFlags, @intCast(flag_set)),
                 else => {},
             }
         },
