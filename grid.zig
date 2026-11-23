@@ -921,7 +921,7 @@ export fn gridResizeWithoutReflow(
     old_screen_rows: c_int,
     new_screen_rows: c_int,
 ) void {
-    const old_grid = grid.rows.?;
+    const old_grid_opt = grid.rows;
     const old_rows = grid.num_rows;
     const old_cols = grid.num_cols;
     const new_rows_u: usize = @intCast(new_rows);
@@ -941,7 +941,7 @@ export fn gridResizeWithoutReflow(
         const old_row_idx: usize = @intCast((grid.offset + r) & (old_rows - 1));
         const new_row_idx: usize = @intCast((new_offset + r) & (new_rows - 1));
 
-        const old_row = old_grid[old_row_idx].?;
+        const old_row = old_grid_opt.?[old_row_idx].?;
         const new_row = rowAlloc(new_cols, false);
         new_grid[new_row_idx] = new_row;
 
@@ -1012,8 +1012,8 @@ export fn gridResizeWithoutReflow(
 
     var fr: usize = 0;
     while (fr < @as(usize, @intCast(grid.num_rows))) : (fr += 1)
-        rowFree(old_grid[fr]);
-    std.c.free(@ptrCast(old_grid));
+        rowFree(old_grid_opt.?[fr]);
+    std.c.free(@ptrCast(old_grid_opt));
 
     grid.rows = new_grid;
     grid.num_rows = new_rows;
@@ -1317,7 +1317,7 @@ export fn gridResizeAndReflow(
 ) void {
     const allocator = std.heap.c_allocator;
 
-    const old_grid = grid.rows.?;
+    const old_grid_opt = grid.rows;
     const old_rows = grid.num_rows;
     const old_cols = grid.num_cols;
     const view_follows = grid.view == grid.offset;
@@ -1369,7 +1369,7 @@ export fn gridResizeAndReflow(
     while (r < old_rows) : (r += 1) {
         const old_row_idx_i: c_int = (offset + r) & (old_rows - 1);
         const old_row_idx: usize = @intCast(old_row_idx_i);
-        const old_row = old_grid[old_row_idx] orelse continue;
+        const old_row = old_grid_opt.?[old_row_idx] orelse continue;
 
         var sn = untranslated.head;
         while (sn) |node| {
@@ -1541,8 +1541,8 @@ export fn gridResizeAndReflow(
             }
         }
 
-        rowFree(old_grid[old_row_idx]);
-        old_grid[old_row_idx] = null;
+        rowFree(old_grid_opt.?[old_row_idx]);
+        old_grid_opt.?[old_row_idx] = null;
     }
 
     zeroCells(new_row, new_col_idx, new_cols);
@@ -1561,7 +1561,7 @@ export fn gridResizeAndReflow(
             new_grid[idx] = rowAlloc(new_cols, true);
     }
 
-    std.c.free(@ptrCast(old_grid));
+    std.c.free(@ptrCast(old_grid_opt));
     grid.rows = new_grid;
     grid.num_rows = new_rows;
     grid.num_cols = new_cols;
@@ -1889,6 +1889,30 @@ test "reflow collapses a character wider than the row into one blank cell" {
     var k: usize = 0;
     while (k < 8) : (k += 1) rowFree(out[k]);
     std.c.free(@ptrCast(out));
+}
+
+test "resize tolerates an uninitialized grid (NULL rows)" {
+    // term_init() zeroes term->normal/alt: rows is NULL and num_rows is 0
+    // until the first wl_surface configure. C tolerates that (the pointer is
+    // never dereferenced and free(NULL) is fine); the port must too.
+    var normal = std.mem.zeroes(types.Grid);
+    normal.sixel_images = .{ .head = null, .tail = null, .length = 0 };
+    normal.scroll_damage = .{ .head = null, .tail = null, .length = 0 };
+
+    gridResizeAndReflow(&normal, null, 24, 80, 0, 24, 0, null);
+
+    try std.testing.expect(normal.rows != null);
+    try std.testing.expectEqual(@as(c_int, 24), normal.num_rows);
+    try std.testing.expectEqual(@as(c_int, 80), normal.num_cols);
+
+    var alt = std.mem.zeroes(types.Grid);
+    alt.sixel_images = .{ .head = null, .tail = null, .length = 0 };
+    alt.scroll_damage = .{ .head = null, .tail = null, .length = 0 };
+
+    gridResizeWithoutReflow(&alt, 24, 80, 0, 24);
+
+    try std.testing.expect(alt.rows != null);
+    try std.testing.expectEqual(@as(c_int, 24), alt.num_rows);
 }
 
 // ---------------------------------------------------------------------------
