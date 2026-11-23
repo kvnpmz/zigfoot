@@ -338,7 +338,6 @@ export fn term_restore_cursor(
 // ── Chunk A: term_row_rel_to_abs + blink/flash timers ────────────
 
 extern fn render_overlay(term: *types.Terminal) callconv(.c) void;
-extern fn render_refresh(term: *types.Terminal) callconv(.c) void;
 extern fn fdm_add(fdm: *anyopaque, fd: c_int, events: c_int, handler: *const fn (*anyopaque, c_int, c_int, ?*anyopaque) callconv(.c) bool, data: ?*anyopaque) callconv(.c) bool;
 extern fn fdm_del(fdm: *anyopaque, fd: c_int) callconv(.c) bool;
 extern fn timerfd_create(clockid: c_int, flags: c_int) callconv(.c) c_int;
@@ -1968,4 +1967,260 @@ export fn term_command_output_to_text(
     }
 
     return true;
+}
+
+//
+// Chunk T3 — small accessors: osc8, user mouse cursor, size notifications,
+// visibility report, flash, app-sync updates, render throttle timers.
+//
+
+fn logErr(msg: [*:0]const u8) void {
+    log_msg(LOG_CLASS_ERROR, "terminal", "terminal.zig", @intCast(@src().line), "%s", msg);
+}
+
+fn logErrno(msg: [*:0]const u8) void {
+    log_errno(LOG_CLASS_ERROR, "terminal", "terminal.zig", @intCast(@src().line), "%s", msg);
+}
+
+extern fn render_refresh(term: *types.Terminal) callconv(.c) void;
+extern fn render_refresh_title(term: *types.Terminal) callconv(.c) void;
+extern fn render_refresh_icon(term: *types.Terminal) callconv(.c) void;
+extern fn render_refresh_app_id(term: *types.Terminal) callconv(.c) void;
+extern fn term_xcursor_update(term: *types.Terminal) callconv(.c) void;
+extern fn terminal_shim_window_is_suspended(term: *types.Terminal) callconv(.c) bool;
+extern fn xstrdup(s: [*:0]const u8) callconv(.c) ?[*:0]u8;
+
+export fn term_osc8_open(term: *types.Terminal, id: u64, uri: [*:0]const u8) void {
+    term_osc8_close(term);
+    std.debug.assert(term.vt.osc8.uri == null);
+
+    term.vt.osc8.id = id;
+    term.vt.osc8.uri = xstrdup(uri);
+
+    term.bits_affecting_ascii_printer._.osc8 = true;
+    term_update_ascii_printer(term);
+}
+
+export fn term_osc8_close(term: *types.Terminal) void {
+    if (term.vt.osc8.uri) |uri|
+        std.c.free(uri);
+    term.vt.osc8.uri = null;
+    term.vt.osc8.id = 0;
+
+    term.bits_affecting_ascii_printer._.osc8 = false;
+    term_update_ascii_printer(term);
+}
+
+export fn term_set_user_mouse_cursor(term: *types.Terminal, cursor: ?[*:0]const u8) void {
+    if (term.mouse_user_cursor) |old|
+        std.c.free(old);
+
+    if (cursor) |c| {
+        term.mouse_user_cursor = if (c[0] != 0) xstrdup(c) else null;
+    } else {
+        term.mouse_user_cursor = null;
+    }
+
+    term_xcursor_update(term);
+}
+
+export fn term_send_visibility_report(term: *types.Terminal) void {
+    // Both reports are 9 bytes; see also term_to_slave()'s length cast.
+    const report = if (terminal_shim_window_is_suspended(term))
+        "\x1b[?999;2n"
+    else
+        "\x1b[?999;1n";
+
+    _ = term_to_slave(term, @ptrCast(report.ptr), report.len);
+}
+
+export fn term_enable_size_notifications(term: *types.Terminal) void {
+    // Note: always send the current size upon activation, regardless of
+    // the previous state.
+    term.size_notifications = true;
+    term_send_size_notification(term);
+}
+
+export fn term_disable_size_notifications(term: *types.Terminal) void {
+    if (!term.size_notifications)
+        return;
+
+    term.size_notifications = false;
+}
+
+export fn term_send_size_notification(term: *types.Terminal) void {
+    if (!term.size_notifications)
+        return;
+
+    const height = term.height - term.margins.top - term.margins.bottom;
+    const width = term.width - term.margins.left - term.margins.right;
+
+    var buf: [128]u8 = undefined;
+    const s = std.fmt.bufPrint(
+        &buf,
+        "\x1b[48;{d};{d};{d};{d}t",
+        .{ term.rows, term.cols, height, width },
+    ) catch return;
+
+    _ = term_to_slave(term, @ptrCast(s.ptr), s.len);
+}
+
+const zero_itimerspec = types.Itimerspec{
+    .it_value = .{ .tv_sec = 0, .tv_nsec = 0 },
+    .it_interval = .{ .tv_sec = 0, .tv_nsec = 0 },
+};
+
+export fn term_flash(term: *types.Terminal, duration_ms: c_uint) void {
+    const alarm = types.Itimerspec{
+        .it_value = .{ .tv_sec = 0, .tv_nsec = @intCast(duration_ms * 1_000_000) },
+        .it_interval = .{ .tv_sec = 0, .tv_nsec = 0 },
+    };
+
+    if (timerfd_settime(term.flash.fd, 0, &alarm, null) < 0) {
+        logErrno("failed to arm flash timer");
+    } else {
+        term.flash.active = true;
+    }
+}
+
+/// Drain a timerfd and disarm it again. Returns false if reading failed for a
+/// reason other than "would block".
+fn drainTimer(fd: c_int) bool {
+    var unused: u64 = undefined;
+    _ = std.posix.read(fd, std.mem.asBytes(&unused)) catch |err| switch (err) {
+        error.WouldBlock => return true,
+        else => return false,
+    };
+
+    _ = timerfd_settime(fd, 0, &zero_itimerspec, null);
+    return true;
+}
+
+export fn fdm_app_sync_updates_timeout(
+    fdm: ?*anyopaque,
+    fd: c_int,
+    events: c_int,
+    data: ?*anyopaque,
+) bool {
+    _ = fdm;
+    _ = fd;
+
+    if (events & EPOLLHUP != 0)
+        return false;
+
+    const term: *types.Terminal = @ptrCast(@alignCast(data.?));
+
+    var unused: u64 = undefined;
+    _ = std.posix.read(term.render.app_sync_updates.timer_fd, std.mem.asBytes(&unused)) catch |err| switch (err) {
+        error.WouldBlock => return true,
+        else => {
+            logErrno("failed to read application synchronized updates timeout timer");
+            return false;
+        },
+    };
+
+    term_disable_app_sync_updates(term);
+    return true;
+}
+
+const ThrottleKind = enum { title, icon, app_id };
+
+fn fdmRenderThrottleTimeout(events: c_int, data: ?*anyopaque, kind: ThrottleKind) bool {
+    if (events & EPOLLHUP != 0)
+        return false;
+
+    const term: *types.Terminal = @ptrCast(@alignCast(data.?));
+
+    const fd = switch (kind) {
+        .title => term.render.title.timer_fd,
+        .icon => term.render.icon.timer_fd,
+        .app_id => term.render.app_id.timer_fd,
+    };
+
+    if (!drainTimer(fd)) {
+        logErrno("failed to read update throttle timer");
+        return false;
+    }
+
+    switch (kind) {
+        .title => render_refresh_title(term),
+        .icon => render_refresh_icon(term),
+        .app_id => render_refresh_app_id(term),
+    }
+
+    return true;
+}
+
+export fn fdm_title_update_timeout(
+    fdm: ?*anyopaque,
+    fd: c_int,
+    events: c_int,
+    data: ?*anyopaque,
+) bool {
+    _ = fdm;
+    _ = fd;
+    return fdmRenderThrottleTimeout(events, data, .title);
+}
+
+export fn fdm_icon_update_timeout(
+    fdm: ?*anyopaque,
+    fd: c_int,
+    events: c_int,
+    data: ?*anyopaque,
+) bool {
+    _ = fdm;
+    _ = fd;
+    return fdmRenderThrottleTimeout(events, data, .icon);
+}
+
+export fn fdm_app_id_update_timeout(
+    fdm: ?*anyopaque,
+    fd: c_int,
+    events: c_int,
+    data: ?*anyopaque,
+) bool {
+    _ = fdm;
+    _ = fd;
+    return fdmRenderThrottleTimeout(events, data, .app_id);
+}
+
+export fn term_enable_app_sync_updates(term: *types.Terminal) void {
+    term.render.app_sync_updates.enabled = true;
+
+    if (timerfd_settime(
+        term.render.app_sync_updates.timer_fd,
+        0,
+        &types.Itimerspec{
+            .it_value = .{ .tv_sec = 1, .tv_nsec = 0 },
+            .it_interval = .{ .tv_sec = 0, .tv_nsec = 0 },
+        },
+        null,
+    ) < 0) {
+        logErr("failed to arm timer for application synchronized updates");
+    }
+
+    // Disable pending refresh *iff* the grid is the *only* thing scheduled
+    // to be re-rendered.
+    if (!term.render.refresh.csd and !term.render.refresh.search and
+        !term.render.pending.csd and !term.render.pending.search)
+    {
+        term.render.refresh.grid = false;
+        term.render.pending.grid = false;
+    }
+
+    // Disarm delayed rendering timers
+    _ = timerfd_settime(terminal_shim_delayed_render_lower_fd(term), 0, &zero_itimerspec, null);
+    _ = timerfd_settime(terminal_shim_delayed_render_upper_fd(term), 0, &zero_itimerspec, null);
+    terminal_shim_delayed_render_set_armed(term, false);
+}
+
+export fn term_disable_app_sync_updates(term: *types.Terminal) void {
+    if (!term.render.app_sync_updates.enabled)
+        return;
+
+    term.render.app_sync_updates.enabled = false;
+    render_refresh(term);
+
+    // Reset timers
+    _ = timerfd_settime(term.render.app_sync_updates.timer_fd, 0, &zero_itimerspec, null);
 }

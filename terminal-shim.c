@@ -8,6 +8,10 @@ struct wl_surface *terminal_shim_window_surface(struct terminal *term) {
     return term->window->surface.surf;
 }
 
+bool terminal_shim_window_is_suspended(struct terminal *term) {
+    return term->window->is_suspended;
+}
+
 bool terminal_shim_window_is_configured(struct terminal *term) {
     return term->window->is_configured;
 }

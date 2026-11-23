@@ -197,100 +197,12 @@ fdm_delayed_render(struct fdm *fdm, int fd, int events, void *data)
     return true;
 }
 
-static bool
-fdm_app_sync_updates_timeout(
-    struct fdm *fdm, int fd, int events, void *data)
-{
-    if (events & EPOLLHUP)
-        return false;
-
-    struct terminal *term = data;
-    uint64_t unused;
-    ssize_t ret = read(term->render.app_sync_updates.timer_fd,
-                       &unused, sizeof(unused));
-
-    if (ret < 0) {
-        if (errno == EAGAIN)
-            return true;
-        LOG_ERRNO("failed to read application synchronized updates timeout timer");
-        return false;
-    }
-
-    term_disable_app_sync_updates(term);
-    return true;
-}
-
-static bool
-fdm_title_update_timeout(struct fdm *fdm, int fd, int events, void *data)
-{
-    if (events & EPOLLHUP)
-        return false;
-
-    struct terminal *term = data;
-    uint64_t unused;
-    ssize_t ret = read(term->render.title.timer_fd, &unused, sizeof(unused));
-
-    if (ret < 0) {
-        if (errno == EAGAIN)
-            return true;
-        LOG_ERRNO("failed to read title update throttle timer");
-        return false;
-    }
-
-    struct itimerspec reset = {{0}};
-    timerfd_settime(term->render.title.timer_fd, 0, &reset, NULL);
-
-    render_refresh_title(term);
-    return true;
-}
-
-static bool
-fdm_icon_update_timeout(struct fdm *fdm, int fd, int events, void *data)
-{
-    if (events & EPOLLHUP)
-        return false;
-
-    struct terminal *term = data;
-    uint64_t unused;
-    ssize_t ret = read(term->render.icon.timer_fd, &unused, sizeof(unused));
-
-    if (ret < 0) {
-        if (errno == EAGAIN)
-            return true;
-        LOG_ERRNO("failed to read icon update throttle timer");
-        return false;
-    }
-
-    struct itimerspec reset = {{0}};
-    timerfd_settime(term->render.icon.timer_fd, 0, &reset, NULL);
-
-    render_refresh_icon(term);
-    return true;
-}
-
-static bool
-fdm_app_id_update_timeout(struct fdm *fdm, int fd, int events, void *data)
-{
-    if (events & EPOLLHUP)
-        return false;
-
-    struct terminal *term = data;
-    uint64_t unused;
-    ssize_t ret = read(term->render.app_id.timer_fd, &unused, sizeof(unused));
-
-    if (ret < 0) {
-        if (errno == EAGAIN)
-            return true;
-        LOG_ERRNO("failed to read app ID update throttle timer");
-        return false;
-    }
-
-    struct itimerspec reset = {{0}};
-    timerfd_settime(term->render.app_id.timer_fd, 0, &reset, NULL);
-
-    render_refresh_app_id(term);
-    return true;
-}
+/* fdm_app_sync_updates_timeout, fdm_title_update_timeout,
+ * fdm_icon_update_timeout, fdm_app_id_update_timeout: ported to terminal.zig */
+extern bool fdm_app_sync_updates_timeout(struct fdm *fdm, int fd, int events, void *data);
+extern bool fdm_title_update_timeout(struct fdm *fdm, int fd, int events, void *data);
+extern bool fdm_icon_update_timeout(struct fdm *fdm, int fd, int events, void *data);
+extern bool fdm_app_id_update_timeout(struct fdm *fdm, int fd, int events, void *data);
 
 static bool
 initialize_render_workers(struct terminal *term)
@@ -2222,13 +2134,7 @@ UNITTEST
 
 
 
-void
-term_send_visibility_report(struct terminal *term)
-{
-    term_to_slave(
-        term,
-        !term->window->is_suspended ? "\033[?999;1n" : "\033[?999;2n", 9);
-}
+/* term_send_visibility_report: ported to terminal.zig */
 
 
 void
@@ -2657,21 +2563,7 @@ term->window_icon != NULL
             : app_id;
 }
 
-void
-term_flash(struct terminal *term, unsigned duration_ms)
-{
-    LOG_DBG("FLASH for %ums", duration_ms);
-
-    struct itimerspec alarm = {
-        .it_value = {.tv_sec = 0, .tv_nsec = duration_ms * 1000000},
-    };
-
-    if (timerfd_settime(term->flash.fd, 0, &alarm, NULL) < 0)
-        LOG_ERRNO("failed to arm flash timer");
-    else {
-        term->flash.active = true;
-    }
-}
+/* term_flash: ported to terminal.zig */
 
 void
 term_bell(struct terminal *term)
@@ -2737,51 +2629,9 @@ term_spawn_new(const struct terminal *term)
         -1, -1, -1, NULL, NULL, NULL) >= 0;
 }
 
-void
-term_enable_app_sync_updates(struct terminal *term)
-{
-    term->render.app_sync_updates.enabled = true;
+/* term_enable_app_sync_updates: ported to terminal.zig */
 
-    if (timerfd_settime(
-            term->render.app_sync_updates.timer_fd, 0,
-            &(struct itimerspec){.it_value = {.tv_sec = 1}}, NULL) < 0)
-    {
-        LOG_ERR("failed to arm timer for application synchronized updates");
-    }
-
-    /* Disable pending refresh *iff* the grid is the *only* thing
-     * scheduled to be re-rendered */
-    if (!term->render.refresh.csd && !term->render.refresh.search &&
-        !term->render.pending.csd && !term->render.pending.search)
-    {
-        term->render.refresh.grid = false;
-        term->render.pending.grid = false;
-    }
-
-    /* Disarm delayed rendering timers */
-    timerfd_settime(
-        term->delayed_render_timer.lower_fd, 0,
-        &(struct itimerspec){{0}}, NULL);
-    timerfd_settime(
-        term->delayed_render_timer.upper_fd, 0,
-        &(struct itimerspec){{0}}, NULL);
-    term->delayed_render_timer.is_armed = false;
-}
-
-void
-term_disable_app_sync_updates(struct terminal *term)
-{
-    if (!term->render.app_sync_updates.enabled)
-        return;
-
-    term->render.app_sync_updates.enabled = false;
-    render_refresh(term);
-
-    /* Reset timers */
-    timerfd_settime(
-        term->render.app_sync_updates.timer_fd, 0,
-        &(struct itimerspec){{0}}, NULL);
-}
+/* term_disable_app_sync_updates: ported to terminal.zig */
 
 void
 print_linewrap(struct terminal *term)
@@ -2985,72 +2835,16 @@ term_ime_set_cursor_rect(struct terminal *term, int x, int y, int width,
 #endif
 }
 
-void
-term_osc8_open(struct terminal *term, uint64_t id, const char *uri)
-{
-    term_osc8_close(term);
-    xassert(term->vt.osc8.uri == NULL);
+/* term_osc8_open/term_osc8_close: ported to terminal.zig */
 
-    term->vt.osc8.id = id;
-    term->vt.osc8.uri = xstrdup(uri);
 
-    term->bits_affecting_ascii_printer.osc8 = true;
-    term_update_ascii_printer(term);
-}
+/* term_set_user_mouse_cursor: ported to terminal.zig */
 
-void
-term_osc8_close(struct terminal *term)
-{
-    free(term->vt.osc8.uri);
-    term->vt.osc8.uri = NULL;
-    term->vt.osc8.id = 0;
-    term->bits_affecting_ascii_printer.osc8 = false;
-    term_update_ascii_printer(term);
-}
+/* size notifications: ported to terminal.zig */
 
-void
-term_set_user_mouse_cursor(struct terminal *term, const char *cursor)
-{
-    free(term->mouse_user_cursor);
-    term->mouse_user_cursor = cursor != NULL && strlen(cursor) > 0
-        ? xstrdup(cursor)
-        : NULL;
-    term_xcursor_update(term);
-}
+/* size notifications: ported to terminal.zig */
 
-void
-term_enable_size_notifications(struct terminal *term)
-{
-    /* Note: always send current size upon activation, regardless of
-       previous state */
-    term->size_notifications = true;
-    term_send_size_notification(term);
-}
-
-void
-term_disable_size_notifications(struct terminal *term)
-{
-    if (!term->size_notifications)
-        return;
-
-    term->size_notifications = false;
-}
-
-void
-term_send_size_notification(struct terminal *term)
-{
-    if (!term->size_notifications)
-        return;
-
-    const int height = term->height - term->margins.top - term->margins.bottom;
-    const int width = term->width - term->margins.left - term->margins.right;
-
-    char buf[128];
-    const size_t n = xsnprintf(
-        buf, sizeof(buf), "\033[48;%d;%d;%d;%dt",
-        term->rows, term->cols, height, width);
-    term_to_slave(term, buf, n);
-}
+/* size notifications: ported to terminal.zig */
 
 void
 term_theme_switch_to_dark(struct terminal *term)

@@ -15,6 +15,8 @@
 #include "xmalloc.h"
 
 #include <stdio.h>
+#include <sys/timerfd.h>
+#include <unistd.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -102,6 +104,10 @@ term_new(void)
     term->selection.coords.end = (struct coord){-1, -1};
     term->selection.kind = SELECTION_NONE;
     term->selection.auto_scroll.fd = -1;
+
+    /* term_to_slave() short-circuits on ptmx < 0, so escape-sequence
+     * generating helpers can be exercised without a pty. */
+    term->ptmx = -1;
 
     populate(term);
     return term;
@@ -285,6 +291,79 @@ test_erase_scrollback(void)
     term_free(term);
 }
 
+/* term_osc8_*(): id/URI state and the ascii-printer bits */
+static void
+test_osc8(void)
+{
+    struct terminal *term = term_new();
+
+    check(term->vt.osc8.uri == NULL, "osc8 starts closed");
+
+    term_osc8_open(term, 42, "https://example.com/");
+    check(term->vt.osc8.id == 42, "osc8_open stores the id");
+    check(term->vt.osc8.uri != NULL &&
+          strcmp(term->vt.osc8.uri, "https://example.com/") == 0,
+          "osc8_open stores the uri");
+    check(term->bits_affecting_ascii_printer.osc8, "osc8_open sets the ascii-printer bit");
+
+    /* Opening again must replace, not leak/duplicate */
+    term_osc8_open(term, 43, "https://second.example/");
+    check(term->vt.osc8.id == 43, "osc8_open replaces the id");
+    check(strcmp(term->vt.osc8.uri, "https://second.example/") == 0,
+          "osc8_open replaces the uri");
+
+    term_osc8_close(term);
+    check(term->vt.osc8.uri == NULL, "osc8_close clears the uri");
+    check(term->vt.osc8.id == 0, "osc8_close clears the id");
+    check(!term->bits_affecting_ascii_printer.osc8, "osc8_close clears the ascii-printer bit");
+
+    term_free(term);
+}
+
+/* size notifications: always reports once on enable, then only while enabled */
+static void
+test_size_notifications(void)
+{
+    struct terminal *term = term_new();
+    term->width = 800;
+    term->height = 600;
+    term->ptmx = -1;
+
+    check(!term->size_notifications, "size notifications start disabled");
+
+    term_disable_size_notifications(term);
+    check(!term->size_notifications, "disabling twice is a no-op");
+
+    term_enable_size_notifications(term);
+    check(term->size_notifications, "enable_size_notifications sets the flag");
+
+    term_send_size_notification(term);   /* must not crash without a pty */
+    term_disable_size_notifications(term);
+    check(!term->size_notifications, "disable_size_notifications clears the flag");
+
+    /* Sending while disabled is a no-op */
+    term_send_size_notification(term);
+    check(!term->size_notifications, "send while disabled leaves the flag alone");
+
+    term_free(term);
+}
+
+/* term_flash(): arms the timer and marks the terminal as flashing */
+static void
+test_flash(void)
+{
+    struct terminal *term = term_new();
+    term->flash.fd = timerfd_create(CLOCK_MONOTONIC, TFD_NONBLOCK | TFD_CLOEXEC);
+    check(term->flash.fd >= 0, "flash timer created");
+
+    check(!term->flash.active, "flash starts inactive");
+    term_flash(term, 100);
+    check(term->flash.active, "term_flash marks the terminal as flashing");
+
+    close(term->flash.fd);
+    term_free(term);
+}
+
 int
 main(void)
 {
@@ -295,6 +374,9 @@ main(void)
     test_command_output_whole_line();
     test_command_output_absent();
     test_erase_scrollback();
+    test_osc8();
+    test_size_notifications();
+    test_flash();
 
     if (failures > 0) {
         fprintf(stderr, "%d harness check(s) failed\n", failures);
