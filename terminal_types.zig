@@ -192,6 +192,76 @@ pub const Colors = extern struct {
     active_theme: WhichColorTheme,
 };
 
+/// Mirrors `struct color_theme` in config.h. Kept here (rather than in a
+/// config mirror) because the terminal only ever reads it through a shim.
+pub const ColorTheme = extern struct {
+    fg: u32,
+    bg: u32,
+    flash: u32,
+    flash_alpha: u32,
+    table: [256]u32,
+    alpha: u16,
+    selection_fg: u32,
+    selection_bg: u32,
+    url: u32,
+
+    dim: [8]u32,
+    sixel: [16]u32,
+
+    dim_blend_towards: enum(c_int) {
+        blend_towards_black,
+        blend_towards_white,
+    },
+
+    alpha_mode: enum(c_int) {
+        default,
+        matching,
+        all,
+    },
+
+    cursor: extern struct {
+        text: u32,
+        cursor: u32,
+    },
+
+    jump_label: extern struct {
+        fg: u32,
+        bg: u32,
+    },
+
+    scrollback_indicator: extern struct {
+        fg: u32,
+        bg: u32,
+    },
+
+    search_box: extern struct {
+        no_match: extern struct {
+            fg: u32,
+            bg: u32,
+        },
+        match: extern struct {
+            fg: u32,
+            bg: u32,
+        },
+    },
+
+    // C: struct { bool cursor:1, jump_label:1, scrollback_indicator:1,
+    //             url:1, search_box_no_match:1, search_box_match:1,
+    //             uint8_t dim; }
+    use_custom: packed struct(u16) {
+        cursor: bool = false,
+        jump_label: bool = false,
+        scrollback_indicator: bool = false,
+        url: bool = false,
+        search_box_no_match: bool = false,
+        search_box_match: bool = false,
+        _pad: u2 = 0,
+        dim: u8 = 0,
+    },
+
+    blur: bool,
+};
+
 pub const CursorKeys = enum(c_int) {
     dontcare,
     normal,
@@ -1095,4 +1165,8 @@ comptime {
     expectAbi(Blink, "Blink");
     expectAbi(Margins, "Margins");
     expectAbi(Terminal, "Terminal");
+}
+
+comptime {
+    expectAbi(ColorTheme, "ColorTheme");
 }

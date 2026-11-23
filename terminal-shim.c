@@ -8,6 +8,31 @@ struct wl_surface *terminal_shim_window_surface(struct terminal *term) {
     return term->window->surface.surf;
 }
 
+/* Read-only accessors into the (still C-owned) conf. */
+const struct color_theme *terminal_shim_conf_colors_dark(
+    const struct terminal *term)
+{
+    return &term->conf->colors_dark;
+}
+
+const struct color_theme *terminal_shim_conf_colors_light(
+    const struct terminal *term)
+{
+    return &term->conf->colors_light;
+}
+
+bool terminal_shim_conf_locked_title(const struct terminal *term) {
+    return term->conf->locked_title;
+}
+
+const char *terminal_shim_conf_app_id(const struct terminal *term) {
+    return term->conf->app_id;
+}
+
+const char *terminal_shim_conf_conf_path(const struct terminal *term) {
+    return term->conf->conf_path;
+}
+
 bool terminal_shim_window_is_suspended(struct terminal *term) {
     return term->window->is_suspended;
 }

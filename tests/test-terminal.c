@@ -12,6 +12,7 @@
 
 #include "terminal.h"
 #include "grid.h"
+#include "config.h"
 #include "xmalloc.h"
 
 #include <stdio.h>
@@ -291,6 +292,95 @@ test_erase_scrollback(void)
     term_free(term);
 }
 
+/* term_theme_apply(): copies the theme into the terminal's colour table */
+static void
+test_theme_apply(void)
+{
+    struct terminal *term = term_new();
+
+    struct color_theme theme = {0};
+    theme.fg = 0x11223344;
+    theme.bg = 0x55667788;
+    theme.alpha = 0xdead;
+    theme.cursor.text = 0x00ff00;
+    theme.cursor.cursor = 0x0000ff;
+    theme.use_custom.cursor = true;
+    theme.selection_fg = 0xaaaaaaaa;
+    theme.selection_bg = 0xbbbbbbbb;
+    for (int i = 0; i < 256; i++)
+        theme.table[i] = 0x1000 + i;
+
+    term_theme_apply(term, &theme);
+
+    check(term->colors.fg == theme.fg, "theme_apply copies fg");
+    check(term->colors.bg == theme.bg, "theme_apply copies bg");
+    check(term->colors.alpha == theme.alpha, "theme_apply copies alpha");
+    check(term->colors.cursor_fg == (0x80000000u | theme.cursor.text),
+          "theme_apply sets the custom-cursor bit on cursor_fg");
+    check(term->colors.cursor_bg == (0x80000000u | theme.cursor.cursor),
+          "theme_apply sets the custom-cursor bit on cursor_bg");
+    check(term->colors.selection_fg == theme.selection_fg, "theme_apply copies selection_fg");
+    check(term->colors.selection_bg == theme.selection_bg, "theme_apply copies selection_bg");
+    check(term->colors.table[0] == theme.table[0] &&
+          term->colors.table[255] == theme.table[255],
+          "theme_apply copies the 256-entry colour table");
+
+    /* Without use_custom.cursor the high bit stays clear */
+    theme.use_custom.cursor = false;
+    term_theme_apply(term, &theme);
+    check(term->colors.cursor_fg == theme.cursor.text,
+          "theme_apply leaves the cursor colour unprefixed when not custom");
+
+    term_free(term);
+}
+
+/* term_theme_get(): dark/light selection through the conf shim */
+static void
+test_theme_get(void)
+{
+    struct terminal *term = term_new();
+    struct config conf = {0};
+    conf.colors_dark.fg = 0xd4d4d4;
+    conf.colors_light.fg = 0x181818;
+    term->conf = &conf;
+
+    term->colors.active_theme = COLOR_THEME_DARK;
+    const struct color_theme *dark = term_theme_get(term);
+    check(dark->fg == 0xd4d4d4, "theme_get returns colors_dark for the dark theme");
+
+    term->colors.active_theme = COLOR_THEME_LIGHT;
+    const struct color_theme *light = term_theme_get(term);
+    check(light->fg == 0x181818, "theme_get returns colors_light for the light theme");
+
+    term_free(term);
+}
+
+/* term_icon(): falls back to conf->app_id, and maps footclient -> foot */
+static void
+test_term_icon(void)
+{
+    struct terminal *term = term_new();
+    struct config conf = {0};
+    conf.app_id = "org.example.term";
+    term->conf = &conf;
+
+    check(strcmp(term_icon(term), "org.example.term") == 0,
+          "term_icon falls back to the configured app-id");
+
+    term->app_id = xstrdup("footclient");
+    check(strcmp(term_icon(term), "foot") == 0,
+          "term_icon maps footclient to foot");
+
+    free(term->app_id);
+    term->app_id = xstrdup("org.example.custom");
+    check(strcmp(term_icon(term), "org.example.custom") == 0,
+          "term_icon prefers the runtime app-id");
+    free(term->app_id);
+    term->app_id = NULL;
+
+    term_free(term);
+}
+
 /* term_osc8_*(): id/URI state and the ascii-printer bits */
 static void
 test_osc8(void)
@@ -377,6 +467,9 @@ main(void)
     test_osc8();
     test_size_notifications();
     test_flash();
+    test_theme_apply();
+    test_theme_get();
+    test_term_icon();
 
     if (failures > 0) {
         fprintf(stderr, "%d harness check(s) failed\n", failures);

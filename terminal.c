@@ -1584,18 +1584,9 @@ erase_line(struct terminal *term, struct row *row)
     row->shell_integration.cmd_end = -1;
 }
 
-static void
-term_theme_apply(struct terminal *term, const struct color_theme *theme)
-{
-    term->colors.fg = theme->fg;
-    term->colors.bg = theme->bg;
-    term->colors.alpha = theme->alpha;
-    term->colors.cursor_fg = (theme->use_custom.cursor ? 1u << 31 : 0) | theme->cursor.text;
-    term->colors.cursor_bg = (theme->use_custom.cursor ? 1u << 31 : 0) | theme->cursor.cursor;
-    term->colors.selection_fg = theme->selection_fg;
-    term->colors.selection_bg = theme->selection_bg;
-    memcpy(term->colors.table, theme->table, sizeof(term->colors.table));
-}
+/* term_theme_apply: ported to terminal.zig. Still called from term_reset()
+ * (T11), hence the prototype. */
+extern void term_theme_apply(struct terminal *term, const struct color_theme *theme);
 
 void
 term_reset(struct terminal *term, bool hard)
@@ -2484,84 +2475,11 @@ term_xcursor_update(struct terminal *term)
         term_xcursor_update_for_seat(term, &it->item);
 }
 
-void
-term_set_window_title(struct terminal *term, const char *title)
-{
-    if (term->conf->locked_title && term->window_title_has_been_set)
-        return;
+/* term_set_window_title: ported to terminal.zig */
 
-    if (term->window_title != NULL && streq(term->window_title, title))
-        return;
+/* term_set_app_id: ported to terminal.zig */
 
-    if (!is_valid_utf8_and_printable(title)) {
-        /* It's an xdg_toplevel::set_title() protocol violation to set
-           a title with an invalid UTF-8 sequence */
-        LOG_WARN("%s: title is not valid UTF-8, ignoring", title);
-        return;
-    }
-
-    free(term->window_title);
-    term->window_title = xstrdup(title);
-    render_refresh_title(term);
-    term->window_title_has_been_set = true;
-}
-
-void
-term_set_app_id(struct terminal *term, const char *app_id)
-{
-    if (app_id != NULL && *app_id == '\0')
-        app_id = NULL;
-
-    if (term->app_id == NULL && app_id == NULL)
-        return;
-
-    if (term->app_id != NULL && app_id != NULL && streq(term->app_id, app_id))
-        return;
-
-    if (app_id != NULL && !is_valid_utf8_and_printable(app_id)) {
-        LOG_WARN("%s: app-id is not valid UTF-8, ignoring", app_id);
-        return;
-    }
-
-    free(term->app_id);
-    if (app_id != NULL) {
-        term->app_id = xstrdup(app_id);
-    } else {
-        term->app_id = NULL;
-    }
-
-    const size_t length = app_id != NULL ? strlen(app_id) : 0;
-    if (length > 2048) {
-        /*
-         * Not sure if there's a limit in the protocol, or the
-         * libwayland implementation, or e.g. wlroots, but too long
-         * app-id's (not e.g. title) causes at least river and sway to
-         * peg the CPU at 100%, and stop sending e.g. frame callbacks.
-         *
-         */
-        term->app_id[2048] = '\0';
-    }
-
-    render_refresh_app_id(term);
-    render_refresh_icon(term);
-}
-
-const char *
-term_icon(const struct terminal *term)
-{
-    const char *app_id =
-        term->app_id != NULL ? term->app_id : term->conf->app_id;
-
-    return
-#if 0
-term->window_icon != NULL
-        ? term->window_icon
-        :
-        #endif
-        streq(app_id, "footclient")
-            ? "foot"
-            : app_id;
-}
+/* term_icon: ported to terminal.zig */
 
 /* term_flash: ported to terminal.zig */
 
@@ -2611,23 +2529,7 @@ term_bell(struct terminal *term)
     }
 }
 
-bool
-term_spawn_new(const struct terminal *term)
-{
-    char *argv[4];
-    int argc = 0;
-
-    argv[argc++] = term->foot_exe;
-    if (term->conf->conf_path != NULL) {
-        argv[argc++] = "--config";
-        argv[argc++] = term->conf->conf_path;
-    }
-    argv[argc] = NULL;
-
-    return spawn(
-        term->reaper, term->cwd, argv,
-        -1, -1, -1, NULL, NULL, NULL) >= 0;
-}
+/* term_spawn_new: ported to terminal.zig */
 
 /* term_enable_app_sync_updates: ported to terminal.zig */
 
@@ -2846,75 +2748,4 @@ term_ime_set_cursor_rect(struct terminal *term, int x, int y, int width,
 
 /* size notifications: ported to terminal.zig */
 
-void
-term_theme_switch_to_dark(struct terminal *term)
-{
-    if (term->colors.active_theme == COLOR_THEME_DARK)
-        return;
-
-    term_theme_apply(term, &term->conf->colors_dark);
-    term->colors.active_theme = COLOR_THEME_DARK;
-
-    wayl_win_alpha_changed(term->window);
-    term_font_subpixel_changed(term);
-
-    if (term->report_theme_changes)
-        term_to_slave(term, "\033[?997;1n", 9);
-
-    term_damage_view(term);
-    term_damage_margins(term);
-    render_refresh(term);
-}
-
-void
-term_theme_switch_to_light(struct terminal *term)
-{
-    if (term->colors.active_theme == COLOR_THEME_LIGHT)
-        return;
-
-    term_theme_apply(term, &term->conf->colors_light);
-    term->colors.active_theme = COLOR_THEME_LIGHT;
-
-    wayl_win_alpha_changed(term->window);
-    term_font_subpixel_changed(term);
-
-    if (term->report_theme_changes)
-        term_to_slave(term, "\033[?997;2n", 9);
-
-    term_damage_view(term);
-    term_damage_margins(term);
-    render_refresh(term);
-}
-
-void
-term_theme_toggle(struct terminal *term)
-{
-    if (term->colors.active_theme == COLOR_THEME_DARK) {
-        term_theme_apply(term, &term->conf->colors_light);
-        term->colors.active_theme = COLOR_THEME_LIGHT;
-
-        if (term->report_theme_changes)
-            term_to_slave(term, "\033[?997;2n", 9);
-    } else {
-        term_theme_apply(term, &term->conf->colors_dark);
-        term->colors.active_theme = COLOR_THEME_DARK;
-
-        if (term->report_theme_changes)
-            term_to_slave(term, "\033[?997;1n", 9);
-    }
-
-    wayl_win_alpha_changed(term->window);
-    term_font_subpixel_changed(term);
-
-    term_damage_view(term);
-    term_damage_margins(term);
-    render_refresh(term);
-}
-
-const struct color_theme *
-term_theme_get(const struct terminal *term)
-{
-    return term->colors.active_theme == COLOR_THEME_DARK
-        ? &term->conf->colors_dark
-        : &term->conf->colors_light;
-}
+/* term_theme_switch_to_dark/light/toggle/get: ported to terminal.zig */

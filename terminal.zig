@@ -2224,3 +2224,190 @@ export fn term_disable_app_sync_updates(term: *types.Terminal) void {
     // Reset timers
     _ = timerfd_settime(term.render.app_sync_updates.timer_fd, 0, &zero_itimerspec, null);
 }
+
+//
+// Chunk T6 (part 1) — window title / app-id / icon / respawn, and the
+// colour-theme switches. The config is still C-owned; read-only access goes
+// through terminal_shim_conf_*() accessors until phase 2 ports it.
+//
+
+extern fn wayl_win_alpha_changed(window: ?*anyopaque) callconv(.c) void;
+extern fn term_font_subpixel_changed(term: *types.Terminal) callconv(.c) void;
+extern fn is_valid_utf8_and_printable(value: [*:0]const u8) callconv(.c) bool;
+extern fn spawn(
+    reaper: ?*anyopaque,
+    cwd: [*c]const u8,
+    argv: [*c]const [*c]u8,
+    stdin_fd: c_int,
+    stdout_fd: c_int,
+    stderr_fd: c_int,
+    cb: ?*const anyopaque,
+    cb_data: ?*anyopaque,
+    xdg_activation_token: [*c]const u8,
+) callconv(.c) c_int;
+extern fn terminal_shim_conf_colors_dark(term: *const types.Terminal) callconv(.c) *const types.ColorTheme;
+extern fn terminal_shim_conf_colors_light(term: *const types.Terminal) callconv(.c) *const types.ColorTheme;
+extern fn terminal_shim_conf_locked_title(term: *const types.Terminal) callconv(.c) bool;
+extern fn terminal_shim_conf_app_id(term: *const types.Terminal) callconv(.c) ?[*:0]const u8;
+extern fn terminal_shim_conf_conf_path(term: *const types.Terminal) callconv(.c) ?[*:0]const u8;
+
+fn streq(a: [*:0]const u8, b: [*:0]const u8) bool {
+    return std.mem.eql(u8, std.mem.span(a), std.mem.span(b));
+}
+
+fn replaceStr(dst: *?[*:0]u8, value: [*:0]const u8) void {
+    if (dst.*) |old|
+        std.c.free(old);
+    dst.* = xstrdup(value);
+}
+
+export fn term_set_window_title(term: *types.Terminal, title: [*:0]const u8) void {
+    if (terminal_shim_conf_locked_title(term) and term.window_title_has_been_set)
+        return;
+
+    if (term.window_title) |current| {
+        if (streq(current, title))
+            return;
+    }
+
+    if (!is_valid_utf8_and_printable(title)) {
+        // It's an xdg_toplevel::set_title() protocol violation to set a
+        // title with an invalid UTF-8 sequence.
+        log_msg(LOG_CLASS_WARNING, "terminal", "terminal.zig", @intCast(@src().line), "%s: title is not valid UTF-8, ignoring", title);
+        return;
+    }
+
+    replaceStr(&term.window_title, title);
+    render_refresh_title(term);
+    term.window_title_has_been_set = true;
+}
+
+export fn term_set_app_id(term: *types.Terminal, app_id_in: ?[*:0]const u8) void {
+    var app_id = app_id_in;
+    if (app_id) |id| {
+        if (id[0] == 0)
+            app_id = null;
+    }
+
+    if (term.app_id == null and app_id == null)
+        return;
+
+    if (term.app_id != null and app_id != null and streq(term.app_id.?, app_id.?))
+        return;
+
+    if (app_id) |id| {
+        if (!is_valid_utf8_and_printable(id)) {
+            log_msg(LOG_CLASS_WARNING, "terminal", "terminal.zig", @intCast(@src().line), "%s: app-id is not valid UTF-8, ignoring", id);
+            return;
+        }
+    }
+
+    if (term.app_id) |old|
+        std.c.free(old);
+
+    if (app_id) |id| {
+        term.app_id = xstrdup(id);
+    } else {
+        term.app_id = null;
+    }
+
+    const length = if (app_id) |id| std.mem.len(id) else 0;
+    if (length > 2048) {
+        // Too long app-ids make at least river and sway peg the CPU at 100%
+        // and stop sending frame callbacks.
+        term.app_id.?[2048] = 0;
+    }
+
+    render_refresh_app_id(term);
+    render_refresh_icon(term);
+}
+
+export fn term_icon(term: *const types.Terminal) [*:0]const u8 {
+    const app_id = if (term.app_id) |id| id else terminal_shim_conf_app_id(term).?;
+
+    return if (streq(app_id, "footclient")) "foot" else app_id;
+}
+
+export fn term_spawn_new(term: *const types.Terminal) bool {
+    var argv: [4]?[*:0]const u8 = .{ term.foot_exe, null, null, null };
+    var argc: usize = 1;
+
+    if (terminal_shim_conf_conf_path(term)) |conf_path| {
+        argv[argc] = "--config";
+        argc += 1;
+        argv[argc] = conf_path;
+        argc += 1;
+    }
+    argv[argc] = null;
+
+    return spawn(
+        term.reaper,
+        @ptrCast(term.cwd),
+        @ptrCast(&argv),
+        -1,
+        -1,
+        -1,
+        null,
+        null,
+        null,
+    ) >= 0;
+}
+
+export fn term_theme_apply(term: *types.Terminal, theme: *const types.ColorTheme) void {
+    term.colors.fg = theme.fg;
+    term.colors.bg = theme.bg;
+    term.colors.alpha = theme.alpha;
+    term.colors.cursor_fg = (if (theme.use_custom.cursor) @as(u32, 0x8000_0000) else 0) | theme.cursor.text;
+    term.colors.cursor_bg = (if (theme.use_custom.cursor) @as(u32, 0x8000_0000) else 0) | theme.cursor.cursor;
+    term.colors.selection_fg = theme.selection_fg;
+    term.colors.selection_bg = theme.selection_bg;
+    @memcpy(&term.colors.table, &theme.table);
+}
+
+fn themeSwitch(term: *types.Terminal, theme: types.WhichColorTheme, report: []const u8) void {
+    const colors = switch (theme) {
+        .dark => terminal_shim_conf_colors_dark(term),
+        else => terminal_shim_conf_colors_light(term),
+    };
+
+    term_theme_apply(term, colors);
+    term.colors.active_theme = theme;
+
+    wayl_win_alpha_changed(term.window);
+    term_font_subpixel_changed(term);
+
+    if (term.report_theme_changes)
+        _ = term_to_slave(term, @ptrCast(report.ptr), report.len);
+
+    term_damage_view(term);
+    term_damage_margins(term);
+    render_refresh(term);
+}
+
+export fn term_theme_switch_to_dark(term: *types.Terminal) void {
+    if (term.colors.active_theme == .dark)
+        return;
+
+    themeSwitch(term, .dark, "\x1b[?997;1n");
+}
+
+export fn term_theme_switch_to_light(term: *types.Terminal) void {
+    if (term.colors.active_theme == .light)
+        return;
+
+    themeSwitch(term, .light, "\x1b[?997;2n");
+}
+
+export fn term_theme_toggle(term: *types.Terminal) void {
+    if (term.colors.active_theme == .dark)
+        themeSwitch(term, .light, "\x1b[?997;2n")
+    else
+        themeSwitch(term, .dark, "\x1b[?997;1n");
+}
+
+export fn term_theme_get(term: *const types.Terminal) *const types.ColorTheme {
+    return if (term.colors.active_theme == .dark)
+        terminal_shim_conf_colors_dark(term)
+    else
+        terminal_shim_conf_colors_light(term);
+}

@@ -70,6 +70,7 @@ C_TYPES: dict[str, str] = {
     "Notification": "struct notification",
     "NotificationIcon": "struct notification_icon",
     "Url": "struct url",
+    "ColorTheme": "struct color_theme",
 }
 
 NESTED_IN_TERMINAL: dict[str, str] = {
@@ -89,6 +90,9 @@ SKIP: set[str] = {
 
 # C packed structs: the size is checkable, individual members are bit-fields.
 PACKED: set[str] = {"Attributes"}
+
+# Inline structs whose members are C bit-fields: only the size is checkable.
+OPAQUE_FIELDS: set[str] = {"ColorTheme_use_custom"}
 
 FIELD_RE = re.compile(
     r'^(?:@"([^"]+)"|([A-Za-z_][A-Za-z0-9_]*))\s*:\s*(.*)$')
@@ -142,7 +146,8 @@ def parse_fields(lines: list[str], lo: int, hi: int) -> list[Field]:
 
         nested: list[Field] = []
         kind = "scalar"
-        if re.match(r'^(extern )?(struct|union)\s*\{', typ):
+        if re.match(r'^(extern )?((packed )?(struct|union)(\([^)]*\))?)\s*\{',
+                    typ):
             kind = "union" if "union" in typ else "struct"
             end = block_end(lines, index)
             nested = parse_fields(lines, index + 1, end)
@@ -239,6 +244,8 @@ def emit_fields(out: list[str], prefix: str, root: str, path: list[str],
         if field["kind"] == "struct":
             out.append(
                 f'fprintf(out, "pub const {key}__abi_fields: usize = 1;\\n");')
+            if key in OPAQUE_FIELDS:
+                continue
             emit_fields(out, key, root, path + [field["name"]],
                         field["nested"], types, False,
                         path + [field["name"]])
