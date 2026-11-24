@@ -19,6 +19,8 @@
 #include "shm.h"
 #include "slave.h"
 #include "log.h"
+#include "box-drawing.h"
+#include <pixman.h>
 #include "user-notification.h"
 #include "debug.h"
 #include "unicode-mode.h"
@@ -2317,6 +2319,255 @@ test_unicode_mode(void)
     check(true, "unicode_mode_updated(NULL) is a no-op");
 }
 
+
+/* A terminal with a real font loaded, for tests that need cell metrics. */
+static struct terminal *
+term_with_fonts(struct config *conf_out)
+{
+    struct config_font *cfg_font = xcalloc(1, sizeof(*cfg_font));
+    cfg_font->pt_size = 8.0f;
+
+    conf_out->fonts[0] = (struct config_font_list){.count = 1, .arr = cfg_font};
+    conf_out->line_height = (struct pt_or_px){.px = -1, .pt = 0};
+
+    struct terminal *term = term_new();
+    term->conf = conf_out;
+    term->scale = 1.0f;
+
+    struct config_font *cur_font = xcalloc(1, sizeof(*cur_font));
+    cur_font->pt_size = 8.0f;
+    term->font_sizes[0] = cur_font;
+    for (size_t i = 1; i < 4; i++)
+        term->font_sizes[i] = xcalloc(0, 1);
+
+    const char *name = "monospace";
+    struct fcft_font *fonts[4];
+    for (size_t i = 0; i < 4; i++)
+        fonts[i] = fcft_from_name(1, &name, ":size=8");
+
+    if (fonts[0] == NULL) {
+        for (size_t i = 0; i < 4; i++) {
+            if (fonts[i] != NULL)
+                fcft_destroy(fonts[i]);
+        }
+        term_free(term);
+        return NULL;
+    }
+
+    if (!term_set_fonts(term, fonts, false)) {
+        term_free(term);
+        return NULL;
+    }
+
+    struct wl_window *win = xcalloc(1, sizeof(*win));
+    term->window = win;
+    struct wayland *wl = xcalloc(1, sizeof(*wl));
+    term->wl = wl;
+
+    return term;
+}
+
+static void
+term_with_fonts_free(struct terminal *term)
+{
+    for (size_t i = 0; i < 4; i++) {
+        if (term->fonts[i] != NULL)
+            fcft_destroy(term->fonts[i]);
+    }
+    free(term->window);
+    free(term->wl);
+    term_free(term);
+}
+
+/* Number of set pixels in a rendered glyph (handles a8 and a1 formats). */
+static size_t
+glyph_pixels(const struct fcft_glyph *glyph)
+{
+    const uint8_t *data = (const uint8_t *)pixman_image_get_data(glyph->pix);
+    const int stride = pixman_image_get_stride(glyph->pix);
+    size_t n = 0;
+
+    switch ((int)pixman_image_get_format(glyph->pix)) {
+    case PIXMAN_a8:
+        for (int y = 0; y < glyph->height; y++) {
+            for (int x = 0; x < glyph->width; x++) {
+                if (data[y * stride + x] != 0)
+                    n++;
+            }
+        }
+        break;
+
+    case PIXMAN_a1:
+        for (int y = 0; y < glyph->height; y++) {
+            for (int x = 0; x < glyph->width; x++) {
+                if (data[y * stride + x / 8] & (0x80 >> (x % 8)))
+                    n++;
+            }
+        }
+        break;
+    }
+
+    return n;
+}
+
+/* Number of non-zero coverage bytes in a rendered box-drawing glyph. */
+static size_t
+glyph_nonzero(const struct fcft_glyph *glyph)
+{
+    const uint8_t *data = (const uint8_t *)pixman_image_get_data(glyph->pix);
+    const int stride = pixman_image_get_stride(glyph->pix);
+    size_t n = 0;
+
+    for (int y = 0; y < glyph->height; y++) {
+        for (int x = 0; x < glyph->width; x++) {
+            if (data[y * stride + x] != 0)
+                n++;
+        }
+    }
+    return n;
+}
+
+/* Fill row/column occupancy bits for a rendered glyph. */
+static void
+glyph_occupancy(const struct fcft_glyph *glyph, bool *rows, bool *cols)
+{
+    const uint8_t *data = (const uint8_t *)pixman_image_get_data(glyph->pix);
+    const int stride = pixman_image_get_stride(glyph->pix);
+
+    for (int y = 0; y < glyph->height; y++) {
+        rows[y] = false;
+        for (int x = 0; x < glyph->width; x++) {
+            if (data[y * stride + x] != 0)
+                rows[y] = true;
+        }
+    }
+
+    for (int x = 0; x < glyph->width; x++) {
+        cols[x] = false;
+        for (int y = 0; y < glyph->height; y++) {
+            if (data[y * stride + x] != 0)
+                cols[x] = true;
+        }
+    }
+}
+
+/* Structural invariants of box-drawing.c's rendering. Font-independent:
+ * nothing here assumes a particular cell size, only proportions. */
+static void
+test_box_drawing(void)
+{
+    struct config conf = {0};
+    struct terminal *term = term_with_fonts(&conf);
+
+    if (term == NULL) {
+        printf("skip: no monospace font available\n");
+        return;
+    }
+
+    const int width = term->cell_width;
+    const int height = term->cell_height;
+
+    if (pixman_image_get_format(box_drawing(term, 0x2500)->pix) != PIXMAN_a8) {
+        printf("skip: box drawing renders without an alpha channel\n");
+        term_with_fonts_free(term);
+        return;
+    }
+
+    /* 0x2500 light horizontal: a contiguous band of rows, each completely
+     * filled, spanning the full cell width. */
+    struct fcft_glyph *g = box_drawing(term, 0x2500);
+    check(g != NULL && g->width == width && g->height == height,
+          "box_drawing fills the cell");
+
+    bool rows[256] = {0}, cols[256] = {0};
+    glyph_occupancy(g, rows, cols);
+    check(cols[0] && cols[width - 1],
+          "light horizontal spans the full cell width");
+
+    int first = -1, last = -1, bands = 0;
+    for (int y = 0; y < height; y++) {
+        if (rows[y]) {
+            if (first < 0)
+                first = y;
+            if (last >= 0 && y != last + 1)
+                bands++;
+            last = y;
+        }
+    }
+    check(first >= 0 && last >= 0 && bands == 0,
+          "light horizontal is a single contiguous band");
+    check(last - first + 1 >= 1 && last - first + 1 <= height / 3,
+          "light horizontal is at most a third of the cell tall");
+    check(glyph_nonzero(g) == (size_t)width * (last - first + 1),
+          "light horizontal fills its band completely");
+
+    size_t light_px = glyph_nonzero(g);
+    free(g);
+
+    /* 0x2501 heavy horizontal is thicker than the light one. */
+    g = box_drawing(term, 0x2501);
+    size_t heavy_px = glyph_nonzero(g);
+    free(g);
+    check(heavy_px > light_px && heavy_px <= (size_t)width * height,
+          "heavy horizontal is thicker than light");
+
+    /* 0x2502 light vertical: symmetric invariant in the other axis. */
+    g = box_drawing(term, 0x2502);
+    glyph_occupancy(g, rows, cols);
+    check(rows[0] && rows[height - 1],
+          "light vertical spans the full cell height");
+    check(glyph_nonzero(g) % (size_t)height == 0,
+          "light vertical fills whole columns");
+    free(g);
+
+    /* 0x2588 full block covers everything; 0x2580 the upper half. */
+    g = box_drawing(term, 0x2588);
+    check(glyph_nonzero(g) == (size_t)width * height, "full block fills the cell");
+    free(g);
+
+    g = box_drawing(term, 0x2580);
+    check(glyph_nonzero(g) >= (size_t)width * (height / 2) &&
+          glyph_nonzero(g) <= (size_t)width * (height / 2 + 1),
+          "upper half block covers half the cell");
+    free(g);
+
+    /* Shades get progressively darker. */
+    size_t shade[3];
+    const char32_t shade_cp[3] = {0x2591, 0x2592, 0x2593};
+    for (int i = 0; i < 3; i++) {
+        g = box_drawing(term, shade_cp[i]);
+        shade[i] = glyph_pixels(g);
+        free(g);
+    }
+    check(shade[0] < shade[1] && shade[1] < shade[2],
+          "shade blocks get darker in order");
+    check(shade[0] > 0 && shade[2] < (size_t)width * height,
+          "shades are strictly between empty and solid");
+
+    /* Quadrants cover a quarter of the cell, in the right corner. */
+    g = box_drawing(term, 0x2596); /* lower left */
+    const uint8_t *qdata = (const uint8_t *)pixman_image_get_data(g->pix);
+    const int qstride = pixman_image_get_stride(g->pix);
+    size_t qn = glyph_nonzero(g);
+    check(qn > (size_t)width * height / 8 && qn < (size_t)width * height / 2,
+          "lower-left quadrant covers roughly a quarter");
+    check(qdata[0] == 0 && qdata[(height - 1) * qstride] != 0,
+          "lower-left quadrant is in the lower-left corner");
+    free(g);
+
+    /* Legacy computing / octant codepoints do not render empty. */
+    const char32_t extra[] = {0x1fb00, 0x1fb3c, 0x1fb70, 0x1fb82, 0x1cd00};
+    for (size_t i = 0; i < sizeof(extra) / sizeof(extra[0]); i++) {
+        g = box_drawing(term, extra[i]);
+        check(g != NULL && glyph_nonzero(g) > 0,
+              "extended block codepoints render");
+        if (g != NULL)
+            free(g);
+    }
+
+    term_with_fonts_free(term);
+}
+
 int
 main(void)
 {
@@ -2367,6 +2618,7 @@ main(void)
     test_log();
     test_debug();
     test_unicode_mode();
+    test_box_drawing();
 
     fcft_fini();
 
