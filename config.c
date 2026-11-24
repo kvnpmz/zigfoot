@@ -287,6 +287,9 @@ extern const char *mouse_button_code_to_name(int code);
 extern bool modifiers_equal(const config_modifier_list_t *mods1, const config_modifier_list_t *mods2);
 extern bool modifiers_disjoint(const config_modifier_list_t *mods1, const config_modifier_list_t *mods2);
 extern char *modifiers_to_str(const config_modifier_list_t *mods, bool strip_last_plus);
+extern bool value_to_key_combos(struct context *ctx, int action, struct binding_aux *aux, struct config_key_binding_list *bindings, enum key_binding_type type);
+extern ssize_t pipe_argv_from_value(struct context *ctx, struct argv *argv);
+extern ssize_t regex_name_from_value(struct context *ctx, char **regex_name);
 extern size_t config_button_map_len(void);
 extern int config_button_map_code(size_t idx);
 extern const char *config_button_map_name(size_t idx);
@@ -607,133 +610,6 @@ config_regex_compile(const char *regex, regex_t *preg,
 /* parse_section_cursor: ported to config.zig */
 /* parse_section_mouse: ported to config.zig */
 /* parse_section_csd: ported to config.zig */
-static bool NOINLINE
-value_to_key_combos(struct context *ctx, int action,
-                    struct binding_aux *aux,
-                    struct config_key_binding_list *bindings,
-                    enum key_binding_type type)
-{
-    if (strcasecmp(ctx->value, "none") == 0) {
-        remove_from_key_bindings_list(bindings, action, aux);
-        return true;
-    }
-
-    /* Count number of combinations */
-    size_t combo_count = 1;
-    size_t used_combos = 1;  /* For error handling */
-    for (const char *p = strchr(ctx->value, ' ');
-         p != NULL;
-         p = strchr(p + 1, ' '))
-    {
-        combo_count++;
-    }
-
-    struct config_key_binding new_combos[combo_count];
-
-    char *copy = xstrdup(ctx->value);
-    size_t idx = 0;
-
-    for (char *tok_ctx = NULL, *combo = strtok_r(copy, " ", &tok_ctx);
-         combo != NULL;
-         combo = strtok_r(NULL, " ", &tok_ctx),
-             idx++, used_combos++)
-    {
-        struct config_key_binding *new_combo = &new_combos[idx];
-        new_combo->action = action;
-        new_combo->aux = *aux;
-        new_combo->aux.master_copy = idx == 0;
-#if 0
-        new_combo->aux.type = BINDING_AUX_PIPE;
-        new_combo->aux.master_copy = idx == 0;
-        new_combo->aux.pipe = *argv;
-#endif
-        memset(&new_combo->modifiers, 0, sizeof(new_combo->modifiers));
-        new_combo->path = ctx->path;
-        new_combo->lineno = ctx->lineno;
-
-        char *key = strrchr(combo, '+');
-
-        if (key == NULL) {
-            /* No modifiers */
-            key = combo;
-        } else {
-            *key = '\0';
-            parse_modifiers(combo, key - combo, &new_combo->modifiers);
-            key++;  /* Skip past the '+' */
-        }
-
-        switch (type) {
-        case KEY_BINDING:
-            /* Translate key name to symbol */
-            new_combo->k.sym = xkb_keysym_from_name(key, 0);
-            if (new_combo->k.sym == XKB_KEY_NoSymbol) {
-                LOG_CONTEXTUAL_ERR("not a valid XKB key name: %s", key);
-                goto err;
-            }
-            break;
-
-        case MOUSE_BINDING: {
-            new_combo->m.count = 1;
-
-            char *_count = strrchr(key, '-');
-            if (_count != NULL) {
-                *_count = '\0';
-                _count++;
-
-                errno = 0;
-                char *end;
-                unsigned long value = strtoul(_count, &end, 10);
-                if (_count[0] == '\0' || *end != '\0' || errno != 0) {
-                    if (errno != 0)
-                        LOG_CONTEXTUAL_ERRNO("invalid click count: %s", _count);
-                    else
-                        LOG_CONTEXTUAL_ERR("invalid click count: %s", _count);
-                    goto err;
-                }
-
-                new_combo->m.count = value;
-            }
-
-            new_combo->m.button = mouse_button_name_to_code(key);
-            if (new_combo->m.button < 0) {
-                LOG_CONTEXTUAL_ERR("invalid mouse button name: %s", key);
-                goto err;
-            }
-
-            break;
-        }
-        }
-
-    }
-
-    if (idx == 0) {
-        LOG_CONTEXTUAL_ERR(
-            "empty binding not allowed (set to 'none' to unmap)");
-        free(copy);
-        return false;
-    }
-
-    remove_from_key_bindings_list(bindings, action, aux);
-
-    bindings->arr = xrealloc(
-        bindings->arr,
-        (bindings->count + combo_count) * sizeof(bindings->arr[0]));
-
-    memcpy(&bindings->arr[bindings->count],
-           new_combos,
-           combo_count * sizeof(bindings->arr[0]));
-    bindings->count += combo_count;
-
-    free(copy);
-    return true;
-
-err:
-    for (size_t i = 0; i < used_combos; i++)
-        free_key_binding(&new_combos[i]);
-    free(copy);
-    return false;
-}
-
 /*
  * Parses a key binding value in the form
  *  "[cmd-to-exec arg1 arg2] Mods+Key"
@@ -755,68 +631,6 @@ err:
  *  - cmd: allocated string containing "cmd arg1 arg2...". Caller frees.
  *  - argv: allocated array containing {"cmd", "arg1", "arg2", NULL}. Caller frees.
  */
-static ssize_t NOINLINE
-pipe_argv_from_value(struct context *ctx, struct argv *argv)
-{
-    argv->args = NULL;
-
-    if (ctx->value[0] != '[')
-        return 0;
-
-    const char *pipe_cmd_end = strrchr(ctx->value, ']');
-    if (pipe_cmd_end == NULL) {
-        LOG_CONTEXTUAL_ERR("unclosed '['");
-        return -1;
-    }
-
-    size_t pipe_len = pipe_cmd_end - ctx->value - 1;
-    char *cmd = xstrndup(&ctx->value[1], pipe_len);
-
-    if (!tokenize_cmdline(cmd, &argv->args)) {
-        LOG_CONTEXTUAL_ERR("syntax error in command line");
-        free(cmd);
-        return -1;
-    }
-
-    ssize_t remove_len = pipe_cmd_end + 1 - ctx->value;
-    ctx->value = pipe_cmd_end + 1;
-    while (isspace(*ctx->value)) {
-        ctx->value++;
-        remove_len++;
-    }
-
-    free(cmd);
-    return remove_len;
-}
-
-static ssize_t NOINLINE
-regex_name_from_value(struct context *ctx, char **regex_name)
-{
-    *regex_name = NULL;
-
-    if (ctx->value[0] != '[')
-        return 0;
-
-    const char *regex_end = strrchr(ctx->value, ']');
-    if (regex_end == NULL) {
-        LOG_CONTEXTUAL_ERR("unclosed '['");
-        return -1;
-    }
-
-    size_t regex_len = regex_end - ctx->value - 1;
-    *regex_name = xstrndup(&ctx->value[1], regex_len);
-
-    ssize_t remove_len = regex_end + 1 - ctx->value;
-    ctx->value = regex_end + 1;
-    while (isspace(*ctx->value)) {
-        ctx->value++;
-        remove_len++;
-    }
-
-    return remove_len;
-}
-
-
 static bool NOINLINE
 parse_key_binding_section(struct context *ctx,
                           int action_count,

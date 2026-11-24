@@ -1120,6 +1120,250 @@ export fn modifiers_to_str(
     return @ptrCast(ret);
 }
 
+// ── key-binding values (C2j) ──────────────────────────────────────
+
+extern fn xrealloc(ptr: ?*anyopaque, size: usize) callconv(.c) ?*anyopaque;
+extern fn strrchr(s: [*:0]const u8, c: c_int) callconv(.c) ?[*:0]u8;
+extern fn isspace(c: c_int) callconv(.c) c_int;
+extern fn xkb_keysym_from_name(name: [*:0]const u8, flags: c_int) callconv(.c) u32;
+
+const XKB_KEY_NoSymbol: u32 = 0;
+
+/// Parses "[command arg1 ...]" (pipe bindings). Returns the number of bytes
+/// stripped from ctx.value (including trailing whitespace), 0 if the value
+/// does not start with '[', or -1 on error.
+export fn pipe_argv_from_value(ctx: *Context, argv: *types.Argv) callconv(.c) isize {
+    argv.args = null;
+
+    const value = ctx.value orelse return 0;
+    if (value[0] != '[')
+        return 0;
+
+    const cmd_end = strrchr(value, ']') orelse {
+        contextualErr(ctx, @src(), "unclosed '['", .{});
+        return -1;
+    };
+
+    const cmd_len = (@intFromPtr(cmd_end) - @intFromPtr(value)) - 1;
+    const cmd = xstrndup(value + 1, cmd_len) orelse return -1;
+
+    if (!tokenize_cmdline(cmd, &argv.args)) {
+        contextualErr(ctx, @src(), "syntax error in command line", .{});
+        free(cmd);
+        return -1;
+    }
+
+    var remove_len: isize = @intCast(@intFromPtr(cmd_end) + 1 - @intFromPtr(value));
+    var rest: [*:0]const u8 = cmd_end + 1;
+    while (isspace(rest[0]) != 0) {
+        rest += 1;
+        remove_len += 1;
+    }
+
+    ctx.value = rest;
+    free(cmd);
+    return remove_len;
+}
+
+/// Parses "[name]" (regex bindings). Same return convention as
+/// pipe_argv_from_value().
+export fn regex_name_from_value(
+    ctx: *Context,
+    regex_name: *?[*:0]u8,
+) callconv(.c) isize {
+    regex_name.* = null;
+
+    const value = ctx.value orelse return 0;
+    if (value[0] != '[')
+        return 0;
+
+    const regex_end = strrchr(value, ']') orelse {
+        contextualErr(ctx, @src(), "unclosed '['", .{});
+        return -1;
+    };
+
+    const regex_len = (@intFromPtr(regex_end) - @intFromPtr(value)) - 1;
+    regex_name.* = xstrndup(value + 1, regex_len);
+
+    var remove_len: isize = @intCast(@intFromPtr(regex_end) + 1 - @intFromPtr(value));
+    var rest: [*:0]const u8 = regex_end + 1;
+    while (isspace(rest[0]) != 0) {
+        rest += 1;
+        remove_len += 1;
+    }
+
+    ctx.value = rest;
+    return remove_len;
+}
+
+/// Parses one or more space separated "Mods+Key" combinations and replaces
+/// the bindings for `action` (and the same aux) with them.
+export fn value_to_key_combos(
+    ctx: *Context,
+    action: c_int,
+    aux: *const types.BindingAux,
+    bindings: *types.ConfigKeyBindingList,
+    kind: types.KeyBindingType,
+) callconv(.c) bool {
+    const value = ctx.value orelse return false;
+
+    if (strcasecmp(value, "none") == 0) {
+        remove_from_key_bindings_list(bindings, action, aux);
+        return true;
+    }
+
+    // C sizes the combo array by counting spaces; strtok_r collapses runs of
+    // spaces, so a value like "a  b" made it memcpy uninitialized slots. Count
+    // actual tokens instead (same result for well-formed input, no garbage).
+    var combo_count: usize = 0;
+    {
+        var pos: usize = 0;
+        while (value[pos] != 0) {
+            while (value[pos] == ' ')
+                pos += 1;
+            if (value[pos] == 0)
+                break;
+            combo_count += 1;
+            while (value[pos] != 0 and value[pos] != ' ')
+                pos += 1;
+        }
+    }
+
+    if (combo_count == 0) {
+        // C reports this after the loop; an empty/blank value never yields
+        // a token.
+        contextualErr(ctx, @src(), "empty binding not allowed (set to 'none' to unmap)", .{});
+        return false;
+    }
+
+    const combo_bytes = combo_count * @sizeOf(types.ConfigKeyBinding);
+    const combos: [*]types.ConfigKeyBinding = @ptrCast(@alignCast(
+        xmalloc(combo_bytes) orelse unreachable,
+    ));
+
+    const copy = xstrdup(value) orelse {
+        free(combos);
+        return false;
+    };
+
+    var idx: usize = 0;
+    var pos: usize = 0;
+    var failed = false;
+
+    while (!failed) {
+        while (copy[pos] == ' ')
+            pos += 1;
+        if (copy[pos] == 0)
+            break;
+
+        const start = pos;
+        while (copy[pos] != 0 and copy[pos] != ' ')
+            pos += 1;
+        const had_sep = copy[pos] == ' ';
+        copy[pos] = 0;
+
+        const combo: [*:0]u8 = @ptrCast(copy + start);
+        const new_combo = &combos[idx];
+        new_combo.* = std.mem.zeroes(types.ConfigKeyBinding);
+        new_combo.action = action;
+        new_combo.aux = aux.*;
+        // The first combo owns the aux payload; the rest are references
+        // (free_binding_aux() only frees master_copy entries).
+        new_combo.aux.master_copy = idx == 0;
+        new_combo.path = ctx.path;
+        new_combo.lineno = @intCast(ctx.lineno);
+
+        var key: [*:0]u8 = combo;
+        if (strrchr(combo, '+')) |plus| {
+            plus[0] = 0;
+            parse_modifiers(combo, @intFromPtr(plus) - @intFromPtr(combo), &new_combo.modifiers);
+            key = plus + 1;
+        }
+
+        switch (kind) {
+            .key => {
+                new_combo._u.k.sym = xkb_keysym_from_name(key, 0);
+                if (new_combo._u.k.sym == XKB_KEY_NoSymbol) {
+                    contextualErr(ctx, @src(), "not a valid XKB key name: {s}", .{std.mem.span(key)});
+                    failed = true;
+                }
+            },
+
+            .mouse => {
+                new_combo._u.m.count = 1;
+
+                if (strrchr(key, '-')) |dash| {
+                    dash[0] = 0;
+                    const count_str: [*:0]u8 = dash + 1;
+
+                    __errno_location().* = 0;
+                    var end: ?[*:0]u8 = null;
+                    const count_value = strtoul(count_str, &end, 10);
+                    const errno_val = __errno_location().*;
+
+                    if (count_str[0] == 0 or end == null or end.?[0] != 0 or errno_val != 0) {
+                        if (errno_val != 0) {
+                            _ = errValueErrno(ctx, @src(), "invalid click count: {s}", .{std.mem.span(count_str)});
+                        } else {
+                            contextualErr(ctx, @src(), "invalid click count: {s}", .{std.mem.span(count_str)});
+                        }
+                        failed = true;
+                    } else {
+                        // C assigns unsigned long to int; keep the wrap.
+                        new_combo._u.m.count = @bitCast(@as(u32, @truncate(count_value)));
+                    }
+                }
+
+                if (!failed) {
+                    new_combo._u.m.button = mouse_button_name_to_code(key);
+                    if (new_combo._u.m.button < 0) {
+                        contextualErr(ctx, @src(), "invalid mouse button name: {s}", .{std.mem.span(key)});
+                        failed = true;
+                    }
+                }
+            },
+        }
+
+        if (failed)
+            break;
+
+        idx += 1;
+        if (had_sep)
+            pos += 1
+        else
+            break;
+    }
+
+    if (failed) {
+        // C frees `used_combos` entries: the failed one too, which was
+        // zero-initialized above.
+        var i: usize = 0;
+        while (i <= idx) : (i += 1)
+            free_key_binding(&combos[i]);
+        free(combos);
+        free(copy);
+        return false;
+    }
+
+    remove_from_key_bindings_list(bindings, action, aux);
+
+    const new_arr = xrealloc(
+        @ptrCast(bindings.arr),
+        (bindings.count + combo_count) * @sizeOf(types.ConfigKeyBinding),
+    ) orelse unreachable;
+    bindings.arr = @ptrCast(@alignCast(new_arr));
+
+    @memcpy(
+        bindings.arr.?[bindings.count .. bindings.count + combo_count],
+        combos[0..combo_count],
+    );
+    bindings.count += combo_count;
+
+    free(combos);
+    free(copy);
+    return true;
+}
+
 // ── [colors] and [csd] (C2c) ──────────────────────────────────────
 
 extern fn value_to_fonts(ctx: *Context) callconv(.c) types.ConfigFontList;
