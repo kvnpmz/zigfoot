@@ -32,6 +32,8 @@
 void print_insert(struct terminal *term, int width);
 void erase_cell_range(struct terminal *term, struct row *row, int start, int end);
 void vt_tab_stops_push_back(struct terminal *term, int value);
+void cmd_scrollback_up(struct terminal *term, int rows);
+void cmd_scrollback_down(struct terminal *term, int rows);
 void begin_receive_clipboard(
     struct terminal *term, bool no_strip, int read_fd,
     enum data_offer_mime_type mime_type,
@@ -650,6 +652,48 @@ test_print_insert(void)
     term_free(term);
 }
 
+/* ── cmd_scrollback_up/down ─────────────────────────────────────────────── */
+
+static void
+test_scrollback_commands(void)
+{
+    struct terminal *term = term_new();
+    term->normal.offset = 11;   /* screen: rows 11..15 */
+    term->normal.view = 11;
+
+    /* Scroll up three rows */
+    cmd_scrollback_up(term, 3);
+    check(term->normal.view == 8, "scrollback_up moves the view back");
+    check(term->normal.scroll_damage.length > 0, "scrollback_up damages the view");
+
+    /* Clamped at the top of the scrollback (row 0) */
+    cmd_scrollback_up(term, 100);
+    check(term->normal.view == 0, "scrollback_up clamps at the scrollback start");
+
+    /* Already at the start: no-op */
+    cmd_scrollback_up(term, 1);
+    check(term->normal.view == 0, "scrollback_up at the start is a no-op");
+
+    /* And back down */
+    cmd_scrollback_down(term, 4);
+    check(term->normal.view == 4, "scrollback_down moves the view forward");
+
+    /* Clamped at the screen (offset) */
+    cmd_scrollback_down(term, 100);
+    check(term->normal.view == 11, "scrollback_down clamps at the screen start");
+
+    cmd_scrollback_down(term, 1);
+    check(term->normal.view == 11, "scrollback_down at the screen start is a no-op");
+
+    /* The alternate screen never scrolls back */
+    term->normal.view = 5;
+    term->grid = &term->alt;
+    cmd_scrollback_up(term, 1);
+    check(term->normal.view == 5, "scrollback_up is disabled on the alt grid");
+
+    term_free(term);
+}
+
 /* ── extract.c (now extract.zig) directly ───────────────────────────────── */
 
 /* Run extract_* over [start,end) of one row and return the text. */
@@ -1081,6 +1125,7 @@ main(void)
     test_osc8();
     test_size_notifications();
     test_flash();
+    test_scrollback_commands();
     test_extract_kinds();
     test_extract_tabs();
     test_receive_paste_normalisation();

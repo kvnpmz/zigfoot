@@ -1,11 +1,17 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include "terminal.h"
+#include "url-mode.h"
 #include "grid.h"
 #include "wayland.h"
 
 struct wl_surface *terminal_shim_window_surface(struct terminal *term) {
     return term->window->surface.surf;
+}
+
+/* urls_mode_is_active() is static inline in url-mode.h. */
+bool terminal_shim_urls_mode_active(const struct terminal *term) {
+    return urls_mode_is_active(term);
 }
 
 /* Read-only accessors into the (still C-owned) conf. */
