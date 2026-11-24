@@ -129,3 +129,10 @@ terminal_shim_emoji_vs_width(uint32_t cp, uint32_t wc)
     return -1;
 }
 
+
+/* ── custom glyph freeing (terminal.zig) ─────────────────────────── */
+
+/* fcft_glyph's layout is fcft's business; terminal.zig only needs pix. */
+pixman_image_t *terminal_shim_fcft_glyph_pix(const struct fcft_glyph *glyph) {
+    return glyph->pix;
+}

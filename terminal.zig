@@ -15,6 +15,67 @@ export fn term_pt_or_px_as_pixels(
     return types.ptOrPxAsPixels(term, pt_or_px);
 }
 
+//
+// Chunk T9b-ii — custom glyph lifetime. C's free_custom_glyph() /
+// free_custom_glyphs() are static helpers called from term_set_fonts() and
+// term_destroy(); both call sites now call the single exported entry point
+// below. The glyph array element type is still opaque, so the one field we
+// need (fcft_glyph.pix) comes from a terminal-shim.c accessor.
+//
+
+const PixmanImage = anyopaque;
+
+extern fn pixman_image_get_data(image: *PixmanImage) callconv(.c) ?[*]u32;
+extern fn pixman_image_unref(image: *PixmanImage) callconv(.c) void;
+extern fn terminal_shim_fcft_glyph_pix(glyph: *anyopaque) callconv(.c) ?*PixmanImage;
+
+// Mirrors terminal.h's GLYPH_*_COUNT macros.
+const GLYPH_BOX_DRAWING_COUNT = GLYPH_BOX_DRAWING_LAST - GLYPH_BOX_DRAWING_FIRST + 1;
+const GLYPH_BRAILLE_COUNT = GLYPH_BRAILLE_LAST - GLYPH_BRAILLE_FIRST + 1;
+const GLYPH_OCTANTS_COUNT = GLYPH_OCTANTS_LAST - GLYPH_OCTANTS_FIRST + 1;
+const GLYPH_LEGACY_COUNT = GLYPH_LEGACY_LAST - GLYPH_LEGACY_FIRST + 1;
+
+const GLYPH_BOX_DRAWING_FIRST = 0x2500;
+const GLYPH_BOX_DRAWING_LAST = 0x259F;
+const GLYPH_BRAILLE_FIRST = 0x2800;
+const GLYPH_BRAILLE_LAST = 0x28FF;
+const GLYPH_OCTANTS_FIRST = 0x1CD00;
+const GLYPH_OCTANTS_LAST = 0x1CDE5;
+const GLYPH_LEGACY_FIRST = 0x1FB00;
+const GLYPH_LEGACY_LAST = 0x1FB9B;
+
+fn freeCustomGlyph(glyph: *?*anyopaque) void {
+    const g = glyph.* orelse return;
+
+    if (terminal_shim_fcft_glyph_pix(g)) |pix| {
+        if (pixman_image_get_data(pix)) |data|
+            std.c.free(@ptrCast(data));
+        pixman_image_unref(pix);
+    }
+
+    std.c.free(g);
+    glyph.* = null;
+}
+
+fn freeCustomGlyphs(glyphs: *?*anyopaque, count: usize) void {
+    const ptr = glyphs.* orelse return;
+
+    const arr: [*]?*anyopaque = @ptrCast(@alignCast(ptr));
+    var i: usize = 0;
+    while (i < count) : (i += 1)
+        freeCustomGlyph(&arr[i]);
+
+    std.c.free(ptr);
+    glyphs.* = null;
+}
+
+export fn term_free_custom_glyphs(term: *types.Terminal) callconv(.c) void {
+    freeCustomGlyphs(&term.custom_glyphs.box_drawing, GLYPH_BOX_DRAWING_COUNT);
+    freeCustomGlyphs(&term.custom_glyphs.braille, GLYPH_BRAILLE_COUNT);
+    freeCustomGlyphs(&term.custom_glyphs.octants, GLYPH_OCTANTS_COUNT);
+    freeCustomGlyphs(&term.custom_glyphs.legacy, GLYPH_LEGACY_COUNT);
+}
+
 fn termResetGraphemeState(term: *types.Terminal) void {
     // Without utf8proc the fields don't exist in `struct vt` and C's
     // term_reset_grapheme_state() is a no-op; keep `term` "used" so the

@@ -49,6 +49,7 @@
 /* Ported to terminal.zig — extern for C callers */
 
 /* Ported to terminal.zig — extern for C callers */
+extern void term_free_custom_glyphs(struct terminal *term);
 extern void term_update_ascii_printer(struct terminal *term);
 extern void term_single_shift(struct terminal *term, enum charset_designator idx);
 
@@ -256,31 +257,6 @@ err_sem_destroy:
 }
 
 static void
-free_custom_glyph(struct fcft_glyph **glyph)
-{
-    if (*glyph == NULL)
-        return;
-
-    free(pixman_image_get_data((*glyph)->pix));
-    pixman_image_unref((*glyph)->pix);
-    free(*glyph);
-    *glyph = NULL;
-}
-
-static void
-free_custom_glyphs(struct fcft_glyph ***glyphs, size_t count)
-{
-    if (*glyphs == NULL)
-        return;
-
-    for (size_t i = 0; i < count; i++)
-        free_custom_glyph(&(*glyphs)[i]);
-
-    free(*glyphs);
-    *glyphs = NULL;
-}
-
-static void
 term_line_height_update(struct terminal *term)
 {
     const struct config *conf = term->conf;
@@ -322,14 +298,7 @@ term_set_fonts(struct terminal *term, struct fcft_font *fonts[static 4],
         term->fonts[i] = fonts[i];
     }
 
-    free_custom_glyphs(
-        &term->custom_glyphs.box_drawing, GLYPH_BOX_DRAWING_COUNT);
-    free_custom_glyphs(
-        &term->custom_glyphs.braille, GLYPH_BRAILLE_COUNT);
-    free_custom_glyphs(
-        &term->custom_glyphs.legacy, GLYPH_LEGACY_COUNT);
-    free_custom_glyphs(
-        &term->custom_glyphs.octants, GLYPH_OCTANTS_COUNT);
+    term_free_custom_glyphs(term);
 
     const struct config *conf = term->conf;
 
@@ -1379,14 +1348,7 @@ term_destroy(struct terminal *term)
         free(term->font_sizes[i]);
 
 
-    free_custom_glyphs(
-        &term->custom_glyphs.box_drawing, GLYPH_BOX_DRAWING_COUNT);
-    free_custom_glyphs(
-        &term->custom_glyphs.braille, GLYPH_BRAILLE_COUNT);
-    free_custom_glyphs(
-        &term->custom_glyphs.legacy, GLYPH_LEGACY_COUNT);
-    free_custom_glyphs(
-        &term->custom_glyphs.octants, GLYPH_OCTANTS_COUNT);
+    term_free_custom_glyphs(term);
 
     free(term->search.buf);
     free(term->search.last.buf);
