@@ -164,6 +164,10 @@ int terminal_shim_fcft_glyph_advance_x(const struct fcft_glyph *glyph) {
     return glyph->advance.x;
 }
 
+const char *terminal_shim_fcft_font_name(const struct fcft_font *font) {
+    return font->name;
+}
+
 /* ── font loading (terminal.zig) ─────────────────────────────────── */
 
 /* Headless harness has no wayland object; foot itself always does. */

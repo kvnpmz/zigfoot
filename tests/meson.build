@@ -1,6 +1,7 @@
 config_test = executable(
   'test-config',
   'test-config.c',
+  'test-config-stubs.c',
   # test-config.c #includes config.c, so the parser is compiled into the
   # test itself; the value-parsing helpers live in config.zig and come in
   # as an object file.

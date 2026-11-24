@@ -3,7 +3,8 @@ const types = @import("terminal_types.zig");
 
 //
 // user-notification.c ported to Zig: the printf-style variant of
-// user_notification_add(). The non-variadic helpers stay as static inlines in
+// user_notification_add(), plus the ownership-taking helper config.zig's
+// loggers need. The non-variadic helpers stay as static inlines in
 // user-notification.h (C callers use them directly).
 //
 
@@ -13,21 +14,13 @@ fn mallocOrAbort(size: usize) *anyopaque {
     return std.c.malloc(size) orelse @panic("out of memory");
 }
 
-export fn user_notification_add_fmt(
+/// Append a notification whose text is already heap allocated; ownership of
+/// `text` is transferred to the list (mirrors user_notification_add()).
+export fn user_notification_add_owned(
     notifications: *types.UserNotifications,
     kind: c_int,
-    fmt: [*:0]const u8,
-    ...
+    text: [*:0]u8,
 ) callconv(.c) void {
-    var va = @cVaStart();
-    var text: ?[*:0]u8 = null;
-    const n = vasprintf(&text, fmt, &va);
-    @cVaEnd(&va);
-
-    // xvasprintf() aborts on OOM
-    if (n < 0 or text == null)
-        std.c.abort();
-
     const node: *types.UserNotificationNode = @ptrCast(@alignCast(
         mallocOrAbort(@sizeOf(types.UserNotificationNode))));
 
@@ -45,4 +38,22 @@ export fn user_notification_add_fmt(
     if (tail) |t| t.next = node else notifications.head = node;
     notifications.tail = node;
     notifications.length += 1;
+}
+
+export fn user_notification_add_fmt(
+    notifications: *types.UserNotifications,
+    kind: c_int,
+    fmt: [*:0]const u8,
+    ...
+) callconv(.c) void {
+    var va = @cVaStart();
+    var text: ?[*:0]u8 = null;
+    const n = vasprintf(&text, fmt, &va);
+    @cVaEnd(&va);
+
+    // xvasprintf() aborts on OOM
+    if (n < 0 or text == null)
+        std.c.abort();
+
+    user_notification_add_owned(notifications, kind, text.?);
 }

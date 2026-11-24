@@ -42,14 +42,204 @@ extern fn log_msg(
     fmt: [*:0]const u8,
     ...
 ) callconv(.c) void;
-extern fn log_contextual(
+extern fn vasprintf(strp: *?[*:0]u8, fmt: [*:0]const u8, ap: *std.builtin.VaList) callconv(.c) c_int;
+extern fn strerror(errnum: c_int) callconv(.c) [*:0]u8;
+extern fn user_notification_add_owned(
+    notifications: *types.UserNotifications,
+    kind: c_int,
+    text: [*:0]u8,
+) callconv(.c) void;
+extern fn bug(
+    file: [*:0]const u8,
+    line: c_int,
+    func: [*:0]const u8,
+    fmt: [*:0]const u8,
+    ...
+) callconv(.c) noreturn;
+
+// ── the config.c logger tail: ported to Zig ───────────────────────
+//
+// log_and_notify()/log_contextual() and their _errno siblings were the last
+// variadic functions in config.c. They live here now, with @cVaStart and
+// vasprintf() doing exactly what the C xvasprintf() did.
+
+const USER_NOTIFICATION_WARNING_NUM: c_int = 1;
+const USER_NOTIFICATION_ERROR_NUM: c_int = 2;
+
+fn vformat(fmt: [*:0]const u8, va: *std.builtin.VaList) [:0]u8 {
+    var formatted: ?[*:0]u8 = null;
+    const n = vasprintf(&formatted, fmt, va);
+
+    // xvasprintf() aborts on OOM
+    if (n < 0 or formatted == null)
+        @panic("out of memory");
+
+    return std.mem.span(formatted.?);
+}
+
+fn notifyKindFor(class: c_int) c_int {
+    return switch (class) {
+        LOG_CLASS_WARNING => USER_NOTIFICATION_WARNING_NUM,
+        LOG_CLASS_ERROR => USER_NOTIFICATION_ERROR_NUM,
+        else => bug(
+            "config.zig",
+            @intCast(@src().line),
+            "notifyKindFor",
+            "unsupported log class: %d",
+            class,
+        ),
+    };
+}
+
+/// Log `msg` (already formatted) and turn it into a user notification.
+fn logAndNotifyStr(
+    conf: *types.Config,
+    class: c_int,
+    file: [*:0]const u8,
+    lineno: c_int,
+    msg: [:0]const u8,
+) void {
+    const kind = notifyKindFor(class);
+
+    log_msg(class, "config", file, lineno, "%s", msg.ptr);
+
+    // The notification takes ownership of the text.
+    const owned = xstrdup(msg.ptr) orelse @panic("out of memory");
+    user_notification_add_owned(&conf.notifications, kind, owned);
+}
+
+export fn log_and_notify(
+    conf: *types.Config,
+    class: c_int,
+    file: [*:0]const u8,
+    lineno: c_int,
+    fmt: [*:0]const u8,
+    ...
+) callconv(.c) void {
+    var va = @cVaStart();
+    const msg = vformat(fmt, &va);
+    defer std.c.free(@ptrCast(msg.ptr));
+    @cVaEnd(&va);
+
+    logAndNotifyStr(conf, class, file, lineno, msg);
+}
+
+/// C: log_and_notify_errno_va() -- append ": <strerror>".
+fn logAndNotifyErrnoVa(
+    conf: *types.Config,
+    file: [*:0]const u8,
+    lineno: c_int,
+    fmt: [*:0]const u8,
+    va: *std.builtin.VaList,
+) void {
+    const errno_copy = std.c._errno().*;
+    const formatted = vformat(fmt, va);
+    defer std.c.free(@ptrCast(formatted.ptr));
+
+    const msg = std.fmt.allocPrintSentinel(
+        std.heap.c_allocator,
+        "{s}: {s}",
+        .{ formatted, std.mem.span(strerror(errno_copy)) },
+        0,
+    ) catch @panic("out of memory");
+    defer std.c.free(@ptrCast(msg.ptr));
+
+    logAndNotifyStr(conf, LOG_CLASS_ERROR, file, lineno, msg);
+}
+
+export fn log_and_notify_errno(
+    conf: *types.Config,
+    file: [*:0]const u8,
+    lineno: c_int,
+    fmt: [*:0]const u8,
+    ...
+) callconv(.c) void {
+    var va = @cVaStart();
+    defer @cVaEnd(&va);
+
+    logAndNotifyErrnoVa(conf, file, lineno, fmt, &va);
+}
+
+/// C: log_contextual() -- "[section]key: value" prefix.
+fn logContextualStr(
+    ctx: *Context,
+    class: c_int,
+    file: [*:0]const u8,
+    lineno: c_int,
+    msg: [:0]const u8,
+) void {
+    const print_dot = ctx.key != null;
+    const print_colon = ctx.value != null;
+    const print_section_suffix = ctx.section_suffix != null;
+
+    if (!print_dot) ctx.key = "";
+    if (!print_colon) ctx.value = "";
+    if (!print_section_suffix) ctx.section_suffix = "";
+
+    const line = std.fmt.allocPrintSentinel(
+        std.heap.c_allocator,
+        "{s}:{d}: [{s}{s}{s}]{s}{s}{s}{s}: {s}",
+        .{
+            ctx.path orelse "(null)",
+            ctx.lineno,
+            ctx.section orelse "(null)",
+            if (print_section_suffix) ":" else "",
+            ctx.section_suffix orelse "",
+            if (print_dot) "." else "",
+            ctx.key orelse "",
+            if (print_colon) ": " else "",
+            ctx.value orelse "",
+            msg,
+        },
+        0,
+    ) catch @panic("out of memory");
+    defer std.c.free(@ptrCast(line.ptr));
+
+    logAndNotifyStr(ctx.conf.?, class, file, lineno, line);
+}
+
+export fn log_contextual(
     ctx: *Context,
     class: c_int,
     file: [*:0]const u8,
     lineno: c_int,
     fmt: [*:0]const u8,
     ...
-) callconv(.c) void;
+) callconv(.c) void {
+    var va = @cVaStart();
+    const msg = vformat(fmt, &va);
+    defer std.c.free(@ptrCast(msg.ptr));
+    @cVaEnd(&va);
+
+    logContextualStr(ctx, class, file, lineno, msg);
+}
+
+export fn log_contextual_errno(
+    ctx: *Context,
+    file: [*:0]const u8,
+    lineno: c_int,
+    fmt: [*:0]const u8,
+    ...
+) callconv(.c) void {
+    var va = @cVaStart();
+    const formatted = vformat(fmt, &va);
+    defer std.c.free(@ptrCast(formatted.ptr));
+    @cVaEnd(&va);
+
+    // C reads errno in log_and_notify_errno_va(), i.e. after the message
+    // itself has been formatted; keep that ordering.
+    const errno_copy = std.c._errno().*;
+
+    const msg = std.fmt.allocPrintSentinel(
+        std.heap.c_allocator,
+        "{s}: {s}",
+        .{ formatted, std.mem.span(strerror(errno_copy)) },
+        0,
+    ) catch @panic("out of memory");
+    defer std.c.free(@ptrCast(msg.ptr));
+
+    logContextualStr(ctx, LOG_CLASS_ERROR, file, lineno, msg);
+}
 
 const LOG_CLASS_ERROR: c_int = 1;
 const LOG_CLASS_WARNING: c_int = 2;
@@ -1833,14 +2023,6 @@ export fn value_to_key_combos(
 
 // ── key-binding sections and collisions (C2k) ─────────────────────
 
-extern fn log_and_notify(
-    conf: *types.Config,
-    class: c_int,
-    file: [*:0]const u8,
-    lineno: c_int,
-    fmt: [*:0]const u8,
-    ...
-) callconv(.c) void;
 extern fn xkb_keysym_get_name(sym: u32, buf: [*]u8, len: usize) callconv(.c) c_int;
 
 fn notifyErr(
@@ -2233,26 +2415,12 @@ export fn config_bindings_finalize(conf: *types.Config) callconv(.c) bool {
 
 // ── [colors] and [csd] (C2c) ──────────────────────────────────────
 
-extern fn log_and_notify_errno(
-    conf: *types.Config,
-    file: [*:0]const u8,
-    lineno: c_int,
-    fmt: [*:0]const u8,
-    ...
-) callconv(.c) void;
 extern fn getline(
     lineptr: *?[*]u8,
     n: *usize,
     stream: *anyopaque,
 ) callconv(.c) isize;
 extern fn strchr(s: [*:0]const u8, c: c_int) callconv(.c) ?[*:0]u8;
-extern fn log_contextual_errno(
-    ctx: *Context,
-    file: [*:0]const u8,
-    lineno: c_int,
-    fmt: [*:0]const u8,
-    ...
-) callconv(.c) void;
 extern fn getenv(name: [*:0]const u8) callconv(.c) ?[*:0]const u8;
 extern fn fopen(path: [*:0]const u8, mode: [*:0]const u8) callconv(.c) ?*anyopaque;
 extern fn fclose(f: *anyopaque) callconv(.c) c_int;
@@ -4106,9 +4274,10 @@ extern fn user_notification_add_fmt(
     ...
 ) callconv(.c) void;
 
-// config.c: fcft_font/fcft_glyph field accessors.
-extern fn config_fcft_glyph_advance_x(glyph: *const anyopaque) callconv(.c) c_int;
-extern fn config_fcft_font_name(font: *const anyopaque) callconv(.c) ?[*:0]const u8;
+// struct fcft_font / struct fcft_glyph are fcft's business; the shims hand
+// over the two fields this file needs.
+extern fn terminal_shim_fcft_glyph_advance_x(glyph: *const anyopaque) callconv(.c) c_int;
+extern fn terminal_shim_fcft_font_name(font: *const anyopaque) callconv(.c) ?[*:0]const u8;
 
 const FcResultMatch: c_int = 0;
 const FcMatchPattern: c_int = 0;
@@ -4279,10 +4448,10 @@ export fn check_if_font_is_monospaced(
 
     for (chars) |cp| {
         const g = fcft_rasterize_char_utf32(f, cp, FCFT_SUBPIXEL_NONE) orelse continue;
-        const advance_x = config_fcft_glyph_advance_x(g);
+        const advance_x = terminal_shim_fcft_glyph_advance_x(g);
 
         if (last_width >= 0 and advance_x != last_width) {
-            const font_name: [*:0]const u8 = config_fcft_font_name(f) orelse pattern;
+            const font_name: [*:0]const u8 = terminal_shim_fcft_font_name(f) orelse pattern;
 
             logWarnFmt(
                 @src(),

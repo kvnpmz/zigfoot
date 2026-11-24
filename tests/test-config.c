@@ -6,6 +6,46 @@
 #include "../log.h"
 
 #include "../config.c"
+#include <fontconfig/fontconfig.h>
+
+/* These used to come in transitively through config.c; config.c is now only
+ * the regex_t shim, so declare what the parser tests call. */
+#include "../char32.h"
+#include "../xmalloc.h"
+#include "../debug.h"
+#include "../macros.h"
+#include "../util.h"
+#include <string.h>
+#include <uchar.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#include <linux/input-event-codes.h>
+
+#include "../input.h"
+#include "../key-binding.h"
+
+extern bool parse_section_main(struct context *ctx);
+extern bool parse_section_security(struct context *ctx);
+extern bool parse_section_bell(struct context *ctx);
+extern bool parse_section_desktop_notifications(struct context *ctx);
+extern bool parse_section_scrollback(struct context *ctx);
+extern bool parse_section_cursor(struct context *ctx);
+extern bool parse_section_mouse(struct context *ctx);
+extern bool parse_section_touch(struct context *ctx);
+extern bool parse_section_environment(struct context *ctx);
+extern bool parse_color_theme(struct context *ctx, struct color_theme *theme);
+extern bool parse_section_colors_dark(struct context *ctx);
+extern bool parse_section_colors_light(struct context *ctx);
+extern bool parse_section_csd(struct context *ctx);
+extern bool parse_section_tweak(struct context *ctx);
+extern bool parse_config_file(
+    FILE *f, struct config *conf, const char *path, bool errors_are_fatal);
+extern bool parse_section_url(struct context *ctx);
+extern void free_key_binding_list(struct config_key_binding_list *bindings);
+extern bool parse_section_regex(struct context *ctx);
+extern size_t config_button_map_len(void);
+extern int config_button_map_code(size_t idx);
+extern const char *config_button_map_name(size_t idx);
 
 /* Ported to config.zig (C2k): the action tables moved there. */
 extern bool parse_section_key_bindings(struct context *ctx);
