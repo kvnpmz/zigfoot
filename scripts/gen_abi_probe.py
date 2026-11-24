@@ -99,7 +99,7 @@ SKIP: set[str] = {
 }
 
 # C packed structs: the size is checkable, individual members are bit-fields.
-PACKED: set[str] = {"Attributes"}
+PACKED: set[str] = {"Attributes", "CsdColorFlags"}
 
 # Inline structs whose members are C bit-fields: only the size is checkable.
 # Keyed by field name, since only inline structs can hit this.

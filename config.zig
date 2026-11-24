@@ -51,18 +51,31 @@ const LOG_CLASS_WARNING: c_int = 2;
 // The C macro is variadic; rather than pass varargs across the ABI, format
 // here and hand log_contextual() a "%s".
 
-fn logCtx(ctx: *Context, class: c_int, msg: [*:0]const u8) void {
-    log_contextual(ctx, class, @src().file, @src().line, "%s", msg);
+fn logCtx(ctx: *Context, class: c_int, file: [*:0]const u8, line: u32, msg: [*:0]const u8) void {
+    log_contextual(ctx, class, file, @intCast(line), "%s", msg);
 }
 
-fn contextualErr(ctx: *Context, comptime fmt: []const u8, args: anytype) void {
+// `src` is threaded through explicitly: the C original logs the line of the
+// LOG_CONTEXTUAL_ERR() macro expansion, and `@src()` inside a helper would
+// report the helper instead.
+fn contextualErr(
+    ctx: *Context,
+    src: std.builtin.SourceLocation,
+    comptime fmt: []const u8,
+    args: anytype,
+) void {
     var buf: [1024]u8 = undefined;
     const msg: [:0]const u8 = std.fmt.bufPrintZ(&buf, fmt, args) catch "invalid value";
-    logCtx(ctx, LOG_CLASS_ERROR, msg.ptr);
+    logCtx(ctx, LOG_CLASS_ERROR, src.file, src.line, msg.ptr);
 }
 
-fn errValue(ctx: *Context, comptime fmt: []const u8, args: anytype) bool {
-    contextualErr(ctx, fmt, args);
+fn errValue(
+    ctx: *Context,
+    src: std.builtin.SourceLocation,
+    comptime fmt: []const u8,
+    args: anytype,
+) bool {
+    contextualErr(ctx, src, fmt, args);
     return false;
 }
 
@@ -105,13 +118,13 @@ fn strToUint16(s: ?[*:0]const u8, base: c_int, res: *u16) bool {
 
 export fn value_to_uint16(ctx: *Context, base: c_int, res: *u16) callconv(.c) bool {
     if (!strToUint16(ctx.value, base, res))
-        return errValue(ctx, "invalid integer value, or outside range 0-{d}", .{std.math.maxInt(u16)});
+        return errValue(ctx, @src(), "invalid integer value, or outside range 0-{d}", .{std.math.maxInt(u16)});
     return true;
 }
 
 export fn value_to_uint32(ctx: *Context, base: c_int, res: *u32) callconv(.c) bool {
     if (!strToUint32(ctx.value, base, res))
-        return errValue(ctx, "invalid integer value, or outside range 0-{d}", .{std.math.maxInt(u32)});
+        return errValue(ctx, @src(), "invalid integer value, or outside range 0-{d}", .{std.math.maxInt(u32)});
     return true;
 }
 
@@ -119,7 +132,7 @@ export fn value_to_bool(ctx: *Context, res: *bool) callconv(.c) bool {
     const yes = [_][*:0]const u8{ "on", "true", "yes", "1" };
     const no = [_][*:0]const u8{ "off", "false", "no", "0" };
 
-    const value = ctx.value orelse return errValue(ctx, "invalid boolean value", .{});
+    const value = ctx.value orelse return errValue(ctx, @src(), "invalid boolean value", .{});
 
     for (yes) |candidate| {
         if (strcasecmp(value, candidate) == 0) {
@@ -135,16 +148,16 @@ export fn value_to_bool(ctx: *Context, res: *bool) callconv(.c) bool {
         }
     }
 
-    return errValue(ctx, "invalid boolean value", .{});
+    return errValue(ctx, @src(), "invalid boolean value", .{});
 }
 
 export fn value_to_dimensions(ctx: *Context, x: *u32, y: *u32) callconv(.c) bool {
-    const value = ctx.value orelse return errValue(ctx, "invalid dimensions (must be in the form AxB)", .{});
+    const value = ctx.value orelse return errValue(ctx, @src(), "invalid dimensions (must be in the form AxB)", .{});
 
     // sscanf(), like the C version: " 5x6" is valid and trailing garbage is
     // ignored (only the two conversions matter).
     if (sscanf(value, "%ux%u", x, y) != 2)
-        return errValue(ctx, "invalid dimensions (must be in the form AxB)", .{});
+        return errValue(ctx, @src(), "invalid dimensions (must be in the form AxB)", .{});
 
     return true;
 }
@@ -157,7 +170,7 @@ export fn value_to_float(ctx: *Context, res: *f32) callconv(.c) bool {
 
     const v = strtof(s, &end);
     if (!(__errno_location().* == 0 and end != null and end.?[0] == 0))
-        return errValue(ctx, "invalid decimal value", .{});
+        return errValue(ctx, @src(), "invalid decimal value", .{});
 
     res.* = v;
     return true;
@@ -203,9 +216,9 @@ export fn value_to_str(ctx: *Context, res: *?[*:0]u8) callconv(.c) bool {
 }
 
 export fn value_to_wchars(ctx: *Context, res: *?[*]u32) callconv(.c) bool {
-    const value = ctx.value orelse return errValue(ctx, "not a valid string value", .{});
+    const value = ctx.value orelse return errValue(ctx, @src(), "not a valid string value", .{});
 
-    const s = ambstoc32(value) orelse return errValue(ctx, "not a valid string value", .{});
+    const s = ambstoc32(value) orelse return errValue(ctx, @src(), "not a valid string value", .{});
 
     if (res.*) |old|
         free(@ptrCast(old));
@@ -251,7 +264,7 @@ export fn value_to_enum(
         idx -= 2;
     valid_values[idx] = 0;
 
-    contextualErr(ctx, "not one of {s}", .{valid_values[0..idx]});
+    contextualErr(ctx, @src(), "not one of {s}", .{valid_values[0..idx]});
     return false;
 }
 
@@ -268,8 +281,8 @@ export fn value_to_color(ctx: *Context, result: *u32, allow_alpha: bool) callcon
         !strToUint32(value, 16, &color))
     {
         if (allow_alpha)
-            return errValue(ctx, "color must be in either RGB or ARGB format", .{});
-        return errValue(ctx, "color must be in RGB format", .{});
+            return errValue(ctx, @src(), "color must be in either RGB or ARGB format", .{});
+        return errValue(ctx, @src(), "color must be in RGB format", .{});
     }
 
     if (allow_alpha and component_count == 3) {
@@ -302,7 +315,7 @@ export fn value_to_two_colors(
     const second_as_str = strtok(null, " ");
 
     if (first_as_str == null or second_as_str == null)
-        return errValue(ctx, "invalid double color value", .{});
+        return errValue(ctx, @src(), "invalid double color value", .{});
 
     var a: u32 = undefined;
     ctx.value = first_as_str;
@@ -331,7 +344,7 @@ export fn value_to_pt_or_px(ctx: *Context, res: *types.PtOrPx) callconv(.c) bool
 
         const value = strtol(s.?, &end, 10);
         if (!(len > 2 and __errno_location().* == 0 and end == s.? + len - 2))
-            return errValue(ctx, "invalid px value (must be in the form 12px)", .{});
+            return errValue(ctx, @src(), "invalid px value (must be in the form 12px)", .{});
 
         res.pt = 0;
         res.px = @truncate(value);
@@ -407,15 +420,216 @@ export fn value_to_spawn_template(
 
     var argv: ?[*:null]?[*:0]u8 = null;
     if (!tokenize_cmdline(value, &argv))
-        return errValue(ctx, "syntax error in command line", .{});
+        return errValue(ctx, @src(), "syntax error in command line", .{});
 
     template.argv.args = argv;
     return true;
 }
 
-// Keep `strcmp` referenced: it documents that the C version compares argv
-// entries with strcmp() (see argv_compare in config.c, still C) and Zig
-// would otherwise drop the declaration as unused.
-comptime {
-    _ = &strcmp;
+
+// ── section parsers (C2b) ─────────────────────────────────────────
+//
+// Each `[section]` in foot.ini ends up here. The dispatch table that maps
+// section names to these functions is still in config.c; the table just
+// takes their addresses.
+
+fn eq(a: ?[*:0]const u8, b: []const u8) bool {
+    const s = a orelse return false;
+    return std.mem.eql(u8, std.mem.span(s), b);
+}
+
+fn eqPtr(a: ?[*:0]const u8, b: ?[*:0]const u8) bool {
+    const lhs = a orelse return false;
+    const rhs = b orelse return false;
+    return strcmp(lhs, rhs) == 0;
+}
+
+fn invalidOption(ctx: *Context, key: [*:0]const u8) bool {
+    return errValue(ctx, @src(), "not a valid option: {s}", .{std.mem.span(key)});
+}
+
+/// NULL-terminated `const char *[]` for value_to_enum(), built at compile
+/// time.
+fn valueMap(comptime names: []const [:0]const u8) [*]const ?[*:0]const u8 {
+    const Table = struct {
+        const arr = blk: {
+            var a: [names.len + 1]?[*:0]const u8 = undefined;
+            for (names, 0..) |name, i|
+                a[i] = name.ptr;
+            a[names.len] = null;
+            break :blk a;
+        };
+    };
+    return &Table.arr;
+}
+
+export fn parse_section_security(ctx: *Context) callconv(.c) bool {
+    const conf = ctx.conf.?;
+    const key = ctx.key orelse return true;
+
+    if (eq(key, "osc52")) {
+        return value_to_enum(
+            ctx,
+            valueMap(&.{ "disabled", "copy-enabled", "paste-enabled", "enabled" }),
+            @ptrCast(&conf.security.osc52),
+        );
+    }
+
+    return invalidOption(ctx, key);
+}
+
+export fn parse_section_bell(ctx: *Context) callconv(.c) bool {
+    const conf = ctx.conf.?;
+    const key = ctx.key orelse return true;
+
+    if (eq(key, "urgent"))
+        return value_to_bool(ctx, &conf.bell.urgent);
+    if (eq(key, "notify"))
+        return value_to_bool(ctx, &conf.bell.notify);
+    if (eq(key, "system"))
+        return value_to_bool(ctx, &conf.bell.system_bell);
+    if (eq(key, "visual"))
+        return value_to_bool(ctx, &conf.bell.flash);
+    if (eq(key, "command"))
+        return value_to_spawn_template(ctx, &conf.bell.command);
+    if (eq(key, "command-focused"))
+        return value_to_bool(ctx, &conf.bell.command_focused);
+
+    return invalidOption(ctx, key);
+}
+
+export fn parse_section_desktop_notifications(ctx: *Context) callconv(.c) bool {
+    const conf = ctx.conf.?;
+    const key = ctx.key orelse return true;
+
+    if (eq(key, "command"))
+        return value_to_spawn_template(ctx, &conf.desktop_notifications.command);
+    if (eq(key, "command-action-argument"))
+        return value_to_spawn_template(ctx, &conf.desktop_notifications.command_action_arg);
+    if (eq(key, "close"))
+        return value_to_spawn_template(ctx, &conf.desktop_notifications.close);
+    if (eq(key, "inhibit-when-focused"))
+        return value_to_bool(ctx, &conf.desktop_notifications.inhibit_when_focused);
+
+    return invalidOption(ctx, key);
+}
+
+export fn parse_section_scrollback(ctx: *Context) callconv(.c) bool {
+    const conf = ctx.conf.?;
+    const key = ctx.key orelse return true;
+
+    if (eq(key, "lines"))
+        return value_to_uint32(ctx, 10, &conf.scrollback.lines);
+
+    if (eq(key, "indicator-position")) {
+        return value_to_enum(
+            ctx,
+            valueMap(&.{ "none", "fixed", "relative" }),
+            @ptrCast(&conf.scrollback.indicator.position),
+        );
+    }
+
+    if (eq(key, "indicator-format")) {
+        if (eq(ctx.value, "percentage")) {
+            conf.scrollback.indicator.format = .percentage;
+            return true;
+        }
+        if (eq(ctx.value, "line")) {
+            conf.scrollback.indicator.format = .lineno;
+            return true;
+        }
+        return value_to_wchars(ctx, &conf.scrollback.indicator.text);
+    }
+
+    if (eq(key, "multiplier"))
+        return value_to_float(ctx, &conf.scrollback.multiplier);
+
+    return invalidOption(ctx, key);
+}
+
+export fn parse_section_cursor(ctx: *Context) callconv(.c) bool {
+    const conf = ctx.conf.?;
+    const key = ctx.key orelse return true;
+
+    if (eq(key, "style")) {
+        return value_to_enum(
+            ctx,
+            valueMap(&.{ "block", "underline", "beam", "hollow" }),
+            @ptrCast(&conf.cursor.style),
+        );
+    }
+
+    if (eq(key, "unfocused-style")) {
+        return value_to_enum(
+            ctx,
+            valueMap(&.{ "unchanged", "hollow", "none" }),
+            @ptrCast(&conf.cursor.unfocused_style),
+        );
+    }
+
+    if (eq(key, "blink"))
+        return value_to_bool(ctx, &conf.cursor.blink.enabled);
+    if (eq(key, "blink-rate"))
+        return value_to_uint32(ctx, 10, &conf.cursor.blink.rate_ms);
+    if (eq(key, "beam-thickness"))
+        return value_to_pt_or_px(ctx, &conf.cursor.beam_thickness);
+    if (eq(key, "underline-thickness"))
+        return value_to_pt_or_px(ctx, &conf.cursor.underline_thickness);
+
+    return invalidOption(ctx, key);
+}
+
+export fn parse_section_mouse(ctx: *Context) callconv(.c) bool {
+    const conf = ctx.conf.?;
+    const key = ctx.key orelse return true;
+
+    if (eq(key, "hide-when-typing"))
+        return value_to_bool(ctx, &conf.mouse.hide_when_typing);
+    if (eq(key, "alternate-scroll-mode"))
+        return value_to_bool(ctx, &conf.mouse.alternate_scroll_mode);
+
+    return invalidOption(ctx, key);
+}
+
+export fn parse_section_touch(ctx: *Context) callconv(.c) bool {
+    const conf = ctx.conf.?;
+    const key = ctx.key orelse return true;
+
+    if (eq(key, "long-press-delay"))
+        return value_to_uint32(ctx, 10, &conf.touch.long_press_delay);
+
+    return invalidOption(ctx, key);
+}
+
+export fn parse_section_environment(ctx: *Context) callconv(.c) bool {
+    const conf = ctx.conf.?;
+    const key = ctx.key orelse return true;
+
+    // Pre-existing variable: overwrite its value in place.
+    var it = conf.env_vars.head;
+    while (it) |node| : (it = node.next) {
+        if (eqPtr(node.item.name, key))
+            return value_to_str(ctx, &node.item.value);
+    }
+
+    var value: ?[*:0]u8 = null;
+    if (!value_to_str(ctx, &value))
+        return false;
+
+    // tll_push_back(conf->env_vars, ((struct env_var){xstrdup(key), value}))
+    const node: *types.EnvVarNode = @ptrCast(@alignCast(
+        xmalloc(@sizeOf(types.EnvVarNode)) orelse unreachable,
+    ));
+    node.item = .{ .name = xstrdup(key), .value = value };
+    node.prev = conf.env_vars.tail;
+    node.next = null;
+
+    if (conf.env_vars.tail) |tail|
+        tail.next = node
+    else
+        conf.env_vars.head = node;
+    conf.env_vars.tail = node;
+    conf.env_vars.length += 1;
+
+    return true;
 }

@@ -293,6 +293,14 @@ Port in this order; each module is a small, reviewable series of chunks.
      exercises the Zig helpers — that is the pattern the rest of C2 uses.
      `struct context` moved to `config.h` so the probe can pin its layout
      (`ConfigContext`), and `log_contextual()` lost its `static`;
+     **C2b done** — eight section parsers (`[security]`, `[bell]`,
+     `[desktop-notifications]`, `[scrollback]`, `[cursor]`, `[mouse]`,
+     `[touch]`, `[environment]`, ~230 C lines). Two things fell out of it:
+     `value_to_enum()` takes compile-time-built NULL-terminated maps, and
+     `csd.color`'s unnamed bit-field block is now a `packed struct(u32)` so
+     Zig can set `title_set`/`buttons_set`/… by name instead of poking a
+     `u32` (the probe skips it because C has no such member; the u32 offsets
+     below it still pin the layout);
    * C3: per-section option tables, one section per commit (`main`, `cursor`,
      `mouse`, `colors`, `key-bindings`, `url`, `bell`, `scrollback`, …).
 4. **Mid-tier (~3.5k):** `ime`, `key-binding`, `url-mode`, `search`.

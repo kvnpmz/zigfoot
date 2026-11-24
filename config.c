@@ -276,6 +276,16 @@ extern void spawn_template_free(struct config_spawn_template *template);
 extern void spawn_template_clone(
     struct config_spawn_template *dst, const struct config_spawn_template *src);
 
+/* Section parsers: ported to config.zig. */
+extern bool parse_section_security(struct context *ctx);
+extern bool parse_section_bell(struct context *ctx);
+extern bool parse_section_desktop_notifications(struct context *ctx);
+extern bool parse_section_scrollback(struct context *ctx);
+extern bool parse_section_cursor(struct context *ctx);
+extern bool parse_section_mouse(struct context *ctx);
+extern bool parse_section_touch(struct context *ctx);
+extern bool parse_section_environment(struct context *ctx);
+
 static const enum user_notification_kind log_class_to_notify_kind[LOG_CLASS_COUNT] = {
     [LOG_CLASS_WARNING] = USER_NOTIFICATION_WARNING,
     [LOG_CLASS_ERROR] = USER_NOTIFICATION_ERROR,
@@ -832,116 +842,10 @@ parse_section_main(struct context *ctx)
     }
 }
 
-static bool
-parse_section_security(struct context *ctx)
-{
-    struct config *conf = ctx->conf;
-    const char *key = ctx->key;
-
-    if (streq(key, "osc52")) {
-        _Static_assert(sizeof(conf->security.osc52) == sizeof(int),
-                       "enum is not 32-bit");
-        return value_to_enum(
-            ctx,
-            (const char *[]){"disabled", "copy-enabled", "paste-enabled", "enabled", NULL},
-            (int *)&conf->security.osc52);
-    } else {
-        LOG_CONTEXTUAL_ERR("not a valid option: %s", key);
-        return false;
-    }
-}
-
-static bool
-parse_section_bell(struct context *ctx)
-{
-    struct config *conf = ctx->conf;
-    const char *key = ctx->key;
-
-    if (streq(key, "urgent"))
-        return value_to_bool(ctx, &conf->bell.urgent);
-    else if (streq(key, "notify"))
-        return value_to_bool(ctx, &conf->bell.notify);
-    else if (streq(key, "system"))
-        return value_to_bool(ctx, &conf->bell.system_bell);
-    else if (streq(key, "visual"))
-        return value_to_bool(ctx, &conf->bell.flash);
-    else if (streq(key, "command"))
-        return value_to_spawn_template(ctx, &conf->bell.command);
-    else if (streq(key, "command-focused"))
-        return value_to_bool(ctx, &conf->bell.command_focused);
-    else {
-        LOG_CONTEXTUAL_ERR("not a valid option: %s", key);
-        return false;
-    }
-}
-
-static bool
-parse_section_desktop_notifications(struct context *ctx)
-{
-    struct config *conf = ctx->conf;
-    const char *key = ctx->key;
-
-    if (streq(key, "command"))
-        return value_to_spawn_template(
-            ctx, &conf->desktop_notifications.command);
-    else if (streq(key, "command-action-argument"))
-        return value_to_spawn_template(
-            ctx, &conf->desktop_notifications.command_action_arg);
-    else if (streq(key, "close"))
-        return value_to_spawn_template(
-            ctx, &conf->desktop_notifications.close);
-    else if (streq(key, "inhibit-when-focused"))
-        return value_to_bool(
-            ctx, &conf->desktop_notifications.inhibit_when_focused);
-    else {
-        LOG_CONTEXTUAL_ERR("not a valid option: %s", key);
-        return false;
-    }
-}
-
-static bool
-parse_section_scrollback(struct context *ctx)
-{
-    struct config *conf = ctx->conf;
-    const char *key = ctx->key;
-    const char *value = ctx->value;
-
-    if (streq(key, "lines"))
-        return value_to_uint32(ctx, 10, &conf->scrollback.lines);
-
-    else if (streq(key, "indicator-position")) {
-        _Static_assert(
-            sizeof(conf->scrollback.indicator.position) == sizeof(int),
-            "enum is not 32-bit");
-
-        return value_to_enum(
-            ctx,
-            (const char *[]){"none", "fixed", "relative", NULL},
-            (int *)&conf->scrollback.indicator.position);
-    }
-
-    else if (streq(key, "indicator-format")) {
-        if (streq(value, "percentage")) {
-            conf->scrollback.indicator.format
-                = SCROLLBACK_INDICATOR_FORMAT_PERCENTAGE;
-            return true;
-        } else if (streq(value, "line")) {
-            conf->scrollback.indicator.format
-                = SCROLLBACK_INDICATOR_FORMAT_LINENO;
-            return true;
-        } else
-            return value_to_wchars(ctx, &conf->scrollback.indicator.text);
-    }
-
-    else if (streq(key, "multiplier"))
-        return value_to_float(ctx, &conf->scrollback.multiplier);
-
-    else {
-        LOG_CONTEXTUAL_ERR("not a valid option: %s", key);
-        return false;
-    }
-}
-
+/* parse_section_security: ported to config.zig */
+/* parse_section_bell: ported to config.zig */
+/* parse_section_desktop_notifications: ported to config.zig */
+/* parse_section_scrollback: ported to config.zig */
 static bool
 parse_section_url(struct context *ctx)
 {
@@ -1279,68 +1183,8 @@ parse_section_colors_light(struct context *ctx)
     return parse_color_theme(ctx, &ctx->conf->colors_light);
 }
 
-static bool
-parse_section_cursor(struct context *ctx)
-{
-    struct config *conf = ctx->conf;
-    const char *key = ctx->key;
-
-    if (streq(key, "style")) {
-        _Static_assert(sizeof(conf->cursor.style) == sizeof(int),
-                       "enum is not 32-bit");
-
-        return value_to_enum(
-            ctx,
-            (const char *[]){"block", "underline", "beam", "hollow", NULL},
-            (int *)&conf->cursor.style);
-    }
-
-    else if (streq(key, "unfocused-style")) {
-        _Static_assert(sizeof(conf->cursor.unfocused_style) == sizeof(int),
-                       "enum is not 32-bit");
-
-        return value_to_enum(
-            ctx,
-            (const char *[]){"unchanged", "hollow", "none", NULL},
-            (int *)&conf->cursor.unfocused_style);
-    }
-
-    else if (streq(key, "blink"))
-        return value_to_bool(ctx, &conf->cursor.blink.enabled);
-
-    else if (streq(key, "blink-rate"))
-        return value_to_uint32(ctx, 10, &conf->cursor.blink.rate_ms);
-
-    else if (streq(key, "beam-thickness"))
-        return value_to_pt_or_px(ctx, &conf->cursor.beam_thickness);
-
-    else if (streq(key, "underline-thickness"))
-        return value_to_pt_or_px(ctx, &conf->cursor.underline_thickness);
-
-    else {
-        LOG_CONTEXTUAL_ERR("not a valid option: %s", key);
-        return false;
-    }
-}
-
-static bool
-parse_section_mouse(struct context *ctx)
-{
-    struct config *conf = ctx->conf;
-    const char *key = ctx->key;
-
-    if (streq(key, "hide-when-typing"))
-        return value_to_bool(ctx, &conf->mouse.hide_when_typing);
-
-    else if (streq(key, "alternate-scroll-mode"))
-        return value_to_bool(ctx, &conf->mouse.alternate_scroll_mode);
-
-    else {
-        LOG_CONTEXTUAL_ERR("not a valid option: %s", key);
-        return false;
-    }
-}
-
+/* parse_section_cursor: ported to config.zig */
+/* parse_section_mouse: ported to config.zig */
 static bool
 parse_section_csd(struct context *ctx)
 {
@@ -2466,30 +2310,7 @@ err:
     return false;
 }
 
-static bool
-parse_section_environment(struct context *ctx)
-{
-    struct config *conf = ctx->conf;
-    const char *key = ctx->key;
-
-    /* Check for pre-existing env variable */
-    tll_foreach(conf->env_vars, it) {
-        if (streq(it->item.name, key))
-            return value_to_str(ctx, &it->item.value);
-    }
-
-    /*
-     * No pre-existing variable - allocate a new one
-     */
-
-    char *value = NULL;
-    if (!value_to_str(ctx, &value))
-        return false;
-
-    tll_push_back(conf->env_vars, ((struct env_var){xstrdup(key), value}));
-    return true;
-}
-
+/* parse_section_environment: ported to config.zig */
 static bool
 parse_section_tweak(struct context *ctx)
 {
@@ -2652,20 +2473,7 @@ parse_section_tweak(struct context *ctx)
     }
 }
 
-static bool
-parse_section_touch(struct context *ctx) {
-    struct config *conf = ctx->conf;
-    const char *key = ctx->key;
-
-    if (streq(key, "long-press-delay"))
-        return value_to_uint32(ctx, 10, &conf->touch.long_press_delay);
-
-    else {
-        LOG_CONTEXTUAL_ERR("not a valid option: %s", key);
-        return false;
-    }
-}
-
+/* parse_section_touch: ported to config.zig */
 static bool
 parse_key_value(char *kv, char **section, const char **key, const char **value)
 {

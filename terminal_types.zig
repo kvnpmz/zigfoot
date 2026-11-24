@@ -1341,6 +1341,17 @@ pub const CursorUnfocusedStyle = enum(c_int) { unchanged, hollow, none };
 
 pub const CsdPreferred = enum(c_int) { prefer_none, prefer_server, prefer_client };
 
+/// The bit-field block at the start of `struct config.csd.color`.
+pub const CsdColorFlags = packed struct(u32) {
+    title_set: bool = false,
+    buttons_set: bool = false,
+    minimize_set: bool = false,
+    maximize_set: bool = false,
+    close_set: bool = false,
+    border_set: bool = false,
+    _pad: u26 = 0,
+};
+
 pub const SelectionTarget = enum(c_int) {
     none,
     primary,
@@ -1500,7 +1511,12 @@ pub const Config = extern struct {
         color: extern struct {
             // C: struct { bool title_set:1, buttons_set:1, minimize_set:1,
             //             maximize_set:1, close_set:1, border_set:1; ... }
-            _color_flags: u32,
+            // Six 1-bit bool fields occupy the low bits of the first word;
+            // a packed struct overlays them so Zig can set them by name.
+            // The C field has no name (the bits *are* the fields), hence the
+            // `_` prefix, which tells the ABI probe to skip it; the offsets
+            // of the u32 fields below still pin the layout down.
+            _flags: CsdColorFlags,
             title: u32,
             buttons: u32,
             minimize: u32,
@@ -1559,7 +1575,7 @@ pub const Config = extern struct {
 /// The parser itself is still config.c (config.zig has the value-parsing
 /// helpers), but both halves need to name it.
 pub const ConfigContext = extern struct {
-    conf: ?*const Config,
+    conf: ?*Config,
     section: ?[*:0]const u8,
     section_suffix: ?[*:0]const u8,
     key: ?[*:0]const u8,
