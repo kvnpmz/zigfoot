@@ -251,6 +251,56 @@ void shm_shim_wl_buffer_add_listener(struct wl_buffer *buffer, void *data) {
     wl_buffer_add_listener(buffer, &buffer_listener, data);
 }
 
+/* Format/wayland-capability constants for shm.zig. The pixman and
+ * wl_shm_format values are macros/enums, so they are exported once here
+ * rather than hard-coded in Zig. */
+struct shm_format_constants {
+    uint32_t pixman_a8r8g8b8;
+    uint32_t pixman_a2r10g10b10;
+    uint32_t pixman_a2b10g10r10;
+    uint32_t pixman_a16b16g16r16;
+    uint32_t wl_argb8888;
+    uint32_t wl_argb2101010;
+    uint32_t wl_abgr2101010;
+    uint32_t wl_abgr16161616;
+};
+
+static const struct shm_format_constants format_constants = {
+    .pixman_a8r8g8b8 = PIXMAN_a8r8g8b8,
+    .pixman_a2r10g10b10 = PIXMAN_a2r10g10b10,
+    .pixman_a2b10g10r10 = PIXMAN_a2b10g10r10,
+    .wl_argb8888 = WL_SHM_FORMAT_ARGB8888,
+    .wl_argb2101010 = WL_SHM_FORMAT_ARGB2101010,
+    .wl_abgr2101010 = WL_SHM_FORMAT_ABGR2101010,
+#if defined(HAVE_PIXMAN_RGBA_16)
+    .pixman_a16b16g16r16 = PIXMAN_a16b16g16r16,
+    .wl_abgr16161616 = WL_SHM_FORMAT_ABGR16161616,
+#else
+    .pixman_a16b16g16r16 = 0,
+    .wl_abgr16161616 = 0,
+#endif
+};
+
+const struct shm_format_constants *shm_shim_format_constants(void) {
+    return &format_constants;
+}
+
+struct shm_wayland_caps {
+    struct wl_shm *shm;
+    bool abgr161616;
+    bool argb2101010;
+    bool abgr2101010;
+};
+
+struct shm_wayland_caps shm_shim_wayl_caps(struct wayland *wayl) {
+    return (struct shm_wayland_caps){
+        .shm = wayl != NULL ? wayl->shm : NULL,
+        .abgr161616 = wayl != NULL && wayl->shm_have_abgr161616,
+        .argb2101010 = wayl != NULL && wayl->shm_have_argb2101010,
+        .abgr2101010 = wayl != NULL && wayl->shm_have_abgr2101010,
+    };
+}
+
 /* instantiate_offset / get_new_buffers: ported to shm.zig */
 
 /* shm_did_not_use_buf: ported to shm.zig */
@@ -558,121 +608,4 @@ shm_scroll(struct buffer *_buf, int rows,
 
 /* shm_purge / shm_addref / shm_unref: ported to shm.zig */
 
-struct buffer_chain *
-shm_chain_new(struct wayland *wayl, bool scrollable, size_t pix_instances,
-              enum shm_bit_depth desired_bit_depth,
-              void (*release_cb)(struct buffer *buf, void *data), void *cb_data)
-{
-    pixman_format_code_t pixman_fmt = PIXMAN_a8r8g8b8;
-    enum wl_shm_format shm_fmt = WL_SHM_FORMAT_ARGB8888;
-
-    static bool have_logged = false;
-    static bool have_logged_10_fallback = false;
-
-#if defined(HAVE_PIXMAN_RGBA_16)
-    static bool have_logged_16_fallback = false;
-
-    if (desired_bit_depth == SHM_BITS_16) {
-        if (wayl->shm_have_abgr161616) {
-            pixman_fmt = PIXMAN_a16b16g16r16;
-            shm_fmt = WL_SHM_FORMAT_ABGR16161616;
-
-            if (!have_logged) {
-                have_logged = true;
-                LOG_INFO("using 16-bit BGR surfaces");
-            }
-        } else {
-            if (!have_logged_16_fallback) {
-                have_logged_16_fallback = true;
-
-                LOG_WARN(
-                    "16-bit surfaces requested, but compositor does not "
-                    "implement ABGR161616+XBGR161616");
-            }
-        }
-    }
-#endif
-
-    if (desired_bit_depth >= SHM_BITS_10 && pixman_fmt == PIXMAN_a8r8g8b8) {
-        if (wayl->shm_have_argb2101010) {
-            pixman_fmt = PIXMAN_a2r10g10b10;
-            shm_fmt = WL_SHM_FORMAT_ARGB2101010;
-
-            if (!have_logged) {
-                have_logged = true;
-                LOG_INFO("using 10-bit RGB surfaces");
-            }
-        }
-
-        else if (wayl->shm_have_abgr2101010) {
-            pixman_fmt = PIXMAN_a2b10g10r10;
-            shm_fmt = WL_SHM_FORMAT_ABGR2101010;
-
-            if (!have_logged) {
-                have_logged = true;
-                LOG_INFO("using 10-bit BGR surfaces");
-            }
-        }
-
-        else {
-            if (!have_logged_10_fallback) {
-                have_logged_10_fallback = true;
-
-                LOG_WARN(
-                    "10-bit surfaces requested, but compositor does not "
-                    "implement ARGB2101010+XRGB2101010, or "
-                    "ABGR2101010+XBGR2101010");
-            }
-        }
-    } else  {
-        if (!have_logged) {
-            have_logged = true;
-            LOG_INFO("using 8-bit RGB surfaces");
-        }
-    }
-
-    struct buffer_chain *chain = xmalloc(sizeof(*chain));
-    *chain = (struct buffer_chain){
-        .bufs = tll_init(),
-        .shm = wayl->shm,
-        .pix_instances = pix_instances,
-        .scrollable = scrollable,
-
-        .pixman_fmt = pixman_fmt,
-        .shm_format = shm_fmt,
-
-        .release_cb = release_cb,
-        .cb_data = cb_data,
-    };
-    return chain;
-}
-
-void
-shm_chain_free(struct buffer_chain *chain)
-{
-    if (chain == NULL)
-        return;
-
-    shm_purge(chain);
-
-    if (tll_length(chain->bufs) > 0) {
-        BUG("chain=%p: there are buffers remaining; "
-            "is there a missing call to shm_unref()?", (void *)chain);
-    }
-
-    free(chain);
-}
-
-enum shm_bit_depth
-shm_chain_bit_depth(const struct buffer_chain *chain)
-{
-    const pixman_format_code_t fmt = chain->pixman_fmt;
-
-    return fmt == PIXMAN_a8r8g8b8
-        ? SHM_BITS_8
-#if defined(HAVE_PIXMAN_RGBA_16)
-        : fmt == PIXMAN_a16b16g16r16
-            ? SHM_BITS_16
-#endif
-        : SHM_BITS_10;
-}
+/* shm_chain_new / shm_chain_free / shm_chain_bit_depth: ported to shm.zig */

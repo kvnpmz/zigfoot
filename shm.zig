@@ -632,3 +632,147 @@ export fn get_new_buffers(
 ) callconv(.c) void {
     getNewBuffers(chain, count, widths, heights, bufs, immediate_purge);
 }
+
+//
+// Chunk S4 — buffer-chain construction/free and bit depth. The pixman and
+// wl_shm_format constants, and the compositor's format capabilities, come
+// from shm.c because they are macros/enums or live in struct wayland.
+//
+
+const ShmFormatConstants = extern struct {
+    pixman_a8r8g8b8: u32,
+    pixman_a2r10g10b10: u32,
+    pixman_a2b10g10r10: u32,
+    pixman_a16b16g16r16: u32,
+    wl_argb8888: u32,
+    wl_argb2101010: u32,
+    wl_abgr2101010: u32,
+    wl_abgr16161616: u32,
+};
+
+const ShmWaylandCaps = extern struct {
+    shm: ?*anyopaque,
+    abgr161616: bool,
+    argb2101010: bool,
+    abgr2101010: bool,
+};
+
+extern fn shm_shim_format_constants() callconv(.c) *const ShmFormatConstants;
+extern fn shm_shim_wayl_caps(wayl: ?*anyopaque) callconv(.c) ShmWaylandCaps;
+
+// enum shm_bit_depth { SHM_BITS_AUTO, SHM_BITS_8, SHM_BITS_10, SHM_BITS_16 }
+const SHM_BITS_8: c_int = 1;
+const SHM_BITS_10: c_int = 2;
+const SHM_BITS_16: c_int = 3;
+
+const LOG_CLASS_INFO: c_int = 3;
+
+var logged: bool = false;
+var logged_10_fallback: bool = false;
+var logged_16_fallback: bool = false;
+
+fn logInfo(msg: [*:0]const u8) void {
+    log_msg(LOG_CLASS_INFO, "shm", "shm.zig", @intCast(@src().line), "%s", msg);
+}
+
+fn logWarn(msg: [*:0]const u8) void {
+    log_msg(LOG_CLASS_WARNING, "shm", "shm.zig", @intCast(@src().line), "%s", msg);
+}
+
+export fn shm_chain_new(
+    wayl: ?*anyopaque,
+    scrollable: bool,
+    pix_instances: usize,
+    desired_bit_depth: c_int,
+    release_cb: ?*const anyopaque,
+    cb_data: ?*anyopaque,
+) callconv(.c) ?*types.ShmBufferChain {
+    const constants = shm_shim_format_constants().*;
+    const caps = shm_shim_wayl_caps(wayl);
+
+    var pixman_fmt: u32 = constants.pixman_a8r8g8b8;
+    var shm_fmt: u32 = constants.wl_argb8888;
+
+    if (constants.pixman_a16b16g16r16 != 0 and desired_bit_depth == SHM_BITS_16) {
+        if (caps.abgr161616) {
+            pixman_fmt = constants.pixman_a16b16g16r16;
+            shm_fmt = constants.wl_abgr16161616;
+
+            if (!logged) {
+                logged = true;
+                logInfo("using 16-bit BGR surfaces");
+            }
+        } else if (!logged_16_fallback) {
+            logged_16_fallback = true;
+            logWarn("16-bit surfaces requested, but compositor does not implement ABGR161616+XBGR161616");
+        }
+    }
+
+    if (desired_bit_depth >= SHM_BITS_10 and pixman_fmt == constants.pixman_a8r8g8b8) {
+        if (caps.argb2101010) {
+            pixman_fmt = constants.pixman_a2r10g10b10;
+            shm_fmt = constants.wl_argb2101010;
+
+            if (!logged) {
+                logged = true;
+                logInfo("using 10-bit RGB surfaces");
+            }
+        } else if (caps.abgr2101010) {
+            pixman_fmt = constants.pixman_a2b10g10r10;
+            shm_fmt = constants.wl_abgr2101010;
+
+            if (!logged) {
+                logged = true;
+                logInfo("using 10-bit BGR surfaces");
+            }
+        } else if (!logged_10_fallback) {
+            logged_10_fallback = true;
+            logWarn("10-bit surfaces requested, but compositor does not implement ARGB2101010+XRGB2101010, or ABGR2101010+XBGR2101010");
+        }
+    } else if (!logged) {
+        logged = true;
+        logInfo("using 8-bit RGB surfaces");
+    }
+
+    const chain: *types.ShmBufferChain = @ptrCast(@alignCast(
+        mallocOrAbort(@sizeOf(types.ShmBufferChain))));
+    chain.* = .{
+        .bufs = .{ .head = null, .tail = null, .length = 0 },
+        .shm = caps.shm,
+        .pix_instances = pix_instances,
+        .scrollable = scrollable,
+        .pixman_fmt = pixman_fmt,
+        .shm_format = shm_fmt,
+        .release_cb = release_cb,
+        .cb_data = cb_data,
+    };
+    return chain;
+}
+
+export fn shm_chain_free(chain_ptr: ?*types.ShmBufferChain) callconv(.c) void {
+    const chain = chain_ptr orelse return;
+
+    shm_purge(chain);
+
+    if (chain.bufs.length > 0) {
+        logErr("chain still has buffers; is a shm_unref() missing?");
+        std.c.abort();
+    }
+
+    std.c.free(chain);
+}
+
+export fn shm_chain_bit_depth(
+    chain: *const types.ShmBufferChain,
+) callconv(.c) c_int {
+    const constants = shm_shim_format_constants().*;
+
+    if (chain.pixman_fmt == constants.pixman_a8r8g8b8)
+        return SHM_BITS_8;
+
+    if (constants.pixman_a16b16g16r16 != 0 and
+        chain.pixman_fmt == constants.pixman_a16b16g16r16)
+        return SHM_BITS_16;
+
+    return SHM_BITS_10;
+}

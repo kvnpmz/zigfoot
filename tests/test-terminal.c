@@ -1624,6 +1624,54 @@ test_shm_cache(void)
     shm_fini();
 }
 
+/* shm_chain_new()/free()/bit_depth(): format selection and teardown. */
+static void
+test_shm_chain(void)
+{
+    struct buffer_chain *chain =
+        shm_chain_new(NULL, false, 1, SHM_BITS_8, NULL, NULL);
+    check(chain != NULL, "shm_chain_new allocates");
+    check(shm_chain_bit_depth(chain) == SHM_BITS_8,
+          "8-bit chain by default");
+
+    struct buffer *buf = shm_get_buffer(chain, 4, 2);
+    check(buf != NULL, "8-bit chain allocates buffers");
+    shm_did_not_use_buf(buf);
+    shm_chain_free(chain);
+
+    /* 10-bit request without compositor support falls back to 8-bit. */
+    chain = shm_chain_new(NULL, false, 1, SHM_BITS_10, NULL, NULL);
+    check(shm_chain_bit_depth(chain) == SHM_BITS_8,
+          "10-bit request falls back without support");
+    shm_chain_free(chain);
+
+    /* With ARGB2101010 advertised, the chain becomes 10-bit. */
+    struct wayland wl = {0};
+    wl.shm_have_argb2101010 = true;
+    chain = shm_chain_new(&wl, false, 1, SHM_BITS_10, NULL, NULL);
+    check(shm_chain_bit_depth(chain) == SHM_BITS_10,
+          "10-bit chain selected when ARGB2101010 is advertised");
+    shm_chain_free(chain);
+
+    /* 16-bit selection (present when built with 16-bit pixman support). */
+    struct wayland wl16 = {0};
+    wl16.shm_have_abgr161616 = true;
+    chain = shm_chain_new(&wl16, false, 1, SHM_BITS_16, NULL, NULL);
+    check(shm_chain_bit_depth(chain) == SHM_BITS_16 ||
+          shm_chain_bit_depth(chain) == SHM_BITS_8,
+          "16-bit chain selection is build-dependent");
+
+    if (shm_chain_bit_depth(chain) == SHM_BITS_16) {
+        struct buffer *b16 = shm_get_buffer(chain, 2, 2);
+        check(b16 != NULL, "16-bit chain allocates buffers");
+        shm_addref(b16);
+        shm_unref(b16);
+        shm_did_not_use_buf(b16);
+        shm_unref(b16);
+    }
+    shm_chain_free(chain);
+}
+
 int
 main(void)
 {
@@ -1665,6 +1713,7 @@ main(void)
     test_font_size_adjustments();
     test_shm_lifetime();
     test_shm_cache();
+    test_shm_chain();
 
     fcft_fini();
 
