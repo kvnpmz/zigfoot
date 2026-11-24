@@ -6,6 +6,15 @@ extern fn render_refresh_csd(term: *types.Terminal) void;
 extern fn row(grid: *types.Grid, row_no: c_int) *types.Row;
 extern fn rowInView(grid: *types.Grid, row_no: c_int) *types.Row;
 
+// Ported from terminal.c; the pure core lives next to PtOrPx so it can be
+// unit-tested without dragging in terminal.zig's extern dependencies.
+export fn term_pt_or_px_as_pixels(
+    term: *const types.Terminal,
+    pt_or_px: *const types.PtOrPx,
+) callconv(.c) c_int {
+    return types.ptOrPxAsPixels(term, pt_or_px);
+}
+
 fn termResetGraphemeState(term: *types.Terminal) void {
     // Without utf8proc the fields don't exist in `struct vt` and C's
     // term_reset_grapheme_state() is a no-op; keep `term` "used" so the

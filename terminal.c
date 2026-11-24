@@ -481,17 +481,7 @@ get_font_subpixel(const struct terminal *term)
     return FCFT_SUBPIXEL_DEFAULT;
 }
 
-int
-term_pt_or_px_as_pixels(const struct terminal *term,
-                        const struct pt_or_px *pt_or_px)
-{
-    float scale = !term->font_is_sized_by_dpi ? term->scale : 1.;
-    float dpi = term->font_is_sized_by_dpi  ? term->font_dpi : 96.;
-
-    return pt_or_px->px == 0
-        ? (int)roundf(pt_or_px->pt * scale * dpi / 72)
-        : (int)roundf(pt_or_px->px * scale);
-}
+/* term_pt_or_px_as_pixels: ported to terminal.zig */
 
 struct font_load_data {
     size_t count;

@@ -1191,6 +1191,24 @@ pub const PtOrPx = extern struct {
     pt: f32,
 };
 
+/// Port of terminal.c's term_pt_or_px_as_pixels().
+///
+/// A pt_or_px value with px == 0 is a point size and is converted using the
+/// font DPI (or 96 when the font isn't DPI-sized); otherwise it is a pixel
+/// value scaled by the current surface scale. Kept here, next to the type,
+/// because it is pure and therefore unit-testable without a terminal.
+pub fn ptOrPxAsPixels(term: *const Terminal, pt_or_px: *const PtOrPx) c_int {
+    const scale: f32 = if (!term.font_is_sized_by_dpi) term.scale else 1.0;
+    const dpi: f32 = if (term.font_is_sized_by_dpi) term.font_dpi else 96.0;
+
+    const pixels: f32 = if (pt_or_px.px == 0)
+        pt_or_px.pt * scale * dpi / 72.0
+    else
+        @as(f32, @floatFromInt(pt_or_px.px)) * scale;
+
+    return @intFromFloat(@round(pixels));
+}
+
 pub const FontSizeAdjustment = extern struct {
     pt_or_px: PtOrPx,
     percent: f32,
@@ -1605,4 +1623,42 @@ comptime {
     expectAbi(Config, "Config");
     expectAbi(ColorTheme, "ColorTheme");
     expectAbi(ConfigContext, "ConfigContext");
+}
+
+test "pt-or-px to pixels" {
+    var term: Terminal = std.mem.zeroes(Terminal);
+    term.font_dpi = 96.0;
+
+    const px = struct {
+        fn f(t: *const Terminal, v: PtOrPx) c_int {
+            return ptOrPxAsPixels(t, &v);
+        }
+    }.f;
+
+    // Plain pixel values are scaled by the surface scale.
+    term.font_is_sized_by_dpi = false;
+    term.scale = 1.0;
+    try std.testing.expectEqual(@as(c_int, 10), px(&term, .{ .px = 10, .pt = 0 }));
+    term.scale = 2.0;
+    try std.testing.expectEqual(@as(c_int, 20), px(&term, .{ .px = 10, .pt = 0 }));
+
+    // Negative pixel values pass through (font_line_height uses -1 for "auto").
+    try std.testing.expectEqual(@as(c_int, -2), px(&term, .{ .px = -1, .pt = 0 }));
+
+    // Point sizes use 96 DPI when the font is not DPI-sized:
+    // 10pt * 1 * 96/72 = 13.33 -> 13, and 10pt * 2 * 96/72 = 26.67 -> 27.
+    term.scale = 1.0;
+    try std.testing.expectEqual(@as(c_int, 13), px(&term, .{ .px = 0, .pt = 10 }));
+    term.scale = 2.0;
+    try std.testing.expectEqual(@as(c_int, 27), px(&term, .{ .px = 0, .pt = 10 }));
+
+    // DPI-sized: the scale is ignored and font_dpi is used instead.
+    term.font_is_sized_by_dpi = true;
+    term.font_dpi = 144.0;
+    term.scale = 3.0;
+    try std.testing.expectEqual(@as(c_int, 10), px(&term, .{ .px = 10, .pt = 0 }));
+    try std.testing.expectEqual(@as(c_int, 20), px(&term, .{ .px = 0, .pt = 10 }));
+
+    // Degenerate: nothing set.
+    try std.testing.expectEqual(@as(c_int, 0), px(&term, .{ .px = 0, .pt = 0 }));
 }
