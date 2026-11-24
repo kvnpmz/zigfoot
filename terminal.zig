@@ -203,6 +203,233 @@ export fn term_set_fonts(
     return true;
 }
 
+//
+// Chunk T9c — reload_fonts() / load_fonts_from_conf().
+//
+// This is the runtime font path: every font-size shortcut, DPI or scale
+// change ends up here. The four faces are loaded on separate threads, like
+// the C version, and the actual swap is term_set_fonts().
+//
+// fcft_font_options is configured through a shim (three fields); whether
+// linear blending is on and whether the grid wants a high-bit-depth emoji
+// format are environment-dependent, so those also go through shims that are
+// null-safe for the headless harness.
+//
+
+const FontLoadData = struct {
+    count: usize,
+    names: [*]const ?[*:0]const u8,
+    attrs: [*:0]const u8,
+    options: *const anyopaque,
+    font: *?*anyopaque,
+    ok: bool = false,
+};
+
+extern fn fcft_from_name2(
+    count: usize,
+    names: [*]const ?[*:0]const u8,
+    attributes: [*:0]const u8,
+    options: *const anyopaque,
+) callconv(.c) ?*anyopaque;
+extern fn fcft_font_options_create() callconv(.c) ?*anyopaque;
+extern fn fcft_font_options_destroy(options: *anyopaque) callconv(.c) void;
+extern fn terminal_shim_fcft_font_options_configure(
+    options: *anyopaque,
+    scaling_filter: c_int,
+    srgb_decode: bool,
+    high_res_color: bool,
+) callconv(.c) void;
+extern fn terminal_shim_linear_blending(term: *const types.Terminal) callconv(.c) bool;
+extern fn terminal_shim_grid_is_high_bit_depth(term: *const types.Terminal) callconv(.c) bool;
+extern fn snprintf(buf: [*]u8, size: usize, format: [*:0]const u8, ...) callconv(.c) c_int;
+extern fn asprintf(strp: *?[*:0]u8, format: [*:0]const u8, ...) callconv(.c) c_int;
+
+fn asConstNames(p: [*]?[*:0]u8) [*]const ?[*:0]const u8 {
+    return @ptrCast(p);
+}
+
+fn fontLoaderThread(data: *FontLoadData) void {
+    const font = fcft_from_name2(data.count, data.names, data.attrs, data.options);
+    data.font.* = font;
+    data.ok = font != null;
+}
+
+export fn reload_fonts(term: *types.Terminal, resize_grid: bool) callconv(.c) bool {
+    const conf = term.conf.?;
+    const alloc = std.heap.c_allocator;
+
+    const counts: [4]usize = .{
+        conf.fonts[0].count,
+        conf.fonts[1].count,
+        conf.fonts[2].count,
+        conf.fonts[3].count,
+    };
+
+    var name_arrays: [4]?[]?[*:0]u8 = .{ null, null, null, null };
+
+    for (0..4) |i| {
+        const list = conf.fonts[i];
+        const arr = alloc.alloc(?[*:0]u8, list.count) catch @panic("out of memory");
+        name_arrays[i] = arr;
+
+        const sizes: [*]types.ConfigFont = @ptrCast(term.font_sizes[i].?);
+        const scale: f32 = if (term.font_is_sized_by_dpi) 1.0 else term.scale;
+
+        for (0..list.count) |j| {
+            const font = list.arr.?[j];
+            var size_buf: [64]u8 = undefined;
+
+            if (sizes[j].px_size > 0) {
+                const px: c_int = @intFromFloat(
+                    @round(@as(f32, @floatFromInt(sizes[j].px_size)) * scale),
+                );
+                _ = snprintf(&size_buf, size_buf.len, ":pixelsize=%d", px);
+            } else {
+                _ = snprintf(&size_buf, size_buf.len, ":size=%.2f", sizes[j].pt_size * scale);
+            }
+
+            const pattern: [*:0]const u8 = if (font.pattern) |p| p else "";
+            var name: ?[*:0]u8 = null;
+            _ = asprintf(&name, "%s%s", pattern, &size_buf);
+            arr[j] = name;
+        }
+    }
+
+    // Did the user configure custom bold/italic faces? Otherwise use the
+    // regular face with weight/slant attributes.
+    const custom_bold = counts[1] > 0;
+    const custom_italic = counts[2] > 0;
+    const custom_bold_italic = counts[3] > 0;
+
+    const count_bold = if (custom_bold) counts[1] else counts[0];
+    const count_italic = if (custom_italic) counts[2] else counts[0];
+    const count_bold_italic = if (custom_bold_italic) counts[3] else counts[0];
+
+    const names_bold = asConstNames(name_arrays[if (custom_bold) 1 else 0].?.ptr);
+    const names_italic = asConstNames(name_arrays[if (custom_italic) 2 else 0].?.ptr);
+    const names_bold_italic = asConstNames(name_arrays[if (custom_bold_italic) 3 else 0].?.ptr);
+
+    const use_dpi = term.font_is_sized_by_dpi;
+    const dpi_value: f32 = if (use_dpi) term.font_dpi else 96.0;
+    var dpi_buf: [32]u8 = undefined;
+    _ = snprintf(&dpi_buf, dpi_buf.len, "dpi=%.2f", dpi_value);
+
+    const bold_suffix: [*:0]const u8 = if (!custom_bold) ":weight=bold" else "";
+    const italic_suffix: [*:0]const u8 = if (!custom_italic) ":slant=italic" else "";
+    const bi_suffix: [*:0]const u8 = if (!custom_bold_italic) ":weight=bold:slant=italic" else "";
+
+    var attrs: [4]?[*:0]u8 = .{ null, null, null, null };
+    _ = asprintf(&attrs[0], "%s", &dpi_buf);
+    _ = asprintf(&attrs[1], "%s%s", &dpi_buf, bold_suffix);
+    _ = asprintf(&attrs[2], "%s%s", &dpi_buf, italic_suffix);
+    _ = asprintf(&attrs[3], "%s%s", &dpi_buf, bi_suffix);
+
+    const options = fcft_font_options_create() orelse
+        @panic("fcft_font_options_create failed");
+    terminal_shim_fcft_font_options_configure(
+        options,
+        conf.tweak.fcft_filter,
+        terminal_shim_linear_blending(term),
+        terminal_shim_grid_is_high_bit_depth(term),
+    );
+
+    var fonts: [4]?*anyopaque = .{ null, null, null, null };
+    var data: [4]FontLoadData = .{
+        .{
+            .count = counts[0],
+            .names = asConstNames(name_arrays[0].?.ptr),
+            .attrs = attrs[0].?,
+            .options = options,
+            .font = &fonts[0],
+        },
+        .{
+            .count = count_bold,
+            .names = names_bold,
+            .attrs = attrs[1].?,
+            .options = options,
+            .font = &fonts[1],
+        },
+        .{
+            .count = count_italic,
+            .names = names_italic,
+            .attrs = attrs[2].?,
+            .options = options,
+            .font = &fonts[2],
+        },
+        .{
+            .count = count_bold_italic,
+            .names = names_bold_italic,
+            .attrs = attrs[3].?,
+            .options = options,
+            .font = &fonts[3],
+        },
+    };
+
+    var threads: [4]?std.Thread = .{ null, null, null, null };
+    for (0..4) |i| {
+        threads[i] = std.Thread.spawn(.{}, fontLoaderThread, .{&data[i]}) catch null;
+        if (threads[i] == null) {
+            logErr("failed to create font loader thread");
+            break;
+        }
+    }
+
+    var success = true;
+    for (0..4) |i| {
+        if (threads[i]) |thread| {
+            thread.join();
+            success = success and data[i].ok;
+        } else {
+            // A face whose thread was never created cannot have loaded.
+            success = false;
+        }
+    }
+
+    fcft_font_options_destroy(options);
+
+    for (0..4) |i| {
+        if (name_arrays[i]) |arr| {
+            for (arr) |maybe_name| {
+                if (maybe_name) |name|
+                    std.c.free(name);
+            }
+            alloc.free(arr);
+        }
+        if (attrs[i]) |attr|
+            std.c.free(attr);
+    }
+
+    if (!success) {
+        logErr("failed to load primary fonts");
+        for (0..4) |i| {
+            fcft_destroy(fonts[i]);
+            fonts[i] = null;
+        }
+    }
+
+    return if (success) term_set_fonts(term, &fonts, resize_grid) else success;
+}
+
+export fn load_fonts_from_conf(term: *types.Terminal) callconv(.c) bool {
+    const conf = term.conf.?;
+
+    for (0..4) |i| {
+        const list = conf.fonts[i];
+        const sizes: [*]types.ConfigFont = @ptrCast(term.font_sizes[i].?);
+
+        for (0..list.count) |j| {
+            const font = list.arr.?[j];
+            sizes[j] = .{
+                .pattern = null,
+                .pt_size = font.pt_size,
+                .px_size = font.px_size,
+            };
+        }
+    }
+
+    return reload_fonts(term, true);
+}
+
 fn termResetGraphemeState(term: *types.Terminal) void {
     // Without utf8proc the fields don't exist in `struct vt` and C's
     // term_reset_grapheme_state() is a no-op; keep `term` "used" so the

@@ -44,6 +44,8 @@ void print_linewrap(struct terminal *term);
 void csi_sgr(struct terminal *term);
 bool term_set_fonts(
     struct terminal *term, struct fcft_font *fonts[static 4], bool resize_grid);
+bool reload_fonts(struct terminal *term, bool resize_grid);
+bool load_fonts_from_conf(struct terminal *term);
 
 #define SCROLLBACK_ROWS 16
 #define TERM_ROWS 5
@@ -1205,13 +1207,6 @@ test_set_fonts(void)
     struct config_font cur_font = {.pt_size = 8.0f, .px_size = 0};
     term->font_sizes[0] = &cur_font;
 
-    /* fcft_from_name() requires fcft_init() first. */
-    if (!fcft_init(FCFT_LOG_COLORIZE_AUTO, false, FCFT_LOG_CLASS_ERROR)) {
-        printf("skip: fcft_init failed\n");
-        term_free(term);
-        return;
-    }
-
     const char *name = "monospace";
     struct fcft_font *fonts[4];
     for (size_t i = 0; i < 4; i++)
@@ -1219,7 +1214,6 @@ test_set_fonts(void)
 
     if (fonts[0] == NULL) {
         printf("skip: no monospace font available\n");
-        fcft_fini();
         term_free(term);
         return;
     }
@@ -1242,13 +1236,69 @@ test_set_fonts(void)
 
     for (size_t i = 0; i < 4; i++)
         fcft_destroy(term->fonts[i]);
-    fcft_fini();
+    term_free(term);
+}
+
+/* reload_fonts()/load_fonts_from_conf(): the runtime font path used by the
+ * font-size shortcuts and DPI changes. */
+static void
+test_reload_fonts(void)
+{
+    struct config conf = {0};
+    struct config_font cfg_font = {
+        .pattern = "monospace", .pt_size = 8.0f, .px_size = 0};
+    conf.fonts[0] = (struct config_font_list){.count = 1, .arr = &cfg_font};
+    conf.line_height = (struct pt_or_px){.px = -1, .pt = 0};
+
+    struct terminal *term = term_new();
+    term->conf = &conf;
+    term->scale = 1.0f;
+
+    struct config_font cur = {.pattern = NULL, .pt_size = 8.0f, .px_size = 0};
+    /* reload_fonts() walks all four lists; real init xmalloc(0)s the empty
+     * ones, so give them a non-NULL backing here too. */
+    /* load_fonts_from_conf() asks for a resize; render_resize() returns
+     * early while the window is not configured, so a zeroed window is
+     * enough to exercise the font path headlessly. */
+    struct wl_window win = {0};
+    term->window = &win;
+
+    struct config_font empty[3] = {0};
+    term->font_sizes[0] = &cur;
+    term->font_sizes[1] = &empty[0];
+    term->font_sizes[2] = &empty[1];
+    term->font_sizes[3] = &empty[2];
+
+    check(reload_fonts(term, false), "reload_fonts loads the configured face");
+    check(term->cell_width > 0, "reload_fonts sets a cell width");
+    const int initial_width = term->cell_width;
+
+    /* Runtime font-size change: the same path as the fontSize shortcuts. */
+    cur.pt_size = 16.0f;
+    check(reload_fonts(term, false), "reload_fonts after a font-size change");
+    check(term->cell_width > initial_width, "a larger font widens the cell");
+
+    /* Reset restores the configured size. */
+    check(load_fonts_from_conf(term), "load_fonts_from_conf resets font sizes");
+    check(term->cell_width == initial_width,
+          "reset restores the original cell width");
+    check(term->font_sizes[0][0].pt_size == 8.0f,
+          "reset restores the configured pt size");
+
+    for (size_t i = 0; i < 4; i++)
+        fcft_destroy(term->fonts[i]);
     term_free(term);
 }
 
 int
 main(void)
 {
+    /* fcft_from_name() requires fcft_init() before any font test. */
+    if (!fcft_init(FCFT_LOG_COLORIZE_AUTO, false, FCFT_LOG_CLASS_ERROR)) {
+        fprintf(stderr, "fcft_init() failed\n");
+        return 1;
+    }
+
     test_view_to_text();
     test_scrollback_to_text();
     test_scrollback_partially_used();
@@ -1276,6 +1326,9 @@ main(void)
     test_term_icon();
     test_sgr_underline();
     test_set_fonts();
+    test_reload_fonts();
+
+    fcft_fini();
 
     if (failures > 0) {
         fprintf(stderr, "%d harness check(s) failed\n", failures);

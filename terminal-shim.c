@@ -4,6 +4,7 @@
 #include "url-mode.h"
 #include "grid.h"
 #include "wayland.h"
+#include "shm.h"
 
 struct wl_surface *terminal_shim_window_surface(struct terminal *term) {
     return term->window->surface.surf;
@@ -161,4 +162,45 @@ terminal_shim_fcft_font_metrics(const struct fcft_font *font)
 
 int terminal_shim_fcft_glyph_advance_x(const struct fcft_glyph *glyph) {
     return glyph->advance.x;
+}
+
+/* ── font loading (terminal.zig) ─────────────────────────────────── */
+
+/* Headless harness has no wayland object; foot itself always does. */
+bool terminal_shim_linear_blending(const struct terminal *term) {
+    return term->wl != NULL && wayl_do_linear_blending(term->wl, term->conf);
+}
+
+/* Likewise: the harness has no buffer chains. */
+bool terminal_shim_grid_is_high_bit_depth(const struct terminal *term) {
+    return term->render.chains.grid != NULL &&
+           shm_chain_bit_depth(term->render.chains.grid) >= SHM_BITS_10;
+}
+
+/* struct fcft_font_options is fcft's business; set only the three fields
+ * reload_fonts() needs. The high-res format choice keeps the
+ * HAVE_PIXMAN_RGBA_16 build option on the C side. */
+void
+terminal_shim_fcft_font_options_configure(
+    struct fcft_font_options *options,
+    enum fcft_scaling_filter scaling_filter,
+    bool srgb_decode,
+    bool high_res_color)
+{
+    options->scaling_filter = scaling_filter;
+    options->color_glyphs.format = PIXMAN_a8r8g8b8;
+    options->color_glyphs.srgb_decode = srgb_decode;
+
+    if (high_res_color) {
+        /*
+         * Use a high-res buffer type for emojis. We don't want to use
+         * an a2r10g0b10 type of surface, since we need more than 2
+         * bits for alpha.
+         */
+#if defined(HAVE_PIXMAN_RGBA_16)
+        options->color_glyphs.format = PIXMAN_a16b16g16r16;
+#else
+        options->color_glyphs.format = PIXMAN_rgba_float;
+#endif
+    }
 }
