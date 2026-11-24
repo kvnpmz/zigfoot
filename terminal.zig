@@ -1526,10 +1526,6 @@ extern fn del_utmp_record(
     reaper: ?*anyopaque,
     ptmx: c_int,
 ) callconv(.c) bool;
-extern fn terminal_shim_delayed_render_lower_fd(term: *types.Terminal) callconv(.c) c_int;
-extern fn terminal_shim_delayed_render_upper_fd(term: *types.Terminal) callconv(.c) c_int;
-extern fn terminal_shim_delayed_render_is_armed(term: *types.Terminal) callconv(.c) bool;
-extern fn terminal_shim_delayed_render_set_armed(term: *types.Terminal, armed: bool) callconv(.c) void;
 
 // PTMX_TIMING is 0 in terminal.c; the timing instrumentation is omitted
 // until that build-time option exists in build_options.
@@ -1610,7 +1606,7 @@ export fn fdm_ptmx(
             std.debug.assert(upper_ns > lower_ns);
 
             _ = timerfd_settime(
-                terminal_shim_delayed_render_lower_fd(term),
+                term.delayed_render_timer.lower_fd,
                 0,
                 &types.Itimerspec{
                     .it_value = .{ .tv_sec = 0, .tv_nsec = @intCast(lower_ns) },
@@ -1621,9 +1617,9 @@ export fn fdm_ptmx(
 
             // Second timeout - only reset when we render. Set to one
             // frame (assuming 60Hz)
-            if (!terminal_shim_delayed_render_is_armed(term)) {
+            if (!term.delayed_render_timer.is_armed) {
                 _ = timerfd_settime(
-                    terminal_shim_delayed_render_upper_fd(term),
+                    term.delayed_render_timer.upper_fd,
                     0,
                     &types.Itimerspec{
                         .it_value = .{ .tv_sec = 0, .tv_nsec = @intCast(upper_ns) },
@@ -1631,7 +1627,7 @@ export fn fdm_ptmx(
                     },
                     null,
                 );
-                terminal_shim_delayed_render_set_armed(term, true);
+                term.delayed_render_timer.is_armed = true;
             }
         } else {
             render_refresh(term);
@@ -2186,9 +2182,9 @@ export fn term_enable_app_sync_updates(term: *types.Terminal) void {
     }
 
     // Disarm delayed rendering timers
-    _ = timerfd_settime(terminal_shim_delayed_render_lower_fd(term), 0, &zero_itimerspec, null);
-    _ = timerfd_settime(terminal_shim_delayed_render_upper_fd(term), 0, &zero_itimerspec, null);
-    terminal_shim_delayed_render_set_armed(term, false);
+    _ = timerfd_settime(term.delayed_render_timer.lower_fd, 0, &zero_itimerspec, null);
+    _ = timerfd_settime(term.delayed_render_timer.upper_fd, 0, &zero_itimerspec, null);
+    term.delayed_render_timer.is_armed = false;
 }
 
 export fn term_disable_app_sync_updates(term: *types.Terminal) void {
