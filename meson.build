@@ -520,6 +520,21 @@ osc_obj = custom_target(
   ]
 )
 
+log_obj = custom_target(
+  'log_obj',
+  input: 'log.zig',
+  depend_files: files('terminal_types.zig'),
+  output: 'log.o',
+  depends: c_layout,
+  command: [
+    python, files('compile_zig.py'), '@INPUT@', '@OUTPUT@',
+    grapheme_clustering_zig,
+    # config.c's LOG_LEVEL help text and log.c's level-name table both hide
+    # the "debug" entry in non-debug builds (_DEBUG).
+    'debug_build=' + is_debug_build.to_string(),
+  ]
+)
+
 shm_obj = custom_target(
   'shm_obj',
   input: 'shm.zig',
@@ -590,7 +605,7 @@ xmalloc_obj = custom_target(
 
 common = static_library(
   'common',
-  'log.c', 'log.h',
+  log_obj, 'log.h',
   char32_obj, 'char32.h',
   'debug.c', 'debug.h',
   'macros.h',

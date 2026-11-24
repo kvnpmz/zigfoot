@@ -18,6 +18,7 @@
 #include "wayland.h"
 #include "shm.h"
 #include "slave.h"
+#include "log.h"
 #include "xmalloc.h"
 
 #include <stdio.h>
@@ -1972,6 +1973,150 @@ test_slave_spawn(void)
     tll_free(notifications);
 }
 
+
+/* Capture whatever a logging call writes to stderr. */
+struct log_capture {
+    int saved_fd;
+    int cap_fd;
+};
+
+static bool
+log_capture_begin(struct log_capture *cap)
+{
+    fflush(stderr);
+
+    cap->saved_fd = dup(STDERR_FILENO);
+    cap->cap_fd = memfd_create("foot-harness-log", 0);
+    if (cap->saved_fd < 0 || cap->cap_fd < 0)
+        return false;
+
+    return dup2(cap->cap_fd, STDERR_FILENO) >= 0;
+}
+
+static size_t
+log_capture_end(struct log_capture *cap, char *buf, size_t cap_len)
+{
+    fflush(stderr);
+    dup2(cap->saved_fd, STDERR_FILENO);
+    close(cap->saved_fd);
+
+    if (lseek(cap->cap_fd, 0, SEEK_SET) < 0) {
+        close(cap->cap_fd);
+        buf[0] = '\0';
+        return 0;
+    }
+
+    size_t len = 0;
+    for (;;) {
+        ssize_t n = read(cap->cap_fd, buf + len, cap_len - len - 1);
+        if (n <= 0)
+            break;
+        len += n;
+    }
+    buf[len] = '\0';
+    close(cap->cap_fd);
+    return len;
+}
+
+/* log.c: level filtering, formatting, errno suffix, colour and the level
+ * name helpers. */
+static void
+test_log(void)
+{
+    struct log_capture cap;
+    char buf[8192];
+
+    /* Level filtering + format arguments + file:line prefix. */
+    log_init(LOG_COLORIZE_NEVER, false, LOG_FACILITY_USER, LOG_CLASS_WARNING);
+
+    if (!log_capture_begin(&cap)) {
+        printf("skip: cannot capture stderr\n");
+        log_init(LOG_COLORIZE_NEVER, false, LOG_FACILITY_USER, LOG_CLASS_ERROR);
+        return;
+    }
+    log_msg(LOG_CLASS_INFO, "harness", "file.c", 123, "info %d %s", 42, "arg");
+    log_capture_end(&cap, buf, sizeof(buf));
+    check(buf[0] == '\0', "messages below the log level are dropped");
+
+    if (!log_capture_begin(&cap)) {
+        log_init(LOG_COLORIZE_NEVER, false, LOG_FACILITY_USER, LOG_CLASS_ERROR);
+        return;
+    }
+    log_msg(LOG_CLASS_WARNING, "harness", "file.c", 123, "warn %d %s", 42, "arg");
+    log_capture_end(&cap, buf, sizeof(buf));
+    check(strcmp(buf, "warn: file.c:123: warn 42 arg\n") == 0,
+          "messages are formatted with the file:line prefix");
+
+    /* errno suffix, both implicit and provided. */
+    log_init(LOG_COLORIZE_NEVER, false, LOG_FACILITY_USER, LOG_CLASS_DEBUG);
+
+    if (!log_capture_begin(&cap)) {
+        log_init(LOG_COLORIZE_NEVER, false, LOG_FACILITY_USER, LOG_CLASS_ERROR);
+        return;
+    }
+    errno = ENOENT;
+    log_errno(LOG_CLASS_ERROR, "harness", "file.c", 7, "open failed");
+    log_capture_end(&cap, buf, sizeof(buf));
+    check(strstr(buf, " err: file.c:7: open failed: ") != NULL &&
+          strstr(buf, strerror(ENOENT)) != NULL,
+          "log_errno appends the current errno string");
+
+    if (!log_capture_begin(&cap)) {
+        log_init(LOG_COLORIZE_NEVER, false, LOG_FACILITY_USER, LOG_CLASS_ERROR);
+        return;
+    }
+    log_errno_provided(LOG_CLASS_ERROR, "harness", "file.c", 8, EACCES,
+                       "exec failed %d", 3);
+    log_capture_end(&cap, buf, sizeof(buf));
+    check(strstr(buf, "exec failed 3: ") != NULL &&
+          strstr(buf, strerror(EACCES)) != NULL,
+          "log_errno_provided uses the given errno");
+
+    /* Colour output. */
+    log_init(LOG_COLORIZE_ALWAYS, false, LOG_FACILITY_USER, LOG_CLASS_DEBUG);
+
+    if (!log_capture_begin(&cap)) {
+        log_init(LOG_COLORIZE_NEVER, false, LOG_FACILITY_USER, LOG_CLASS_ERROR);
+        return;
+    }
+    log_msg(LOG_CLASS_ERROR, "harness", "file.c", 1, "coloured");
+    log_capture_end(&cap, buf, sizeof(buf));
+    check(strstr(buf, "\033[31m") != NULL && strstr(buf, "\033[0m") != NULL &&
+          strstr(buf, "\033[2m") != NULL,
+          "colourised output uses the level colour and dim file prefix");
+
+    /* A syslog-only sink must not write to stderr below its level either. */
+    log_init(LOG_COLORIZE_NEVER, false, LOG_FACILITY_USER, LOG_CLASS_NONE);
+    if (log_capture_begin(&cap)) {
+        log_msg(LOG_CLASS_ERROR, "harness", "file.c", 1, "suppressed");
+        log_capture_end(&cap, buf, sizeof(buf));
+        check(buf[0] == '\0', "LOG_CLASS_NONE suppresses all messages");
+    }
+
+    log_init(LOG_COLORIZE_NEVER, false, LOG_FACILITY_USER, LOG_CLASS_ERROR);
+
+    /* Level name helpers. */
+    check(log_level_from_string("none") == LOG_CLASS_NONE,
+          "log level names parse");
+    check(log_level_from_string("warning") == LOG_CLASS_WARNING,
+          "log level names parse (warning)");
+    check(log_level_from_string("") == -1, "an empty level name is invalid");
+    check(log_level_from_string("bogus") == -1, "an unknown level name is invalid");
+#if defined(_DEBUG)
+    check(log_level_from_string("debug") == LOG_CLASS_DEBUG,
+          "debug is a valid level in debug builds");
+#else
+    check(log_level_from_string("debug") == -1,
+          "debug is hidden in non-debug builds");
+#endif
+
+    const char *hint = log_level_string_hint();
+    check(strstr(hint, "'none'") != NULL && strstr(hint, "'error'") != NULL,
+          "the level hint lists the valid names");
+    check(log_level_string_hint() == hint,
+          "the level hint is built once");
+}
+
 int
 main(void)
 {
@@ -2016,6 +2161,7 @@ main(void)
     test_shm_chain();
     test_shm_scroll();
     test_slave_spawn();
+    test_log();
 
     fcft_fini();
 
