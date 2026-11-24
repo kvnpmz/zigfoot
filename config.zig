@@ -3381,10 +3381,6 @@ extern fn fdopen(fd: c_int, mode: [*:0]const u8) callconv(.c) ?*anyopaque;
 extern fn sysconf(name: c_int) callconv(.c) c_long;
 extern fn fcft_capabilities() callconv(.c) c_int;
 extern fn config_font_parse(pattern: [*:0]const u8, font: *types.ConfigFont) callconv(.c) bool;
-extern fn config_font_list_clone(
-    dst: *types.ConfigFontList,
-    src: *const types.ConfigFontList,
-) callconv(.c) void;
 extern fn get_shell() callconv(.c) ?[*:0]u8;
 
 /// C: `struct config_file`
@@ -3392,7 +3388,6 @@ const ConfigFile = extern struct {
     path: ?[*:0]u8,
     fd: c_int,
 };
-extern fn open_config() callconv(.c) ConfigFile;
 
 const O_RDONLY: c_int = 0;
 const X_OK: c_int = 1;
@@ -3406,6 +3401,10 @@ const FCFT_SCALING_FILTER_LANCZOS3: c_int = 4;
 const default_word_delimiters = [_:0]u32{
     ',', 0x2502, '`', '|', ':', '"', '\'', '(', ')', '[', ']', '{', '}', '<', '>',
 };
+/// An empty char32_t string. A zero-length sentinel array (`[_:0]u32{}`)
+/// has size 0, so xc32dup() would read past its end -- give it a real
+/// element to point at.
+const empty_c32 = [_:0]u32{0};
 /// U"sadfjklewcmpgh"
 const default_url_label_letters = [_:0]u32{ 's', 'a', 'd', 'f', 'j', 'k', 'l', 'e', 'w', 'c', 'm', 'p', 'g', 'h' };
 
@@ -3446,7 +3445,7 @@ export fn config_load(
     conf.title = xstrdup("foot");
     conf.app_id = xstrdup(if (as_server) "footclient" else "foot");
     conf.toplevel_tag = xstrdup("");
-    conf.word_delimiters = xc32dup(&default_word_delimiters);
+    conf.word_delimiters = c32dup(&default_word_delimiters);
     conf.size = .{ .type = .px, .width = 700, .height = 500 };
     conf.pad_left = 0;
     conf.pad_top = 0;
@@ -3480,7 +3479,7 @@ export fn config_load(
         .command = .{ .argv = .{ .args = null } },
         .command_focused = false,
     };
-    conf.url.label_letters = xc32dup(&default_url_label_letters);
+    conf.url.label_letters = c32dup(&default_url_label_letters);
     conf.url.osc8_underline = .url_mode;
     conf.url.style = .dotted;
     conf.can_shape_grapheme = (fcft_caps & FCFT_CAPABILITY_GRAPHEME_SHAPING) != 0;
@@ -3489,7 +3488,7 @@ export fn config_load(
         .indicator = .{
             .position = .relative,
             .format = .text,
-            .text = xc32dup(&[_:0]u32{}),
+            .text = c32dup(&empty_c32),
         },
         .multiplier = 3.0,
     };
@@ -3624,7 +3623,7 @@ export fn config_load(
             conf_file.fd = fd;
         }
     } else {
-        conf_file = open_config();
+        conf_file = openConfig();
         if (conf_file.fd < 0) {
             logWarn(@src(), "no configuration found, using defaults");
             ret = !errors_are_fatal;
@@ -3672,7 +3671,7 @@ export fn config_load(
     }
 
     if (ret and conf.csd.font.count == 0)
-        config_font_list_clone(&conf.csd.font, &conf.fonts[0]);
+        configFontListClone(&conf.csd.font, &conf.fonts[0]);
 
     if (build_options.debug_build) {
         for (conf.bindings.key.arr.?[0..conf.bindings.key.count]) |b|
@@ -3688,5 +3687,366 @@ export fn config_load(
     if (conf_file.fd >= 0)
         _ = close(conf_file.fd);
 
+    return ret;
+}
+
+// ── clone and free (C2n) ──────────────────────────────────────────
+//
+// Ownership rules are the C ones verbatim: the clone deep-copies every
+// pointer, except the binding aux "master copy" pointers, which several
+// bindings share inside one list (the first binding with master_copy set
+// owns the allocation; the rest alias it). Getting that wrong shows up as a
+// double free the first time a config with `pipe-*` bindings is cloned.
+
+extern fn regcomp(preg: *anyopaque, regex: [*:0]const u8, cflags: c_int) callconv(.c) c_int;
+extern fn strdup(s: [*:0]const u8) callconv(.c) ?[*:0]u8;
+
+const REG_EXTENDED: c_int = 1;
+const O_CLOEXEC: c_int = 0o2000000;
+const LOG_CLASS_DEBUG: c_int = 4;
+
+fn xstrjoin(s1: [*:0]const u8, s2: [*:0]const u8) [*:0]u8 {
+    const n1 = strlen(s1);
+    const n2 = strlen(s2);
+    const joined: [*]u8 = @ptrCast(xmalloc(n1 + n2 + 1).?);
+    @memcpy(joined[0..n1], s1[0..n1]);
+    @memcpy(joined[n1..][0..n2], s2[0..n2]);
+    joined[n1 + n2] = 0;
+    return @ptrCast(joined);
+}
+
+fn xmemdupBytes(ptr: [*]const u8, size: usize) [*]u8 {
+    const p: [*]u8 = @ptrCast(xmalloc(size).?);
+    @memcpy(p[0..size], ptr[0..size]);
+    return p;
+}
+
+/// C's xc32dup() over the mirrored (non-sentinel) char32_t pointers.
+fn c32dup(str: ?[*]const u32) ?[*]u32 {
+    const s = str orelse return null;
+    return xc32dup(@ptrCast(s));
+}
+
+fn logDbg(
+    src: std.builtin.SourceLocation,
+    comptime fmt: []const u8,
+    args: anytype,
+) void {
+    if (!build_options.debug_build)
+        return;
+    var buf: [1024]u8 = undefined;
+    const msg: [:0]const u8 = std.fmt.bufPrintZ(&buf, fmt, args) catch return;
+    log_msg(LOG_CLASS_DEBUG, "config", src.file, @intCast(src.line), "%s", msg.ptr);
+}
+
+fn configFontListClone(dst: *types.ConfigFontList, src: *const types.ConfigFontList) void {
+    dst.count = src.count;
+    const arr: [*]types.ConfigFont = @ptrCast(@alignCast(
+        xmalloc(dst.count * @sizeOf(types.ConfigFont)).?,
+    ));
+    dst.arr = arr;
+
+    for (0..dst.count) |j| {
+        arr[j].pt_size = src.arr.?[j].pt_size;
+        arr[j].px_size = src.arr.?[j].px_size;
+        arr[j].pattern = xstrdup(src.arr.?[j].pattern.?);
+    }
+}
+
+fn keyBindingListClone(
+    dst: *types.ConfigKeyBindingList,
+    src: *const types.ConfigKeyBindingList,
+) void {
+
+    var last_master_argv: ?*types.Argv = null;
+    var last_master_text_data: ?[*]u8 = null;
+    var last_master_text_len: usize = 0;
+    var last_master_regex_name: ?[*:0]u8 = null;
+
+    dst.count = src.count;
+    const arr: [*]types.ConfigKeyBinding = @ptrCast(@alignCast(
+        xmalloc(src.count * @sizeOf(types.ConfigKeyBinding)).?,
+    ));
+    dst.arr = arr;
+
+    for (0..src.count) |i| {
+        const old = &src.arr.?[i];
+        const new = &arr[i];
+
+        new.* = old.*;
+
+        new.modifiers = std.mem.zeroes(types.TllStr);
+        const old_mods: *StrList = @ptrCast(@alignCast(&old.modifiers));
+        const new_mods: *StrList = @ptrCast(@alignCast(&new.modifiers));
+        var node = old_mods.head;
+        while (node) |n| : (node = n.next)
+            new_mods.pushBack(xstrdup(n.item.?));
+
+        switch (old.aux.type) {
+            .none => {
+                last_master_argv = null;
+                last_master_text_data = null;
+                last_master_text_len = 0;
+            },
+            .pipe => {
+                if (old.aux.master_copy) {
+                    clone_argv(&new.aux._u.pipe, &old.aux._u.pipe);
+                    last_master_argv = &new.aux._u.pipe;
+                } else {
+                    new.aux._u.pipe = last_master_argv.?.*;
+                }
+                last_master_text_data = null;
+                last_master_text_len = 0;
+            },
+            .text => {
+                if (old.aux.master_copy) {
+                    const len = old.aux._u.text.len;
+                    new.aux._u.text.len = len;
+                    new.aux._u.text.data = xmemdupBytes(old.aux._u.text.data.?, len);
+
+                    last_master_text_len = len;
+                    last_master_text_data = new.aux._u.text.data;
+                } else {
+                    new.aux._u.text.len = last_master_text_len;
+                    new.aux._u.text.data = last_master_text_data.?;
+                }
+                last_master_argv = null;
+            },
+            .regex => {
+                if (old.aux.master_copy) {
+                    new.aux._u.regex_name = xstrdup(old.aux._u.regex_name.?);
+                    last_master_regex_name = new.aux._u.regex_name;
+                } else {
+                    new.aux._u.regex_name = last_master_regex_name.?;
+                }
+            },
+        }
+    }
+}
+
+export fn config_clone(old: *const types.Config) callconv(.c) *types.Config {
+    const conf: *types.Config = @ptrCast(@alignCast(xmalloc(@sizeOf(types.Config)).?));
+    conf.* = old.*;
+
+    conf.conf_path = if (old.conf_path) |p| xstrdup(p) else null;
+    conf.term = xstrdup(old.term.?);
+    conf.shell = xstrdup(old.shell.?);
+    conf.title = xstrdup(old.title.?);
+    conf.app_id = xstrdup(old.app_id.?);
+    conf.toplevel_tag = xstrdup(old.toplevel_tag.?);
+    conf.word_delimiters = c32dup(old.word_delimiters);
+    conf.scrollback.indicator.text = c32dup(old.scrollback.indicator.text);
+    conf.server_socket_path = xstrdup(old.server_socket_path.?);
+    spawn_template_clone(&conf.bell.command, &old.bell.command);
+    spawn_template_clone(
+        &conf.desktop_notifications.command,
+        &old.desktop_notifications.command,
+    );
+    spawn_template_clone(
+        &conf.desktop_notifications.command_action_arg,
+        &old.desktop_notifications.command_action_arg,
+    );
+    spawn_template_clone(&conf.desktop_notifications.close, &old.desktop_notifications.close);
+
+    for (0..conf.fonts.len) |i|
+        configFontListClone(&conf.fonts[i], &old.fonts[i]);
+    configFontListClone(&conf.csd.font, &old.csd.font);
+
+    conf.url.label_letters = c32dup(old.url.label_letters);
+    spawn_template_clone(&conf.url.launch, &old.url.launch);
+    conf.url.regex = xstrdup(old.url.regex.?);
+    _ = regcomp(@ptrCast(&conf.url.preg), conf.url.regex.?, REG_EXTENDED);
+
+    {
+        const RegexList = tll.Tll(types.CustomRegex);
+        const dst: *RegexList = @ptrCast(&conf.custom_regexes);
+        const src: *const RegexList = @ptrCast(&old.custom_regexes);
+        dst.* = std.mem.zeroes(tll.Tll(types.CustomRegex));
+
+        var node = src.head;
+        while (node) |n| : (node = n.next) {
+            const old_regex = &n.item;
+
+            var item = std.mem.zeroes(types.CustomRegex);
+            item.name = xstrdup(old_regex.name.?);
+            item.regex = xstrdup(old_regex.regex.?);
+            dst.pushBack(item);
+
+            const new_regex = dst.back();
+            _ = regcomp(@ptrCast(&new_regex.preg), new_regex.regex.?, REG_EXTENDED);
+            spawn_template_clone(&new_regex.launch, &old_regex.launch);
+        }
+    }
+
+    keyBindingListClone(&conf.bindings.key, &old.bindings.key);
+    keyBindingListClone(&conf.bindings.search, &old.bindings.search);
+    keyBindingListClone(&conf.bindings.url, &old.bindings.url);
+    keyBindingListClone(&conf.bindings.mouse, &old.bindings.mouse);
+
+    {
+        conf.env_vars = std.mem.zeroes(types.EnvVarList);
+
+        conf.mouse.selection_override_modifiers = std.mem.zeroes(types.TllStr);
+        const dst: *StrList = @ptrCast(@alignCast(&conf.mouse.selection_override_modifiers));
+        const src: *const StrList = @ptrCast(@alignCast(&old.mouse.selection_override_modifiers));
+        var node = src.head;
+        while (node) |n| : (node = n.next)
+            dst.pushBack(xstrdup(n.item.?));
+
+        const EnvList = tll.Tll(types.EnvVar);
+        const env_dst: *EnvList = @ptrCast(&conf.env_vars);
+        const env_src: *const EnvList = @ptrCast(&old.env_vars);
+        var env_node = env_src.head;
+        while (env_node) |n| : (env_node = n.next) {
+            env_dst.pushBack(.{
+                .name = xstrdup(n.item.name.?),
+                .value = xstrdup(n.item.value.?),
+            });
+        }
+    }
+
+    conf.utmp_helper_path = if (old.utmp_helper_path) |p| xstrdup(p) else null;
+
+    {
+        const Notifications = tll.Tll(types.UserNotification);
+        conf.notifications = std.mem.zeroes(types.UserNotifications);
+        const dst: *Notifications = @ptrCast(&conf.notifications);
+        const src: *const Notifications = @ptrCast(&old.notifications);
+
+        var node = src.head;
+        while (node) |n| : (node = n.next) {
+            const text = xstrdup(n.item.text.?);
+            dst.pushBack(.{ .kind = n.item.kind, .text = text });
+        }
+    }
+
+    return conf;
+}
+
+fn freeString(item: ?[*:0]u8) callconv(.c) void {
+    free(@ptrCast(item));
+}
+
+export fn config_free(conf: *types.Config) callconv(.c) void {
+    free(@ptrCast(conf.conf_path));
+    free(@ptrCast(conf.term));
+    free(@ptrCast(conf.shell));
+    free(@ptrCast(conf.title));
+    free(@ptrCast(conf.app_id));
+    free(@ptrCast(conf.toplevel_tag));
+    free(@ptrCast(conf.word_delimiters));
+    spawn_template_free(&conf.bell.command);
+    free(@ptrCast(conf.scrollback.indicator.text));
+    spawn_template_free(&conf.desktop_notifications.command);
+    spawn_template_free(&conf.desktop_notifications.command_action_arg);
+    spawn_template_free(&conf.desktop_notifications.close);
+    for (&conf.fonts) |*list|
+        config_font_list_destroy(list);
+    free(@ptrCast(conf.server_socket_path));
+
+    config_font_list_destroy(&conf.csd.font);
+
+    free(@ptrCast(conf.url.label_letters));
+    spawn_template_free(&conf.url.launch);
+    regfree(@ptrCast(&conf.url.preg));
+    free(@ptrCast(conf.url.regex));
+
+    {
+        const RegexList = tll.Tll(types.CustomRegex);
+        const list: *RegexList = @ptrCast(&conf.custom_regexes);
+        while (list.head) |node| {
+            const regex = &node.item;
+            free(@ptrCast(regex.name));
+            free(@ptrCast(regex.regex));
+            regfree(@ptrCast(&regex.preg));
+            spawn_template_free(&regex.launch);
+            list.removeNode(node);
+        }
+    }
+
+    free_key_binding_list(&conf.bindings.key);
+    free_key_binding_list(&conf.bindings.search);
+    free_key_binding_list(&conf.bindings.url);
+    free_key_binding_list(&conf.bindings.mouse);
+
+    {
+        const list: *StrList = @ptrCast(@alignCast(&conf.mouse.selection_override_modifiers));
+        list.freeListAndFree(freeString);
+    }
+
+    {
+        const EnvList = tll.Tll(types.EnvVar);
+        const list: *EnvList = @ptrCast(&conf.env_vars);
+        while (list.head) |node| {
+            free(@ptrCast(node.item.name));
+            free(@ptrCast(node.item.value));
+            list.removeNode(node);
+        }
+    }
+
+    free(@ptrCast(conf.utmp_helper_path));
+
+    {
+        const Notifications = tll.Tll(types.UserNotification);
+        const list: *Notifications = @ptrCast(&conf.notifications);
+        while (list.head) |node| {
+            free(@ptrCast(node.item.text));
+            list.removeNode(node);
+        }
+    }
+}
+
+// ── config file discovery (C2n) ───────────────────────────────────
+
+/// C: open_config(), minus the `goto done`. Returns the first readable
+/// foot.ini from $XDG_CONFIG_HOME/foot, $HOME/.config/foot, then each entry
+/// of $XDG_CONFIG_DIRS (default /etc/xdg).
+fn openConfig() ConfigFile {
+    var path: ?[*:0]u8 = null;
+    var ret = ConfigFile{ .path = null, .fd = -1 };
+
+    const xdg_config_home = getenv("XDG_CONFIG_HOME");
+    const xdg_config_dirs = getenv("XDG_CONFIG_DIRS");
+    const home_dir = getenv("HOME");
+
+    if (xdg_config_home != null and xdg_config_home.?[0] != 0)
+        path = xstrjoin(xdg_config_home.?, "/foot/foot.ini")
+    else if (home_dir != null)
+        path = xstrjoin(home_dir.?, "/.config/foot/foot.ini");
+
+    if (path) |p| {
+        logDbg(@src(), "checking for {s}", .{std.mem.span(p)});
+        const fd = open(p, O_RDONLY | O_CLOEXEC);
+
+        if (fd >= 0) {
+            ret = .{ .path = p, .fd = fd };
+            path = null;
+            return ret;
+        }
+    }
+
+    const dirs: ?[*:0]u8 = if (xdg_config_dirs != null and xdg_config_dirs.?[0] != 0)
+        strdup(xdg_config_dirs.?)
+    else
+        strdup("/etc/xdg");
+    defer if (dirs) |d| free(@ptrCast(d));
+
+    if (dirs != null and dirs.?[0] != 0) {
+        var tok: ?[*:0]u8 = strtok(dirs, ":");
+        while (tok) |conf_dir| : (tok = strtok(null, ":")) {
+            if (path) |p| free(@ptrCast(p));
+            path = xstrjoin(conf_dir, "/foot/foot.ini");
+
+            logDbg(@src(), "checking for {s}", .{std.mem.span(path.?)});
+            const fd = open(path.?, O_RDONLY | O_CLOEXEC);
+            if (fd >= 0) {
+                ret = .{ .path = path, .fd = fd };
+                path = null;
+                return ret;
+            }
+        }
+    }
+
+    if (path) |p| free(@ptrCast(p));
     return ret;
 }

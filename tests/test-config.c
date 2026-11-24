@@ -1708,6 +1708,233 @@ test_default_url_regex(void)
     regfree(&re);
 }
 
+/*
+ * config_load() / config_clone() / config_free() (C2m, C2n).
+ *
+ * This is the old UNITTEST from config.c, widened: the clone used to be
+ * commented out there, and every default config_load() assigns is now
+ * checked, since the assignments were re-typed by hand.
+ */
+
+static void
+test_config_load(void)
+{
+    struct config original;
+    user_notifications_t nots = tll_init();
+    config_override_t overrides = tll_init();
+
+    xassert(config_load(&original, "/dev/null", &nots, &overrides, false, false));
+
+    /* [main] defaults */
+    xassert(strcmp(original.term, FOOT_DEFAULT_TERM) == 0);
+    xassert(strcmp(original.title, "foot") == 0);
+    xassert(strcmp(original.app_id, "foot") == 0);
+    xassert(original.size.type == CONF_SIZE_PX);
+    xassert(original.size.width == 700);
+    xassert(original.size.height == 500);
+    xassert(original.center_when == CENTER_MAXIMIZED_AND_FULLSCREEN);
+    xassert(original.resize_by_cells);
+    xassert(original.resize_keep_grid);
+    xassert(original.resize_delay_ms == 100);
+    xassert(original.startup_mode == STARTUP_WINDOWED);
+    xassert(original.dpi_aware == false);
+    xassert(original.uppercase_regex_insert);
+
+    /* colours: the 256-entry table is the part most likely to be mistyped */
+    xassert(original.colors_dark.fg == 0xffffff);
+    xassert(original.colors_dark.bg == 0x242424);
+    xassert(original.colors_dark.table[0] == 0x242424);
+    xassert(original.colors_dark.table[16] == 0x000000);
+    xassert(original.colors_dark.table[17] == 0x00005f);
+    xassert(original.colors_dark.table[231] == 0xffffff);
+    xassert(original.colors_dark.table[232] == 0x080808);
+    xassert(original.colors_dark.sixel[1] == 0xff3333cc);
+    xassert(original.colors_dark.dim_blend_towards == DIM_BLEND_TOWARDS_BLACK);
+    xassert(original.colors_light.dim_blend_towards == DIM_BLEND_TOWARDS_WHITE);
+    xassert(original.initial_color_theme == COLOR_THEME_DARK);
+
+    /* [tweak]: lanchoz3, 256-byte stride alignment, half a 60Hz frame */
+    xassert(original.tweak.fcft_filter == FCFT_SCALING_FILTER_LANCZOS3);
+    xassert(original.tweak.min_stride_alignment == 256);
+    xassert(original.tweak.delayed_render_upper_ns == 16666666 / 2);
+    xassert(original.tweak.max_shm_pool_size == 512 * 1024 * 1024);
+    xassert(original.tweak.sixel);
+    xassert(original.touch.long_press_delay == 400);
+
+    /* command lines tokenized from the built-in templates */
+    xassert(original.url.launch.argv.args != NULL);
+    xassert(strcmp(original.url.launch.argv.args[0], "xdg-open") == 0);
+    xassert(original.desktop_notifications.command.argv.args != NULL);
+    xassert(strcmp(original.desktop_notifications.command.argv.args[0],
+                   "notify-send") == 0);
+    xassert(original.url.regex != NULL);
+    xassert(strcmp(original.url.regex, config_default_url_regex_string()) == 0);
+    xassert(original.mouse.selection_override_modifiers.length == 1);
+
+    /* defaults that depend on the environment / on other defaults */
+    xassert(original.shell != NULL);
+    xassert(original.fonts[0].count == 1);
+    xassert(strcmp(original.fonts[0].arr[0].pattern, "monospace") == 0);
+    xassert(original.csd.font.count == 1);
+    xassert(original.bindings.key.count > 0);
+    xassert(original.bindings.search.count > 0);
+    xassert(original.bindings.url.count > 0);
+    xassert(original.bindings.mouse.count > 0);
+
+    /*
+     * Binding aux ownership. A multi-combo pipe binding allocates the argv
+     * once (master_copy) and the following combos alias it; config_clone()
+     * must reproduce exactly that, or config_free() frees the same argv
+     * twice. Same for a [regex] name.
+     */
+    struct context ctx = {
+        .conf = &original, .section = "key-bindings", .path = "unittest"};
+    const size_t n_key = original.bindings.key.count;
+
+    ctx.key = "pipe-visible";
+    ctx.value = "[sh -c echo hi] Mod1+v Mod1+b";
+    xassert(parse_section_key_bindings(&ctx));
+
+    ctx.key = "regex-launch";
+    ctx.value = "[my-regex] Mod1+r Mod1+n";
+    xassert(parse_section_key_bindings(&ctx));
+
+    xassert(original.bindings.key.count == n_key + 4);
+    xassert(original.bindings.key.arr[n_key].aux.master_copy);
+    xassert(!original.bindings.key.arr[n_key + 1].aux.master_copy);
+    xassert(original.bindings.key.arr[n_key + 2].aux.master_copy);
+    xassert(!original.bindings.key.arr[n_key + 3].aux.master_copy);
+
+    struct config *clone = config_clone(&original);
+    xassert(clone != NULL);
+    xassert(clone != &original);
+
+    /* deep copy: every pointer must be a different allocation... */
+    xassert(clone->term != original.term);
+    xassert(clone->word_delimiters != original.word_delimiters);
+    xassert(clone->url.regex != original.url.regex);
+    xassert(clone->fonts[0].arr != original.fonts[0].arr);
+    xassert(clone->bindings.key.arr != original.bindings.key.arr);
+    xassert(clone->bindings.key.arr[0].modifiers.head !=
+            original.bindings.key.arr[0].modifiers.head);
+    /* ...holding the same values */
+    xassert(strcmp(clone->term, original.term) == 0);
+    xassert(clone->colors_dark.table[17] == original.colors_dark.table[17]);
+    xassert(clone->bindings.key.count == original.bindings.key.count);
+    xassert(clone->bindings.mouse.count == original.bindings.mouse.count);
+    xassert(clone->fonts[0].count == original.fonts[0].count);
+    xassert(clone->mouse.selection_override_modifiers.length == 1);
+    xassert(clone->env_vars.length == original.env_vars.length);
+
+    /* The master-copy alias must point *into the clone*. */
+    xassert(clone->bindings.key.arr[n_key + 1].aux.pipe.args ==
+            clone->bindings.key.arr[n_key].aux.pipe.args);
+    xassert(clone->bindings.key.arr[n_key].aux.pipe.args !=
+            original.bindings.key.arr[n_key].aux.pipe.args);
+    xassert(clone->bindings.key.arr[n_key + 3].aux.regex_name ==
+            clone->bindings.key.arr[n_key + 2].aux.regex_name);
+    xassert(clone->bindings.key.arr[n_key + 2].aux.regex_name !=
+            original.bindings.key.arr[n_key + 2].aux.regex_name);
+
+    /* Both must be separately freeable (share nothing). */
+    config_free(clone);
+    free(clone);
+    config_free(&original);
+
+    tll_free(overrides);
+    tll_free(nots);
+}
+
+/*
+ * The config-file *discovery* half of config_load(): open_config() moved to
+ * config.zig in C2n, and with an explicit conf_path it is never called, so
+ * it needs its own test.
+ */
+
+static void
+test_config_load_from_xdg(void)
+{
+    char root[] = "/tmp/foot-config-unittest-XXXXXX";
+    xassert(mkdtemp(root) != NULL);
+
+    char dot_config[512];
+    char foot_dir[512];
+    char conf_path[512];
+    char no_dirs[512];
+
+    snprintf(dot_config, sizeof(dot_config), "%s/.config", root);
+    snprintf(foot_dir, sizeof(foot_dir), "%s/.config/foot", root);
+    snprintf(conf_path, sizeof(conf_path), "%s/.config/foot/foot.ini", root);
+    snprintf(no_dirs, sizeof(no_dirs), "%s/nonexistent", root);
+
+    xassert(mkdir(dot_config, 0700) == 0);
+    xassert(mkdir(foot_dir, 0700) == 0);
+
+    FILE *f = fopen(conf_path, "w");
+    xassert(f != NULL);
+    fputs("[main]\ntitle=xdg-title\n", f);
+    fclose(f);
+
+    char *old_home = getenv("HOME") ? strdup(getenv("HOME")) : NULL;
+    char *old_xdg_home = getenv("XDG_CONFIG_HOME") ? strdup(getenv("XDG_CONFIG_HOME")) : NULL;
+    char *old_xdg_dirs = getenv("XDG_CONFIG_DIRS") ? strdup(getenv("XDG_CONFIG_DIRS")) : NULL;
+
+    user_notifications_t nots = tll_init();
+    config_override_t overrides = tll_init();
+    struct config conf;
+
+    /* $HOME/.config/foot/foot.ini */
+    unsetenv("XDG_CONFIG_HOME");
+    unsetenv("XDG_CONFIG_DIRS");
+    setenv("HOME", root, 1);
+
+    xassert(config_load(&conf, NULL, &nots, &overrides, false, false));
+    xassert(conf.title != NULL);
+    xassert(strcmp(conf.title, "xdg-title") == 0);
+    /* NB: upstream never copies the *discovered* path into conf_path --
+     * only an explicit conf_path argument ends up there. */
+    xassert(conf.conf_path == NULL);
+    config_free(&conf);
+
+    /* $XDG_CONFIG_HOME wins over $HOME */
+    {
+        char xdg[512];
+        snprintf(xdg, sizeof(xdg), "%s/.config", root);
+        setenv("XDG_CONFIG_HOME", xdg, 1);
+
+        xassert(config_load(&conf, NULL, &nots, &overrides, false, false));
+        xassert(strcmp(conf.title, "xdg-title") == 0);
+        config_free(&conf);
+        unsetenv("XDG_CONFIG_HOME");
+    }
+
+    /* No configuration anywhere: defaults, and only fatal if asked */
+    xassert(unlink(conf_path) == 0);
+    setenv("XDG_CONFIG_DIRS", no_dirs, 1);
+
+    xassert(config_load(&conf, NULL, &nots, &overrides, false, false));
+    xassert(strcmp(conf.title, "foot") == 0);
+    xassert(conf.conf_path == NULL);
+    config_free(&conf);
+
+    xassert(!config_load(&conf, NULL, &nots, &overrides, true, false));
+
+    /* restore the environment */
+    if (old_home) { setenv("HOME", old_home, 1); free(old_home); }
+    else unsetenv("HOME");
+    if (old_xdg_home) { setenv("XDG_CONFIG_HOME", old_xdg_home, 1); free(old_xdg_home); }
+    else unsetenv("XDG_CONFIG_HOME");
+    if (old_xdg_dirs) { setenv("XDG_CONFIG_DIRS", old_xdg_dirs, 1); free(old_xdg_dirs); }
+    else unsetenv("XDG_CONFIG_DIRS");
+
+    rmdir(foot_dir);
+    rmdir(dot_config);
+    rmdir(root);
+
+    tll_free(overrides);
+    tll_free(nots);
+}
+
 int
 main(int argc, const char *const *argv)
 {
@@ -1738,6 +1965,8 @@ main(int argc, const char *const *argv)
     test_section_environment();
     test_section_tweak();
     test_default_url_regex();
+    test_config_load();
+    test_config_load_from_xdg();
     log_deinit();
     FcFini();
     return 0;
