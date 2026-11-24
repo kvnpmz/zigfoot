@@ -81,6 +81,12 @@ C_TYPES: dict[str, str] = {
     "ConfigKeyBinding": "struct config_key_binding",
     "ConfigKeyBindingList": "struct config_key_binding_list",
     "CustomRegex": "struct custom_regex",
+    "PixmanBox32": "pixman_box32_t",
+    "PixmanRegion32": "pixman_region32_t",
+    "Buffer": "struct buffer",
+    "ShmBufferPool": "struct buffer_pool",
+    "ShmBufferPrivate": "struct buffer_private",
+    "ShmBufferChain": "struct buffer_chain",
 }
 
 NESTED_IN_TERMINAL: dict[str, str] = {
@@ -95,7 +101,7 @@ NESTED_IN_TERMINAL: dict[str, str] = {
 SKIP: set[str] = {
     "AsciiPrinterBits", "TllInt", "TllStr", "TllNotification", "UrlList",
     "SixelList", "DamageList", "DamageNode", "SixelNode", "UrlNode",
-    "NotificationNode", "Timespec", "Itimerspec",
+    "NotificationNode", "Timespec", "Itimerspec", "TllBufferPrivate",
 }
 
 # C packed structs: the size is checkable, individual members are bit-fields.
@@ -294,6 +300,7 @@ def generate() -> str:
         '#include "config.h"',
         '#include "grid.h"',
         '#include "notify.h"',
+        '#include "shm.h"',
         '#include "terminal.h"',
         "",
         "int main(int argc, char **argv) {",

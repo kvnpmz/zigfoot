@@ -16,6 +16,7 @@
 #include "extract.h"
 #include "fdm.h"
 #include "wayland.h"
+#include "shm.h"
 #include "xmalloc.h"
 
 #include <stdio.h>
@@ -24,6 +25,8 @@
 #include <linux/input-event-codes.h>
 #include "input.h"
 #include <sys/timerfd.h>
+#include <sys/mman.h>
+#include <errno.h>
 #include <unistd.h>
 #include <stdlib.h>
 #include <string.h>
@@ -47,6 +50,7 @@ bool term_set_fonts(
 bool reload_fonts(struct terminal *term, bool resize_grid);
 bool load_fonts_from_conf(struct terminal *term);
 float get_font_dpi(const struct terminal *term);
+bool buffer_unref_no_remove_from_chain(struct buffer_private *buf);
 enum fcft_subpixel get_font_subpixel(const struct terminal *term);
 
 #define SCROLLBACK_ROWS 16
@@ -1436,6 +1440,125 @@ test_font_size_adjustments(void)
     term_free(term);
 }
 
+/* shm buffer lifetime: refcounts, deferred release, and fd/mmap teardown. */
+static void
+test_shm_lifetime(void)
+{
+    struct buffer_chain *chain = xcalloc(1, sizeof(*chain));
+
+    /* 1. Last unref of an idle buffer destroys it and closes the pool fd. */
+    int fd = memfd_create("foot-shm-test", MFD_CLOEXEC);
+    check(fd >= 0, "shm test memfd created");
+    if (fd < 0) {
+        free(chain);
+        return;
+    }
+    xassert(ftruncate(fd, 4096) == 0);
+    void *map = mmap(NULL, 4096, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+    check(map != MAP_FAILED, "shm test mapping created");
+
+    struct buffer_pool *pool = xcalloc(1, sizeof(*pool));
+    pool->fd = fd;
+    pool->real_mmapped = map;
+    pool->mmap_size = 4096;
+    pool->ref_count = 1;
+
+    struct buffer_private *buf = xcalloc(1, sizeof(*buf));
+    buf->chain = chain;
+    buf->ref_count = 1;
+    buf->busy = false;
+    buf->pool = pool;
+
+    shm_addref(&buf->public);
+    check(buf->ref_count == 2, "shm_addref bumps the refcount");
+    check(!buffer_unref_no_remove_from_chain(buf),
+          "unref above zero keeps the buffer");
+    check(buf->ref_count == 1, "refcount decremented");
+    check(buffer_unref_no_remove_from_chain(buf),
+          "last unref reports removal");
+    check(fcntl(fd, F_GETFD) == -1 && errno == EBADF,
+          "destroy closes the pool fd");
+
+    /* 2. A busy buffer is deferred until shm_fini(). */
+    int fd2 = memfd_create("foot-shm-test-2", MFD_CLOEXEC);
+    xassert(fd2 >= 0);
+    xassert(ftruncate(fd2, 4096) == 0);
+    void *map2 = mmap(NULL, 4096, PROT_READ | PROT_WRITE, MAP_SHARED, fd2, 0);
+    xassert(map2 != MAP_FAILED);
+
+    struct buffer_pool *pool2 = xcalloc(1, sizeof(*pool2));
+    pool2->fd = fd2;
+    pool2->real_mmapped = map2;
+    pool2->mmap_size = 4096;
+    pool2->ref_count = 1;
+
+    struct buffer_private *busy = xcalloc(1, sizeof(*busy));
+    busy->chain = chain;
+    busy->ref_count = 1;
+    busy->busy = true;
+    busy->pool = pool2;
+
+    check(buffer_unref_no_remove_from_chain(busy),
+          "unref of a busy buffer reports removal");
+    check(fcntl(fd2, F_GETFD) != -1, "busy buffer is not destroyed yet");
+    shm_fini();
+    check(fcntl(fd2, F_GETFD) == -1 && errno == EBADF,
+          "shm_fini destroys deferred buffers");
+
+    /* 3. shm_unref removes the buffer from its chain and destroys it. */
+    int fd3 = memfd_create("foot-shm-test-3", MFD_CLOEXEC);
+    xassert(fd3 >= 0);
+    xassert(ftruncate(fd3, 4096) == 0);
+    void *map3 = mmap(NULL, 4096, PROT_READ | PROT_WRITE, MAP_SHARED, fd3, 0);
+    xassert(map3 != MAP_FAILED);
+
+    struct buffer_pool *pool3 = xcalloc(1, sizeof(*pool3));
+    pool3->fd = fd3;
+    pool3->real_mmapped = map3;
+    pool3->mmap_size = 4096;
+    pool3->ref_count = 1;
+
+    struct buffer_private *chained = xcalloc(1, sizeof(*chained));
+    chained->chain = chain;
+    chained->ref_count = 1;
+    chained->pool = pool3;
+    tll_push_back(chain->bufs, chained);
+
+    shm_unref(&chained->public);
+    check(tll_length(chain->bufs) == 0,
+          "shm_unref removes the buffer from the chain");
+    check(fcntl(fd3, F_GETFD) == -1 && errno == EBADF,
+          "shm_unref destroys the unreferenced buffer");
+
+    /* 4. shm_did_not_use_buf() clears the compositor-busy flag. */
+    int fd4 = memfd_create("foot-shm-test-4", MFD_CLOEXEC);
+    xassert(fd4 >= 0);
+    xassert(ftruncate(fd4, 4096) == 0);
+    void *map4 = mmap(NULL, 4096, PROT_READ | PROT_WRITE, MAP_SHARED, fd4, 0);
+    xassert(map4 != MAP_FAILED);
+
+    struct buffer_pool *pool4 = xcalloc(1, sizeof(*pool4));
+    pool4->fd = fd4;
+    pool4->real_mmapped = map4;
+    pool4->mmap_size = 4096;
+    pool4->ref_count = 1;
+
+    struct buffer_private *unused = xcalloc(1, sizeof(*unused));
+    unused->chain = chain;
+    unused->ref_count = 1;
+    unused->busy = true;
+    unused->pool = pool4;
+
+    shm_did_not_use_buf(&unused->public);
+    check(!unused->busy, "shm_did_not_use_buf clears busy");
+    check(buffer_unref_no_remove_from_chain(unused),
+          "unused buffer destroyed immediately");
+    check(fcntl(fd4, F_GETFD) == -1 && errno == EBADF,
+          "unused buffer closed its pool fd");
+
+    free(chain);
+}
+
 int
 main(void)
 {
@@ -1475,6 +1598,7 @@ main(void)
     test_reload_fonts();
     test_dpi_and_scale();
     test_font_size_adjustments();
+    test_shm_lifetime();
 
     fcft_fini();
 

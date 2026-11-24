@@ -520,6 +520,18 @@ osc_obj = custom_target(
   ]
 )
 
+shm_obj = custom_target(
+  'shm_obj',
+  input: 'shm.zig',
+  depend_files: files('terminal_types.zig'),
+  output: 'shm.o',
+  depends: c_layout,
+  command: [
+    python, files('compile_zig.py'), '@INPUT@', '@OUTPUT@',
+    grapheme_clustering_zig,
+  ]
+)
+
 sixel_obj = custom_target(
   'sixel_obj',
   input: 'sixel.zig',
@@ -661,7 +673,7 @@ footlib = static_library(
   'render.c', 'render.h',
   'search.c', 'search.h',
   'server.c', 'server.h', 'client-protocol.h',
-  'shm.c', 'shm.h',
+  shm_obj, 'shm.c', 'shm.h',
   'slave.c', 'slave.h',
   spawn_obj, spawn_template_obj, 'spawn.h',
   tokenize_obj, 'tokenize.h',

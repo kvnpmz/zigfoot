@@ -1770,3 +1770,88 @@ test "line height update" {
     lineHeightUpdate(&term);
     try std.testing.expectEqual(@as(f32, 0), term.font_line_height.pt);
 }
+
+
+// ── shm.c internals (shared with shm.zig) ─────────────────────────
+
+pub const PixmanBox32 = extern struct {
+    x1: i32,
+    y1: i32,
+    x2: i32,
+    y2: i32,
+};
+
+pub const PixmanRegion32 = extern struct {
+    extents: PixmanBox32,
+    data: ?*anyopaque,
+};
+
+pub const Buffer = extern struct {
+    width: c_int,
+    height: c_int,
+    stride: c_int,
+
+    data: ?*anyopaque,
+
+    wl_buf: ?*anyopaque,
+    pix: ?[*]?*anyopaque,
+    pix_instances: usize,
+
+    age: c_uint,
+
+    dirty: ?*anyopaque,
+};
+
+/// tll(struct buffer_private *): only head/tail/length matter to us.
+pub const TllBufferPrivate = extern struct {
+    head: ?*anyopaque,
+    tail: ?*anyopaque,
+    length: usize,
+};
+
+pub const ShmBufferPool = extern struct {
+    fd: c_int,
+    wl_pool: ?*anyopaque,
+    real_mmapped: ?*anyopaque,
+    mmap_size: usize,
+    ref_count: usize,
+};
+
+pub const ShmBufferPrivate = extern struct {
+    public: Buffer,
+    chain: ?*ShmBufferChain,
+
+    ref_count: usize,
+    busy: bool,
+
+    pool: ?*ShmBufferPool,
+    offset: i64, // off_t
+    size: usize,
+
+    scrollable: bool,
+
+    release_cb: ?*const anyopaque,
+    cb_data: ?*anyopaque,
+};
+
+pub const ShmBufferChain = extern struct {
+    bufs: TllBufferPrivate,
+    shm: ?*anyopaque,
+    pix_instances: usize,
+    scrollable: bool,
+
+    pixman_fmt: u32, // pixman_format_code_t
+    shm_format: u32, // enum wl_shm_format
+
+    release_cb: ?*const anyopaque,
+    cb_data: ?*anyopaque,
+};
+
+test "shm layout matches C probe" {
+    expectAbi(PixmanBox32, "PixmanBox32");
+    expectAbi(PixmanRegion32, "PixmanRegion32");
+    expectAbi(Buffer, "Buffer");
+    expectAbi(ShmBufferPool, "ShmBufferPool");
+    expectAbi(ShmBufferPrivate, "ShmBufferPrivate");
+    expectAbi(ShmBufferChain, "ShmBufferChain");
+}

@@ -31,6 +31,25 @@
  #define MFD_NOEXEC_SEAL 0
 #endif
 
+/* wl_buffer_destroy()/wl_shm_pool_destroy() are static inline in the
+ * generated protocol header, so shm.zig needs real symbols. */
+void shm_shim_wl_buffer_destroy(struct wl_buffer *buffer) {
+    wl_buffer_destroy(buffer);
+}
+
+void shm_shim_wl_shm_pool_destroy(struct wl_shm_pool *pool) {
+    wl_shm_pool_destroy(pool);
+}
+
+/* Ported to shm.zig — extern for C callers */
+extern void buffer_destroy_dont_close(struct buffer *buf);
+extern void pool_unref(struct buffer_pool *pool);
+extern void buffer_destroy(struct buffer_private *buf);
+extern bool buffer_unref_no_remove_from_chain(struct buffer_private *buf);
+extern void buffer_release(void *data, struct wl_buffer *wl_buffer);
+/* C still populates the deferred list during allocation (shm.zig owns it). */
+extern void shm_defer_push_front(struct buffer_private *buf);
+
 #define TIME_SCROLL 0
 
 #define FORCED_DOUBLE_BUFFERING 0
@@ -63,49 +82,6 @@ static bool can_punch_hole_initialized = false;
 
 static size_t min_stride_alignment = 0;
 
-struct buffer_pool {
-    int fd;                /* memfd */
-    struct wl_shm_pool *wl_pool;
-
-    void *real_mmapped;    /* Address returned from mmap */
-    size_t mmap_size;      /* Size of mmap (>= size) */
-
-    size_t ref_count;
-};
-
-struct buffer_chain;
-struct buffer_private {
-    struct buffer public;
-    struct buffer_chain *chain;
-
-    size_t ref_count;
-    bool busy;                /* Owned by compositor */
-
-    struct buffer_pool *pool;
-    off_t offset;             /* Offset into memfd where data begins */
-    size_t size;
-
-    bool scrollable;
-
-    void (*release_cb)(struct buffer *buf, void *data);
-    void *cb_data;
-};
-
-struct buffer_chain {
-    tll(struct buffer_private *) bufs;
-    struct wl_shm *shm;
-    size_t pix_instances;
-    bool scrollable;
-
-    pixman_format_code_t pixman_fmt;
-    enum wl_shm_format shm_format;
-
-    void (*release_cb)(struct buffer *buf, void *data);
-    void *cb_data;
-};
-
-static tll(struct buffer_private *) deferred;
-
 #undef MEASURE_SHM_ALLOCS
 #if defined(MEASURE_SHM_ALLOCS)
 static size_t max_alloced = 0;
@@ -123,123 +99,10 @@ shm_set_min_stride_alignment(size_t _min_stride_alignment)
     min_stride_alignment = _min_stride_alignment;
 }
 
-static void
-buffer_destroy_dont_close(struct buffer *buf)
-{
-    if (buf->pix != NULL) {
-        for (size_t i = 0; i < buf->pix_instances; i++)
-            if (buf->pix[i] != NULL)
-                pixman_image_unref(buf->pix[i]);
-    }
+/* buffer_destroy_dont_close / pool_unref / buffer_destroy /
+ * buffer_unref_no_remove_from_chain / shm_fini: ported to shm.zig */
 
-    if (buf->wl_buf != NULL)
-        wl_buffer_destroy(buf->wl_buf);
-
-    free(buf->pix);
-    buf->pix = NULL;
-    buf->wl_buf = NULL;
-    buf->data = NULL;
-}
-
-static void
-pool_unref(struct buffer_pool *pool)
-{
-    if (pool == NULL)
-        return;
-
-    xassert(pool->ref_count > 0);
-    pool->ref_count--;
-
-    if (pool->ref_count > 0)
-        return;
-
-    if (pool->real_mmapped != MAP_FAILED)
-        munmap(pool->real_mmapped, pool->mmap_size);
-    if (pool->wl_pool != NULL)
-        wl_shm_pool_destroy(pool->wl_pool);
-    if (pool->fd >= 0)
-        close(pool->fd);
-
-    pool->real_mmapped = MAP_FAILED;
-    pool->wl_pool = NULL;
-    pool->fd = -1;
-    free(pool);
-}
-
-static void
-buffer_destroy(struct buffer_private *buf)
-{
-    buffer_destroy_dont_close(&buf->public);
-    pool_unref(buf->pool);
-    buf->pool = NULL;
-
-    for (size_t i = 0; i < buf->public.pix_instances; i++)
-        pixman_region32_fini(&buf->public.dirty[i]);
-    free(buf->public.dirty);
-    free(buf);
-}
-
-static bool
-buffer_unref_no_remove_from_chain(struct buffer_private *buf)
-{
-    xassert(buf->ref_count > 0);
-    buf->ref_count--;
-
-    if (buf->ref_count > 0)
-        return false;
-
-    if (buf->busy)
-        tll_push_back(deferred, buf);
-    else
-        buffer_destroy(buf);
-    return true;
-}
-
-void
-shm_fini(void)
-{
-    LOG_DBG("deferred buffers: %zu", tll_length(deferred));
-
-    tll_foreach(deferred, it) {
-        buffer_destroy(it->item);
-        tll_remove(deferred, it);
-    }
-
-#if defined(MEASURE_SHM_ALLOCS) && MEASURE_SHM_ALLOCS
-    LOG_INFO("max total allocations was: %zu MB", max_alloced / 1024 / 1024);
-#endif
-}
-
-static void
-buffer_release(void *data, struct wl_buffer *wl_buffer)
-{
-    struct buffer_private *buffer = data;
-
-    xassert(buffer->public.wl_buf == wl_buffer);
-    xassert(buffer->busy);
-    buffer->busy = false;
-
-    if (buffer->ref_count == 0) {
-        bool found = false;
-        tll_foreach(deferred, it) {
-            if (it->item == buffer) {
-                found = true;
-                tll_remove(deferred, it);
-                break;
-            }
-        }
-
-        buffer_destroy(buffer);
-
-        xassert(found);
-        if (!found)
-            LOG_WARN("deferred delete: buffer not on the 'deferred' list");
-    } else {
-        if (buffer->release_cb != NULL) {
-            buffer->release_cb(&buffer->public, buffer->cb_data);
-        }
-    }
-}
+/* buffer_release: ported to shm.zig */
 
 static const struct wl_buffer_listener buffer_listener = {
     .release = &buffer_release,
@@ -524,7 +387,7 @@ get_new_buffers(struct buffer_chain *chain, size_t count,
         }
 
         if (immediate_purge)
-            tll_push_front(deferred, buf);
+            shm_defer_push_front(buf);
         else
             tll_push_front(chain->bufs, buf);
 
@@ -571,12 +434,7 @@ err:
     abort();
 }
 
-void
-shm_did_not_use_buf(struct buffer *_buf)
-{
-    struct buffer_private *buf = (struct buffer_private *)_buf;
-    buf->busy = false;
-}
+/* shm_did_not_use_buf: ported to shm.zig */
 
 void
 shm_get_many(struct buffer_chain *chain, size_t count,
@@ -952,43 +810,7 @@ shm_scroll(struct buffer *_buf, int rows,
 #endif
 }
 
-void
-shm_purge(struct buffer_chain *chain)
-{
-    LOG_DBG("chain: %p: purging all buffers", (void *)chain);
-
-    /* Purge old buffers associated with this cookie */
-    tll_foreach(chain->bufs, it) {
-        if (buffer_unref_no_remove_from_chain(it->item))
-            tll_remove(chain->bufs, it);
-    }
-}
-
-void
-shm_addref(struct buffer *_buf)
-{
-    struct buffer_private *buf = (struct buffer_private *)_buf;
-    buf->ref_count++;
-}
-
-void
-shm_unref(struct buffer *_buf)
-{
-    if (_buf == NULL)
-        return;
-
-    struct buffer_private *buf = (struct buffer_private *)_buf;
-    struct buffer_chain *chain = buf->chain;
-
-    tll_foreach(chain->bufs, it) {
-        if (it->item != buf)
-            continue;
-
-        if (buffer_unref_no_remove_from_chain(buf))
-            tll_remove(chain->bufs, it);
-        break;
-    }
-}
+/* shm_purge / shm_addref / shm_unref: ported to shm.zig */
 
 struct buffer_chain *
 shm_chain_new(struct wayland *wayl, bool scrollable, size_t pix_instances,

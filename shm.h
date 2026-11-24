@@ -41,6 +41,49 @@ struct buffer {
     pixman_region32_t *dirty;
 };
 
+/* Internal, but shared with shm.zig and pinned by the ABI probe. */
+struct buffer_pool {
+    int fd;                /* memfd */
+    struct wl_shm_pool *wl_pool;
+
+    void *real_mmapped;    /* Address returned from mmap */
+    size_t mmap_size;      /* Size of mmap (>= size) */
+
+    size_t ref_count;
+};
+
+struct buffer_chain;
+struct buffer_private {
+    struct buffer public;
+    struct buffer_chain *chain;
+
+    size_t ref_count;
+    bool busy;                /* Owned by compositor */
+
+    struct buffer_pool *pool;
+    off_t offset;             /* Offset into memfd where data begins */
+    size_t size;
+
+    bool scrollable;
+
+    void (*release_cb)(struct buffer *buf, void *data);
+    void *cb_data;
+};
+
+struct buffer_chain {
+    tll(struct buffer_private *) bufs;
+    struct wl_shm *shm;
+    size_t pix_instances;
+    bool scrollable;
+
+    pixman_format_code_t pixman_fmt;
+    enum wl_shm_format shm_format;
+
+    void (*release_cb)(struct buffer *buf, void *data);
+    void *cb_data;
+};
+
+
 void shm_fini(void);
 
 /* TODO: combine into shm_init() */
