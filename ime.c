@@ -12,6 +12,7 @@
 #include "char32.h"
 #include "render.h"
 #include "search.h"
+#include "selection.h"
 #include "terminal.h"
 #include "util.h"
 #include "wayland.h"
@@ -185,8 +186,11 @@ done(void *data, struct zwp_text_input_v3 *zwp_text_input_v3,
         if (term != NULL) {
             if (term->is_searching)
                 render_refresh_search(term);
-            else
+            else {
+                term_reset_view(term);
+                selection_cancel(term);
                 render_refresh(term);
+            }
         }
     }
 
@@ -208,8 +212,12 @@ done(void *data, struct zwp_text_input_v3 *zwp_text_input_v3,
                 search_add_chars(term, text, len);
                 search_find_next(term, SEARCH_BACKWARD_SAME_POSITION);
                 render_refresh_search(term);
-            } else
+            } else {
                 term_to_slave(term, text, len);
+                term_reset_view(term);
+                selection_cancel(term);
+                render_refresh(term);
+            }
         }
         ime_reset_pending_commit(seat);
     }

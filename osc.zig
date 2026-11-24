@@ -490,26 +490,24 @@ export fn osc_from_clipboard(term: *types.Terminal, source: [*:0]const u8) callc
         return;
     }
 
-    var src: u8 = if (source[0] == 0) 'c' else 0;
-    var from_clipboard = src == 'c';
-    var from_primary = false;
-
-    var i: usize = 0;
-    while (source[i] != 0 and !from_clipboard and !from_primary) : (i += 1) {
-        const c = source[i];
-        if (c == 'c' or c == 'p' or c == 's') {
-            src = c;
-            switch (c) {
-                'c' => from_clipboard = selection_clipboard_has_data(seat.?),
-                's', 'p' => from_primary = selection_primary_has_data(seat.?),
-                else => unreachable,
+    // Use the clipboard if no source was given. Walk the source list and
+    // use the last source that has data; if none does, reply with an empty
+    // payload for that source instead of dropping the request (upstream
+    // "osc-52: send response even if no source has data").
+    var src: u8 = 'c';
+    {
+        var i: usize = 0;
+        while (source[i] != 0) : (i += 1) {
+            src = source[i];
+            if (src == 'c') {
+                if (selection_clipboard_has_data(seat.?)) break;
+            } else if (src == 'p' or src == 's') {
+                if (selection_primary_has_data(seat.?)) break;
+            } else {
+                std.debug.print("osc: WARN: unimplemented clipboard source '{c}'\n", .{src});
             }
-        } else {
-            std.debug.print("osc: WARN: unimplemented clipboard source '{c}'\n", .{c});
         }
     }
-
-    if (!from_clipboard and !from_primary) return;
 
     if (term.is_sending_paste_data) {
         term_to_slave(term, "\x1b]52;", 5);
@@ -533,11 +531,13 @@ export fn osc_from_clipboard(term: *types.Terminal, source: [*:0]const u8) callc
     const ctx: *ClipContext = @ptrCast(@alignCast(ctx_ptr));
     ctx.* = .{ .seat = seat.?, .term = term, .buf = undefined, .idx = 0 };
 
-    if (from_clipboard) {
+    if (src == 'c') {
         text_from_clipboard(seat.?, term, true, &fromClipboardCb, &fromClipboardDone, ctx);
-    }
-    if (from_primary) {
+    } else if (src == 'p' or src == 's') {
         text_from_primary(seat.?, term, true, &fromClipboardCb, &fromClipboardDone, ctx);
+    } else {
+        // Unsupported source: reply with an empty payload.
+        fromClipboardDone(ctx);
     }
 }
 

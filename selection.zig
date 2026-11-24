@@ -1053,11 +1053,19 @@ export fn selection_update(
     var new_start = term.selection.coords.start;
     var new_end: types.Coord = .{ .col = col, .row = term.grid.?.view + row };
 
-    if (!(new_end.row == new_start.row and new_end.col == new_start.col)) {
+    // Compare rows in scrollback-relative space: absolute row numbers wrap
+    // around the grid ring buffer, so comparing them directly misdetects the
+    // selection direction when the view is scrolled (upstream fixes
+    // "selection: fix row comparison in selection update").
+    const rel_new_start_row = grid_row_abs_to_sb(term.grid.?, term.rows, new_start.row);
+    const rel_new_end_row = grid_row_abs_to_sb(term.grid.?, term.rows, new_end.row);
+
+    if (!(rel_new_end_row == rel_new_start_row and new_end.col == new_start.col)) {
         var new_direction = term.selection.direction;
 
         const pivot_start = &term.selection.pivot.start;
         const pivot_end = &term.selection.pivot.end;
+        const rel_pivot_start_row = grid_row_abs_to_sb(term.grid.?, term.rows, pivot_start.row);
 
         if (term.selection.kind == .block) {
             if (new_end.col >= pivot_start.col) {
@@ -1077,8 +1085,8 @@ export fn selection_update(
             }
             term.selection.direction = new_direction;
         } else {
-            if (new_end.row < pivot_start.row or
-                (new_end.row == pivot_start.row and new_end.col < pivot_start.col))
+            if (rel_new_end_row < rel_pivot_start_row or
+                (rel_new_end_row == rel_pivot_start_row and new_end.col < pivot_start.col))
             {
                 new_direction = .left;
             } else {
@@ -1141,7 +1149,8 @@ export fn selection_update(
     const row_start = grid.rows.?[start_row_idx] orelse return;
     const row_end = grid.rows.?[end_row_idx] orelse return;
 
-    // Pull CELL_SPACER start/end back into the multi-cell char
+    // If an end point points into the pad area of a multi-cell character,
+    // back off to the start of that character.
     while (row_start.cells.?[@intCast(new_start.col)].wc == CELL_SPACER) {
         new_start.col -= 1;
     }
@@ -1149,9 +1158,9 @@ export fn selection_update(
         new_end.col -= 1;
     }
 
-    if (new_start.row < new_end.row or
-        (new_start.row == new_end.row and new_start.col <= new_end.col))
-    {
+    // Whether the *start* is expanded depends on the selection direction,
+    // not on a row/column ordering test (upstream fix for multi-cell chars).
+    if (term.selection.direction != .left) {
         while (new_start.col >= 1 and
             row_start.cells.?[@intCast(new_start.col)].wc >= CELL_SPACER)
         {

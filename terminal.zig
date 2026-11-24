@@ -2301,21 +2301,28 @@ export fn term_icon(term: *const types.Terminal) [*:0]const u8 {
 }
 
 export fn term_spawn_new(term: *const types.Terminal) bool {
-    var argv: [4]?[*:0]const u8 = .{ term.foot_exe, null, null, null };
-    var argc: usize = 1;
+    // C: xassert(term->argc > 0). Keep the same contract, but fail the
+    // spawn instead of trapping when there is no command line to reuse.
+    if (term.argc <= 0) return false;
 
-    if (term.conf.?.conf_path) |conf_path| {
-        argv[argc] = "--config";
-        argc += 1;
-        argv[argc] = conf_path;
-        argc += 1;
-    }
+    const argc: usize = @intCast(term.argc);
+    const argv: [*]?[*:0]u8 = @ptrCast(@alignCast(
+        xmalloc((argc + 1) * @sizeOf(?[*:0]u8)) orelse return false,
+    ));
+    defer std.c.free(@ptrCast(argv));
+
+    // Reuse the original foot command line, but with argv[0] pointing at
+    // this process's executable.
+    argv[0] = term.foot_exe;
+    var i: usize = 1;
+    while (i < argc) : (i += 1)
+        argv[i] = term.argv.?[i];
     argv[argc] = null;
 
     return spawn(
         term.reaper,
         @ptrCast(term.cwd),
-        @ptrCast(&argv),
+        @ptrCast(argv),
         -1,
         -1,
         -1,

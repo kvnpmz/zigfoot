@@ -673,7 +673,8 @@ struct terminal *
 term_init(const struct config *conf, struct fdm *fdm, struct reaper *reaper,
           struct wayland *wayl, const char *foot_exe, const char *cwd,
           const char *token, const char *pty_path,
-          int argc, char *const *argv, const char *const *envp,
+          int slave_argc, char *const *slave_argv, const char *const *slave_envp,
+          int foot_argc, const char *const *foot_argv,
           void (*shutdown_cb)(void *data, int exit_code), void *shutdown_data)
 {
     int ptmx = -1;
@@ -913,7 +914,12 @@ term_init(const struct config *conf, struct fdm *fdm, struct reaper *reaper,
         .ime_enabled = true,
 #endif
         .active_notifications = tll_init(),
+        .argc = foot_argc,
+        .argv = xcalloc(foot_argc, sizeof(char *)),
     };
+
+    for (int i = 0; i < foot_argc; i++)
+        term->argv[i] = xstrdup(foot_argv[i]);
 
     pixman_region32_init(&term->render.last_overlay_clip);
 
@@ -938,8 +944,8 @@ term_init(const struct config *conf, struct fdm *fdm, struct reaper *reaper,
     if (!pty_path) {
         /* Start the slave/client */
         if ((term->slave = slave_spawn(
-                 term->ptmx, argc, term->cwd, argv, envp, &conf->env_vars,
-                 conf->term, conf->shell, conf->login_shell,
+                 term->ptmx, slave_argc, term->cwd, slave_argv, slave_envp,
+                 &conf->env_vars, conf->term, conf->shell, conf->login_shell,
                  &conf->notifications)) == -1)
         {
             goto err;
@@ -1453,6 +1459,10 @@ term_destroy(struct terminal *term)
     free(term->cwd);
     free(term->mouse_user_cursor);
     free(term->color_stack.stack);
+
+    for (int i = 0; i < term->argc; i++)
+        free(term->argv[i]);
+    free(term->argv);
 
     int ret = EXIT_SUCCESS;
 

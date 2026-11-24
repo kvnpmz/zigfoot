@@ -959,6 +959,10 @@ pub const Terminal = extern struct {
     cwd: ?[*:0]u8,
     grapheme_shaping: bool,
     size_notifications: bool,
+
+    /// For spawn-terminal: the foot command line, owned by C (term_init).
+    argc: c_int,
+    argv: ?[*]?[*:0]u8,
 };
 
 // ── Notifications (mirrors notify.h) ──────────────────────────────
