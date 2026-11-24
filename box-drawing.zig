@@ -794,3 +794,294 @@ export fn draw_box_drawings_heavy_vertical_and_horizontal(buf: *types.BoxBuf) ca
     hlineMiddle(buf, HEAVY);
     vlineMiddle(buf, HEAVY);
 }
+
+//
+// Chunk A3 — the double-line family (U+254C..U+257F).
+//
+// Same shape as A2: a couple of local thicknesses, then rect/line calls.
+//
+
+export fn draw_box_drawings_light_double_dash_horizontal(buf: *types.BoxBuf) callconv(.c) void {
+    draw_box_drawings_dash_horizontal(buf, 2, buf.thickness[LIGHT], buf.thickness[LIGHT]);
+}
+
+export fn draw_box_drawings_heavy_double_dash_horizontal(buf: *types.BoxBuf) callconv(.c) void {
+    draw_box_drawings_dash_horizontal(buf, 2, buf.thickness[HEAVY], buf.thickness[LIGHT]);
+}
+
+export fn draw_box_drawings_light_double_dash_vertical(buf: *types.BoxBuf) callconv(.c) void {
+    draw_box_drawings_dash_vertical(buf, 2, buf.thickness[LIGHT], buf.thickness[HEAVY]);
+}
+
+export fn draw_box_drawings_heavy_double_dash_vertical(buf: *types.BoxBuf) callconv(.c) void {
+    draw_box_drawings_dash_vertical(buf, 2, buf.thickness[HEAVY], buf.thickness[HEAVY]);
+}
+
+export fn draw_box_drawings_double_horizontal(buf: *types.BoxBuf) callconv(.c) void {
+    const thick: c_int = buf.thickness[LIGHT];
+    const mid: c_int = @divTrunc(buf.height - thick * 3, 2);
+    hline(buf, 0, buf.width, mid, thick);
+    hline(buf, 0, buf.width, mid + 2 * thick, thick);
+}
+
+export fn draw_box_drawings_double_vertical(buf: *types.BoxBuf) callconv(.c) void {
+    const thick: c_int = buf.thickness[LIGHT];
+    const mid: c_int = @divTrunc(buf.width - thick * 3, 2);
+    vline(buf, 0, buf.height, mid, thick);
+    vline(buf, 0, buf.height, mid + 2 * thick, thick);
+}
+
+export fn draw_box_drawings_down_single_and_right_double(buf: *types.BoxBuf) callconv(.c) void {
+    const thick: c_int = buf.thickness[LIGHT];
+    const hmid: c_int = @divTrunc(buf.height - thick * 3, 2);
+    const vmid: c_int = @divTrunc(buf.width - thick, 2);
+    vlineMiddleDown(buf, LIGHT);
+    hline(buf, vmid, buf.width, hmid, thick);
+    hline(buf, vmid, buf.width, hmid + 2 * thick, thick);
+}
+
+export fn draw_box_drawings_down_double_and_right_single(buf: *types.BoxBuf) callconv(.c) void {
+    const thick: c_int = buf.thickness[LIGHT];
+    const hmid: c_int = @divTrunc(buf.height - thick, 2);
+    const vmid: c_int = @divTrunc(buf.width - thick * 3, 2);
+    hlineMiddleRight(buf, LIGHT);
+    vline(buf, hmid, buf.height, vmid, thick);
+    vline(buf, hmid, buf.height, vmid + 2 * thick, thick);
+}
+
+export fn draw_box_drawings_double_down_and_right(buf: *types.BoxBuf) callconv(.c) void {
+    const thick: c_int = buf.thickness[LIGHT];
+    const hmid: c_int = @divTrunc(buf.height - thick * 3, 2);
+    const vmid: c_int = @divTrunc(buf.width - thick * 3, 2);
+    vline(buf, hmid, buf.height, vmid, thick);
+    vline(buf, hmid + 2 * thick, buf.height, vmid + 2 * thick, thick);
+    hline(buf, vmid, buf.width, hmid, thick);
+    hline(buf, vmid + 2 * thick, buf.width, hmid + 2 * thick, thick);
+}
+
+export fn draw_box_drawings_down_single_and_left_double(buf: *types.BoxBuf) callconv(.c) void {
+    const thick: c_int = buf.thickness[LIGHT];
+    const hmid: c_int = @divTrunc(buf.height - thick * 3, 2);
+    const vmid: c_int = @divTrunc(buf.width + thick, 2);
+    vlineMiddleDown(buf, LIGHT);
+    hline(buf, 0, vmid, hmid, thick);
+    hline(buf, 0, vmid, hmid + 2 * thick, thick);
+}
+
+export fn draw_box_drawings_down_double_and_left_single(buf: *types.BoxBuf) callconv(.c) void {
+    const thick: c_int = buf.thickness[LIGHT];
+    const hmid: c_int = @divTrunc(buf.height - thick, 2);
+    const vmid: c_int = @divTrunc(buf.width - thick * 3, 2);
+    hlineMiddleLeft(buf, LIGHT);
+    vline(buf, hmid, buf.height, vmid, thick);
+    vline(buf, hmid, buf.height, vmid + 2 * thick, thick);
+}
+
+export fn draw_box_drawings_double_down_and_left(buf: *types.BoxBuf) callconv(.c) void {
+    const thick: c_int = buf.thickness[LIGHT];
+    const hmid: c_int = @divTrunc(buf.height - thick * 3, 2);
+    const vmid: c_int = @divTrunc(buf.width - thick * 3, 2);
+    vline(buf, hmid + 2 * thick, buf.height, vmid, thick);
+    vline(buf, hmid, buf.height, vmid + 2 * thick, thick);
+    hline(buf, 0, vmid + 2 * thick, hmid, thick);
+    hline(buf, 0, vmid, hmid + 2 * thick, thick);
+}
+
+export fn draw_box_drawings_up_single_and_right_double(buf: *types.BoxBuf) callconv(.c) void {
+    const thick: c_int = buf.thickness[LIGHT];
+    const hmid: c_int = @divTrunc(buf.height - thick * 3, 2);
+    const vmid: c_int = @divTrunc(buf.width - thick, 2);
+    vlineMiddleUp(buf, LIGHT);
+    hline(buf, vmid, buf.width, hmid, thick);
+    hline(buf, vmid, buf.width, hmid + 2 * thick, thick);
+}
+
+export fn draw_box_drawings_up_double_and_right_single(buf: *types.BoxBuf) callconv(.c) void {
+    const thick: c_int = buf.thickness[LIGHT];
+    const hmid: c_int = @divTrunc(buf.height + thick, 2);
+    const vmid: c_int = @divTrunc(buf.width - thick * 3, 2);
+    hlineMiddleRight(buf, LIGHT);
+    vline(buf, 0, hmid, vmid, thick);
+    vline(buf, 0, hmid, vmid + 2 * thick, thick);
+}
+
+export fn draw_box_drawings_double_up_and_right(buf: *types.BoxBuf) callconv(.c) void {
+    const thick: c_int = buf.thickness[LIGHT];
+    const hmid: c_int = @divTrunc(buf.height - thick * 3, 2);
+    const vmid: c_int = @divTrunc(buf.width - thick * 3, 2);
+    vline(buf, 0, hmid + 2 * thick, vmid, thick);
+    vline(buf, 0, hmid, vmid + 2 * thick, thick);
+    hline(buf, vmid + 2 * thick, buf.width, hmid, thick);
+    hline(buf, vmid, buf.width, hmid + 2 * thick, thick);
+}
+
+export fn draw_box_drawings_up_single_and_left_double(buf: *types.BoxBuf) callconv(.c) void {
+    const thick: c_int = buf.thickness[LIGHT];
+    const hmid: c_int = @divTrunc(buf.height - thick * 3, 2);
+    const vmid: c_int = @divTrunc(buf.width + thick, 2);
+    vlineMiddleUp(buf, LIGHT);
+    hline(buf, 0, vmid, hmid, thick);
+    hline(buf, 0, vmid, hmid + 2 * thick, thick);
+}
+
+export fn draw_box_drawings_up_double_and_left_single(buf: *types.BoxBuf) callconv(.c) void {
+    const thick: c_int = buf.thickness[LIGHT];
+    const hmid: c_int = @divTrunc(buf.height + thick, 2);
+    const vmid: c_int = @divTrunc(buf.width - thick * 3, 2);
+    hlineMiddleLeft(buf, LIGHT);
+    vline(buf, 0, hmid, vmid, thick);
+    vline(buf, 0, hmid, vmid + 2 * thick, thick);
+}
+
+export fn draw_box_drawings_double_up_and_left(buf: *types.BoxBuf) callconv(.c) void {
+    const thick: c_int = buf.thickness[LIGHT];
+    const hmid: c_int = @divTrunc(buf.height - thick * 3, 2);
+    const vmid: c_int = @divTrunc(buf.width - thick * 3, 2);
+    vline(buf, 0, hmid + 0 * thick + thick, vmid, thick);
+    vline(buf, 0, hmid + 2 * thick + thick, vmid + 2 * thick, thick);
+    hline(buf, 0, vmid, hmid, thick);
+    hline(buf, 0, vmid + 2 * thick, hmid + 2 * thick, thick);
+}
+
+export fn draw_box_drawings_vertical_single_and_right_double(buf: *types.BoxBuf) callconv(.c) void {
+    const thick: c_int = buf.thickness[LIGHT];
+    const hmid: c_int = @divTrunc(buf.height - thick * 3, 2);
+    const vmid: c_int = @divTrunc(buf.width - thick, 2);
+    vlineMiddle(buf, LIGHT);
+    hline(buf, vmid, buf.width, hmid, thick);
+    hline(buf, vmid, buf.width, hmid + 2 * thick, thick);
+}
+
+export fn draw_box_drawings_vertical_double_and_right_single(buf: *types.BoxBuf) callconv(.c) void {
+    const thick: c_int = buf.thickness[LIGHT];
+    const vmid: c_int = @divTrunc(buf.width - thick * 3, 2);
+    hline(buf, vmid + 2 * thick, buf.width, @divTrunc(buf.height - thick, 2), thick);
+    vline(buf, 0, buf.height, vmid, thick);
+    vline(buf, 0, buf.height, vmid + 2 * thick, thick);
+}
+
+export fn draw_box_drawings_double_vertical_and_right(buf: *types.BoxBuf) callconv(.c) void {
+    const thick: c_int = buf.thickness[LIGHT];
+    const hmid: c_int = @divTrunc(buf.height - thick * 3, 2);
+    const vmid: c_int = @divTrunc(buf.width - thick * 3, 2);
+    vline(buf, 0, buf.height, vmid, thick);
+    vline(buf, 0, hmid, vmid + 2 * thick, thick);
+    vline(buf, hmid + 2 * thick, buf.height, vmid + 2 * thick, thick);
+    hline(buf, vmid + 2 * thick, buf.width, hmid, thick);
+    hline(buf, vmid + 2 * thick, buf.width, hmid + 2 * thick, thick);
+}
+
+export fn draw_box_drawings_vertical_single_and_left_double(buf: *types.BoxBuf) callconv(.c) void {
+    const thick: c_int = buf.thickness[LIGHT];
+    const hmid: c_int = @divTrunc(buf.height - thick * 3, 2);
+    const vmid: c_int = @divTrunc(buf.width + thick, 2);
+    vlineMiddle(buf, LIGHT);
+    hline(buf, 0, vmid, hmid, thick);
+    hline(buf, 0, vmid, hmid + 2 * thick, thick);
+}
+
+export fn draw_box_drawings_vertical_double_and_left_single(buf: *types.BoxBuf) callconv(.c) void {
+    const thick: c_int = buf.thickness[LIGHT];
+    const vmid: c_int = @divTrunc(buf.width - thick * 3, 2);
+    hline(buf, 0, vmid, @divTrunc(buf.height - thick, 2), thick);
+    vline(buf, 0, buf.height, vmid, thick);
+    vline(buf, 0, buf.height, vmid + 2 * thick, thick);
+}
+
+export fn draw_box_drawings_double_vertical_and_left(buf: *types.BoxBuf) callconv(.c) void {
+    const thick: c_int = buf.thickness[LIGHT];
+    const hmid: c_int = @divTrunc(buf.height - thick * 3, 2);
+    const vmid: c_int = @divTrunc(buf.width - thick * 3, 2);
+    vline(buf, 0, buf.height, vmid + 2 * thick, thick);
+    vline(buf, 0, hmid, vmid, thick);
+    vline(buf, hmid + 2 * thick, buf.height, vmid, thick);
+    hline(buf, 0, vmid + thick, hmid, thick);
+    hline(buf, 0, vmid, hmid + 2 * thick, thick);
+}
+
+export fn draw_box_drawings_down_single_and_horizontal_double(buf: *types.BoxBuf) callconv(.c) void {
+    const thick: c_int = buf.thickness[LIGHT];
+    const hmid: c_int = @divTrunc(buf.height - thick * 3, 2);
+    vline(buf, hmid + 2 * thick, buf.height, @divTrunc(buf.width - thick, 2), thick);
+    hline(buf, 0, buf.width, hmid, thick);
+    hline(buf, 0, buf.width, hmid + 2 * thick, thick);
+}
+
+export fn draw_box_drawings_down_double_and_horizontal_single(buf: *types.BoxBuf) callconv(.c) void {
+    const thick: c_int = buf.thickness[LIGHT];
+    const hmid: c_int = @divTrunc(buf.height - thick, 2);
+    const vmid: c_int = @divTrunc(buf.width - thick * 3, 2);
+    hlineMiddle(buf, LIGHT);
+    vline(buf, hmid, buf.height, vmid, thick);
+    vline(buf, hmid, buf.height, vmid + 2 * thick, thick);
+}
+
+export fn draw_box_drawings_double_down_and_horizontal(buf: *types.BoxBuf) callconv(.c) void {
+    const thick: c_int = buf.thickness[LIGHT];
+    const hmid: c_int = @divTrunc(buf.height - thick * 3, 2);
+    const vmid: c_int = @divTrunc(buf.width - thick * 3, 2);
+    hline(buf, 0, buf.width, hmid, thick);
+    hline(buf, 0, vmid, hmid + 2 * thick, thick);
+    hline(buf, vmid + 2 * thick, buf.width, hmid + 2 * thick, thick);
+    vline(buf, hmid + 2 * thick, buf.height, vmid, thick);
+    vline(buf, hmid + 2 * thick, buf.height, vmid + 2 * thick, thick);
+}
+
+export fn draw_box_drawings_up_single_and_horizontal_double(buf: *types.BoxBuf) callconv(.c) void {
+    const thick: c_int = buf.thickness[LIGHT];
+    const hmid: c_int = @divTrunc(buf.height - thick * 3, 2);
+    const vmid: c_int = @divTrunc(buf.width - thick, 2);
+    vline(buf, 0, hmid, vmid, thick);
+    hline(buf, 0, buf.width, hmid, thick);
+    hline(buf, 0, buf.width, hmid + 2 * thick, thick);
+}
+
+export fn draw_box_drawings_up_double_and_horizontal_single(buf: *types.BoxBuf) callconv(.c) void {
+    const thick: c_int = buf.thickness[LIGHT];
+    const hmid: c_int = @divTrunc(buf.height - thick, 2);
+    const vmid: c_int = @divTrunc(buf.width - thick * 3, 2);
+    hlineMiddle(buf, LIGHT);
+    vline(buf, 0, hmid, vmid, thick);
+    vline(buf, 0, hmid, vmid + 2 * thick, thick);
+}
+
+export fn draw_box_drawings_double_up_and_horizontal(buf: *types.BoxBuf) callconv(.c) void {
+    const thick: c_int = buf.thickness[LIGHT];
+    const hmid: c_int = @divTrunc(buf.height - thick * 3, 2);
+    const vmid: c_int = @divTrunc(buf.width - thick * 3, 2);
+    vline(buf, 0, hmid, vmid, thick);
+    vline(buf, 0, hmid, vmid + 2 * thick, thick);
+    hline(buf, 0, vmid + thick, hmid, thick);
+    hline(buf, vmid + 2 * thick, buf.width, hmid, thick);
+    hline(buf, 0, buf.width, hmid + 2 * thick, thick);
+}
+
+export fn draw_box_drawings_vertical_single_and_horizontal_double(buf: *types.BoxBuf) callconv(.c) void {
+    const thick: c_int = buf.thickness[LIGHT];
+    const hmid: c_int = @divTrunc(buf.height - thick * 3, 2);
+    vlineMiddle(buf, LIGHT);
+    hline(buf, 0, buf.width, hmid, thick);
+    hline(buf, 0, buf.width, hmid + 2 * thick, thick);
+}
+
+export fn draw_box_drawings_vertical_double_and_horizontal_single(buf: *types.BoxBuf) callconv(.c) void {
+    const thick: c_int = buf.thickness[LIGHT];
+    const vmid: c_int = @divTrunc(buf.width - thick * 3, 2);
+    hlineMiddle(buf, LIGHT);
+    vline(buf, 0, buf.height, vmid, thick);
+    vline(buf, 0, buf.height, vmid + 2 * thick, thick);
+}
+
+export fn draw_box_drawings_double_vertical_and_horizontal(buf: *types.BoxBuf) callconv(.c) void {
+    const thick: c_int = buf.thickness[LIGHT];
+    const hmid: c_int = @divTrunc(buf.height - thick * 3, 2);
+    const vmid: c_int = @divTrunc(buf.width - thick * 3, 2);
+    hline(buf, 0, vmid, hmid, thick);
+    hline(buf, vmid + 2 * thick, buf.width, hmid, thick);
+    hline(buf, 0, vmid, hmid + 2 * thick, thick);
+    hline(buf, vmid + 2 * thick, buf.width, hmid + 2 * thick, thick);
+    vline(buf, 0, hmid + thick, vmid, thick);
+    vline(buf, 0, hmid, vmid + 2 * thick, thick);
+    vline(buf, hmid + 2 * thick, buf.height, vmid, thick);
+    vline(buf, hmid + 2 * thick, buf.height, vmid + 2 * thick, thick);
+}
