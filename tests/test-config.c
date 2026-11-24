@@ -959,8 +959,8 @@ test_key_binding(struct context *ctx, bool (*parse_fun)(struct context *ctx),
     const xkb_keysym_t sym = XKB_KEY_a + action;
 
     /* Mouse button (mouse bindings) */
-    const int button_idx = action % ALEN(button_map);
-    const int button = button_map[button_idx].code;
+    const int button_idx = action % config_button_map_len();
+    const int button = config_button_map_code(button_idx);
     const int click_count = action % 3 + 1;
 
     /* Finally, generate the ‘value’ (e.g. “Control+shift+x”) */
@@ -987,7 +987,7 @@ test_key_binding(struct context *ctx, bool (*parse_fun)(struct context *ctx),
     }
 
     case MOUSE_BINDING: {
-        const char *const button_name = button_map[button_idx].name;
+        const char *const button_name = config_button_map_name(button_idx);
         int chars = snprintf(
             value, sizeof(value), "%s%s%s",
             argv ? "[command arg1 arg2 \"arg3 has spaces\"] " : section_id ? "[foobar]" : "",

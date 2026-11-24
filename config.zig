@@ -789,6 +789,337 @@ export fn parse_section_regex(ctx: *Context) callconv(.c) bool {
     return invalidOption(ctx, key);
 }
 
+// ── key-binding helpers (C2i) ─────────────────────────────────────
+
+const StrList = tll.Tll(?[*:0]u8);
+
+extern fn xstrndup(str: [*:0]const u8, n: usize) callconv(.c) ?[*:0]u8;
+
+fn modList(list: *types.TllStr) *StrList {
+    return @ptrCast(@alignCast(list));
+}
+
+fn freeStr(p: ?[*:0]u8) callconv(.c) void {
+    free(@ptrCast(p));
+}
+
+fn strPtrCompare(a: *const ?[*:0]u8, b: *const ?[*:0]u8) callconv(.c) c_int {
+    return strcmp(a.*.?, b.*.?);
+}
+
+fn freeModifierList(mods: *StrList) void {
+    mods.freeListAndFree(freeStr);
+}
+
+export fn parse_modifiers(text: [*]const u8, len: usize, list: *types.TllStr) callconv(.c) void {
+    const mods = modList(list);
+    freeModifierList(mods);
+
+    // Handle "none" separately because e.g. none+shift is nonsense.
+    // C: strncmp(text, "none", len) == 0
+    if (len <= 4 and std.mem.eql(u8, text[0..len], "none"[0..len]))
+        return;
+
+    // C tokenizes a copy with strtok_r(copy, "+"), i.e. empty tokens are
+    // skipped. Do the same, then sort (C: tll_sort(mods, strcmp)).
+    const copy = xstrndup(@ptrCast(text), len) orelse return;
+    defer free(copy);
+
+    var start: usize = 0;
+    var i: usize = 0;
+    while (true) : (i += 1) {
+        if (copy[i] != '+' and copy[i] != 0)
+            continue;
+
+        const at_end = copy[i] == 0;
+        if (i > start) {
+            copy[i] = 0;
+            mods.pushBack(xstrdup(@ptrCast(copy + start)));
+        }
+        if (at_end)
+            break;
+        start = i + 1;
+    }
+
+    mods.sort(strPtrCompare);
+}
+
+export fn free_binding_aux(aux: *types.BindingAux) callconv(.c) void {
+    if (!aux.master_copy)
+        return;
+
+    switch (aux.type) {
+        .none => {},
+        .pipe => free_argv(&aux._u.pipe),
+        .text => free(@ptrCast(aux._u.text.data)),
+        .regex => free(@ptrCast(aux._u.regex_name)),
+    }
+}
+
+export fn free_key_binding(binding: *types.ConfigKeyBinding) callconv(.c) void {
+    free_binding_aux(&binding.aux);
+    freeModifierList(modList(&binding.modifiers));
+}
+
+export fn free_key_binding_list(bindings: *types.ConfigKeyBindingList) callconv(.c) void {
+    if (bindings.arr) |arr| {
+        var i: usize = 0;
+        while (i < bindings.count) : (i += 1)
+            free_key_binding(&arr[i]);
+        free(@ptrCast(arr));
+    }
+
+    bindings.arr = null;
+    bindings.count = 0;
+}
+
+fn argvCompare(argv1: *const types.Argv, argv2: *const types.Argv) c_int {
+    const a1 = argv1.args;
+    const a2 = argv2.args;
+
+    if (a1 == null and a2 == null)
+        return 0;
+    if (a1 == null)
+        return -1;
+    if (a2 == null)
+        return 1;
+
+    var i: usize = 0;
+    while (true) : (i += 1) {
+        const s1 = a1.?[i];
+        const s2 = a2.?[i];
+
+        if (s1 == null and s2 == null)
+            return 0;
+        if (s1 == null)
+            return -1;
+        if (s2 == null)
+            return 1;
+
+        const ret = strcmp(s1.?, s2.?);
+        if (ret != 0)
+            return ret;
+    }
+}
+
+export fn binding_aux_equal(
+    a: *const types.BindingAux,
+    b: *const types.BindingAux,
+) callconv(.c) bool {
+    if (a.type != b.type)
+        return false;
+
+    switch (a.type) {
+        .none => return true,
+
+        .pipe => return argvCompare(&a._u.pipe, &b._u.pipe) == 0,
+
+        .text => {
+            if (a._u.text.len != b._u.text.len)
+                return false;
+            if (a._u.text.len == 0)
+                return true;
+
+            const ad = a._u.text.data orelse return false;
+            const bd = b._u.text.data orelse return false;
+            return std.mem.eql(
+                u8,
+                ad[0..a._u.text.len],
+                bd[0..b._u.text.len],
+            );
+        },
+
+        .regex => {
+            const an = a._u.regex_name;
+            const bn = b._u.regex_name;
+            if (an == null or bn == null)
+                return an == null and bn == null;
+            return std.mem.eql(u8, std.mem.span(an.?), std.mem.span(bn.?));
+        },
+    }
+}
+
+export fn remove_from_key_bindings_list(
+    bindings: *types.ConfigKeyBindingList,
+    action: c_int,
+    aux: *const types.BindingAux,
+) callconv(.c) void {
+    const arr = bindings.arr orelse return;
+
+    var remove_first_idx: usize = 0;
+    var remove_count: usize = 0;
+
+    var i: usize = 0;
+    while (i < bindings.count) : (i += 1) {
+        const binding = &arr[i];
+
+        if (binding.action != action)
+            continue;
+
+        if (binding_aux_equal(&binding.aux, aux)) {
+            if (remove_count == 0)
+                remove_first_idx = i;
+
+            remove_count += 1;
+            free_key_binding(binding);
+        }
+    }
+
+    if (remove_count == 0)
+        return;
+
+    const move_count = bindings.count - (remove_first_idx + remove_count);
+    std.mem.copyForwards(
+        types.ConfigKeyBinding,
+        arr[remove_first_idx .. remove_first_idx + move_count],
+        arr[remove_first_idx + remove_count .. remove_first_idx + remove_count + move_count],
+    );
+    bindings.count -= remove_count;
+}
+
+// linux/input-event-codes.h, plus foot's custom wheel buttons (input.h).
+const ButtonMapEntry = struct { name: [:0]const u8, code: c_int };
+const button_map = [_]ButtonMapEntry{
+    .{ .name = "BTN_LEFT", .code = 0x110 },
+    .{ .name = "BTN_RIGHT", .code = 0x111 },
+    .{ .name = "BTN_MIDDLE", .code = 0x112 },
+    .{ .name = "BTN_SIDE", .code = 0x113 },
+    .{ .name = "BTN_EXTRA", .code = 0x114 },
+    .{ .name = "BTN_FORWARD", .code = 0x115 },
+    .{ .name = "BTN_BACK", .code = 0x116 },
+    .{ .name = "BTN_TASK", .code = 0x117 },
+    .{ .name = "BTN_WHEEL_BACK", .code = 0x11c },
+    .{ .name = "BTN_WHEEL_FORWARD", .code = 0x11d },
+    .{ .name = "BTN_WHEEL_LEFT", .code = 0x11e },
+    .{ .name = "BTN_WHEEL_RIGHT", .code = 0x11f },
+};
+
+export fn mouse_button_name_to_code(name: [*:0]const u8) callconv(.c) c_int {
+    for (button_map) |entry| {
+        if (eqPtr(name, entry.name.ptr))
+            return entry.code;
+    }
+    return -1;
+}
+
+export fn mouse_button_code_to_name(code: c_int) callconv(.c) ?[*:0]const u8 {
+    for (button_map) |entry| {
+        if (code == entry.code)
+            return entry.name.ptr;
+    }
+    return null;
+}
+
+// The C oracle (tests/test-config.c) iterates the button table when
+// generating mouse-binding values; keep that access rather than moving the
+// table back to C.
+export fn config_button_map_len() callconv(.c) usize {
+    return button_map.len;
+}
+
+export fn config_button_map_code(idx: usize) callconv(.c) c_int {
+    return button_map[idx].code;
+}
+
+export fn config_button_map_name(idx: usize) callconv(.c) [*:0]const u8 {
+    return button_map[idx].name.ptr;
+}
+
+export fn modifiers_equal(
+    mods1_in: *const types.TllStr,
+    mods2_in: *const types.TllStr,
+) callconv(.c) bool {
+    const mods1: *const StrList = @ptrCast(@alignCast(mods1_in));
+    const mods2: *const StrList = @ptrCast(@alignCast(mods2_in));
+
+    if (mods1.length != mods2.length)
+        return false;
+
+    var count: usize = 0;
+    var it1 = mods1.head;
+    while (it1) |n1| : (it1 = n1.next) {
+        var skip = count;
+        var it2 = mods2.head;
+        while (it2) |n2| : (it2 = n2.next) {
+            if (skip > 0) {
+                skip -= 1;
+                continue;
+            }
+
+            if (strcmp(n1.item.?, n2.item.?) != 0)
+                return false;
+            break;
+        }
+        count += 1;
+    }
+
+    return true;
+}
+
+export fn modifiers_disjoint(
+    mods1_in: *const types.TllStr,
+    mods2_in: *const types.TllStr,
+) callconv(.c) bool {
+    const mods1: *const StrList = @ptrCast(@alignCast(mods1_in));
+    const mods2: *const StrList = @ptrCast(@alignCast(mods2_in));
+
+    var count: usize = 0;
+    var it1 = mods1.head;
+    while (it1) |n1| : (it1 = n1.next) {
+        // Both sets are sorted; skip the items in set #2 that we have
+        // already checked against previous items in set #1.
+        var skip = count;
+        var it2 = mods2.head;
+        while (it2) |n2| : (it2 = n2.next) {
+            if (skip > 0) {
+                skip -= 1;
+                continue;
+            }
+
+            const r = strcmp(n1.item.?, n2.item.?);
+            if (r == 0)
+                return false;
+            if (r < 0)
+                break;
+
+            count += 1;
+        }
+    }
+
+    return true;
+}
+
+export fn modifiers_to_str(
+    mods_in: *const types.TllStr,
+    strip_last_plus: bool,
+) callconv(.c) ?[*:0]u8 {
+    const mods: *const StrList = @ptrCast(@alignCast(mods_in));
+
+    var len: usize = mods.length; // '+' separators
+    var it = mods.head;
+    while (it) |n| : (it = n.next)
+        len += strlen(n.item.?);
+
+    const ret: [*]u8 = @ptrCast(xmalloc(len + 1) orelse unreachable);
+
+    var idx: usize = 0;
+    it = mods.head;
+    while (it) |n| : (it = n.next) {
+        const item = n.item.?;
+        const item_len = strlen(item);
+        @memcpy(ret[idx .. idx + item_len], item[0..item_len]);
+        idx += item_len;
+        ret[idx] = '+';
+        idx += 1;
+    }
+
+    if (strip_last_plus and idx > 0)
+        idx -= 1;
+
+    ret[idx] = 0;
+    return @ptrCast(ret);
+}
+
 // ── [colors] and [csd] (C2c) ──────────────────────────────────────
 
 extern fn value_to_fonts(ctx: *Context) callconv(.c) types.ConfigFontList;
