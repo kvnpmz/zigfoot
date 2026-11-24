@@ -2,10 +2,11 @@
 
 Status snapshot and a concrete continuation plan.
 Prepared 2026-11-23 against `feature/zig-migration` @ `a1d9d288`.
-Refreshed 2026-11-24 against @ `c87988db` (Phase 0, Phase 1a, upstream merge,
-config C1-C2o, the terminal font/DPI/size stack T9/T10, `shm` S1-S5 and
-`slave` — the config parser, the SHM allocator/cache/scroller and the
-spawn/exec path are Zig).
+Refreshed 2026-11-24 against @ `3e023fd6` (Phase 0, Phase 1a, upstream merge,
+config C1-C2o, the terminal font/DPI/size stack T9/T10, `shm` S1-S5, `slave`,
+`log`, `debug`, `user-notification` and `unicode-mode` — the config parser,
+the SHM allocator/cache/scroller, the spawn/exec path and the whole logging
+stack are Zig).
 
 ---
 
@@ -593,59 +594,151 @@ utmp backends where available.
 6. **Port `config` before finishing `terminal`'s font/init chunks** —
    recommended yes, because it unblocks T9–T11 and removes many accessors.
    **Done** (C2o): T9/T10/T11 are unblocked.
-7. **Where do the variadic loggers live?** `config.c` still defines
-   `log_and_notify*()`/`log_contextual*()`, which only config.zig calls. Zig
-   cannot define variadic functions, so they either stay in `config.c` (and
-   `config.c` never reaches zero) or move to `log.c` (which is where the rest
-   of the logging lives) and `config.c` disappears. Recommendation: move them
-   to `log.c` in Phase 4, and amend Definition-of-Done #1 to "no
-   module-specific C left", not "no C left".
+7. ~~**Where do the variadic loggers live?**~~ — **answered**: Zig *can*
+   define C-variadic functions (`export fn f(fmt: [*:0]const u8, ...)` +
+   `@cVaStart`/`@cVaCopy`/`@cVaEnd`, forwarded to `vfprintf`/`vsnprintf`).
+   `log_msg`, `log_errno`, `bug()` and config's `log_and_notify*()`/
+   `log_contextual*()` are all Zig now; the only remaining risk is a platform
+   whose `va_list` layout differs from what Zig assumes when forwarding to
+   `vfprintf`/`vsnprintf` (covered for x86-64 by the harness's stderr-capture
+   tests; re-check on aarch64 before shipping). Keep Definition-of-Done #1 as
+   "no module-specific C left", not "no C left".
+8. **`struct seat`/`struct wayland`: mirror in full, or keep accessor shims?**
+   Recommendation: **mirror in full, with the ABI probe**, in two stages
+   (`wayland` + `wayl_surface` first, then `seat` + its nested `kbd`/
+   `pointer`/`touch` groups). Rationale: `input.c` alone touches `seat->`
+   356 times across a dozen fields, and `render.c` 88 times; per-field
+   accessors would be hundreds of shims and would make the Zig code
+   unrecognisable, while a mirror is ~250 lines of `extern struct` that the
+   probe pins. The existing `terminal_shim_seat_*` (3), monitor/window (9)
+   accessors then get deleted in Track B3.
+9. **Where do the last C files land?** After `render`/`wayland`/`input`, the
+   shims that only exist because a struct is not mirrored (`shm`'s
+   `__SIZEOF_POINTER__`/`FALLOC_FL_PUNCH_HOLE` one-liners, `slave.c`'s
+   constants accessor, `debug.c`'s ASAN hook, `config.c`'s `regex_t`) stay:
+   each encodes compile-time knowledge Zig does not get from meson. Track E1
+   only deletes the *struct-mirror* shims.
 
 ---
 
-## 13. Suggested immediate actions (next two weeks)
+## 13. Sequenced backlog (refreshed 2026-11-24)
 
-1. ~~**Finish `config` (C2h+)**~~ — **done** (C2h–C2o). `config.c` is down to
-   the variadic loggers, the `regex_t` helper and two fcft accessors; the
-   parser, the bindings, `config_load`/`clone`/`free` and the font helpers are
-   Zig, and the oracle covers them.
-2. ~~**terminal T9/T10** (font stack + size/scale, ~640 C lines).~~ — **done**
-   (today). `term_set_fonts`, `reload_fonts`, `load_fonts_from_conf`, the DPI
-   and subpixel policy, `term_update_scale` and the font-size adjustments are
-   Zig; the pure parts (`term_pt_or_px_as_pixels`, `term_font_baseline`,
-   `term_line_height_update`) live in `terminal_types.zig` and are unit-tested.
-3. ~~**`slave` + `shm` (~1.7k)**~~ — **`shm` done** (S1-S5: lifetime, allocation,
-   cache, chain API, scrolling), with 40+ headless harness assertions using a
-   NULL-`wl_shm` sentinel so real memfd/mmap/fallocate paths run without a
-   compositor. **`slave` also done**: `slave_spawn()` (fork/exec, environment
-   scrubbing, /etc/shells validation, the user-notification banner) is Zig and
-   is exercised end-to-end by the harness through a real pty.
-   **`log` (231) also done** (variadic entry points implemented in Zig with
-   `@cVaStart`/`@cVaCopy`, output passed straight to `vfprintf`/`vsnprintf`).
-   **`debug` + `user-notification` also done** (`fatal_error`/`bug` and the
-   printf-style notification helper are Zig; only the ASAN hook stays in C).
-   **Next: `box-drawing` (3,450)** —
-   or `ime`/`key-binding` if the seat mirror lands first.
-4. **Keep the safety net moving:** add a Zig test whenever a chunk ports
-   logic with a pure core, and run `meson test` in all three build dirs plus
-   `scripts/smoke.sh` before each commit.
-5. **Merge `origin/master` weekly** (R7) and port upstream fixes into ported
-   modules immediately.
+State: **24,222 of 48,830 C lines gone (49.6%)**, ~35% by effort, 28 modules
+ported, 287 harness assertions, `meson test` 5/5 in three build dirs.
+Remaining C: 24,608 hand-written lines + 1,253 shim lines.
 
-**Rough effort from here:** Phase 1b ~2 weeks; rest of Phase 2
-(slave/shm + ime/key-binding/url-mode/search) 3–5 weeks; Phase 3 4–6 weeks;
-Phase 4 1–2 weeks. About **2 months for one developer**, or **4–6 weeks with
-2–3 parallel workers**.
+Every chunk below is one commit, follows §9's recipe, and passes §10's
+verification contract (3 build dirs + smoke + ABI probe + new tests).
+Estimates are for one developer and are deliberately pessimistic.
 
-**Caveat on the smoke test in this container:** `scripts/smoke.sh` uses
-`$WAYLAND_DISPLAY` when set, and here it points at a host compositor that
-currently reports "no monitors available"; the window launches therefore fail
-for environmental reasons. `env -u WAYLAND_DISPLAY scripts/smoke.sh` skips
-them (no weston installed), and `foot -C -c <file>` still exercises the whole
-config/font path. Do not read a smoke failure as a port regression without
-checking which branch of the script ran.
+### Track A — finish the leaves that need no new mirror (~4–5 days)
 
-**Rough effort from here:** config tail 1–1.5 weeks; Phase 1b ~2 weeks;
-rest of Phase 2 (slave/shm + ime/key-binding/url-mode/search) 3–5 weeks;
-Phase 3 4–6 weeks; Phase 4 1–2 weeks. About **2–2.5 months for one
-developer**, or **5–7 weeks with 2–3 parallel workers**.
+Nothing in Track A is blocked on `seat`/`wayland`, so it can be done in any
+order and in parallel with someone starting Track B.
+
+| Chunk | Work | Files | Est. |
+|---|---|---|---|
+| **A1** | `box-drawing` scaffolding: move `struct buf` to `box-drawing.h`, mirror it in `terminal_types.zig` (+ `expectAbi`), port `_thickness`, `_hline`/`_vline`/`_rect`/`_*_middle` primitives, `change_buffer_format` | box-drawing.c/h, terminal_types.zig | 0.5d |
+| **A2** | `box-drawing` line family: 0x2500–0x254x light/heavy/double h & v lines, all dash variants, the 0x250c–0x254b corners and tees | box-drawing.c/.zig | 1d |
+| **A3** | `box-drawing` mixed/diagonal/arc family: 0x254c–0x257f (mixed light/heavy, arcs, diagonals, half lines) | box-drawing.c/.zig | 1d |
+| **A4** | `box-drawing` blocks: 0x2580–0x259f blocks/shades/quadrants, 0x25e2–0x25e5 triangles, 0x1fb00–0x1fb8b sextants/octants/wedges/eighth blocks, 0x1cc00+ legacy computing tables | box-drawing.c/.zig | 1.5d |
+| **A5** | `box-drawing` dispatch: the 251-case `draw_glyph()` switch, `box_drawing()` itself (glyph allocation, metrics, `fcft_glyph` fill-in), delete `box-drawing.c` | box-drawing.c/.zig | 1d |
+| **A6** | `quirks` (86): weston detection + CSD subsurface desync, 4 shims for `wl_subsurface_set_{de,}sync` and the csd surface array | quirks.c/.zig, terminal-shim.c | 0.5d |
+| **A7** | `foot-features` (42): pass `foot_version`, `pgo`, `ime`, `graphemes`, `toplevel-tag`, `blur`, `assertions` as `compile_zig.py` build options and build the string in Zig | foot-features.c/.zig, meson.build | 0.25d |
+| **A8** | shim audit: document the removal criterion in each `*-shim.c`, delete anything already dead (e.g. leftover monitor/window accessors that Track B replaces) | *-shim.c | 0.25d |
+
+`box-drawing` verification (A1–A5): during the port keep a temporary
+differential harness test that renders ~48 representative codepoints through
+both the C and Zig path and compares the pixman buffers byte-for-byte; when
+`box-drawing.c` is deleted, replace it with structural assertions (light
+horizontal fills exactly `width × thickness` pixels in the middle rows, full
+block fills the cell, each quadrant ≈ ¼ of the cell, ...) so the test does not
+depend on the installed font.
+
+### Track B — the mirrors that unlock the core (~1 week) [gate for C/D]
+
+| Chunk | Work | Est. |
+|---|---|---|
+| **B1** | Mirror the 19 structs in `wayland.h` **except** `struct seat`: `wayland`, `wayl_surface`, `wl_window`, `monitor`(+outputs), `clipboard`, `data_offer`, `renderer`/`chains`/`damage` subsets. Extend `gen_abi_probe.py` + `expectAbi` tests. No behaviour change; the C code keeps using the same structs. | 2–3d |
+| **B2** | Mirror `struct seat` (~100 members incl. nested `kbd`, `pointer`, `touch`, `repeat`) and `tll(struct seat)`; pin every offset with the probe; switch `terminal-shim.c`'s 3 seat accessors + the monitor/window ones to direct Zig field access and delete them. | 2–3d |
+| **B3** | Delete the now-dead accessors; re-point `terminal.zig` (DPI/scale), `unicode-mode.zig` and `slave`/`shm` call sites at the mirrors. | 0.5d |
+
+Milestone **M1**: `struct seat` and `struct wayland` are Zig-visible, so
+`input`, `ime`, `key-binding`, `selection`'s data-source listeners, `render`
+and `terminal`'s xcursor/IME/init code all become portable **and testable**
+(the harness can fabricate `struct seat`/`struct wayland` the same way it
+fabricates `struct terminal` today).
+
+### Track C — `terminal`'s tail (after B2, ~4–6 days)
+
+| Chunk | Work | Depends on | Est. |
+|---|---|---|---|
+| **C1** | T4 IME accessors (`term_ime_is_enabled/enable/disable/reset/set_cursor_rect`, ~60 lines) | B2, ime.c | 0.5d |
+| **C2** | T8 xcursor (`term_xcursor_update_for_seat`, `term_xcursor_update`, ~53 lines) | B2 | 0.5d |
+| **C3** | T11a: utmp helpers, `fdm_delayed_render`, `initialize_render_workers`, `term_window_configured` | B1, render | 1–2d |
+| **C4** | T11b: `term_init` (342 lines) | C3, wayland, render | 1–2d |
+| **C5** | T11c: `term_shutdown`/`shutdown_maybe_done`/`fdm_shutdown`/`fdm_terminate_timeout`/`fdm_client_terminated` | C4 | 1d |
+| **C6** | T11d: `term_destroy`, `term_reset` (~600 lines) | C4 | 1d |
+
+### Track D — the core (~3–4 weeks)
+
+Order matters: `search` and `wayland` first (they unblock the rest), then
+`render`, then `input`, then the wayland-protocol-heavy leftovers.
+
+| Chunk | Module | Why this order | Est. |
+|---|---|---|---|
+| **D1** | `search` (1,512) | only 8 `seat->` lines and it depends on grid/terminal internals that are already Zig | 2–3d |
+| **D2** | `wayland` (2,884) | B1 unblocks it; porting it deletes the monitor/output accessors and makes `render` portable | 1w |
+| **D3** | `render` (5,479) — split into D3a chains/damage/cursor, D3b grid/csd/box-drawing glyph cache, D3c sixel/notifications/search-highlight | biggest module; do it after `wayland` so the surface/scale paths are Zig | 1.5–2w |
+| **D4** | `input` (3,687) — split into D4a keyboard/legacy+kitty protocols, D4b pointer/mouse/touch, D4c compose/IME plumbing | after B2 + key-binding | 1–1.5w |
+| **D5** | `key-binding` (661), `ime` (540), `url-mode` (833), `selection` S1+S3 (~600) | after B2/D4 | 4–5d |
+| **D6** | `main` (770), `server` (707), `client` (679) | last; they tie everything together and are only fully testable once a window opens | 4–5d |
+
+### Track E — endgame (~2–3 days)
+
+- **E1** delete the struct-mirror shims (not the compile-time-knowledge ones,
+  see §12.9); shrink `terminal-shim.c` (279) and `selection-shim.c` (227).
+- **E2** decisions to close: `ReleaseSafe` vs `ReleaseFast` (§12.4 — fuzz
+  first), PGO, `translate-c` spike (§12.1 — recommend abandoning it: the
+  probe + mirrors have not produced an ABI bug yet), meson vs `build.zig`
+  (§12.3 — stay on meson).
+- **E3** refresh the LOC scoreboard, Definition-of-Done checklist, run the
+  full matrix + smoke, tag the branch.
+
+### Critical path and total
+
+```
+A1-A5 box-drawing ──┐
+A6-A8 leaves ───────┴─> (independent)
+
+B1 wayland mirror ──> B2 seat mirror ──> B3 cleanup
+        │                    │
+        │                    ├─> C1/C2 IME+xcursor
+        │                    ├─> D5 key-binding/ime/url-mode/selection
+        │                    └─> D4 input
+        └─> D2 wayland ──> D3 render ──> C3-C6 terminal tail ──> D6 main/server/client
+D1 search (starts as soon as someone is free)
+```
+
+**Total: 6–7 weeks for one developer** (A ~1w, B ~1w, C ~1w, D ~3–4w, E ~0.5w),
+or **3–4 weeks with 2–3 parallel workers** (A ∥ B, then C ∥ D1 ∥ D2).
+
+### Standing rules (unchanged)
+
+1. One chunk per commit; no behaviour change in a port commit.
+2. Never `.?` a pointer C allows to be NULL; never `unreachable` where C
+   degrades gracefully.
+3. Memory allocated by C is freed with `std.c.free`, never a Zig allocator.
+4. `terminal_types.zig` changes ⇒ regenerate `abi_probe.c`.
+5. `meson test` in `build`, `build-disabled`, `build-release` + `env -u
+   WAYLAND_DISPLAY scripts/smoke.sh` before every commit.
+6. Merge `origin/master` weekly (R7) and port upstream fixes immediately.
+
+### Standing caveat
+
+There is no compositor in this container, so *nothing* in Track B–D is
+verified visually. The substitutes are: the headless harness (fabricated
+structs + real pty/memfd/fonts), `foot --pty`, `foot -C -c <file>`, and the
+config oracle. Once a compositor (weston/cage/sway) is available, add
+`scripts/smoke.sh` window launches and a screenshot-diff job to CI before
+declaring Phase 3 done.
