@@ -49,6 +49,11 @@ extern bool buffer_unref_no_remove_from_chain(struct buffer_private *buf);
 extern void buffer_release(void *data, struct wl_buffer *wl_buffer);
 /* C still populates the deferred list during allocation (shm.zig owns it). */
 extern void shm_defer_push_front(struct buffer_private *buf);
+extern bool instantiate_offset(struct buffer_private *buf, off_t new_offset);
+extern void get_new_buffers(
+    struct buffer_chain *chain, size_t count,
+    int widths[static count], int heights[static count],
+    struct buffer *bufs[static count], bool immediate_purge);
 
 #define TIME_SCROLL 0
 
@@ -125,168 +130,58 @@ page_size(void)
     return size;
 }
 
-static bool
-instantiate_offset(struct buffer_private *buf, off_t new_offset)
-{
-    xassert(buf->public.data == NULL);
-    xassert(buf->public.pix == NULL);
-    xassert(buf->public.wl_buf == NULL);
-    xassert(buf->pool != NULL);
+/* ── platform/protocol shims for shm.zig's allocation path ────────── */
 
-    const struct buffer_pool *pool = buf->pool;
-
-    void *mmapped = MAP_FAILED;
-    struct wl_buffer *wl_buf = NULL;
-    pixman_image_t **pix = xcalloc(buf->public.pix_instances, sizeof(pix[0]));
-
-    mmapped = (uint8_t *)pool->real_mmapped + new_offset;
-
-    wl_buf = wl_shm_pool_create_buffer(
-        pool->wl_pool, new_offset,
-        buf->public.width, buf->public.height, buf->public.stride,
-        buf->chain->shm_format);
-
-    if (wl_buf == NULL) {
-        LOG_ERR("failed to create SHM buffer");
-        goto err;
-    }
-
-    /* One pixman image for each worker thread (do we really need multiple?) */
-    for (size_t i = 0; i < buf->public.pix_instances; i++) {
-        pix[i] = pixman_image_create_bits_no_clear(
-            buf->chain->pixman_fmt,
-            buf->public.width, buf->public.height,
-            (uint32_t *)mmapped, buf->public.stride);
-
-        if (pix[i] == NULL) {
-            LOG_ERR("failed to create pixman image");
-            goto err;
-        }
-    }
-
-    buf->public.data = mmapped;
-    buf->public.wl_buf = wl_buf;
-    buf->public.pix = pix;
-    buf->offset = new_offset;
-
-    wl_buffer_add_listener(wl_buf, &buffer_listener, buf);
-    return true;
-
-err:
-    if (pix != NULL) {
-        for (size_t i = 0; i < buf->public.pix_instances; i++)
-            if (pix[i] != NULL)
-                pixman_image_unref(pix[i]);
-    }
-    free(pix);
-    if (wl_buf != NULL)
-        wl_buffer_destroy(wl_buf);
-
-    abort();
-    return false;
+size_t shm_shim_page_size(void) {
+    return page_size();
 }
 
-static void NOINLINE
-get_new_buffers(struct buffer_chain *chain, size_t count,
-                int widths[static count], int heights[static count],
-                struct buffer *bufs[static count], bool immediate_purge)
-{
-    xassert(count == 1 || !chain->scrollable);
-    /*
-     * No existing buffer available. Create a new one by:
-     *
-     * 1. open a memory backed "file" with memfd_create()
-     * 2. mmap() the memory file, to be used by the pixman image
-     * 3. create a wayland shm buffer for the same memory file
-     *
-     * The pixman image and the wayland buffer are now sharing memory.
-     */
+off_t shm_shim_max_pool_size(void) {
+    return max_pool_size;
+}
 
-    int stride[count];
-    int sizes[count];
+size_t shm_shim_min_stride_alignment(void) {
+    return min_stride_alignment;
+}
 
-    size_t total_size = 0;
-    for (size_t i = 0; i < count; i++) {
-        stride[i] = stride_for_format_and_width(
-            chain->pixman_fmt, widths[i]);
+int shm_shim_stride_for_format(pixman_format_code_t fmt, int width) {
+    return stride_for_format_and_width(fmt, width);
+}
 
-        if (min_stride_alignment > 0) {
-            const size_t m = min_stride_alignment;
-            stride[i] = (stride[i] + m - 1) / m * m;
-        }
-
-        xassert(min_stride_alignment == 0 || stride[i] % min_stride_alignment == 0);
-        sizes[i] = stride[i] * heights[i];
-        total_size += sizes[i];
-    }
-    if (total_size == 0)
-        return;
-
-    int pool_fd = -1;
-
-    void *real_mmapped = MAP_FAILED;
-    struct wl_shm_pool *wl_pool = NULL;
-    struct buffer_pool *pool = NULL;
-
-    /* Backing memory for SHM */
+int shm_shim_create_backing_file(void) {
 #if defined(MEMFD_CREATE)
     /*
      * Older kernels reject MFD_NOEXEC_SEAL with EINVAL. Try first
      * *with* it, and if that fails, try again *without* it.
      */
     errno = 0;
-    pool_fd = memfd_create(
+    int fd = memfd_create(
         "foot-wayland-shm-buffer-pool",
         MFD_CLOEXEC | MFD_ALLOW_SEALING | MFD_NOEXEC_SEAL);
 
-    if (pool_fd < 0 && errno == EINVAL && MFD_NOEXEC_SEAL != 0) {
-        pool_fd = memfd_create(
+    if (fd < 0 && errno == EINVAL && MFD_NOEXEC_SEAL != 0) {
+        fd = memfd_create(
             "foot-wayland-shm-buffer-pool", MFD_CLOEXEC | MFD_ALLOW_SEALING);
     }
-
+    return fd;
 #elif defined(__FreeBSD__)
     // memfd_create on FreeBSD 13 is SHM_ANON without sealing support
-    pool_fd = shm_open(SHM_ANON, O_RDWR | O_CLOEXEC, 0600);
+    return shm_open(SHM_ANON, O_RDWR | O_CLOEXEC, 0600);
 #else
     char name[] = "/tmp/foot-wayland-shm-buffer-pool-XXXXXX";
-    pool_fd = mkostemp(name, O_CLOEXEC);
-    unlink(name);
+    int fd = mkostemp(name, O_CLOEXEC);
+    if (fd >= 0)
+        unlink(name);
+    return fd;
 #endif
-    if (pool_fd == -1) {
-        LOG_ERRNO("failed to create SHM backing memory file");
-        goto err;
-    }
+}
 
-    const size_t page_sz = page_size();
-
-#if __SIZEOF_POINTER__ == 8
-    off_t offset = chain->scrollable && max_pool_size > 0
-        ? (max_pool_size / 4) & ~(page_sz - 1)
-        : 0;
-    off_t memfd_size = chain->scrollable && max_pool_size > 0
-        ? max_pool_size
-        : total_size;
-#else
-    off_t offset = 0;
-    off_t memfd_size = total_size;
-    (void)max_pool_size;
-#endif
-
-    /* Page align */
-    memfd_size = (memfd_size + page_sz - 1) & ~(page_sz - 1);
-
-    LOG_DBG("memfd-size: %lu, initial offset: %lu", memfd_size, offset);
-
-    if (ftruncate(pool_fd, memfd_size) == -1) {
-        LOG_ERRNO("failed to set size of SHM backing memory file");
-        goto err;
-    }
-
+bool shm_shim_punch_hole_supported(int fd) {
     if (!can_punch_hole_initialized) {
         can_punch_hole_initialized = true;
 #if __SIZEOF_POINTER__ == 8 && defined(FALLOC_FL_PUNCH_HOLE)
         can_punch_hole = fallocate(
-            pool_fd, FALLOC_FL_PUNCH_HOLE | FALLOC_FL_KEEP_SIZE, 0, 1) == 0;
+            fd, FALLOC_FL_PUNCH_HOLE | FALLOC_FL_KEEP_SIZE, 0, 1) == 0;
 
         if (!can_punch_hole) {
             LOG_WARN(
@@ -294,145 +189,52 @@ get_new_buffers(struct buffer_chain *chain, size_t count,
                 "supported (%s): expect lower performance", strerror(errno));
         }
 #else
-        /* This is mostly to make sure we skip the warning issued
-         * above */
         can_punch_hole = false;
 #endif
     }
+    return can_punch_hole;
+}
 
-    if (chain->scrollable && !can_punch_hole) {
-        offset = 0;
-        memfd_size = total_size;
-        chain->scrollable = false;
+void *shm_shim_mmap_pool(int fd, size_t size) {
+    return mmap(
+        NULL, size, PROT_READ | PROT_WRITE,
+        MAP_SHARED | MAP_UNINITIALIZED, fd, 0);
+}
 
-        /* Page align */
-        memfd_size = (memfd_size + page_sz - 1) & ~(page_sz - 1);
-
-        if (ftruncate(pool_fd, memfd_size) < 0) {
-            LOG_ERRNO("failed to set size of SHM backing memory file");
-            goto err;
-        }
-    }
-
-    real_mmapped = mmap(
-        NULL, memfd_size, PROT_READ | PROT_WRITE,
-        MAP_SHARED | MAP_UNINITIALIZED, pool_fd, 0);
-
-    if (real_mmapped == MAP_FAILED) {
-        LOG_ERRNO("failed to mmap SHM backing memory file");
-        goto err;
-    }
-
+void shm_shim_seal_pool(int fd) {
 #if defined(MEMFD_CREATE)
-    /* Seal file - we no longer allow any kind of resizing */
-    /* TODO: wayland mmaps(PROT_WRITE), for some unknown reason, hence we cannot use F_SEAL_FUTURE_WRITE */
-    if (fcntl(pool_fd, F_ADD_SEALS,
+    /* TODO: wayland mmaps(PROT_WRITE), for some unknown reason, hence we
+     * cannot use F_SEAL_FUTURE_WRITE */
+    if (fcntl(fd, F_ADD_SEALS,
               F_SEAL_GROW | F_SEAL_SHRINK | /*F_SEAL_FUTURE_WRITE |*/ F_SEAL_SEAL) < 0)
     {
         LOG_ERRNO("failed to seal SHM backing memory file");
         /* This is not a fatal error */
     }
+#else
+    (void)fd;
 #endif
-
-    wl_pool = wl_shm_create_pool(chain->shm, pool_fd, memfd_size);
-    if (wl_pool == NULL) {
-        LOG_ERR("failed to create SHM pool");
-        goto err;
-    }
-
-    pool = xmalloc(sizeof(*pool));
-    if (pool == NULL) {
-        LOG_ERRNO("failed to allocate buffer pool");
-        goto err;
-    }
-
-    *pool = (struct buffer_pool){
-        .fd = pool_fd,
-        .wl_pool = wl_pool,
-        .real_mmapped = real_mmapped,
-        .mmap_size = memfd_size,
-        .ref_count = 0,
-    };
-
-    for (size_t i = 0; i < count; i++) {
-        if (sizes[i] == 0) {
-            bufs[i] = NULL;
-            continue;
-        }
-
-        /* Push to list of available buffers, but marked as 'busy' */
-        struct buffer_private *buf = xmalloc(sizeof(*buf));
-        *buf = (struct buffer_private){
-            .public = {
-                .width = widths[i],
-                .height = heights[i],
-                .stride = stride[i],
-                .pix_instances = chain->pix_instances,
-                .age = 1234,  /* Force a full repaint */
-            },
-            .chain = chain,
-            .ref_count = immediate_purge ? 0 : 1,
-            .busy = true,
-            .pool = pool,
-            .offset = 0,
-            .size = sizes[i],
-            .scrollable = chain->scrollable,
-            .release_cb = chain->release_cb,
-            .cb_data = chain->cb_data,
-        };
-
-        if (!instantiate_offset(buf, offset)) {
-            free(buf);
-            goto err;
-        }
-
-        if (immediate_purge)
-            shm_defer_push_front(buf);
-        else
-            tll_push_front(chain->bufs, buf);
-
-        buf->public.dirty = xmalloc(
-            chain->pix_instances * sizeof(buf->public.dirty[0]));
-
-        for (size_t j = 0; j < chain->pix_instances; j++)
-            pixman_region32_init(&buf->public.dirty[j]);
-
-        pool->ref_count++;
-        offset += buf->size;
-        bufs[i] = &buf->public;
-    }
-
-#if defined(MEASURE_SHM_ALLOCS) && MEASURE_SHM_ALLOCS
-    {
-        size_t currently_alloced = 0;
-        tll_foreach(buffers, it)
-            currently_alloced += it->item.size;
-        if (currently_alloced > max_alloced)
-            max_alloced = currently_alloced;
-    }
-#endif
-
-    if (!(bufs[0] && shm_can_scroll(bufs[0]))) {
-        /* We only need to keep the pool FD open if we're going to SHM
-         * scroll it */
-        close(pool_fd);
-        pool->fd = -1;
-    }
-
-    return;
-
-err:
-    pool_unref(pool);
-    if (wl_pool != NULL)
-        wl_shm_pool_destroy(wl_pool);
-    if (real_mmapped != MAP_FAILED)
-        munmap(real_mmapped, memfd_size);
-    if (pool_fd != -1)
-        close(pool_fd);
-
-    /* We don't handle this */
-    abort();
 }
+
+struct wl_shm_pool *shm_shim_wl_shm_create_pool(
+    struct wl_shm *shm, int fd, int32_t size)
+{
+    return wl_shm_create_pool(shm, fd, size);
+}
+
+struct wl_buffer *shm_shim_wl_shm_pool_create_buffer(
+    struct wl_shm_pool *pool, int32_t offset, int32_t width, int32_t height,
+    int32_t stride, uint32_t format)
+{
+    return wl_shm_pool_create_buffer(
+        pool, offset, width, height, stride, format);
+}
+
+void shm_shim_wl_buffer_add_listener(struct wl_buffer *buffer, void *data) {
+    wl_buffer_add_listener(buffer, &buffer_listener, data);
+}
+
+/* instantiate_offset / get_new_buffers: ported to shm.zig */
 
 /* shm_did_not_use_buf: ported to shm.zig */
 

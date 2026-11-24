@@ -237,3 +237,327 @@ export fn shm_unref(buf_ptr: ?*types.Buffer) callconv(.c) void {
         node = n.next;
     }
 }
+
+//
+// Chunk S2 — allocation: instantiate_offset() and get_new_buffers().
+//
+// Platform bits that are #ifdef-heavy in C (memfd vs FreeBSD shm_open vs
+// mkostemp, fallocate probing, sealing, mmap flags) and the generated Wayland
+// inline wrappers stay in shm.c; everything about sizes, offsets and buffer
+// ownership is here.
+//
+
+const LOG_CLASS_ERROR: c_int = 1;
+
+extern fn log_errno(
+    class: c_int,
+    module: [*:0]const u8,
+    file: [*:0]const u8,
+    lineno: c_int,
+    fmt: [*:0]const u8,
+    ...
+) void;
+
+extern fn shm_shim_page_size() callconv(.c) usize;
+extern fn shm_shim_max_pool_size() callconv(.c) i64;
+extern fn shm_shim_min_stride_alignment() callconv(.c) usize;
+extern fn shm_shim_stride_for_format(fmt: c_int, width: c_int) callconv(.c) c_int;
+extern fn shm_shim_create_backing_file() callconv(.c) c_int;
+extern fn shm_shim_punch_hole_supported(fd: c_int) callconv(.c) bool;
+extern fn shm_shim_mmap_pool(fd: c_int, size: usize) callconv(.c) ?*anyopaque;
+extern fn shm_shim_seal_pool(fd: c_int) callconv(.c) void;
+extern fn shm_shim_wl_shm_create_pool(
+    shm: ?*anyopaque,
+    fd: c_int,
+    size: i32,
+) callconv(.c) ?*anyopaque;
+extern fn shm_shim_wl_shm_pool_create_buffer(
+    pool: ?*anyopaque,
+    offset: i32,
+    width: c_int,
+    height: c_int,
+    stride: c_int,
+    format: u32,
+) callconv(.c) ?*anyopaque;
+extern fn shm_shim_wl_buffer_add_listener(buffer: ?*anyopaque, data: ?*anyopaque) callconv(.c) void;
+
+extern fn ftruncate(fd: c_int, length: i64) callconv(.c) c_int;
+extern fn pixman_image_create_bits_no_clear(
+    format: c_int,
+    width: c_int,
+    height: c_int,
+    bits: ?[*]u32,
+    rowstride: c_int,
+) callconv(.c) ?*anyopaque;
+extern fn pixman_region32_init(region: ?*anyopaque) callconv(.c) void;
+extern fn shm_can_scroll(buf: ?*types.Buffer) callconv(.c) bool;
+
+fn logErr(msg: [*:0]const u8) void {
+    log_msg(LOG_CLASS_ERROR, "shm", "shm.zig", @intCast(@src().line), "%s", msg);
+}
+
+fn logErrno(msg: [*:0]const u8) void {
+    log_errno(LOG_CLASS_ERROR, "shm", "shm.zig", @intCast(@src().line), "%s", msg);
+}
+
+fn mallocOrAbort(size: usize) *anyopaque {
+    return std.c.malloc(size) orelse @panic("out of memory");
+}
+
+fn callocOrAbort(count: usize, size: usize) *anyopaque {
+    return std.c.calloc(count, size) orelse @panic("out of memory");
+}
+
+fn freePixImages(pix: [*]?*anyopaque, count: usize) void {
+    var i: usize = 0;
+    while (i < count) : (i += 1) {
+        if (pix[i]) |image| pixman_image_unref(image);
+    }
+    std.c.free(@ptrCast(pix));
+}
+
+export fn instantiate_offset(
+    buf: *types.ShmBufferPrivate,
+    new_offset: i64,
+) callconv(.c) bool {
+    std.debug.assert(buf.public.data == null);
+    std.debug.assert(buf.public.pix == null);
+    std.debug.assert(buf.public.wl_buf == null);
+    std.debug.assert(buf.pool != null);
+
+    const pool = buf.pool.?;
+    const chain = buf.chain.?;
+
+    const pix: [*]?*anyopaque = @ptrCast(@alignCast(
+        callocOrAbort(buf.public.pix_instances, @sizeOf(?*anyopaque))));
+
+    const base: [*]u8 = @ptrCast(pool.real_mmapped.?);
+    const mmapped: *anyopaque = @ptrCast(base + @as(usize, @intCast(new_offset)));
+
+    const wl_buf = shm_shim_wl_shm_pool_create_buffer(
+        pool.wl_pool.?,
+        @intCast(new_offset),
+        buf.public.width,
+        buf.public.height,
+        buf.public.stride,
+        chain.shm_format,
+    );
+
+    if (wl_buf == null) {
+        logErr("failed to create SHM buffer");
+        freePixImages(pix, buf.public.pix_instances);
+        std.c.abort();
+    }
+
+    var i: usize = 0;
+    while (i < buf.public.pix_instances) : (i += 1) {
+        pix[i] = pixman_image_create_bits_no_clear(
+            @intCast(chain.pixman_fmt),
+            buf.public.width,
+            buf.public.height,
+            @ptrCast(@alignCast(mmapped)),
+            buf.public.stride,
+        );
+
+        if (pix[i] == null) {
+            logErr("failed to create pixman image");
+            freePixImages(pix, buf.public.pix_instances);
+            shm_shim_wl_buffer_destroy(wl_buf);
+            std.c.abort();
+        }
+    }
+
+    buf.public.data = mmapped;
+    buf.public.wl_buf = wl_buf;
+    buf.public.pix = pix;
+    buf.offset = new_offset;
+
+    shm_shim_wl_buffer_add_listener(wl_buf, buf);
+    return true;
+}
+
+fn abortAllocation(
+    pool_fd: c_int,
+    wl_pool: ?*anyopaque,
+    real_mmapped: ?*anyopaque,
+    mmap_size: i64,
+) noreturn {
+    if (wl_pool) |p| shm_shim_wl_shm_pool_destroy(p);
+    if (real_mmapped != null and real_mmapped != MAP_FAILED)
+        _ = munmap(real_mmapped, @intCast(mmap_size));
+    if (pool_fd != -1) _ = close(pool_fd);
+    std.c.abort();
+}
+
+fn getNewBuffers(
+    chain: *types.ShmBufferChain,
+    count: usize,
+    widths: [*]c_int,
+    heights: [*]c_int,
+    bufs: [*]?*types.Buffer,
+    immediate_purge: bool,
+) void {
+    std.debug.assert(count == 1 or !chain.scrollable);
+
+    const alloc = std.heap.c_allocator;
+    const strides = alloc.alloc(c_int, count) catch @panic("out of memory");
+    defer alloc.free(strides);
+    const sizes = alloc.alloc(c_int, count) catch @panic("out of memory");
+    defer alloc.free(sizes);
+
+    const alignment = shm_shim_min_stride_alignment();
+    var total_size: usize = 0;
+
+    for (0..count) |i| {
+        var stride: c_int = shm_shim_stride_for_format(
+            @intCast(chain.pixman_fmt), widths[i]);
+
+        if (alignment > 0) {
+            const m: c_int = @intCast(alignment);
+            stride = @divTrunc(stride + m - 1, m) * m;
+        }
+
+        std.debug.assert(alignment == 0 or
+            @rem(stride, @as(c_int, @intCast(alignment))) == 0);
+
+        strides[i] = stride;
+        sizes[i] = stride * heights[i];
+        total_size += @intCast(sizes[i]);
+    }
+
+    if (total_size == 0) return;
+
+    const page_sz = shm_shim_page_size();
+    const page: i64 = @intCast(page_sz);
+    const max_pool = shm_shim_max_pool_size();
+
+    const pool_fd = shm_shim_create_backing_file();
+    if (pool_fd == -1) {
+        logErrno("failed to create SHM backing memory file");
+        std.c.abort();
+    }
+
+    var offset: i64 = 0;
+    var memfd_size: i64 = @intCast(total_size);
+
+    if (comptime @sizeOf(usize) == 8) {
+        if (chain.scrollable and max_pool > 0) {
+            offset = @divTrunc(max_pool, 4) & ~(page - 1);
+            memfd_size = max_pool;
+        }
+    }
+
+    memfd_size = (memfd_size + page - 1) & ~(page - 1);
+
+    if (ftruncate(pool_fd, memfd_size) == -1) {
+        logErrno("failed to set size of SHM backing memory file");
+        abortAllocation(pool_fd, null, null, memfd_size);
+    }
+
+    if (chain.scrollable and !shm_shim_punch_hole_supported(pool_fd)) {
+        offset = 0;
+        memfd_size = @intCast(total_size);
+        chain.scrollable = false;
+
+        memfd_size = (memfd_size + page - 1) & ~(page - 1);
+
+        if (ftruncate(pool_fd, memfd_size) < 0) {
+            logErrno("failed to set size of SHM backing memory file");
+            abortAllocation(pool_fd, null, null, memfd_size);
+        }
+    }
+
+    const real_mmapped = shm_shim_mmap_pool(pool_fd, @intCast(memfd_size));
+    if (real_mmapped == null or real_mmapped == MAP_FAILED) {
+        logErrno("failed to mmap SHM backing memory file");
+        abortAllocation(pool_fd, null, null, memfd_size);
+    }
+
+    shm_shim_seal_pool(pool_fd);
+
+    const wl_pool = shm_shim_wl_shm_create_pool(chain.shm, pool_fd, @intCast(memfd_size));
+    if (wl_pool == null) {
+        logErr("failed to create SHM pool");
+        abortAllocation(pool_fd, null, real_mmapped, memfd_size);
+    }
+
+    const pool: *types.ShmBufferPool = @ptrCast(@alignCast(
+        mallocOrAbort(@sizeOf(types.ShmBufferPool))));
+    pool.* = .{
+        .fd = pool_fd,
+        .wl_pool = wl_pool,
+        .real_mmapped = real_mmapped,
+        .mmap_size = @intCast(memfd_size),
+        .ref_count = 0,
+    };
+
+    for (0..count) |i| {
+        if (sizes[i] == 0) {
+            bufs[i] = null;
+            continue;
+        }
+
+        const buf: *types.ShmBufferPrivate = @ptrCast(@alignCast(
+            mallocOrAbort(@sizeOf(types.ShmBufferPrivate))));
+        buf.* = .{
+            .public = .{
+                .width = widths[i],
+                .height = heights[i],
+                .stride = strides[i],
+                .data = null,
+                .wl_buf = null,
+                .pix = null,
+                .pix_instances = chain.pix_instances,
+                .age = 1234, // force a full repaint
+                .dirty = null,
+            },
+            .chain = chain,
+            .ref_count = if (immediate_purge) 0 else 1,
+            .busy = true,
+            .pool = pool,
+            .offset = 0,
+            .size = @intCast(sizes[i]),
+            .scrollable = chain.scrollable,
+            .release_cb = chain.release_cb,
+            .cb_data = chain.cb_data,
+        };
+
+        if (!instantiate_offset(buf, offset)) {
+            std.c.free(buf);
+            abortAllocation(pool_fd, wl_pool, real_mmapped, memfd_size);
+        }
+
+        if (immediate_purge)
+            listPushFront(&deferred, buf)
+        else
+            listPushFront(&chain.bufs, buf);
+
+        const dirty = mallocOrAbort(chain.pix_instances * @sizeOf(types.PixmanRegion32));
+        buf.public.dirty = dirty;
+
+        const regions: [*]types.PixmanRegion32 = @ptrCast(@alignCast(dirty));
+        for (0..chain.pix_instances) |j|
+            pixman_region32_init(&regions[j]);
+
+        pool.ref_count += 1;
+        offset += @intCast(buf.size);
+        bufs[i] = &buf.public;
+    }
+
+    // Keep the pool FD open only if we are going to SHM-scroll it.
+    if (!(bufs[0] != null and shm_can_scroll(bufs[0]))) {
+        _ = close(pool_fd);
+        pool.fd = -1;
+    }
+}
+
+export fn get_new_buffers(
+    chain: *types.ShmBufferChain,
+    count: usize,
+    widths: [*]c_int,
+    heights: [*]c_int,
+    bufs: [*]?*types.Buffer,
+    immediate_purge: bool,
+) callconv(.c) void {
+    getNewBuffers(chain, count, widths, heights, bufs, immediate_purge);
+}
