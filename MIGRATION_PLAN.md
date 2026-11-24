@@ -167,7 +167,7 @@ Phase 1 is roughly **4× Phase 0**, and it splits cleanly in two:
 
 | Part | Content | ~C lines left | Effort | Blocked on |
 |---|---|---|---|---|
-| **1a** | T1–T3, T5–T7, S1, S2 (T4 needs the seats) | ~1.7k | 8–10 days | nothing — shims suffice |
+| **1a** | T1–T3, T5–T7, S2 (T4 and S1 turned out to need the seats too) | ~1.7k | 8–10 days | nothing — shims suffice |
 | **1b** | T8–T11, S3 | ~2.1k | 10–12 days | Phase 2 `config` (T9/T10/T11), Phase 3 `wayland` (T8/S3), `render`/`slave` (T11) |
 
 Phase 0 was 4 commits and ~600 lines of *infrastructure* (probe, tests, CI,
@@ -176,8 +176,9 @@ smoke script) with no behaviour ported. Phase 1a alone is ~1.7k lines of
 the smoke test green. So yes: longer, and the tail of Phase 1 cannot be
 finished in Phase 1 at all — it is a Phase 2/3 deliverable by construction.
 
-**Progress:** six chunks landed (terminal.c 3363 → 2400 lines, 1029 C lines
-removed for 1211 Zig lines added, harness at 87 checks):
+**Progress:** seven chunks landed (terminal.c 3363 → 2400 lines, selection.c
+1175 → ~800; 1029 C lines removed for 1211 Zig lines added; harness at 102
+checks):
 
 | Chunk | Status |
 |---|---|
@@ -189,6 +190,8 @@ removed for 1211 Zig lines added, harness at 87 checks):
 | T6 focus/bell/title/icon/spawn | ✅ except `term_kbd_focus_out` (seats) and `term_surface_kind` (window CSD) |
 | T7 mouse reporting | ✅ except `term_mouse_grabbed` + `term_xcursor_update*` (seats/key-bindings) |
 | extra | `erase_cell_range`, `erase_line`, `print_linewrap`, `print_insert` |
+| S2 clipboard receive | ✅ normalisation, C0 filter, URI decoding, 2s watchdog |
+| S1 clipboard send | ⛔ **blocked**: `send_clipboard_or_primary()` and the `wl_data_source` listeners need the seat mirror |
 
 The harness (`tests/test-terminal.c`) now fakes a `struct terminal`, a real
 pty (for `term_to_slave` output), a real `struct config` and a timerfd, so it
@@ -197,8 +200,9 @@ theme apply/get, term_icon, mouse reporting in all five styles, and
 insert-mode shifting.
 
 What is left in `terminal.c` is T8–T11 — i.e. exactly the parts that need
-`config`, `wayland` and `render` — so 1a is done: the remaining ~2.4k lines
-cannot move until phase 2/3 land.
+`config`, `wayland` and `render` — and in `selection.c` only S1/S3, which need
+the seat. So **1a is done**: the remaining ~2.5k C lines cannot move until
+phase 2/3 land.
 
 Order of work inside 1a: **~~T1 → T2 → T3 → T5 → T6 → T7~~**, with T4 pushed
 to 1b, then **S2 → S1**., i.e.
