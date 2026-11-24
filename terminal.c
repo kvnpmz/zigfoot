@@ -1549,40 +1549,10 @@ term_destroy(struct terminal *term)
     return ret;
 }
 
-void
-erase_cell_range(struct terminal *term, struct row *row, int start, int end)
-{
-    xassert(start < term->cols);
-    xassert(end < term->cols);
+/* erase_cell_range/erase_line: ported to terminal.zig */
+extern void erase_line(struct terminal *term, struct row *row);
 
-    row->dirty = true;
 
-    const enum color_source bg_src = term->vt.attrs.bg_src;
-
-    if (unlikely(bg_src != COLOR_DEFAULT)) {
-        for (int col = start; col <= end; col++) {
-            struct cell *c = &row->cells[col];
-            c->wc = 0;
-            c->attrs = (struct attributes){.bg_src = bg_src, .bg = term->vt.attrs.bg};
-        }
-    } else
-        memset(&row->cells[start], 0, (end - start + 1) * sizeof(row->cells[0]));
-
-    if (unlikely(row->extra != NULL)) {
-        grid_row_uri_range_erase(row, start, end);
-        grid_row_underline_range_erase(row, start, end);
-    }
-}
-
-void
-erase_line(struct terminal *term, struct row *row)
-{
-    erase_cell_range(term, row, 0, term->cols - 1);
-    row->linebreak = true;
-    row->shell_integration.prompt_marker = false;
-    row->shell_integration.cmd_start = -1;
-    row->shell_integration.cmd_end = -1;
-}
 
 /* term_theme_apply: ported to terminal.zig. Still called from term_reset()
  * (T11), hence the prototype. */

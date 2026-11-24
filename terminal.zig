@@ -565,6 +565,8 @@ extern fn grid_row_abs_to_sb(grid: *const types.Grid, screen_rows: c_int, abs_ro
 extern fn grid_row_sb_to_abs(grid: *const types.Grid, screen_rows: c_int, sb_rel_row: c_int) callconv(.c) c_int;
 extern fn grid_swap_row(grid: *types.Grid, row_a: c_int, row_b: c_int) callconv(.c) void;
 extern fn grid_row_free(r: ?*types.Row) callconv(.c) void;
+extern fn grid_row_uri_range_erase(row: *types.Row, start: c_int, end: c_int) callconv(.c) void;
+extern fn grid_row_underline_range_erase(row: *types.Row, start: c_int, end: c_int) callconv(.c) void;
 
 extern fn terminal_shim_grid_row_and_alloc(grid: *types.Grid, row_no: c_int) callconv(.c) ?*types.Row;
 extern fn terminal_shim_grid_row_absolute(grid: *types.Grid, row_no: c_int) callconv(.c) c_int;
@@ -740,12 +742,9 @@ export fn term_reverse_index(term: *types.Terminal) callconv(.c) void {
 // Hot path. Depends on grid row access, URI/underline ranges,
 // linewrap/insert helpers (all still C), and sixel_overwrite_* (Zig).
 
-extern fn erase_cell_range(term: *types.Terminal, row: *types.Row, start: c_int, end: c_int) callconv(.c) void;
 
 extern fn grid_row_uri_range_put(row: *types.Row, col: c_int, uri: [*:0]const u8, id: u64) callconv(.c) void;
-extern fn grid_row_uri_range_erase(row: *types.Row, start: c_int, end: c_int) callconv(.c) void;
 extern fn grid_row_underline_range_put(row: *types.Row, col: c_int, range: types.UnderlineRangeData) callconv(.c) void;
-extern fn grid_row_underline_range_erase(row: *types.Row, start: c_int, end: c_int) callconv(.c) void;
 
 extern fn sixel_overwrite_by_row(term: *types.Terminal, row: c_int, col: c_int, width: c_int) callconv(.c) void;
 extern fn sixel_overwrite_by_rectangle(term: *types.Terminal, row: c_int, col: c_int, height: c_int, width: c_int) callconv(.c) void;
@@ -2805,4 +2804,50 @@ export fn term_kbd_focus_in(term: *types.Terminal) void {
 
     if (term.focus_events)
         _ = term_to_slave(term, "\x1b[I", 3);
+}
+
+//
+// erase_cell_range / erase_line — grid helpers, called from term_erase()
+// (already Zig) through terminal_shim_erase_line() and by C for now.
+//
+
+const COLOR_SRC_DEFAULT: u2 = 0;
+
+
+export fn erase_cell_range(term: *types.Terminal, r: *types.Row, start: c_int, end: c_int) void {
+    std.debug.assert(start < term.cols);
+    std.debug.assert(end < term.cols);
+
+    r.dirty = true;
+
+    const cells = r.cells.?;
+    const bg_src = term.vt.attrs.bg_src;
+
+    if (bg_src != COLOR_SRC_DEFAULT) {
+        var col = start;
+        while (col <= end) : (col += 1) {
+            const c = &cells[@intCast(col)];
+            c.wc = 0;
+            c.attrs = std.mem.zeroes(types.Attributes);
+            c.attrs.bg_src = bg_src;
+            c.attrs.bg = term.vt.attrs.bg;
+        }
+    } else {
+        const first: usize = @intCast(start);
+        const count: usize = @intCast(end - start + 1);
+        @memset(cells[first .. first + count], std.mem.zeroes(types.Cell));
+    }
+
+    if (r.extra != null) {
+        grid_row_uri_range_erase(r, start, end);
+        grid_row_underline_range_erase(r, start, end);
+    }
+}
+
+export fn erase_line(term: *types.Terminal, r: *types.Row) void {
+    erase_cell_range(term, r, 0, term.cols - 1);
+    r.linebreak = true;
+    r.shell_integration.prompt_marker = false;
+    r.shell_integration.cmd_start = -1;
+    r.shell_integration.cmd_end = -1;
 }

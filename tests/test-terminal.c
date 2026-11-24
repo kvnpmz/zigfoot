@@ -27,6 +27,8 @@
 
 /* Ported to terminal.zig; internal helpers, not part of terminal.h. */
 void print_insert(struct terminal *term, int width);
+void erase_cell_range(struct terminal *term, struct row *row, int start, int end);
+void erase_line(struct terminal *term, struct row *row);
 void print_linewrap(struct terminal *term);
 
 #define SCROLLBACK_ROWS 16
@@ -639,6 +641,57 @@ test_print_insert(void)
     term_free(term);
 }
 
+/* erase_cell_range()/erase_line(): blanking cells, honouring the current bg */
+static void
+test_erase_cell_range(void)
+{
+    struct terminal *term = term_new();
+    struct row *r = term->normal.rows[0];
+
+    for (int c = 0; c < COLS; c++)
+        r->cells[c].wc = 'a' + c;
+
+    /* Default background: plain memset of the range */
+    term->vt.attrs.bg_src = COLOR_DEFAULT;
+    erase_cell_range(term, r, 1, 3);
+    check(r->dirty, "erase_cell_range marks the row dirty");
+    check(r->cells[0].wc == 'a' && r->cells[4].wc == 'e',
+          "erase_cell_range leaves cells outside the range alone");
+    check(r->cells[1].wc == 0 && r->cells[2].wc == 0 && r->cells[3].wc == 0,
+          "erase_cell_range blanks the range");
+
+    /* Non-default background: cells keep the bg colour */
+    for (int c = 0; c < COLS; c++)
+        r->cells[c].wc = 'a' + c;
+    term->vt.attrs.bg_src = COLOR_BASE256;
+    term->vt.attrs.bg = 42;
+    erase_cell_range(term, r, 0, 1);
+    check(r->cells[0].wc == 0 && r->cells[1].wc == 0,
+          "erase_cell_range blanks cells with a custom bg");
+    check(r->cells[0].attrs.bg_src == COLOR_BASE256 &&
+          r->cells[0].attrs.bg == 42,
+          "erase_cell_range keeps the background colour");
+    check(r->cells[2].wc == 'c', "erase_cell_range stops at the end column");
+
+    /* erase_line() blanks the whole row and resets shell integration */
+    term->vt.attrs.bg_src = COLOR_DEFAULT;
+    r->linebreak = false;
+    r->shell_integration.cmd_start = 3;
+    r->shell_integration.cmd_end = 4;
+    r->shell_integration.prompt_marker = true;
+    erase_line(term, r);
+    check(r->cells[0].wc == 0 && r->cells[COLS - 1].wc == 0,
+          "erase_line blanks the entire row");
+    check(r->linebreak, "erase_line sets the hard linebreak");
+    check(r->shell_integration.cmd_start == -1 &&
+          r->shell_integration.cmd_end == -1 &&
+          !r->shell_integration.prompt_marker,
+          "erase_line clears the shell-integration markers");
+
+    term->vt.attrs.bg_src = COLOR_DEFAULT;
+    term_free(term);
+}
+
 /* term_bell(): only the flash action is observable without a window */
 static void
 test_bell(void)
@@ -729,6 +782,7 @@ main(void)
     test_osc8();
     test_size_notifications();
     test_flash();
+    test_erase_cell_range();
     test_bell();
     test_kbd_focus_in();
     test_mouse_reporting();
