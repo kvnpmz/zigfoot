@@ -469,6 +469,21 @@ struct config {
     user_notifications_t notifications;
 };
 
+/* Parser state. Lives here (rather than in config.c) so the Zig half of the
+ * parser can name it; see config.zig. */
+struct context {
+    struct config *conf;
+    const char *section;
+    const char *section_suffix;
+    const char *key;
+    const char *value;
+
+    const char *path;
+    unsigned lineno;
+
+    bool errors_are_fatal;
+};
+
 bool config_override_apply(struct config *conf, config_override_t *overrides,
     bool errors_are_fatal);
 bool config_load(

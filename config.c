@@ -252,18 +252,29 @@ static_assert(ALEN(search_binding_action_map) == BIND_ACTION_SEARCH_COUNT,
 static_assert(ALEN(url_binding_action_map) == BIND_ACTION_URL_COUNT,
               "URL binding action map size mismatch");
 
-struct context {
-    struct config *conf;
-    const char *section;
-    const char *section_suffix;
-    const char *key;
-    const char *value;
+/* struct context: moved to config.h (mirrored in terminal_types.zig) */
 
-    const char *path;
-    unsigned lineno;
-
-    bool errors_are_fatal;
-};
+/* Value-parsing helpers: ported to config.zig. */
+extern bool str_to_ulong(const char *s, int base, unsigned long *res);
+extern bool value_to_bool(struct context *ctx, bool *res);
+extern bool value_to_uint16(struct context *ctx, int base, uint16_t *res);
+extern bool value_to_uint32(struct context *ctx, int base, uint32_t *res);
+extern bool value_to_dimensions(struct context *ctx, uint32_t *x, uint32_t *y);
+extern bool value_to_float(struct context *ctx, float *res);
+extern bool value_to_str(struct context *ctx, char **res);
+extern bool value_to_wchars(struct context *ctx, char32_t **res);
+extern bool value_to_enum(struct context *ctx, const char **value_map, int *res);
+extern bool value_to_color(struct context *ctx, uint32_t *result, bool allow_alpha);
+extern bool value_to_two_colors(
+    struct context *ctx, uint32_t *first, uint32_t *second, bool allow_alpha);
+extern bool value_to_pt_or_px(struct context *ctx, struct pt_or_px *res);
+extern bool value_to_spawn_template(
+    struct context *ctx, struct config_spawn_template *template);
+extern void free_argv(struct argv *argv);
+extern void clone_argv(struct argv *dst, const struct argv *src);
+extern void spawn_template_free(struct config_spawn_template *template);
+extern void spawn_template_clone(
+    struct config_spawn_template *dst, const struct config_spawn_template *src);
 
 static const enum user_notification_kind log_class_to_notify_kind[LOG_CLASS_COUNT] = {
     [LOG_CLASS_WARNING] = USER_NOTIFICATION_WARNING,
@@ -297,7 +308,8 @@ log_and_notify(struct config *conf, enum log_class log_class,
     va_end(va);
 }
 
-static void NOINLINE PRINTF(5)
+/* Non-static: config.zig logs through it. */
+void NOINLINE PRINTF(5)
 log_contextual(struct context *ctx, enum log_class log_class,
                const char *file, int lineno, const char *fmt, ...)
 {
@@ -481,307 +493,6 @@ str_has_prefix(const char *str, const char *prefix)
     return strncmp(str, prefix, strlen(prefix)) == 0;
 }
 
-static bool NOINLINE
-value_to_bool(struct context *ctx, bool *res)
-{
-    static const char *const yes[] = {"on", "true", "yes", "1"};
-    static const char *const  no[] = {"off", "false", "no", "0"};
-
-    for (size_t i = 0; i < ALEN(yes); i++) {
-        if (strcasecmp(ctx->value, yes[i]) == 0) {
-            *res = true;
-            return true;
-        }
-    }
-
-    for (size_t i = 0; i < ALEN(no); i++) {
-        if (strcasecmp(ctx->value, no[i]) == 0) {
-            *res = false;
-            return true;
-        }
-    }
-
-    LOG_CONTEXTUAL_ERR("invalid boolean value");
-    return false;
-}
-
-
-static bool NOINLINE
-str_to_ulong(const char *s, int base, unsigned long *res)
-{
-    if (s == NULL)
-        return false;
-
-    errno = 0;
-    char *end = NULL;
-
-    unsigned long v = strtoul(s, &end, base);
-    if (!(errno == 0 && *end == '\0'))
-        return false;
-
-    *res = v;
-    return true;
-}
-
-static bool NOINLINE
-str_to_uint32(const char *s, int base, uint32_t *res)
-{
-    unsigned long v;
-    bool ret = str_to_ulong(s, base, &v);
-    if (v > UINT32_MAX)
-        return false;
-    *res = v;
-    return ret;
-}
-
-static bool NOINLINE
-str_to_uint16(const char *s, int base, uint16_t *res)
-{
-    unsigned long v;
-    bool ret = str_to_ulong(s, base, &v);
-    if (v > UINT16_MAX)
-        return false;
-    *res = v;
-    return ret;
-}
-
-static bool NOINLINE
-value_to_uint16(struct context *ctx, int base, uint16_t *res)
-{
-    if (!str_to_uint16(ctx->value, base, res)) {
-        LOG_CONTEXTUAL_ERR(
-            "invalid integer value, or outside range 0-%u", UINT16_MAX);
-        return false;
-    }
-    return true;
-}
-
-static bool NOINLINE
-value_to_uint32(struct context *ctx, int base, uint32_t *res)
-{
-    if (!str_to_uint32(ctx->value, base, res)){
-        LOG_CONTEXTUAL_ERR(
-            "invalid integer value, or outside range 0-%u", UINT32_MAX);
-        return false;
-    }
-    return true;
-}
-
-static bool NOINLINE
-value_to_dimensions(struct context *ctx, uint32_t *x, uint32_t *y)
-{
-    if (sscanf(ctx->value, "%ux%u", x, y) != 2) {
-        LOG_CONTEXTUAL_ERR("invalid dimensions (must be in the form AxB)");
-        return false;
-    }
-
-    return true;
-}
-
-static bool NOINLINE
-value_to_float(struct context *ctx, float *res)
-{
-    const char *s = ctx->value;
-
-    if (s == NULL)
-        return false;
-
-    errno = 0;
-    char *end = NULL;
-
-    float v = strtof(s, &end);
-    if (!(errno == 0 && *end == '\0')) {
-        LOG_CONTEXTUAL_ERR("invalid decimal value");
-        return false;
-    }
-
-    *res = v;
-    return true;
-}
-
-static bool NOINLINE
-value_to_str(struct context *ctx, char **res)
-{
-    char *copy = xstrdup(ctx->value);
-    char *end = copy + strlen(copy) - 1;
-
-    /* Un-quote
-     *
-     * Note: this is very simple; we only support the *entire* value
-     * being quoted. That is, no mid-value quotes. Both double and
-     * single quotes are supported.
-     *
-     *  - key="value"              OK
-     *  - key=abc "quote" def  NOT OK
-     *  - key='value'              OK
-     *
-     * Finally, we support escaping the quote character, and the
-     * escape character itself:
-     *
-     *  - key="value \"quotes\""
-     *  - key="backslash: \\"
-     *
-     * ONLY the "current" quote character can be escaped:
-     *
-     *  key="value \'"   NOt OK (both backslash and single quote is kept)
-     */
-
-    if ((copy[0] == '"' && *end == '"') ||
-        (copy[0] == '\'' && *end == '\''))
-    {
-        const char quote = copy[0];
-        *end = '\0';
-
-        memmove(copy, copy + 1, end - copy);
-
-        /* Un-escape */
-        for (char *p = copy; *p != '\0'; p++) {
-            if (p[0] == '\\' && (p[1] == '\\' || p[1] == quote)) {
-                memmove(p, p + 1, end - p);
-            }
-        }
-    }
-
-    free(*res);
-    *res = copy;
-    return true;
-}
-
-static bool NOINLINE
-value_to_wchars(struct context *ctx, char32_t **res)
-{
-    char32_t *s = ambstoc32(ctx->value);
-    if (s == NULL) {
-        LOG_CONTEXTUAL_ERR("not a valid string value");
-        return false;
-    }
-
-    free(*res);
-    *res = s;
-    return true;
-}
-
-static bool NOINLINE
-value_to_enum(struct context *ctx, const char **value_map, int *res)
-{
-    size_t str_len = 0;
-    size_t count = 0;
-
-    for (; value_map[count] != NULL; count++) {
-        if (strcasecmp(value_map[count], ctx->value) == 0) {
-            *res = count;
-            return true;
-        }
-        str_len += strlen(value_map[count]);
-    }
-
-    const size_t size = str_len + count * 4 + 1;
-    char valid_values[512];
-    size_t idx = 0;
-    xassert(size < sizeof(valid_values));
-
-    for (size_t i = 0; i < count; i++)
-        idx += xsnprintf(&valid_values[idx], size - idx, "'%s', ", value_map[i]);
-
-    if (count > 0)
-        valid_values[idx - 2] = '\0';
-
-    LOG_CONTEXTUAL_ERR("not one of %s", valid_values);
-    return false;
-}
-
-static bool NOINLINE
-value_to_color(struct context *ctx, uint32_t *result, bool allow_alpha)
-{
-    uint32_t color;
-    const size_t len = strlen(ctx->value);
-    const size_t component_count = len / 2;
-
-    if (!(len == 6 || (allow_alpha && len == 8)) ||
-        !str_to_uint32(ctx->value, 16, &color))
-    {
-        if (allow_alpha) {
-            LOG_CONTEXTUAL_ERR("color must be in either RGB or ARGB format");
-        } else {
-            LOG_CONTEXTUAL_ERR("color must be in RGB format");
-        }
-
-        return false;
-    }
-
-    if (allow_alpha && component_count == 3) {
-        /* If user left out the alpha component, assume non-transparency */
-        color |= 0xff000000;
-    }
-
-    *result = color;
-    return true;
-}
-
-static bool NOINLINE
-value_to_two_colors(struct context *ctx,
-                    uint32_t *first, uint32_t *second, bool allow_alpha)
-{
-    bool ret = false;
-    const char *original_value = ctx->value;
-
-    /* TODO: do this without strdup() */
-    char *value_copy = xstrdup(ctx->value);
-    const char *first_as_str = strtok(value_copy, " ");
-    const char *second_as_str = strtok(NULL, " ");
-
-    if (first_as_str == NULL || second_as_str == NULL) {
-        LOG_CONTEXTUAL_ERR("invalid double color value");
-        goto out;
-    }
-
-    uint32_t a, b;
-
-    ctx->value = first_as_str;
-    if (!value_to_color(ctx, &a, allow_alpha))
-        goto out;
-
-    ctx->value = second_as_str;
-    if (!value_to_color(ctx, &b, allow_alpha))
-        goto out;
-
-    *first = a;
-    *second = b;
-    ret = true;
-
-out:
-    free(value_copy);
-    ctx->value = original_value;
-    return ret;
-}
-
-static bool NOINLINE
-value_to_pt_or_px(struct context *ctx, struct pt_or_px *res)
-{
-    const char *s = ctx->value;
-
-    size_t len = s != NULL ? strlen(s) : 0;
-    if (len >= 2 && s[len - 2] == 'p' && s[len - 1] == 'x') {
-        errno = 0;
-        char *end = NULL;
-
-        long value = strtol(s, &end, 10);
-        if (!(len > 2 && errno == 0 && end == s + len - 2)) {
-            LOG_CONTEXTUAL_ERR("invalid px value (must be in the form 12px)");
-            return false;
-        }
-        res->pt = 0;
-        res->px = value;
-    } else {
-        float value;
-        if (!value_to_float(ctx, &value))
-            return false;
-        res->pt = value;
-        res->px = 0;
-    }
-
-    return true;
-}
 
 static struct config_font_list NOINLINE
 value_to_fonts(struct context *ctx)
@@ -825,74 +536,6 @@ err:
     free(copy);
     free(fonts);
     return (struct config_font_list){.arr = NULL, .count = 0};
-}
-
-static void NOINLINE
-free_argv(struct argv *argv)
-{
-    if (argv->args == NULL)
-        return;
-    for (char **a = argv->args; *a != NULL; a++)
-        free(*a);
-    free(argv->args);
-    argv->args = NULL;
-}
-
-static void NOINLINE
-clone_argv(struct argv *dst, const struct argv *src)
-{
-    if (src->args == NULL) {
-        dst->args = NULL;
-        return;
-    }
-
-    size_t count = 0;
-    for (char **args = src->args; *args != NULL; args++)
-        count++;
-
-    dst->args = xmalloc((count + 1) * sizeof(dst->args[0]));
-    for (char **args_src = src->args, **args_dst = dst->args;
-         *args_src != NULL; args_src++,
-             args_dst++)
-    {
-        *args_dst = xstrdup(*args_src);
-    }
-    dst->args[count] = NULL;
-}
-
-static void
-spawn_template_free(struct config_spawn_template *template)
-{
-    free_argv(&template->argv);
-}
-
-static void
-spawn_template_clone(struct config_spawn_template *dst,
-                     const struct config_spawn_template *src)
-{
-    clone_argv(&dst->argv, &src->argv);
-}
-
-static bool NOINLINE
-value_to_spawn_template(struct context *ctx,
-                        struct config_spawn_template *template)
-{
-    spawn_template_free(template);
-
-    char **argv = NULL;
-
-    if (ctx->value[0] == '"' && ctx->value[1] == '"' && ctx->value[2] == '\0') {
-        template->argv.args = NULL;
-        return true;
-    }
-
-    if (!tokenize_cmdline(ctx->value, &argv)) {
-        LOG_CONTEXTUAL_ERR("syntax error in command line");
-        return false;
-    }
-
-    template->argv.args = argv;
-    return true;
 }
 
 static bool parse_config_file(

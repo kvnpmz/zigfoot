@@ -286,7 +286,13 @@ Port in this order; each module is a small, reviewable series of chunks.
      `tests/test-terminal.c` pins the numbers;
    * C2: parser core (sections, key/value, include) with `tests/test-config.c`
      as the oracle — run the C test against the Zig implementation until the
-     C parser is deleted;
+     C parser is deleted. **C2a done** (value-parsing helpers: bool/int/
+     dimensions/float/string/wchars/enum/colour/two-colour/pt-or-px and the
+     argv + spawn-template clone/free pair, ~360 C lines). The test now
+     compiles `config.c` into itself *and* links `config.o`, so the C oracle
+     exercises the Zig helpers — that is the pattern the rest of C2 uses.
+     `struct context` moved to `config.h` so the probe can pin its layout
+     (`ConfigContext`), and `log_contextual()` lost its `static`;
    * C3: per-section option tables, one section per commit (`main`, `cursor`,
      `mouse`, `colors`, `key-bindings`, `url`, `bell`, `scrollback`, …).
 4. **Mid-tier (~3.5k):** `ime`, `key-binding`, `url-mode`, `search`.

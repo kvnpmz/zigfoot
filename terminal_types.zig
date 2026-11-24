@@ -1555,7 +1555,24 @@ pub const Config = extern struct {
     notifications: UserNotifications,
 };
 
+/// Mirrors `struct context` in config.h: the config parser's working state.
+/// The parser itself is still config.c (config.zig has the value-parsing
+/// helpers), but both halves need to name it.
+pub const ConfigContext = extern struct {
+    conf: ?*const Config,
+    section: ?[*:0]const u8,
+    section_suffix: ?[*:0]const u8,
+    key: ?[*:0]const u8,
+    value: ?[*:0]const u8,
+
+    path: ?[*:0]const u8,
+    lineno: c_uint,
+
+    errors_are_fatal: bool,
+};
+
 comptime {
     expectAbi(Config, "Config");
     expectAbi(ColorTheme, "ColorTheme");
+    expectAbi(ConfigContext, "ConfigContext");
 }

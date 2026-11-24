@@ -72,6 +72,7 @@ C_TYPES: dict[str, str] = {
     "Url": "struct url",
     "ColorTheme": "struct color_theme",
     "Config": "struct config",
+    "ConfigContext": "struct context",
     "ConfigFont": "struct config_font",
     "ConfigFontList": "struct config_font_list",
     "ConfigSpawnTemplate": "struct config_spawn_template",

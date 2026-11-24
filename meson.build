@@ -368,6 +368,18 @@ extract_obj = custom_target(
   ]
 )
 
+config_obj = custom_target(
+  'config_obj',
+  input: 'config.zig',
+  depend_files: files('terminal_types.zig'),
+  output: 'config.o',
+  depends: c_layout,
+  command: [
+    python, files('compile_zig.py'), '@INPUT@', '@OUTPUT@',
+    grapheme_clustering_zig,
+  ]
+)
+
 cursor_shape_obj = custom_target(
   'cursor_shape_obj',
   input: 'cursor-shape.zig',
@@ -626,7 +638,7 @@ footlib = static_library(
   'footlib',
   async_obj, 'async.h',
   'box-drawing.c', 'box-drawing.h',
-  'config.c', 'config.h',
+  'config.c', config_obj, 'config.h',
   commands_obj, 'commands.h',
   extract_obj, 'extract.h',
   fdm_obj, 'fdm.h',
