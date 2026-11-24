@@ -733,7 +733,7 @@ foot_deps = [math, threads, libepoll, pixman, wayland_client, wayland_cursor,
 footlib = static_library(
   'footlib',
   async_obj, 'async.h',
-  box_drawing_obj, 'box-drawing.c', 'box-drawing.h',
+  box_drawing_obj, 'box-drawing.h',
   'config.c', config_obj, 'config.h',
   commands_obj, 'commands.h',
   extract_obj, 'extract.h',

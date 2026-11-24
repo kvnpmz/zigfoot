@@ -2786,3 +2786,589 @@ export fn draw_wedge_triangle_and_box(buf: *types.BoxBuf, wc: u32) callconv(.c) 
 
     fillBox(buf, box);
 }
+
+//
+// Chunk A5c -- the light arcs, the glyph dispatch and box_drawing() itself.
+// With this chunk box-drawing.c is gone: box-drawing.zig owns the whole
+// module (struct buf is still declared in box-drawing.h so the ABI probe can
+// pin it against types.BoxBuf).
+//
+
+extern fn terminal_shim_fcft_font_antialias(font: *const anyopaque) callconv(.c) bool;
+
+export fn draw_box_drawings_light_arc(buf: *types.BoxBuf, wc: u32) callconv(.c) void {
+    const fmt = buf.format;
+    const supersample: c_int = if (fmt == PIXMAN_a8) 4 else 1;
+    const height: c_int = buf.height * supersample;
+    const width: c_int = buf.width * supersample;
+    const stride: c_int = if (fmt == PIXMAN_a8)
+        strideForFormatAndWidth(PIXMAN_a8, width)
+    else
+        buf.stride;
+    const data: [*]u8 = if (supersample > 1)
+        @ptrCast(@alignCast(std.c.calloc(@intCast(height * stride), 1) orelse
+            @panic("out of memory")))
+    else
+        buf.data.?;
+
+    const thick: c_int = buf.thickness[LIGHT] * supersample;
+
+    const height_pixels = buf.height;
+    const width_pixels = buf.width;
+    const thick_pixels = buf.thickness[LIGHT];
+
+    // The general idea here is to connect the two incoming lines using a
+    // circle, which is extended to the box-edges with vertical/horizontal
+    // lines. See the C original for the full rationale behind the radius
+    // choice; only the mechanics are reproduced here.
+    const circle_inner_edge = @divTrunc(@min(width_pixels, height_pixels) - thick_pixels, 2);
+
+    // We want to draw the quartercircle by filling small circles (with
+    // r = thickness/2.) whose centers are on its edge, so add the exact half
+    // thickness to the radius of the inner circle.
+    var c_r: f64 = f(circle_inner_edge) + f(thick_pixels) / 2.0;
+
+    var vert_to: c_int = 0;
+    var hor_to: c_int = 0;
+
+    // Coordinates of the circle-center.
+    var c_x: c_int = 0;
+    var c_y: c_int = 0;
+
+    // For a given y there are up to two solutions for the circle-equation.
+    // -1 for the left, and 1 for the right hemisphere.
+    var circle_hemisphere: c_int = 0;
+
+    // The quarter circle only has to be evaluated for a small range of
+    // y-values.
+    var y_min: c_int = 0;
+    var y_max: c_int = 0;
+
+    switch (wc) {
+        0x256d => { // ╭
+            // Don't use supersampled coordinates yet, we want to align actual
+            // pixels: pixel-coordinates of the lower edge of the right line
+            // and the right edge of the bottom line.
+            const right_bottom_edge = @divTrunc(height_pixels + thick_pixels, 2);
+            const bottom_right_edge = @divTrunc(width_pixels + thick_pixels, 2);
+
+            c_y = right_bottom_edge + circle_inner_edge;
+            c_x = bottom_right_edge + circle_inner_edge;
+
+            // We want to render the left, not the right hemisphere.
+            circle_hemisphere = -1;
+
+            // Don't evaluate beyond c_y, the vertical line is drawn there.
+            y_min = 0;
+            y_max = c_y;
+
+            // The vertical line extends to the bottom of the box, the
+            // horizontal one to the right.
+            vert_to = height_pixels;
+            hor_to = width_pixels;
+        },
+
+        0x256e => { // ╮
+            const left_bottom_edge = @divTrunc(height_pixels + thick_pixels, 2);
+            const bottom_left_edge = @divTrunc(width_pixels - thick_pixels, 2);
+
+            c_y = left_bottom_edge + circle_inner_edge;
+            c_x = bottom_left_edge - circle_inner_edge;
+
+            circle_hemisphere = 1;
+
+            y_min = 0;
+            y_max = c_y;
+
+            vert_to = height_pixels;
+            hor_to = 0;
+        },
+
+        0x2570 => { // ╰
+            const right_top_edge = @divTrunc(height_pixels - thick_pixels, 2);
+            const top_right_edge = @divTrunc(width_pixels + thick_pixels, 2);
+
+            c_y = right_top_edge - circle_inner_edge;
+            c_x = top_right_edge + circle_inner_edge;
+
+            circle_hemisphere = -1;
+
+            y_min = c_y;
+            y_max = height_pixels;
+
+            vert_to = 0;
+            hor_to = width_pixels;
+        },
+
+        0x256f => { // ╯
+            const left_top_edge = @divTrunc(height_pixels - thick_pixels, 2);
+            const top_left_edge = @divTrunc(width_pixels - thick_pixels, 2);
+
+            c_y = left_top_edge - circle_inner_edge;
+            c_x = top_left_edge - circle_inner_edge;
+
+            circle_hemisphere = 1;
+
+            y_min = c_y;
+            y_max = height_pixels;
+
+            vert_to = 0;
+            hor_to = 0;
+        },
+
+        else => {},
+    }
+
+    // Store for horizontal+vertical line.
+    const c_x_pixels = c_x;
+    const c_y_pixels = c_y;
+
+    // Bring coordinates from pixel-grid to supersampled grid.
+    c_r *= f(supersample);
+    c_x *= supersample;
+    c_y *= supersample;
+    y_min *= supersample;
+    y_max *= supersample;
+
+    const c_r2 = c_r * c_r;
+
+    // To prevent gaps in the circle, each pixel is sampled multiple times.
+    // As the quartercircle ends (vertically) in the middle of a pixel, an
+    // uneven number helps hit that exactly.
+    var i: f64 = f(y_min * 16);
+    while (i <= f(y_max * 16)) : (i += 1.0) {
+        const y = i / 16.0;
+        const dy = y - f(c_y);
+        const radicand = c_r2 - dy * dy;
+
+        // The C code sets errno and checks it after sqrt(); the only error
+        // sqrt() can raise for this input is EDOM on a negative argument.
+        if (radicand < 0.0)
+            continue;
+
+        const x = f(circle_hemisphere) * @sqrt(radicand) + f(c_x);
+
+        const row = roundi(y);
+        const col = roundi(x);
+
+        if (col < 0)
+            continue;
+
+        // Rectangle big enough to fit entire circle with radius thick/2.
+        const row1 = row - (@divTrunc(thick, 2) + 1);
+        const row2 = row + (@divTrunc(thick, 2) + 1);
+        const col1 = col - (@divTrunc(thick, 2) + 1);
+        const col2 = col + (@divTrunc(thick, 2) + 1);
+
+        const row_start = @min(row1, row2);
+        const row_end = @max(row1, row2);
+        const col_start = @min(col1, col2);
+        const col_end = @max(col1, col2);
+
+        std.debug.assert(row_end > row_start);
+        std.debug.assert(col_end > col_start);
+
+        // Draw a circle with radius thick/2 around x,y: reject pixels whose
+        // center is further than thick/2 from x,y.
+        var r: c_int = @max(row_start, 0);
+        const r_end = @max(@min(row_end, height), 0);
+        while (r < r_end) : (r += 1) {
+            const r_midpoint = f(r) + 0.5;
+
+            var c: c_int = @max(col_start, 0);
+            const c_end = @max(@min(col_end, width), 0);
+            while (c < c_end) : (c += 1) {
+                const c_midpoint = f(c) + 0.5;
+
+                // Vector from point on quartercircle to midpoint of the
+                // current pixel.
+                const center_midpoint_x = c_midpoint - x;
+                const center_midpoint_y = r_midpoint - y;
+
+                // Distance from current point to circle-center; skip if the
+                // midpoint of the pixel is outside the circle.
+                const dist = @sqrt(center_midpoint_x * center_midpoint_x +
+                    center_midpoint_y * center_midpoint_y);
+                if (dist > f(thick) / 2.0)
+                    continue;
+
+                if (fmt == PIXMAN_a1) {
+                    const idx: usize = @intCast(@divTrunc(c, 8));
+                    const bit_no: usize = @intCast(@mod(c, 8));
+                    setA1Bit(data, @as(usize, @intCast(r * stride)) + idx, bit_no);
+                } else {
+                    data[@intCast(r * stride + c)] = 0xff;
+                }
+            }
+        }
+    }
+
+    if (fmt == PIXMAN_a8) {
+        std.debug.assert(data != buf.data.?);
+
+        // Downsample
+        const ss: usize = @intCast(supersample);
+        const ss_stride: usize = @intCast(stride);
+
+        var r: usize = 0;
+        while (r < @as(usize, @intCast(buf.height))) : (r += 1) {
+            var c: usize = 0;
+            while (c < @as(usize, @intCast(buf.width))) : (c += 1) {
+                var total: u32 = 0;
+                var ii: usize = 0;
+                while (ii < ss) : (ii += 1) {
+                    var jj: usize = 0;
+                    while (jj < ss) : (jj += 1) {
+                        total += data[(r * ss + ii) * ss_stride + c * ss + jj];
+                    }
+                }
+
+                const average: u8 = @intCast(@min(total / @as(u32, @intCast(supersample * supersample)), 0xff));
+                buf.data.?[r * @as(usize, @intCast(buf.stride)) + c] = average;
+            }
+        }
+
+        std.c.free(@ptrCast(data));
+    }
+
+    // Draw vertical/horizontal lines from quartercircle-edge to box-edge.
+    box_vline(
+        buf,
+        @min(c_y_pixels, vert_to),
+        @max(c_y_pixels, vert_to),
+        @divTrunc(width_pixels - thick_pixels, 2),
+        thick_pixels,
+    );
+    box_hline(
+        buf,
+        @min(c_x_pixels, hor_to),
+        @max(c_x_pixels, hor_to),
+        @divTrunc(height_pixels - thick_pixels, 2),
+        thick_pixels,
+    );
+}
+
+fn drawGlyph(buf: *types.BoxBuf, wc: u32) void {
+    switch (wc) {
+        0x2500 => draw_box_drawings_light_horizontal(buf),
+        0x2501 => draw_box_drawings_heavy_horizontal(buf),
+        0x2502 => draw_box_drawings_light_vertical(buf),
+        0x2503 => draw_box_drawings_heavy_vertical(buf),
+        0x2504 => draw_box_drawings_light_triple_dash_horizontal(buf),
+        0x2505 => draw_box_drawings_heavy_triple_dash_horizontal(buf),
+        0x2506 => draw_box_drawings_light_triple_dash_vertical(buf),
+        0x2507 => draw_box_drawings_heavy_triple_dash_vertical(buf),
+        0x2508 => draw_box_drawings_light_quadruple_dash_horizontal(buf),
+        0x2509 => draw_box_drawings_heavy_quadruple_dash_horizontal(buf),
+        0x250a => draw_box_drawings_light_quadruple_dash_vertical(buf),
+        0x250b => draw_box_drawings_heavy_quadruple_dash_vertical(buf),
+        0x250c => draw_box_drawings_light_down_and_right(buf),
+        0x250d => draw_box_drawings_down_light_and_right_heavy(buf),
+        0x250e => draw_box_drawings_down_heavy_and_right_light(buf),
+        0x250f => draw_box_drawings_heavy_down_and_right(buf),
+        0x2510 => draw_box_drawings_light_down_and_left(buf),
+        0x2511 => draw_box_drawings_down_light_and_left_heavy(buf),
+        0x2512 => draw_box_drawings_down_heavy_and_left_light(buf),
+        0x2513 => draw_box_drawings_heavy_down_and_left(buf),
+        0x2514 => draw_box_drawings_light_up_and_right(buf),
+        0x2515 => draw_box_drawings_up_light_and_right_heavy(buf),
+        0x2516 => draw_box_drawings_up_heavy_and_right_light(buf),
+        0x2517 => draw_box_drawings_heavy_up_and_right(buf),
+        0x2518 => draw_box_drawings_light_up_and_left(buf),
+        0x2519 => draw_box_drawings_up_light_and_left_heavy(buf),
+        0x251a => draw_box_drawings_up_heavy_and_left_light(buf),
+        0x251b => draw_box_drawings_heavy_up_and_left(buf),
+        0x251c => draw_box_drawings_light_vertical_and_right(buf),
+        0x251d => draw_box_drawings_vertical_light_and_right_heavy(buf),
+        0x251e => draw_box_drawings_up_heavy_and_right_down_light(buf),
+        0x251f => draw_box_drawings_down_heavy_and_right_up_light(buf),
+        0x2520 => draw_box_drawings_vertical_heavy_and_right_light(buf),
+        0x2521 => draw_box_drawings_down_light_and_right_up_heavy(buf),
+        0x2522 => draw_box_drawings_up_light_and_right_down_heavy(buf),
+        0x2523 => draw_box_drawings_heavy_vertical_and_right(buf),
+        0x2524 => draw_box_drawings_light_vertical_and_left(buf),
+        0x2525 => draw_box_drawings_vertical_light_and_left_heavy(buf),
+        0x2526 => draw_box_drawings_up_heavy_and_left_down_light(buf),
+        0x2527 => draw_box_drawings_down_heavy_and_left_up_light(buf),
+        0x2528 => draw_box_drawings_vertical_heavy_and_left_light(buf),
+        0x2529 => draw_box_drawings_down_light_and_left_up_heavy(buf),
+        0x252a => draw_box_drawings_up_light_and_left_down_heavy(buf),
+        0x252b => draw_box_drawings_heavy_vertical_and_left(buf),
+        0x252c => draw_box_drawings_light_down_and_horizontal(buf),
+        0x252d => draw_box_drawings_left_heavy_and_right_down_light(buf),
+        0x252e => draw_box_drawings_right_heavy_and_left_down_light(buf),
+        0x252f => draw_box_drawings_down_light_and_horizontal_heavy(buf),
+        0x2530 => draw_box_drawings_down_heavy_and_horizontal_light(buf),
+        0x2531 => draw_box_drawings_right_light_and_left_down_heavy(buf),
+        0x2532 => draw_box_drawings_left_light_and_right_down_heavy(buf),
+        0x2533 => draw_box_drawings_heavy_down_and_horizontal(buf),
+        0x2534 => draw_box_drawings_light_up_and_horizontal(buf),
+        0x2535 => draw_box_drawings_left_heavy_and_right_up_light(buf),
+        0x2536 => draw_box_drawings_right_heavy_and_left_up_light(buf),
+        0x2537 => draw_box_drawings_up_light_and_horizontal_heavy(buf),
+        0x2538 => draw_box_drawings_up_heavy_and_horizontal_light(buf),
+        0x2539 => draw_box_drawings_right_light_and_left_up_heavy(buf),
+        0x253a => draw_box_drawings_left_light_and_right_up_heavy(buf),
+        0x253b => draw_box_drawings_heavy_up_and_horizontal(buf),
+        0x253c => draw_box_drawings_light_vertical_and_horizontal(buf),
+        0x253d => draw_box_drawings_left_heavy_and_right_vertical_light(buf),
+        0x253e => draw_box_drawings_right_heavy_and_left_vertical_light(buf),
+        0x253f => draw_box_drawings_vertical_light_and_horizontal_heavy(buf),
+        0x2540 => draw_box_drawings_up_heavy_and_down_horizontal_light(buf),
+        0x2541 => draw_box_drawings_down_heavy_and_up_horizontal_light(buf),
+        0x2542 => draw_box_drawings_vertical_heavy_and_horizontal_light(buf),
+        0x2543 => draw_box_drawings_left_up_heavy_and_right_down_light(buf),
+        0x2544 => draw_box_drawings_right_up_heavy_and_left_down_light(buf),
+        0x2545 => draw_box_drawings_left_down_heavy_and_right_up_light(buf),
+        0x2546 => draw_box_drawings_right_down_heavy_and_left_up_light(buf),
+        0x2547 => draw_box_drawings_down_light_and_up_horizontal_heavy(buf),
+        0x2548 => draw_box_drawings_up_light_and_down_horizontal_heavy(buf),
+        0x2549 => draw_box_drawings_right_light_and_left_vertical_heavy(buf),
+        0x254a => draw_box_drawings_left_light_and_right_vertical_heavy(buf),
+        0x254b => draw_box_drawings_heavy_vertical_and_horizontal(buf),
+        0x254c => draw_box_drawings_light_double_dash_horizontal(buf),
+        0x254d => draw_box_drawings_heavy_double_dash_horizontal(buf),
+        0x254e => draw_box_drawings_light_double_dash_vertical(buf),
+        0x254f => draw_box_drawings_heavy_double_dash_vertical(buf),
+        0x2550 => draw_box_drawings_double_horizontal(buf),
+        0x2551 => draw_box_drawings_double_vertical(buf),
+        0x2552 => draw_box_drawings_down_single_and_right_double(buf),
+        0x2553 => draw_box_drawings_down_double_and_right_single(buf),
+        0x2554 => draw_box_drawings_double_down_and_right(buf),
+        0x2555 => draw_box_drawings_down_single_and_left_double(buf),
+        0x2556 => draw_box_drawings_down_double_and_left_single(buf),
+        0x2557 => draw_box_drawings_double_down_and_left(buf),
+        0x2558 => draw_box_drawings_up_single_and_right_double(buf),
+        0x2559 => draw_box_drawings_up_double_and_right_single(buf),
+        0x255a => draw_box_drawings_double_up_and_right(buf),
+        0x255b => draw_box_drawings_up_single_and_left_double(buf),
+        0x255c => draw_box_drawings_up_double_and_left_single(buf),
+        0x255d => draw_box_drawings_double_up_and_left(buf),
+        0x255e => draw_box_drawings_vertical_single_and_right_double(buf),
+        0x255f => draw_box_drawings_vertical_double_and_right_single(buf),
+        0x2560 => draw_box_drawings_double_vertical_and_right(buf),
+        0x2561 => draw_box_drawings_vertical_single_and_left_double(buf),
+        0x2562 => draw_box_drawings_vertical_double_and_left_single(buf),
+        0x2563 => draw_box_drawings_double_vertical_and_left(buf),
+        0x2564 => draw_box_drawings_down_single_and_horizontal_double(buf),
+        0x2565 => draw_box_drawings_down_double_and_horizontal_single(buf),
+        0x2566 => draw_box_drawings_double_down_and_horizontal(buf),
+        0x2567 => draw_box_drawings_up_single_and_horizontal_double(buf),
+        0x2568 => draw_box_drawings_up_double_and_horizontal_single(buf),
+        0x2569 => draw_box_drawings_double_up_and_horizontal(buf),
+        0x256a => draw_box_drawings_vertical_single_and_horizontal_double(buf),
+        0x256b => draw_box_drawings_vertical_double_and_horizontal_single(buf),
+        0x256c => draw_box_drawings_double_vertical_and_horizontal(buf),
+        0x256d...0x2570 => draw_box_drawings_light_arc(buf, wc),
+        0x2571 => draw_box_drawings_light_diagonal_upper_right_to_lower_left(buf),
+        0x2572 => draw_box_drawings_light_diagonal_upper_left_to_lower_right(buf),
+        0x2573 => draw_box_drawings_light_diagonal_cross(buf),
+        0x2574 => draw_box_drawings_light_left(buf),
+        0x2575 => draw_box_drawings_light_up(buf),
+        0x2576 => draw_box_drawings_light_right(buf),
+        0x2577 => draw_box_drawings_light_down(buf),
+        0x2578 => draw_box_drawings_heavy_left(buf),
+        0x2579 => draw_box_drawings_heavy_up(buf),
+        0x257a => draw_box_drawings_heavy_right(buf),
+        0x257b => draw_box_drawings_heavy_down(buf),
+        0x257c => draw_box_drawings_light_left_and_heavy_right(buf),
+        0x257d => draw_box_drawings_light_up_and_heavy_down(buf),
+        0x257e => draw_box_drawings_heavy_left_and_light_right(buf),
+        0x257f => draw_box_drawings_heavy_up_and_light_down(buf),
+        0x2580 => draw_upper_half_block(buf),
+        0x2581 => draw_lower_one_eighth_block(buf),
+        0x2582 => draw_lower_one_quarter_block(buf),
+        0x2583 => draw_lower_three_eighths_block(buf),
+        0x2584 => draw_lower_half_block(buf),
+        0x2585 => draw_lower_five_eighths_block(buf),
+        0x2586 => draw_lower_three_quarters_block(buf),
+        0x2587 => draw_lower_seven_eighths_block(buf),
+        0x2588 => draw_full_block(buf),
+        0x2589 => draw_left_seven_eighths_block(buf),
+        0x258a => draw_left_three_quarters_block(buf),
+        0x258b => draw_left_five_eighths_block(buf),
+        0x258c => draw_left_half_block(buf),
+        0x258d => draw_left_three_eighths_block(buf),
+        0x258e => draw_left_one_quarter_block(buf),
+        0x258f => draw_left_one_eighth_block(buf),
+        0x2590 => draw_right_half_block(buf),
+        0x2591 => draw_light_shade(buf),
+        0x2592 => draw_medium_shade(buf),
+        0x2593 => draw_dark_shade(buf),
+        0x2594 => draw_upper_one_eighth_block(buf),
+        0x2595 => draw_right_one_eighth_block(buf),
+        0x2596...0x259f => draw_quadrant(buf, wc),
+        0x2800...0x28ff => draw_braille(buf, wc),
+        0x1cd00...0x1cde5 => draw_octant(buf, wc),
+        0x1fb00...0x1fb3b => draw_sextant(buf, wc),
+        0x1fb3c...0x1fb40, 0x1fb47...0x1fb4b, 0x1fb57...0x1fb5b, 0x1fb62...0x1fb66, 0x1fb6c...0x1fb6f => draw_wedge_triangle(buf, wc),
+        0x1fb41...0x1fb45, 0x1fb4c...0x1fb50, 0x1fb52...0x1fb56, 0x1fb5d...0x1fb61, 0x1fb68...0x1fb6b => draw_wedge_triangle_inverted(buf, wc),
+        0x1fb46, 0x1fb51, 0x1fb5c, 0x1fb67 => draw_wedge_triangle_and_box(buf, wc),
+        0x1fb9a => {
+            draw_wedge_triangle(buf, 0x1fb6d);
+            draw_wedge_triangle(buf, 0x1fb6f);
+        },
+        0x1fb9b => {
+            draw_wedge_triangle(buf, 0x1fb6c);
+            draw_wedge_triangle(buf, 0x1fb6e);
+        },
+        0x1fb70 => draw_vertical_one_eighth_block_2(buf),
+        0x1fb71 => draw_vertical_one_eighth_block_3(buf),
+        0x1fb72 => draw_vertical_one_eighth_block_4(buf),
+        0x1fb73 => draw_vertical_one_eighth_block_5(buf),
+        0x1fb74 => draw_vertical_one_eighth_block_6(buf),
+        0x1fb75 => draw_vertical_one_eighth_block_7(buf),
+        0x1fb76 => draw_horizontal_one_eighth_block_2(buf),
+        0x1fb77 => draw_horizontal_one_eighth_block_3(buf),
+        0x1fb78 => draw_horizontal_one_eighth_block_4(buf),
+        0x1fb79 => draw_horizontal_one_eighth_block_5(buf),
+        0x1fb7a => draw_horizontal_one_eighth_block_6(buf),
+        0x1fb7b => draw_horizontal_one_eighth_block_7(buf),
+        0x1fb82 => draw_upper_one_quarter_block(buf),
+        0x1fb83 => draw_upper_three_eighths_block(buf),
+        0x1fb84 => draw_upper_five_eighths_block(buf),
+        0x1fb85 => draw_upper_three_quarters_block(buf),
+        0x1fb86 => draw_upper_seven_eighths_block(buf),
+        0x1fb7c => draw_left_and_lower_one_eighth_block(buf),
+        0x1fb7d => draw_left_and_upper_one_eighth_block(buf),
+        0x1fb7e => draw_right_and_upper_one_eighth_block(buf),
+        0x1fb7f => draw_right_and_lower_one_eighth_block(buf),
+        0x1fb80 => draw_upper_and_lower_one_eighth_block(buf),
+        0x1fb81 => draw_horizontal_one_eighth_1358_block(buf),
+        0x1fb87 => draw_right_one_quarter_block(buf),
+        0x1fb88 => draw_right_three_eighths_block(buf),
+        0x1fb89 => draw_right_five_eighths_block(buf),
+        0x1fb8a => draw_right_three_quarters_block(buf),
+        0x1fb8b => draw_right_seven_eighths_block(buf),
+        else => {},
+    }
+}
+
+export fn box_drawing(term: *const types.Terminal, wc: u32) callconv(.c) *types.FcftGlyph {
+    const width = term.cell_width;
+    const height = term.cell_height;
+
+    const font = term.fonts[0] orelse @panic("box_drawing: no font");
+    const fmt: u32 = if (terminal_shim_fcft_font_antialias(@ptrCast(font))) PIXMAN_a8 else PIXMAN_a1;
+
+    const stride = strideForFormatAndWidth(fmt, width);
+    const data: [*]u8 = @ptrCast(@alignCast(
+        std.c.calloc(@intCast(height * stride), 1) orelse @panic("out of memory")));
+
+    const pix = pixman_image_create_bits_no_clear(
+        @intCast(fmt),
+        width,
+        height,
+        @ptrCast(@alignCast(data)),
+        stride,
+    );
+
+    if (pix == null) {
+        std.c._errno().* = 12; // ENOMEM
+        perror("box_drawing");
+        std.c.abort();
+    }
+
+    const conf = term.conf orelse @panic("box_drawing: no config");
+
+    const dpi: f64 = if (term.font_is_sized_by_dpi) @floatCast(term.font_dpi) else 96.0;
+    const scale: f64 = if (term.font_is_sized_by_dpi) 1.0 else @floatCast(term.scale);
+    const cell_w: f64 = @floatFromInt(term.cell_width);
+    const cell_h: f64 = @floatFromInt(term.cell_height);
+    const cell_size = @sqrt(cell_w * cell_w + cell_h * cell_h);
+
+    var base_thickness: c_int = @intFromFloat(
+        @as(f64, @floatCast(conf.tweak.box_drawing_base_thickness)) * scale * cell_size * dpi / 72.0,
+    );
+    base_thickness = @max(base_thickness, 1);
+
+    var y_third_0: c_int = 0;
+    var y_third_1: c_int = 0;
+    switch (@mod(height, 3)) {
+        0 => {
+            y_third_0 = @divTrunc(height, 3);
+            y_third_1 = @divTrunc(2 * height, 3);
+        },
+
+        1 => {
+            y_third_0 = @divTrunc(height, 3);
+            y_third_1 = @divTrunc(2 * height, 3) + 1;
+        },
+
+        2 => {
+            y_third_0 = @divTrunc(height, 3) + 1;
+            y_third_1 = y_third_0 + @divTrunc(height, 3);
+        },
+
+        else => unreachable,
+    }
+
+    // All four height % 4 cases yield the same thirds of the cell height.
+    const y_quad_0 = @divTrunc(height, 4);
+    const y_quad_1 = @divTrunc(height, 2);
+    const y_quad_2 = @divTrunc(3 * height, 4);
+
+    var buf = types.BoxBuf{
+        .data = data,
+        .pix = pix,
+        .format = fmt,
+        .width = width,
+        .height = height,
+        .stride = stride,
+        .solid_shades = conf.tweak.box_drawing_solid_shades,
+
+        .thickness = .{
+            box_thickness(base_thickness, LIGHT),
+            box_thickness(base_thickness, HEAVY),
+        },
+
+        // Overlap when width is odd
+        .x_halfs = .{
+            roundi(@as(f64, @floatFromInt(width)) / 2.0), // Endpoint first half
+            @divTrunc(width, 2), // Startpoint second half
+        },
+
+        .y_thirds = .{
+            y_third_0, // Endpoint first third, start point second third
+            y_third_1, // Endpoint second third, start point last third
+        },
+
+        .y_quads = .{
+            y_quad_0,
+            y_quad_1,
+            y_quad_2,
+        },
+    };
+
+    log_msg(
+        LOG_CLASS_DEBUG,
+        "box-drawing",
+        "box-drawing.zig",
+        @intCast(@src().line),
+        "LIGHT=%d, HEAVY=%d",
+        buf.thickness[LIGHT],
+        buf.thickness[HEAVY],
+    );
+
+    drawGlyph(&buf, wc);
+
+    const glyph: *types.FcftGlyph = @ptrCast(@alignCast(
+        std.c.malloc(@sizeOf(types.FcftGlyph)) orelse @panic("out of memory")));
+    glyph.* = .{
+        .cp = wc,
+        .cols = 1,
+        .font_name = null,
+        .pix = buf.pix,
+        .x = -@as(c_int, term.font_x_ofs),
+        .y = @as(c_int, term.font_baseline),
+        .width = width,
+        .height = height,
+        .advance = .{
+            .x = width,
+            .y = height,
+        },
+        .is_color_glyph = false,
+    };
+
+    return glyph;
+}

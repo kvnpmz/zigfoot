@@ -186,6 +186,10 @@ const char *terminal_shim_fcft_font_name(const struct fcft_font *font) {
     return font->name;
 }
 
+bool terminal_shim_fcft_font_antialias(const struct fcft_font *font) {
+    return font->antialias;
+}
+
 /* ── font loading (terminal.zig) ─────────────────────────────────── */
 
 /* Headless harness has no wayland object; foot itself always does. */

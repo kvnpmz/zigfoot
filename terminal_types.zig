@@ -1138,6 +1138,27 @@ pub const Itimerspec = extern struct {
     it_value: Timespec,
 };
 
+/// fcft_glyph.advance
+pub const FcftGlyphAdvance = extern struct {
+    x: c_int,
+    y: c_int,
+};
+
+/// `struct fcft_glyph` from fcft.h. foot allocates these itself for the
+/// box-drawing glyphs, so the layout has to match the library's exactly.
+pub const FcftGlyph = extern struct {
+    cp: u32,
+    cols: c_int,
+    font_name: ?[*:0]const u8,
+    pix: ?*anyopaque,
+    x: c_int,
+    y: c_int,
+    width: c_int,
+    height: c_int,
+    advance: FcftGlyphAdvance,
+    is_color_glyph: bool,
+};
+
 // Every mirror that is handed to/from C must match the C layout exactly.
 // The values come from `c_layout.zig`, generated from the real headers by
 // `abi_probe.c`; see `scripts/gen_abi_probe.py`.
@@ -1869,6 +1890,10 @@ pub const ShmBufferChain = extern struct {
 
 test "box-drawing buffer layout matches C probe" {
     expectAbi(BoxBuf, "BoxBuf");
+}
+
+test "fcft glyph layout matches C probe" {
+    expectAbi(FcftGlyph, "FcftGlyph");
 }
 
 test "shm layout matches C probe" {

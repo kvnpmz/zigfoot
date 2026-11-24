@@ -84,6 +84,7 @@ C_TYPES: dict[str, str] = {
     "PixmanBox32": "pixman_box32_t",
     "PixmanRegion32": "pixman_region32_t",
     "BoxBuf": "struct buf",
+    "FcftGlyph": "struct fcft_glyph",
     "Buffer": "struct buffer",
     "ShmBufferPool": "struct buffer_pool",
     "ShmBufferPrivate": "struct buffer_private",
@@ -103,6 +104,7 @@ SKIP: set[str] = {
     "AsciiPrinterBits", "TllInt", "TllStr", "TllNotification", "UrlList",
     "SixelList", "DamageList", "DamageNode", "SixelNode", "UrlNode",
     "NotificationNode", "Timespec", "Itimerspec", "TllBufferPrivate",
+    "FcftGlyphAdvance",
 }
 
 # C packed structs: the size is checkable, individual members are bit-fields.
