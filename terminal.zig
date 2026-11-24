@@ -76,6 +76,26 @@ export fn term_free_custom_glyphs(term: *types.Terminal) callconv(.c) void {
     freeCustomGlyphs(&term.custom_glyphs.legacy, GLYPH_LEGACY_COUNT);
 }
 
+//
+// Chunk T9b-iii — font baseline. Reads only fcft's ascent/descent, which come
+// through the metrics accessor above; the arithmetic lives in
+// terminal_types.zig so it has a unit test.
+//
+
+const FontMetrics = extern struct {
+    height: c_int,
+    descent: c_int,
+    ascent: c_int,
+    max_advance_x: c_int,
+};
+
+extern fn terminal_shim_fcft_font_metrics(font: *anyopaque) callconv(.c) FontMetrics;
+
+export fn term_font_baseline(term: *const types.Terminal) callconv(.c) c_int {
+    const metrics = terminal_shim_fcft_font_metrics(term.fonts[0].?);
+    return types.fontBaseline(term, metrics.ascent, metrics.descent);
+}
+
 fn termResetGraphemeState(term: *types.Terminal) void {
     // Without utf8proc the fields don't exist in `struct vt` and C's
     // term_reset_grapheme_state() is a no-op; keep `term` "used" so the

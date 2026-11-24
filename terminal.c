@@ -1890,24 +1890,7 @@ term_font_subpixel_changed(struct terminal *term)
     render_refresh(term);
 }
 
-int
-term_font_baseline(const struct terminal *term)
-{
-    const struct fcft_font *font = term->fonts[0];
-    const int line_height = term->cell_height;
-    const int font_height = font->ascent + font->descent;
-
-    /*
-     * Center glyph on the line *if* using a custom line height,
-     * otherwise the baseline is simply 'descent' pixels above the
-     * bottom of the cell
-     */
-    const int glyph_top_y = term->font_line_height.px >= 0
-        ? round((line_height - font_height) / 2.)
-        : 0;
-
-    return term->font_y_ofs + line_height - glyph_top_y - font->descent;
-}
+/* term_font_baseline: ported to terminal.zig */
 
 /* term_erase: ported to terminal.zig */
 

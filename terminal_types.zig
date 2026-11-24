@@ -1209,6 +1209,23 @@ pub fn ptOrPxAsPixels(term: *const Terminal, pt_or_px: *const PtOrPx) c_int {
     return @intFromFloat(@round(pixels));
 }
 
+/// Port of terminal.c's term_font_baseline().
+///
+/// With a custom line height the glyph is centred in the cell; otherwise the
+/// baseline sits descent pixels above the bottom of the cell. The fcft
+/// ascent/descent values come in as arguments so this stays testable.
+pub fn fontBaseline(term: *const Terminal, ascent: c_int, descent: c_int) c_int {
+    const line_height = term.cell_height;
+    const font_height = ascent + descent;
+
+    const glyph_top_y: c_int = if (term.font_line_height.px >= 0)
+        @intFromFloat(@round(@as(f64, @floatFromInt(line_height - font_height)) / 2.0))
+    else
+        0;
+
+    return @as(c_int, term.font_y_ofs) + line_height - glyph_top_y - descent;
+}
+
 pub const FontSizeAdjustment = extern struct {
     pt_or_px: PtOrPx,
     percent: f32,
@@ -1661,4 +1678,22 @@ test "pt-or-px to pixels" {
 
     // Degenerate: nothing set.
     try std.testing.expectEqual(@as(c_int, 0), px(&term, .{ .px = 0, .pt = 0 }));
+}
+
+test "font baseline" {
+    var term: Terminal = std.mem.zeroes(Terminal);
+    term.cell_height = 20;
+    term.font_y_ofs = 2;
+
+    // No custom line height (-1 == auto): baseline = cell bottom - descent.
+    term.font_line_height = .{ .px = -1, .pt = 0 };
+    try std.testing.expectEqual(@as(c_int, 18), fontBaseline(&term, 14, 4));
+
+    // Custom line height: the glyph is centred in the cell.
+    term.font_line_height = .{ .px = 0, .pt = 10 };
+    try std.testing.expectEqual(@as(c_int, 17), fontBaseline(&term, 14, 4));
+
+    // Centre offset rounds half away from zero: (21 - 18) / 2 = 1.5 -> 2.
+    term.cell_height = 21;
+    try std.testing.expectEqual(@as(c_int, 17), fontBaseline(&term, 14, 4));
 }

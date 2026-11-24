@@ -136,3 +136,25 @@ terminal_shim_emoji_vs_width(uint32_t cp, uint32_t wc)
 pixman_image_t *terminal_shim_fcft_glyph_pix(const struct fcft_glyph *glyph) {
     return glyph->pix;
 }
+
+/* ── font metrics (terminal.zig) ─────────────────────────────────── */
+
+/* struct fcft_font is fcft's business; terminal.zig only reads these four
+ * values, so hand them over as a plain struct instead of mirroring it. */
+struct terminal_font_metrics {
+    int height;
+    int descent;
+    int ascent;
+    int max_advance_x;
+};
+
+struct terminal_font_metrics
+terminal_shim_fcft_font_metrics(const struct fcft_font *font)
+{
+    return (struct terminal_font_metrics){
+        .height = font->height,
+        .descent = font->descent,
+        .ascent = font->ascent,
+        .max_advance_x = font->max_advance.x,
+    };
+}
