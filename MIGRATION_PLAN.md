@@ -238,6 +238,25 @@ message.
 | T10 | font size/scale/dpi: `term_font_size_*`, `term_fractional_scaling`, `term_update_scale`, `term_font_dpi_changed`, `term_font_subpixel_changed`, `term_font_baseline` | ~210 | depends on T9 |
 | T11 | `term_init`, `term_destroy`, `term_shutdown`, `term_reset`, `term_window_configured`, `shutdown_maybe_done`, `fdm_client_terminated`, `fdm_shutdown`, `fdm_terminate_timeout`, `sig_alarm`, utmp helpers, `initialize_render_workers` | ~1.3k | last: needs config, wayland, render, ime, spawn, slave |
 
+**T9/T10 prerequisites, measured (2026-11-24, now that `config` is done):**
+
+* The font state is still an opaque blob: `Terminal._font_state: [112]u8`
+  spans `terminal.h`'s `delayed_render_timer` … `font_subpixel`
+  (C offsets: timer 2300, `fonts` 2312, `font_sizes` 2344,
+  `font_line_height` 2376, `font_dpi` 2384, `font_is_sized_by_dpi` 2392,
+  `font_x_ofs` 2394, `font_subpixel` 2400; `custom_glyphs` follows at 2408).
+  Un-blobbing it is T9's first step: replace it with real fields, then let
+  the probe confirm every offset above.
+* `get_font_dpi()`/`get_font_subpixel()` need `term->window->on_outputs`
+  (a tll of `struct monitor`) and `term->wl->monitors`, i.e. the `wayland`
+  mirrors — they are **not** unblockable from `config` alone, contrary to the
+  earlier note. `term_set_fonts()`/`term_line_height_update()` only need
+  `fcft_font`'s `height`/`ascent`/`descent`/`max_advance`; following the
+  `regex_t`/fcft precedent, expose those through `terminal-shim.c`
+  accessors rather than mirroring `struct fcft_font`.
+* `term_pt_or_px_as_pixels()` is pure (scale, dpi, pt/px) and can go in the
+  first T9 commit with a Zig test.
+
 ### `selection.c` — remaining ~1.1k lines
 
 The text-selection core is already ported. What is left is Wayland clipboard
