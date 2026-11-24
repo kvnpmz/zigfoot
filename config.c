@@ -285,6 +285,10 @@ extern bool parse_section_cursor(struct context *ctx);
 extern bool parse_section_mouse(struct context *ctx);
 extern bool parse_section_touch(struct context *ctx);
 extern bool parse_section_environment(struct context *ctx);
+extern bool parse_color_theme(struct context *ctx, struct color_theme *theme);
+extern bool parse_section_colors_dark(struct context *ctx);
+extern bool parse_section_colors_light(struct context *ctx);
+extern bool parse_section_csd(struct context *ctx);
 
 static const enum user_notification_kind log_class_to_notify_kind[LOG_CLASS_COUNT] = {
     [LOG_CLASS_WARNING] = USER_NOTIFICATION_WARNING,
@@ -497,14 +501,9 @@ done:
     return ret;
 }
 
-static bool
-str_has_prefix(const char *str, const char *prefix)
-{
-    return strncmp(str, prefix, strlen(prefix)) == 0;
-}
 
-
-static struct config_font_list NOINLINE
+/* Non-static: config.zig's [csd] parser calls it. */
+struct config_font_list NOINLINE
 value_to_fonts(struct context *ctx)
 {
     size_t count = 0;
@@ -981,307 +980,12 @@ parse_section_regex(struct context *ctx)
     }
 }
 
-static bool NOINLINE
-parse_color_theme(struct context *ctx, struct color_theme *theme)
-{
-    const char *key = ctx->key;
-
-    size_t key_len = strlen(key);
-    uint8_t last_digit = (unsigned char)key[key_len - 1] - '0';
-    uint32_t *color = NULL;
-
-    if (isdigit(key[0])) {
-        unsigned long index;
-        if (!str_to_ulong(key, 0, &index) || index >= ALEN(theme->table)) {
-            LOG_CONTEXTUAL_ERR(
-                "invalid color palette index: %s (not in range 0-%zu)",
-                key, ALEN(theme->table));
-            return false;
-        }
-        color = &theme->table[index];
-    }
-
-    else if (key_len == 8 && str_has_prefix(key, "regular") && last_digit < 8)
-        color = &theme->table[last_digit];
-
-    else if (key_len == 7 && str_has_prefix(key, "bright") && last_digit < 8)
-        color = &theme->table[8 + last_digit];
-
-    else if (key_len == 4 && str_has_prefix(key, "dim") && last_digit < 8) {
-        if (!value_to_color(ctx, &theme->dim[last_digit], false))
-            return false;
-
-        theme->use_custom.dim |= 1 << last_digit;
-        return true;
-    }
-
-    else if (str_has_prefix(key, "sixel") &&
-             ((key_len == 6 && last_digit < 10) ||
-              (key_len == 7 && key[5] == '1' && last_digit < 6)))
-    {
-        size_t idx = key_len == 6 ? last_digit : 10 + last_digit;
-        return value_to_color(ctx, &theme->sixel[idx], false);
-    }
-
-    else if (streq(key, "flash")) color = &theme->flash;
-    else if (streq(key, "foreground")) color = &theme->fg;
-    else if (streq(key, "background")) color = &theme->bg;
-    else if (streq(key, "selection-foreground")) color = &theme->selection_fg;
-    else if (streq(key, "selection-background")) color = &theme->selection_bg;
-
-    else if (streq(key, "jump-labels")) {
-        if (!value_to_two_colors(
-                ctx,
-                &theme->jump_label.fg,
-                &theme->jump_label.bg,
-                false))
-        {
-            return false;
-        }
-
-        theme->use_custom.jump_label = true;
-        return true;
-    }
-
-    else if (streq(key, "scrollback-indicator")) {
-        if (!value_to_two_colors(
-                ctx,
-                &theme->scrollback_indicator.fg,
-                &theme->scrollback_indicator.bg,
-                false))
-        {
-            return false;
-        }
-
-        theme->use_custom.scrollback_indicator = true;
-        return true;
-    }
-
-    else if (streq(key, "search-box-no-match")) {
-        if (!value_to_two_colors(
-                ctx,
-                &theme->search_box.no_match.fg,
-                &theme->search_box.no_match.bg,
-                false))
-        {
-            return false;
-        }
-
-        theme->use_custom.search_box_no_match = true;
-        return true;
-    }
-
-    else if (streq(key, "search-box-match")) {
-        if (!value_to_two_colors(
-                ctx,
-                &theme->search_box.match.fg,
-                &theme->search_box.match.bg,
-                false))
-        {
-            return false;
-        }
-
-        theme->use_custom.search_box_match = true;
-        return true;
-    }
-
-    else if (streq(key, "cursor")) {
-        if (!value_to_two_colors(
-                ctx,
-                &theme->cursor.text,
-                &theme->cursor.cursor,
-                false))
-        {
-            return false;
-        }
-
-        theme->use_custom.cursor = true;
-        return true;
-    }
-
-    else if (streq(key, "urls")) {
-        if (!value_to_color(ctx, &theme->url, false))
-            return false;
-
-        theme->use_custom.url = true;
-        return true;
-    }
-
-    else if (streq(key, "alpha")) {
-        float alpha;
-        if (!value_to_float(ctx, &alpha))
-            return false;
-
-        if (alpha < 0. || alpha > 1.) {
-            LOG_CONTEXTUAL_ERR("not in range 0.0-1.0");
-            return false;
-        }
-
-        theme->alpha = alpha * 65535.;
-        return true;
-    }
-
-    else if (streq(key, "flash-alpha")) {
-        float alpha;
-        if (!value_to_float(ctx, &alpha))
-            return false;
-
-        if (alpha < 0. || alpha > 1.) {
-            LOG_CONTEXTUAL_ERR("not in range 0.0-1.0");
-            return false;
-        }
-
-        theme->flash_alpha = alpha * 65535.;
-        return true;
-    }
-
-    else if (streq(key, "alpha-mode")) {
-        _Static_assert(sizeof(theme->alpha_mode) == sizeof(int),
-        "enum is not 32-bit");
-
-        return value_to_enum(
-            ctx,
-            (const char *[]){"default", "matching", "all", NULL},
-            (int *)&theme->alpha_mode);
-    }
-
-    else if (streq(key, "dim-blend-towards")) {
-        _Static_assert(sizeof(theme->dim_blend_towards) == sizeof(int),
-                       "enum is not 32-bit");
-
-        return value_to_enum(
-            ctx,
-            (const char *[]){"black", "white", NULL},
-            (int *)&theme->dim_blend_towards);
-    }
-
-    else if (streq(key, "blur"))
-        return value_to_bool(ctx, &theme->blur);
-
-    else {
-        LOG_CONTEXTUAL_ERR("not valid option");
-        return false;
-    }
-
-    uint32_t color_value;
-    if (!value_to_color(ctx, &color_value, false))
-        return false;
-
-    *color = color_value;
-    return true;
-}
-
-static bool
-parse_section_colors_dark(struct context *ctx)
-{
-    return parse_color_theme(ctx, &ctx->conf->colors_dark);
-}
-
-static bool
-parse_section_colors_light(struct context *ctx)
-{
-    return parse_color_theme(ctx, &ctx->conf->colors_light);
-}
-
+/* parse_color_theme: ported to config.zig */
+/* parse_section_colors_dark: ported to config.zig */
+/* parse_section_colors_light: ported to config.zig */
 /* parse_section_cursor: ported to config.zig */
 /* parse_section_mouse: ported to config.zig */
-static bool
-parse_section_csd(struct context *ctx)
-{
-    struct config *conf = ctx->conf;
-    const char *key = ctx->key;
-
-    if (streq(key, "preferred")) {
-        _Static_assert(sizeof(conf->csd.preferred) == sizeof(int),
-                       "enum is not 32-bit");
-
-        return value_to_enum(
-            ctx,
-            (const char *[]){"none", "server", "client", NULL},
-            (int *)&conf->csd.preferred);
-    }
-
-    else if (streq(key, "font")) {
-        struct config_font_list new_list = value_to_fonts(ctx);
-        if (new_list.arr == NULL)
-            return false;
-
-        config_font_list_destroy(&conf->csd.font);
-        conf->csd.font = new_list;
-        return true;
-    }
-
-    else if (streq(key, "color")) {
-        uint32_t color;
-        if (!value_to_color(ctx, &color, true))
-            return false;
-
-        conf->csd.color.title_set = true;
-        conf->csd.color.title = color;
-        return true;
-    }
-
-    else if (streq(key, "size"))
-        return value_to_uint16(ctx, 10, &conf->csd.title_height);
-
-    else if (streq(key, "button-width"))
-        return value_to_uint16(ctx, 10, &conf->csd.button_width);
-
-    else if (streq(key, "button-color")) {
-        if (!value_to_color(ctx, &conf->csd.color.buttons, true))
-            return false;
-
-        conf->csd.color.buttons_set = true;
-        return true;
-    }
-
-    else if (streq(key, "button-minimize-color")) {
-        if (!value_to_color(ctx, &conf->csd.color.minimize, true))
-            return false;
-
-        conf->csd.color.minimize_set = true;
-        return true;
-    }
-
-    else if (streq(key, "button-maximize-color")) {
-        if (!value_to_color(ctx, &conf->csd.color.maximize, true))
-            return false;
-
-        conf->csd.color.maximize_set = true;
-        return true;
-    }
-
-    else if (streq(key, "button-close-color")) {
-        if (!value_to_color(ctx, &conf->csd.color.quit, true))
-            return false;
-
-        conf->csd.color.close_set = true;
-        return true;
-    }
-
-    else if (streq(key, "border-color")) {
-        if (!value_to_color(ctx, &conf->csd.color.border, true))
-            return false;
-
-        conf->csd.color.border_set = true;
-        return true;
-    }
-
-    else if (streq(key, "border-width"))
-        return value_to_uint16(ctx, 10, &conf->csd.border_width_visible);
-
-    else if (streq(key, "hide-when-maximized"))
-        return value_to_bool(ctx, &conf->csd.hide_when_maximized);
-
-    else if (streq(key, "double-click-to-maximize"))
-        return value_to_bool(ctx, &conf->csd.double_click_to_maximize);
-
-    else {
-        LOG_CONTEXTUAL_ERR("not a valid action: %s", key);
-        return false;
-    }
-}
-
+/* parse_section_csd: ported to config.zig */
 static void
 free_binding_aux(struct binding_aux *aux)
 {

@@ -301,6 +301,12 @@ Port in this order; each module is a small, reviewable series of chunks.
      Zig can set `title_set`/`buttons_set`/… by name instead of poking a
      `u32` (the probe skips it because C has no such member; the u32 offsets
      below it still pin the layout);
+     **C2c done** — `[colors-dark]`/`[colors-light]` (`parse_color_theme()`,
+     the palette/`regularN`/`brightN`/`dimN`/`sixelN` index arithmetic and
+     every named colour) and `[csd]`, another ~340 C lines. `config.c` is now
+     3.5k (from 4.4k) and the whole ini except `[main]`, `[tweak]`, the
+     key-binding sections and the regex ones (`[url]`/`[regex]` need
+     `regex_t.re_nsub`, which is libc-private) is Zig;
    * C3: per-section option tables, one section per commit (`main`, `cursor`,
      `mouse`, `colors`, `key-bindings`, `url`, `bell`, `scrollback`, …).
 4. **Mid-tier (~3.5k):** `ime`, `key-binding`, `url-mode`, `search`.

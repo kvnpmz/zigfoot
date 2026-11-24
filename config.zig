@@ -633,3 +633,243 @@ export fn parse_section_environment(ctx: *Context) callconv(.c) bool {
 
     return true;
 }
+
+// ── [colors] and [csd] (C2c) ──────────────────────────────────────
+
+extern fn value_to_fonts(ctx: *Context) callconv(.c) types.ConfigFontList;
+extern fn config_font_list_destroy(list: *types.ConfigFontList) callconv(.c) void;
+
+export fn parse_color_theme(ctx: *Context, theme: *types.ColorTheme) callconv(.c) bool {
+    const key = ctx.key orelse return true;
+    const k = std.mem.span(key);
+    const key_len = k.len;
+
+    if (key_len == 0)
+        return invalidOption(ctx, key);
+
+    const last_byte = k[key_len - 1];
+    const last_digit: u8 = if (std.ascii.isDigit(last_byte)) last_byte - '0' else 0xff;
+
+    var color: ?*u32 = null;
+
+    if (std.ascii.isDigit(k[0])) {
+        var index: c_ulong = 0;
+        if (!str_to_ulong(key, 0, &index) or index >= theme.table.len) {
+            contextualErr(
+                ctx,
+                @src(),
+                "invalid color palette index: {s} (not in range 0-{d})",
+                .{ k, theme.table.len },
+            );
+            return false;
+        }
+        color = &theme.table[@intCast(index)];
+    } else if (key_len == 8 and std.mem.startsWith(u8, k, "regular") and last_digit < 8) {
+        color = &theme.table[last_digit];
+    } else if (key_len == 7 and std.mem.startsWith(u8, k, "bright") and last_digit < 8) {
+        color = &theme.table[8 + last_digit];
+    } else if (key_len == 4 and std.mem.startsWith(u8, k, "dim") and last_digit < 8) {
+        if (!value_to_color(ctx, &theme.dim[last_digit], false))
+            return false;
+
+        theme.use_custom.dim |= @as(u8, 1) << @intCast(last_digit);
+        return true;
+    } else if (std.mem.startsWith(u8, k, "sixel") and
+        ((key_len == 6 and last_digit < 10) or
+        (key_len == 7 and k[5] == '1' and last_digit < 6)))
+    {
+        const idx: usize = if (key_len == 6) last_digit else 10 + last_digit;
+        return value_to_color(ctx, &theme.sixel[idx], false);
+    } else if (eq(key, "flash")) {
+        color = &theme.flash;
+    } else if (eq(key, "foreground")) {
+        color = &theme.fg;
+    } else if (eq(key, "background")) {
+        color = &theme.bg;
+    } else if (eq(key, "selection-foreground")) {
+        color = &theme.selection_fg;
+    } else if (eq(key, "selection-background")) {
+        color = &theme.selection_bg;
+    } else if (eq(key, "jump-labels")) {
+        if (!value_to_two_colors(ctx, &theme.jump_label.fg, &theme.jump_label.bg, false))
+            return false;
+
+        theme.use_custom.jump_label = true;
+        return true;
+    } else if (eq(key, "scrollback-indicator")) {
+        if (!value_to_two_colors(
+            ctx,
+            &theme.scrollback_indicator.fg,
+            &theme.scrollback_indicator.bg,
+            false,
+        )) return false;
+
+        theme.use_custom.scrollback_indicator = true;
+        return true;
+    } else if (eq(key, "search-box-no-match")) {
+        if (!value_to_two_colors(
+            ctx,
+            &theme.search_box.no_match.fg,
+            &theme.search_box.no_match.bg,
+            false,
+        )) return false;
+
+        theme.use_custom.search_box_no_match = true;
+        return true;
+    } else if (eq(key, "search-box-match")) {
+        if (!value_to_two_colors(
+            ctx,
+            &theme.search_box.match.fg,
+            &theme.search_box.match.bg,
+            false,
+        )) return false;
+
+        theme.use_custom.search_box_match = true;
+        return true;
+    } else if (eq(key, "cursor")) {
+        if (!value_to_two_colors(ctx, &theme.cursor.text, &theme.cursor.cursor, false))
+            return false;
+
+        theme.use_custom.cursor = true;
+        return true;
+    } else if (eq(key, "urls")) {
+        if (!value_to_color(ctx, &theme.url, false))
+            return false;
+
+        theme.use_custom.url = true;
+        return true;
+    } else if (eq(key, "alpha")) {
+        var alpha: f32 = undefined;
+        if (!value_to_float(ctx, &alpha))
+            return false;
+
+        if (alpha < 0.0 or alpha > 1.0)
+            return errValue(ctx, @src(), "not in range 0.0-1.0", .{});
+
+        theme.alpha = @intFromFloat(alpha * 65535.0);
+        return true;
+    } else if (eq(key, "flash-alpha")) {
+        var alpha: f32 = undefined;
+        if (!value_to_float(ctx, &alpha))
+            return false;
+
+        if (alpha < 0.0 or alpha > 1.0)
+            return errValue(ctx, @src(), "not in range 0.0-1.0", .{});
+
+        theme.flash_alpha = @intFromFloat(alpha * 65535.0);
+        return true;
+    } else if (eq(key, "alpha-mode")) {
+        return value_to_enum(
+            ctx,
+            valueMap(&.{ "default", "matching", "all" }),
+            @ptrCast(&theme.alpha_mode),
+        );
+    } else if (eq(key, "dim-blend-towards")) {
+        return value_to_enum(
+            ctx,
+            valueMap(&.{ "black", "white" }),
+            @ptrCast(&theme.dim_blend_towards),
+        );
+    } else if (eq(key, "blur")) {
+        return value_to_bool(ctx, &theme.blur);
+    } else {
+        return invalidOption(ctx, key);
+    }
+
+    var color_value: u32 = undefined;
+    if (!value_to_color(ctx, &color_value, false))
+        return false;
+
+    (color orelse unreachable).* = color_value;
+    return true;
+}
+
+export fn parse_section_colors_dark(ctx: *Context) callconv(.c) bool {
+    return parse_color_theme(ctx, &ctx.conf.?.colors_dark);
+}
+
+export fn parse_section_colors_light(ctx: *Context) callconv(.c) bool {
+    return parse_color_theme(ctx, &ctx.conf.?.colors_light);
+}
+
+export fn parse_section_csd(ctx: *Context) callconv(.c) bool {
+    const conf = ctx.conf.?;
+    const key = ctx.key orelse return true;
+
+    if (eq(key, "preferred")) {
+        return value_to_enum(
+            ctx,
+            valueMap(&.{ "none", "server", "client" }),
+            @ptrCast(&conf.csd.preferred),
+        );
+    }
+
+    if (eq(key, "font")) {
+        const new_list = value_to_fonts(ctx);
+        if (new_list.arr == null)
+            return false;
+
+        config_font_list_destroy(&conf.csd.font);
+        conf.csd.font = new_list;
+        return true;
+    }
+
+    if (eq(key, "color")) {
+        var color: u32 = undefined;
+        if (!value_to_color(ctx, &color, true))
+            return false;
+
+        conf.csd.color._flags.title_set = true;
+        conf.csd.color.title = color;
+        return true;
+    }
+
+    if (eq(key, "size"))
+        return value_to_uint16(ctx, 10, &conf.csd.title_height);
+    if (eq(key, "button-width"))
+        return value_to_uint16(ctx, 10, &conf.csd.button_width);
+
+    if (eq(key, "button-color")) {
+        if (!value_to_color(ctx, &conf.csd.color.buttons, true))
+            return false;
+        conf.csd.color._flags.buttons_set = true;
+        return true;
+    }
+
+    if (eq(key, "button-minimize-color")) {
+        if (!value_to_color(ctx, &conf.csd.color.minimize, true))
+            return false;
+        conf.csd.color._flags.minimize_set = true;
+        return true;
+    }
+
+    if (eq(key, "button-maximize-color")) {
+        if (!value_to_color(ctx, &conf.csd.color.maximize, true))
+            return false;
+        conf.csd.color._flags.maximize_set = true;
+        return true;
+    }
+
+    if (eq(key, "button-close-color")) {
+        if (!value_to_color(ctx, &conf.csd.color.quit, true))
+            return false;
+        conf.csd.color._flags.close_set = true;
+        return true;
+    }
+
+    if (eq(key, "border-color")) {
+        if (!value_to_color(ctx, &conf.csd.color.border, true))
+            return false;
+        conf.csd.color._flags.border_set = true;
+        return true;
+    }
+
+    if (eq(key, "border-width"))
+        return value_to_uint16(ctx, 10, &conf.csd.border_width_visible);
+    if (eq(key, "hide-when-maximized"))
+        return value_to_bool(ctx, &conf.csd.hide_when_maximized);
+    if (eq(key, "double-click-to-maximize"))
+        return value_to_bool(ctx, &conf.csd.double_click_to_maximize);
+
+    return errValue(ctx, @src(), "not a valid action: {s}", .{std.mem.span(key)});
+}
