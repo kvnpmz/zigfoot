@@ -13,6 +13,7 @@
 #include "terminal.h"
 #include "grid.h"
 #include "config.h"
+#include "extract.h"
 #include "fdm.h"
 #include "wayland.h"
 #include "xmalloc.h"
@@ -30,6 +31,7 @@
 /* Ported to terminal.zig; internal helpers, not part of terminal.h. */
 void print_insert(struct terminal *term, int width);
 void erase_cell_range(struct terminal *term, struct row *row, int start, int end);
+void vt_tab_stops_push_back(struct terminal *term, int value);
 void begin_receive_clipboard(
     struct terminal *term, bool no_strip, int read_fd,
     enum data_offer_mime_type mime_type,
@@ -648,6 +650,104 @@ test_print_insert(void)
     term_free(term);
 }
 
+/* ── extract.c (now extract.zig) directly ───────────────────────────────── */
+
+/* Run extract_* over [start,end) of one row and return the text. */
+static char *
+extract_row(struct terminal *term, struct row *r, int col_start, int col_end,
+            enum selection_kind kind, bool strip_trailing_empty, size_t *len)
+{
+    struct extraction_context *ctx = extract_begin(kind, strip_trailing_empty);
+    xassert(ctx != NULL);
+
+    for (int c = col_start; c < col_end; c++)
+        extract_one(term, r, &r->cells[c], c, ctx);
+
+    char *text = NULL;
+    size_t n = 0;
+    xassert(extract_finish(ctx, &text, &n));
+    *len = n;
+    return text;
+}
+
+static void
+test_extract_kinds(void)
+{
+    struct terminal *term = term_new();
+    struct row *r = term->normal.rows[0];
+
+    r->cells[0].wc = 'a';
+    r->cells[1].wc = 'b';
+    r->cells[2].wc = 'c';
+    r->cells[3].wc = 'd';
+    r->cells[4].wc = 'e';
+
+    size_t len = 0;
+    char *text;
+
+    /* Char-wise, trailing empty stripped: no trailing newline */
+    text = extract_row(term, r, 0, COLS, SELECTION_CHAR_WISE, true, &len);
+    check_text(text, "abcde", "extract: char-wise selection");
+    check(len == 5, "extract: length excludes the NUL");
+    free(text);
+
+    /* Line-wise: a trailing newline is added */
+    text = extract_row(term, r, 0, COLS, SELECTION_LINE_WISE, true, &len);
+    check_text(text, "abcde\n", "extract: line-wise selection ends with a newline");
+    check(len == 6, "extract: line-wise length includes the newline");
+    free(text);
+
+    /* Block-wise, not stripping: trailing empties become spaces */
+    r->cells[3].wc = 0;
+    r->cells[4].wc = 0;
+    text = extract_row(term, r, 0, COLS, SELECTION_BLOCK, false, &len);
+    check_text(text, "abc  ", "extract: block selection keeps trailing spaces");
+    free(text);
+
+    /* An empty selection still yields an empty string */
+    r->cells[0].wc = 0;
+    r->cells[1].wc = 0;
+    r->cells[2].wc = 0;
+    text = extract_row(term, r, 0, 3, SELECTION_CHAR_WISE, true, &len);
+    check_text(text, "", "extract: empty selection is an empty string");
+    check(len == 0, "extract: empty selection has zero length");
+    free(text);
+
+    term_free(term);
+}
+
+static void
+test_extract_tabs(void)
+{
+    struct terminal *term = term_new();
+    struct row *r = term->normal.rows[1];
+
+    /* A tab cell is emitted literally; the padding spaces up to the next tab
+     * stop are swallowed (tab_spaces_left), so the text keeps one "\t". */
+    vt_tab_stops_push_back(term, 0);
+    vt_tab_stops_push_back(term, 4);
+
+    r->cells[0].wc = '\t';
+    r->cells[1].wc = ' ';
+    r->cells[2].wc = ' ';
+    r->cells[3].wc = 'x';
+
+    size_t len = 0;
+    char *text = extract_row(term, r, 0, COLS, SELECTION_CHAR_WISE, true, &len);
+    check_text(text, "\tx", "extract: tab is literal, padding spaces are swallowed");
+    check(len == 2, "extract: swallowed spaces do not count towards length");
+    free(text);
+
+    /* With no tab stop ahead, tab_spaces_left is 0 and spaces are kept */
+    term->normal.rows[2]->cells[3].wc = '\t';
+    term->normal.rows[2]->cells[4].wc = 'q';
+    text = extract_row(term, term->normal.rows[2], 3, COLS, SELECTION_CHAR_WISE, true, &len);
+    check_text(text, "\tq", "extract: tab at the last column stays literal");
+    free(text);
+
+    term_free(term);
+}
+
 /* ── clipboard receive pipeline ─────────────────────────────────────────── */
 
 struct collector {
@@ -981,6 +1081,8 @@ main(void)
     test_osc8();
     test_size_notifications();
     test_flash();
+    test_extract_kinds();
+    test_extract_tabs();
     test_receive_paste_normalisation();
     test_receive_uri_list();
     test_receive_uri_split_reads();
