@@ -96,6 +96,11 @@ export fn term_font_baseline(term: *const types.Terminal) callconv(.c) c_int {
     return types.fontBaseline(term, metrics.ascent, metrics.descent);
 }
 
+// Ported from terminal.c; core in terminal_types.zig (unit-tested).
+export fn term_line_height_update(term: *types.Terminal) callconv(.c) void {
+    types.lineHeightUpdate(term);
+}
+
 fn termResetGraphemeState(term: *types.Terminal) void {
     // Without utf8proc the fields don't exist in `struct vt` and C's
     // term_reset_grapheme_state() is a no-op; keep `term` "used" so the

@@ -50,6 +50,7 @@
 
 /* Ported to terminal.zig — extern for C callers */
 extern void term_free_custom_glyphs(struct terminal *term);
+extern void term_line_height_update(struct terminal *term);
 extern void term_update_ascii_printer(struct terminal *term);
 extern void term_single_shift(struct terminal *term, enum charset_designator idx);
 
@@ -256,36 +257,7 @@ err_sem_destroy:
     return false;
 }
 
-static void
-term_line_height_update(struct terminal *term)
-{
-    const struct config *conf = term->conf;
-
-    if (term->conf->line_height.px < 0) {
-        term->font_line_height.pt = 0;
-        term->font_line_height.px = -1;
-        return;
-    }
-
-    const float dpi = term->font_is_sized_by_dpi ? term->font_dpi : 96.;
-
-    const float font_original_pt_size =
-        conf->fonts[0].arr[0].px_size > 0
-        ? conf->fonts[0].arr[0].px_size * 72. / dpi
-        : conf->fonts[0].arr[0].pt_size;
-    const float font_current_pt_size =
-        term->font_sizes[0][0].px_size > 0
-        ? term->font_sizes[0][0].px_size * 72. / dpi
-        : term->font_sizes[0][0].pt_size;
-
-    const float change = font_current_pt_size / font_original_pt_size;
-    const float line_original_pt_size = conf->line_height.px > 0
-            ? conf->line_height.px * 72. / dpi
-            : conf->line_height.pt;
-
-    term->font_line_height.px = 0;
-    term->font_line_height.pt = fmaxf(line_original_pt_size * change, 0.);
-}
+/* term_line_height_update: ported to terminal.zig */
 
 static bool
 term_set_fonts(struct terminal *term, struct fcft_font *fonts[static 4],

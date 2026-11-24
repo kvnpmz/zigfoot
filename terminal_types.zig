@@ -1226,6 +1226,44 @@ pub fn fontBaseline(term: *const Terminal, ascent: c_int, descent: c_int) c_int 
     return @as(c_int, term.font_y_ofs) + line_height - glyph_top_y - descent;
 }
 
+/// Port of terminal.c's term_line_height_update().
+///
+/// The configured line height is expressed relative to the *original* font
+/// size, so it must be rescaled when the runtime font size changes (font size
+/// shortcuts). A negative px means "use the font's own line height".
+pub fn lineHeightUpdate(term: *Terminal) void {
+    const conf = term.conf.?;
+
+    if (conf.line_height.px < 0) {
+        term.font_line_height.pt = 0;
+        term.font_line_height.px = -1;
+        return;
+    }
+
+    const dpi: f32 = if (term.font_is_sized_by_dpi) term.font_dpi else 96.0;
+
+    const original = conf.fonts[0].arr.?[0];
+    const font_original_pt_size: f32 = if (original.px_size > 0)
+        @as(f32, @floatFromInt(original.px_size)) * 72.0 / dpi
+    else
+        original.pt_size;
+
+    const current = term.font_sizes[0].?.*;
+    const font_current_pt_size: f32 = if (current.px_size > 0)
+        @as(f32, @floatFromInt(current.px_size)) * 72.0 / dpi
+    else
+        current.pt_size;
+
+    const change = font_current_pt_size / font_original_pt_size;
+    const line_original_pt_size: f32 = if (conf.line_height.px > 0)
+        @as(f32, @floatFromInt(conf.line_height.px)) * 72.0 / dpi
+    else
+        conf.line_height.pt;
+
+    term.font_line_height.px = 0;
+    term.font_line_height.pt = @max(line_original_pt_size * change, 0.0);
+}
+
 pub const FontSizeAdjustment = extern struct {
     pt_or_px: PtOrPx,
     percent: f32,
@@ -1696,4 +1734,39 @@ test "font baseline" {
     // Centre offset rounds half away from zero: (21 - 18) / 2 = 1.5 -> 2.
     term.cell_height = 21;
     try std.testing.expectEqual(@as(c_int, 17), fontBaseline(&term, 14, 4));
+}
+
+test "line height update" {
+    var conf: Config = std.mem.zeroes(Config);
+
+    var configured: ConfigFont = .{ .pattern = null, .pt_size = 10.0, .px_size = 0 };
+    conf.fonts[0] = .{ .count = 1, .arr = @ptrCast(&configured) };
+
+    var current: ConfigFont = .{ .pattern = null, .pt_size = 10.0, .px_size = 0 };
+
+    var term: Terminal = std.mem.zeroes(Terminal);
+    term.conf = &conf;
+    term.font_sizes[0] = &current;
+
+    // Negative px means "auto": keep the sentinel and no point size.
+    conf.line_height = .{ .px = -1, .pt = 0 };
+    lineHeightUpdate(&term);
+    try std.testing.expectEqual(@as(i16, -1), term.font_line_height.px);
+    try std.testing.expectEqual(@as(f32, 0), term.font_line_height.pt);
+
+    // 18px at 96 DPI is 13.5pt; font size unchanged, so the change is 1.
+    conf.line_height = .{ .px = 18, .pt = 0 };
+    lineHeightUpdate(&term);
+    try std.testing.expectEqual(@as(i16, 0), term.font_line_height.px);
+    try std.testing.expectEqual(@as(f32, 13.5), term.font_line_height.pt);
+
+    // Doubling the runtime font size doubles the line height.
+    current.pt_size = 20.0;
+    lineHeightUpdate(&term);
+    try std.testing.expectEqual(@as(f32, 27.0), term.font_line_height.pt);
+
+    // Never negative.
+    conf.line_height = .{ .px = 0, .pt = -5.0 };
+    lineHeightUpdate(&term);
+    try std.testing.expectEqual(@as(f32, 0), term.font_line_height.pt);
 }
