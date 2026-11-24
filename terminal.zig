@@ -2732,3 +2732,77 @@ export fn print_insert(term: *types.Terminal, width: c_int) void {
     while (i < cols) : (i += 1)
         cells[i].attrs.clean = false;
 }
+
+//
+// Chunk T6 (part 2) — bell + keyboard focus-in. term_kbd_focus_out() needs
+// term->wl->seats and stays in C until the wayland port.
+//
+
+extern fn wayl_win_set_urgent(window: ?*anyopaque) callconv(.c) bool;
+extern fn wayl_win_ring_bell(window: ?*anyopaque) void;
+extern fn notify_notify(term: *types.Terminal, notif: *types.Notification) callconv(.c) bool;
+extern fn open(path: [*:0]const u8, flags: c_int, ...) callconv(.c) c_int;
+extern fn terminal_shim_conf_bell_urgent(term: *const types.Terminal) callconv(.c) bool;
+extern fn terminal_shim_conf_bell_system_bell(term: *const types.Terminal) callconv(.c) bool;
+extern fn terminal_shim_conf_bell_notify(term: *const types.Terminal) callconv(.c) bool;
+extern fn terminal_shim_conf_bell_flash(term: *const types.Terminal) callconv(.c) bool;
+extern fn terminal_shim_conf_bell_command_focused(term: *const types.Terminal) callconv(.c) bool;
+extern fn terminal_shim_conf_bell_command_argv(term: *const types.Terminal) callconv(.c) [*c]const [*c]u8;
+
+const O_RDONLY: c_int = 0;
+
+export fn term_bell(term: *types.Terminal) void {
+    if (!term.bell_action_enabled)
+        return;
+
+    if (terminal_shim_conf_bell_urgent(term) and !term.kbd_focus) {
+        if (!wayl_win_set_urgent(term.window)) {
+            // Urgency (xdg-activation) is relatively new in Wayland. Fall
+            // back to the old, "faked", urgency: red window margins.
+            term.render.urgency = true;
+            term_damage_margins(term);
+        }
+    }
+
+    if (terminal_shim_conf_bell_system_bell(term))
+        wayl_win_ring_bell(term.window);
+
+    if (terminal_shim_conf_bell_notify(term)) {
+        var notif = std.mem.zeroes(types.Notification);
+        notif.title = xstrdup("Bell");
+        notif.body = xstrdup("Bell in terminal");
+        notif.expire_time = -1;
+        notif.focus = true;
+        _ = notify_notify(term, &notif);
+    }
+
+    if (terminal_shim_conf_bell_flash(term))
+        term_flash(term, 100);
+
+    if (terminal_shim_conf_bell_command_argv(term) != null and
+        (!term.kbd_focus or terminal_shim_conf_bell_command_focused(term)))
+    {
+        const devnull = open("/dev/null", O_RDONLY);
+        _ = spawn(term.reaper, null, terminal_shim_conf_bell_command_argv(term), devnull, -1, -1, null, null, null);
+
+        if (devnull >= 0)
+            _ = close(devnull);
+    }
+}
+
+export fn term_kbd_focus_in(term: *types.Terminal) void {
+    if (term.kbd_focus)
+        return;
+
+    term.kbd_focus = true;
+
+    if (term.render.urgency) {
+        term.render.urgency = false;
+        term_damage_margins(term);
+    }
+
+    cursor_refresh(term);
+
+    if (term.focus_events)
+        _ = term_to_slave(term, "\x1b[I", 3);
+}

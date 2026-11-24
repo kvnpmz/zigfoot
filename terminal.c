@@ -2128,24 +2128,7 @@ UNITTEST
 /* term_send_visibility_report: ported to terminal.zig */
 
 
-void
-term_kbd_focus_in(struct terminal *term)
-{
-    if (term->kbd_focus)
-        return;
-
-    term->kbd_focus = true;
-
-    if (term->render.urgency) {
-        term->render.urgency = false;
-        term_damage_margins(term);
-    }
-
-    cursor_refresh(term);
-
-    if (term->focus_events)
-        term_to_slave(term, "\033[I", 3);
-}
+/* term_kbd_focus_in: ported to terminal.zig */
 
 void
 term_kbd_focus_out(struct terminal *term)
@@ -2269,51 +2252,7 @@ term_xcursor_update(struct terminal *term)
 
 /* term_flash: ported to terminal.zig */
 
-void
-term_bell(struct terminal *term)
-{
-
-    if (!term->bell_action_enabled)
-        return;
-
-    if (term->conf->bell.urgent && !term->kbd_focus) {
-        if (!wayl_win_set_urgent(term->window)) {
-            /*
-             * Urgency (xdg-activation) is relatively new in
-             * Wayland. Fallback to our old, "faked", urgency -
-             * rendering our window margins in red
-             */
-            term->render.urgency = true;
-            term_damage_margins(term);
-        }
-    }
-
-    if (term->conf->bell.system_bell)
-        wayl_win_ring_bell(term->window);
-
-    if (term->conf->bell.notify) {
-        notify_notify(term, &(struct notification){
-            .title = xstrdup("Bell"),
-            .body = xstrdup("Bell in terminal"),
-            .expire_time = -1,
-            .focus = true,
-        });
-    }
-
-    if (term->conf->bell.flash)
-        term_flash(term, 100);
-
-    if ((term->conf->bell.command.argv.args != NULL) &&
-        (!term->kbd_focus || term->conf->bell.command_focused))
-    {
-        int devnull = open("/dev/null", O_RDONLY);
-        spawn(term->reaper, NULL, term->conf->bell.command.argv.args,
-              devnull, -1, -1, NULL, NULL, NULL);
-
-        if (devnull >= 0)
-            close(devnull);
-    }
-}
+/* term_bell: ported to terminal.zig */
 
 /* term_spawn_new: ported to terminal.zig */
 

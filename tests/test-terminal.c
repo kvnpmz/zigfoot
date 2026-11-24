@@ -639,6 +639,67 @@ test_print_insert(void)
     term_free(term);
 }
 
+/* term_bell(): only the flash action is observable without a window */
+static void
+test_bell(void)
+{
+    struct terminal *term = term_new();
+    struct config conf = {0};
+    term->conf = &conf;
+    term->bell_action_enabled = false;
+
+    /* Disabled entirely: nothing happens even with every action enabled */
+    conf.bell.flash = true;
+    term_bell(term);
+    check(!term->flash.active, "bell is a no-op when bell-action is disabled");
+
+    term->bell_action_enabled = true;
+    conf.bell.flash = false;
+    term_bell(term);
+    check(!term->flash.active, "bell without any action does not flash");
+
+    term->flash.fd = timerfd_create(CLOCK_MONOTONIC, TFD_NONBLOCK | TFD_CLOEXEC);
+    conf.bell.flash = true;
+    term_bell(term);
+    check(term->flash.active, "bell flashes when configured to");
+
+    close(term->flash.fd);
+    term_free(term);
+}
+
+/* term_kbd_focus_in(): focus reports and urgency clearing */
+static void
+test_kbd_focus_in(void)
+{
+    struct terminal *term = term_new();
+    term->focus_events = true;
+    term->render.urgency = true;
+
+    int slave = term_capture_begin(term);
+    char buf[64];
+
+    term_kbd_focus_in(term);
+    term_capture_read(slave, buf, sizeof(buf));
+    check_text(buf, "\033[I", "focus-in reports focus");
+    check(term->kbd_focus, "focus-in sets kbd_focus");
+    check(!term->render.urgency, "focus-in clears the urgency flag");
+
+    /* Already focused: nothing must be emitted */
+    term_kbd_focus_in(term);
+    term_capture_read(slave, buf, sizeof(buf));
+    check_text(buf, "", "focus-in is idempotent");
+
+    /* Without focus-events reporting, no escape sequence */
+    term->kbd_focus = false;
+    term->focus_events = false;
+    term_kbd_focus_in(term);
+    term_capture_read(slave, buf, sizeof(buf));
+    check_text(buf, "", "focus-in respects focus-events=false");
+
+    term_capture_end(term, slave);
+    term_free(term);
+}
+
 /* term_flash(): arms the timer and marks the terminal as flashing */
 static void
 test_flash(void)
@@ -668,6 +729,8 @@ main(void)
     test_osc8();
     test_size_notifications();
     test_flash();
+    test_bell();
+    test_kbd_focus_in();
     test_mouse_reporting();
     test_print_insert();
     test_theme_apply();

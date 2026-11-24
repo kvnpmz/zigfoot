@@ -21,6 +21,30 @@ const struct color_theme *terminal_shim_conf_colors_light(
     return &term->conf->colors_light;
 }
 
+bool terminal_shim_conf_bell_urgent(const struct terminal *term) {
+    return term->conf->bell.urgent;
+}
+
+bool terminal_shim_conf_bell_system_bell(const struct terminal *term) {
+    return term->conf->bell.system_bell;
+}
+
+bool terminal_shim_conf_bell_notify(const struct terminal *term) {
+    return term->conf->bell.notify;
+}
+
+bool terminal_shim_conf_bell_flash(const struct terminal *term) {
+    return term->conf->bell.flash;
+}
+
+bool terminal_shim_conf_bell_command_focused(const struct terminal *term) {
+    return term->conf->bell.command_focused;
+}
+
+char *const *terminal_shim_conf_bell_command_argv(const struct terminal *term) {
+    return term->conf->bell.command.argv.args;
+}
+
 bool terminal_shim_conf_locked_title(const struct terminal *term) {
     return term->conf->locked_title;
 }
@@ -33,12 +57,14 @@ const char *terminal_shim_conf_conf_path(const struct terminal *term) {
     return term->conf->conf_path;
 }
 
+/* The null checks are defensive: in foot itself `window` is always set, but
+ * the headless harness runs these paths without a wayland window. */
 bool terminal_shim_window_is_suspended(struct terminal *term) {
-    return term->window->is_suspended;
+    return term->window != NULL && term->window->is_suspended;
 }
 
 bool terminal_shim_window_is_configured(struct terminal *term) {
-    return term->window->is_configured;
+    return term->window != NULL && term->window->is_configured;
 }
 
 int terminal_shim_conf_cursor_blink_rate_ms(struct terminal *term) {
