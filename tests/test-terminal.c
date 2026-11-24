@@ -46,6 +46,8 @@ bool term_set_fonts(
     struct terminal *term, struct fcft_font *fonts[static 4], bool resize_grid);
 bool reload_fonts(struct terminal *term, bool resize_grid);
 bool load_fonts_from_conf(struct terminal *term);
+float get_font_dpi(const struct terminal *term);
+enum fcft_subpixel get_font_subpixel(const struct terminal *term);
 
 #define SCROLLBACK_ROWS 16
 #define TERM_ROWS 5
@@ -1285,8 +1287,89 @@ test_reload_fonts(void)
     check(term->font_sizes[0][0].pt_size == 8.0f,
           "reset restores the configured pt size");
 
+    /* DPI/scale change path: no outputs, so DPI falls back to 96. */
+    conf.dpi_aware = false;
+    term->scale = 1.0f;
+    term->font_dpi = 0.0f;
+    check(term_font_dpi_changed(term, 0.5f),
+          "term_font_dpi_changed reloads on a scale change");
+    check(term->font_dpi == 96.0f,
+          "DPI falls back to 96 with no outputs");
+
     for (size_t i = 0; i < 4; i++)
         fcft_destroy(term->fonts[i]);
+    term_free(term);
+}
+
+/* DPI/subpixel/scale policy: real monitor structs, no compositor. */
+static void
+test_dpi_and_scale(void)
+{
+    struct terminal *term = term_new();
+    struct wayland wl = {0};
+    struct wl_window win = {0};
+    term->wl = &wl;
+    term->window = &win;
+
+    /* Opaque background: subpixel rendering is allowed. */
+    term->colors.alpha = 0xffff;
+
+    struct monitor mon = {0};
+    mon.scale = 2;
+    mon.dpi.physical = 120.0f;
+    mon.dpi.scaled = 96.0f;
+    mon.subpixel = WL_OUTPUT_SUBPIXEL_HORIZONTAL_RGB;
+    tll_push_back(wl.monitors, mon);
+
+    /* No fractional-scaling protocol: use the scaled DPI. */
+    check(get_font_dpi(term) == 96.0f, "DPI uses monitor's scaled DPI");
+    check(get_font_subpixel(term) == FCFT_SUBPIXEL_HORIZONTAL_RGB,
+          "subpixel mode comes from the first monitor");
+
+    /* Fractional scaling: use the physical DPI. */
+    wl.fractional_scale_manager = (void *)1;
+    wl.viewporter = (void *)1;
+    win.scale = 1.5f;
+    check(term_fractional_scaling(term), "fractional scaling detected");
+    check(get_font_dpi(term) == 120.0f, "DPI uses monitor's physical DPI");
+
+    /* An output we are mapped on wins over wl->monitors. */
+    struct monitor mapped = {0};
+    mapped.scale = 3;
+    mapped.dpi.physical = 144.0f;
+    mapped.subpixel = WL_OUTPUT_SUBPIXEL_VERTICAL_BGR;
+    tll_push_back(win.on_outputs, &mapped);
+    check(get_font_dpi(term) == 144.0f, "mapped output DPI wins");
+    check(get_font_subpixel(term) == FCFT_SUBPIXEL_VERTICAL_BGR,
+          "mapped output subpixel wins");
+
+    /* Transparent background forces grayscale antialiasing. */
+    term->colors.alpha = 0x8000;
+    check(get_font_subpixel(term) == FCFT_SUBPIXEL_NONE,
+          "transparent background disables subpixel");
+
+    /* Scale order: fractional > preferred > mapped > last known > first. */
+    term->scale = 1.0f;
+    check(term_update_scale(term), "scale changes");
+    check(term->scale == 1.5f, "fractional window scale wins");
+
+    wl.fractional_scale_manager = NULL;
+    wl.viewporter = NULL;
+    win.preferred_buffer_scale = 3;
+    check(term_update_scale(term), "preferred scale changes the scale");
+    check(term->scale == 3.0f, "preferred buffer scale wins");
+
+    win.preferred_buffer_scale = 0;
+    tll_free(win.on_outputs);
+    term->scale_before_unmap = 1.25f;
+    check(term_update_scale(term), "falls back to last known scale");
+    check(term->scale == 1.25f, "last known scale wins");
+
+    term->scale_before_unmap = 0.0f;
+    check(term_update_scale(term), "falls back to first monitor");
+    check(term->scale == 2.0f, "first monitor scale wins");
+
+    tll_free(wl.monitors);
     term_free(term);
 }
 
@@ -1327,6 +1410,7 @@ main(void)
     test_sgr_underline();
     test_set_fonts();
     test_reload_fonts();
+    test_dpi_and_scale();
 
     fcft_fini();
 

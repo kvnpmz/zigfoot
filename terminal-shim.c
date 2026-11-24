@@ -204,3 +204,54 @@ terminal_shim_fcft_font_options_configure(
 #endif
     }
 }
+
+/* ── output/scale accessors (terminal.zig DPI logic) ──────────────── */
+
+/* terminal.zig owns the DPI/scale policy; these keep struct monitor and the
+ * two monitor tllists on the C side until wayland.c is ported. */
+
+const struct monitor *
+terminal_shim_window_last_output(const struct terminal *term)
+{
+    if (term->window == NULL || tll_length(term->window->on_outputs) == 0)
+        return NULL;
+    return tll_back(term->window->on_outputs);
+}
+
+const struct monitor *
+terminal_shim_first_monitor(const struct terminal *term)
+{
+    if (term->wl == NULL || tll_length(term->wl->monitors) == 0)
+        return NULL;
+    return &tll_front(term->wl->monitors);
+}
+
+float terminal_shim_monitor_scale(const struct monitor *mon) {
+    return mon->scale;
+}
+
+float terminal_shim_monitor_dpi_physical(const struct monitor *mon) {
+    return mon->dpi.physical;
+}
+
+float terminal_shim_monitor_dpi_scaled(const struct monitor *mon) {
+    return mon->dpi.scaled;
+}
+
+int terminal_shim_monitor_subpixel(const struct monitor *mon) {
+    return mon->subpixel;
+}
+
+bool terminal_shim_has_fractional_scale_manager(const struct terminal *term) {
+    return term->wl != NULL &&
+           term->wl->fractional_scale_manager != NULL &&
+           term->wl->viewporter != NULL;
+}
+
+float terminal_shim_window_scale(const struct terminal *term) {
+    return term->window != NULL ? term->window->scale : 0.0f;
+}
+
+int terminal_shim_window_preferred_buffer_scale(const struct terminal *term) {
+    return term->window != NULL ? term->window->preferred_buffer_scale : 0;
+}

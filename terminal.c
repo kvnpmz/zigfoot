@@ -55,6 +55,7 @@ extern bool term_set_fonts(
     struct terminal *term, struct fcft_font *fonts[static 4], bool resize_grid);
 extern bool reload_fonts(struct terminal *term, bool resize_grid);
 extern bool load_fonts_from_conf(struct terminal *term);
+extern enum fcft_subpixel get_font_subpixel(const struct terminal *term);
 extern void term_update_ascii_printer(struct terminal *term);
 extern void term_single_shift(struct terminal *term, enum charset_designator idx);
 
@@ -265,108 +266,7 @@ err_sem_destroy:
 
 /* term_set_fonts: ported to terminal.zig */
 
-static float
-get_font_dpi(const struct terminal *term)
-{
-    /*
-     * Use output's DPI to scale font. This is to ensure the font has
-     * the same physical height (if measured by a ruler) regardless of
-     * monitor.
-     *
-     * Conceptually, we use the physical monitor specs to calculate
-     * the DPI, and we ignore the output's scaling factor.
-     *
-     * However, to deal with legacy fractional scaling, where we're
-     * told to render at e.g. 2x, but are then downscaled by the
-     * compositor to e.g. 1.25, we use the scaled DPI value multiplied
-     * by the scale factor instead.
-     *
-     * For integral scaling factors the resulting DPI is the same as
-     * if we had used the physical DPI.
-     *
-     * For legacy fractional scaling factors we'll get a DPI *larger*
-     * than the physical DPI, that ends up being right when later
-     * downscaled by the compositor.
-     *
-     * With the newer fractional-scale-v1 protocol, we use the
-     * monitor's real DPI, since we scale everything to the correct
-     * scaling factor (no downscaling done by the compositor).
-     */
-
-    const struct wl_window *win = term->window;
-    const struct monitor *mon = NULL;
-
-    if (tll_length(win->on_outputs) > 0)
-        mon = tll_back(win->on_outputs);
-    else {
-        if (term->font_dpi_before_unmap > 0.) {
-            /*
-             * Use last known "good" DPI
-             *
-             * This avoids flickering when window is unmapped/mapped
-             * (some compositors do this when a window is minimized),
-             * on a multi-monitor setup with different monitor DPIs.
-             */
-            return term->font_dpi_before_unmap;
-        }
-
-        if (tll_length(term->wl->monitors) > 0)
-            mon = &tll_front(term->wl->monitors);
-    }
-
-    const float monitor_dpi = mon != NULL
-        ? term_fractional_scaling(term)
-            ? mon->dpi.physical
-            : mon->dpi.scaled
-        : 96.;
-
-    return monitor_dpi > 0. ? monitor_dpi : 96.;
-}
-
-static enum fcft_subpixel
-get_font_subpixel(const struct terminal *term)
-{
-    if (term->colors.alpha != 0xffff) {
-        /* Can't do subpixel rendering on transparent background */
-        return FCFT_SUBPIXEL_NONE;
-    }
-
-    enum wl_output_subpixel wl_subpixel;
-
-    /*
-     * Wayland doesn't tell us *which* part of the surface that goes
-     * on a specific output, only whether the surface is mapped to an
-     * output or not.
-     *
-     * Thus, when determining which subpixel mode to use, we can't do
-     * much but select *an* output. So, we pick the one we were most
-     * recently mapped on.
-     *
-     * If we're not mapped at all, we pick the first available
-     * monitor, and hope that's where we'll eventually get mapped.
-     *
-     * If there aren't any monitors we use the "default" subpixel
-     * mode.
-     */
-
-    if (tll_length(term->window->on_outputs) > 0)
-        wl_subpixel = tll_back(term->window->on_outputs)->subpixel;
-    else if (tll_length(term->wl->monitors) > 0)
-        wl_subpixel = tll_front(term->wl->monitors).subpixel;
-    else
-        wl_subpixel = WL_OUTPUT_SUBPIXEL_UNKNOWN;
-
-    switch (wl_subpixel) {
-    case WL_OUTPUT_SUBPIXEL_UNKNOWN:        return FCFT_SUBPIXEL_DEFAULT;
-    case WL_OUTPUT_SUBPIXEL_NONE:           return FCFT_SUBPIXEL_NONE;
-    case WL_OUTPUT_SUBPIXEL_HORIZONTAL_RGB: return FCFT_SUBPIXEL_HORIZONTAL_RGB;
-    case WL_OUTPUT_SUBPIXEL_HORIZONTAL_BGR: return FCFT_SUBPIXEL_HORIZONTAL_BGR;
-    case WL_OUTPUT_SUBPIXEL_VERTICAL_RGB:   return FCFT_SUBPIXEL_VERTICAL_RGB;
-    case WL_OUTPUT_SUBPIXEL_VERTICAL_BGR:   return FCFT_SUBPIXEL_VERTICAL_BGR;
-    }
-
-    return FCFT_SUBPIXEL_DEFAULT;
-}
+/* get_font_dpi / get_font_subpixel: ported to terminal.zig */
 
 /* term_pt_or_px_as_pixels: ported to terminal.zig */
 
@@ -1524,120 +1424,8 @@ term_font_size_reset(struct terminal *term)
     return load_fonts_from_conf(term);
 }
 
-bool
-term_fractional_scaling(const struct terminal *term)
-{
-    return term->wl->fractional_scale_manager != NULL &&
-           term->wl->viewporter != NULL &&
-           term->window->scale > 0.;
-}
-
-bool
-term_preferred_buffer_scale(const struct terminal *term)
-{
-    return term->window->preferred_buffer_scale > 0;
-}
-
-bool
-term_update_scale(struct terminal *term)
-{
-    const struct wl_window *win = term->window;
-
-    /*
-     * We have a number of "sources" we can use as scale. We choose
-     * the scale in the following order:
-     *
-     *  - "preferred" scale, from the fractional-scale-v1 protocol
-     *  - "preferred" scale, from wl_compositor version 6.
-          NOTE: if the compositor advertises version 6 we must use 1.0
-          until wl_surface.preferred_buffer_scale is sent
-     *  - scaling factor of output we most recently were mapped on
-     *  - if we're not mapped, use the last known scaling factor
-     *  - if we're not mapped, and we don't have a last known scaling
-     *    factor, use the scaling factor from the first available
-     *    output.
-     *  - if there aren't any outputs available, use 1.0
-     */
-    const float new_scale = (term_fractional_scaling(term)
-        ? win->scale
-        : term_preferred_buffer_scale(term)
-            ? win->preferred_buffer_scale
-            : tll_length(win->on_outputs) > 0
-                ? tll_back(win->on_outputs)->scale
-                : term->scale_before_unmap > 0.
-                    ? term->scale_before_unmap
-                    : tll_length(term->wl->monitors) > 0
-                        ? tll_front(term->wl->monitors).scale
-                        : 1.);
-
-    if (new_scale == term->scale)
-        return false;
-
-    LOG_DBG("scaling factor changed: %.2f -> %.2f", term->scale, new_scale);
-    term->scale_before_unmap = new_scale;
-    term->scale = new_scale;
-    return true;
-}
-
-bool
-term_font_dpi_changed(struct terminal *term, float old_scale)
-{
-    float dpi = get_font_dpi(term);
-    xassert(term->scale > 0.);
-
-    bool was_scaled_using_dpi = term->font_is_sized_by_dpi;
-    bool will_scale_using_dpi = term->conf->dpi_aware;
-
-    bool need_font_reload =
-        was_scaled_using_dpi != will_scale_using_dpi ||
-        (will_scale_using_dpi
-         ? term->font_dpi != dpi
-         : old_scale != term->scale);
-
-    if (need_font_reload) {
-        LOG_DBG("DPI/scale change: DPI-aware=%s, "
-                "DPI: %.2f -> %.2f, scale: %.2f -> %.2f, "
-                "sizing font based on monitor's %s",
-                term->conf->dpi_aware ? "yes" : "no",
-                term->font_dpi, dpi, old_scale, term->scale,
-                will_scale_using_dpi ? "DPI" : "scaling factor");
-    }
-
-    term->font_dpi = dpi;
-    term->font_dpi_before_unmap = dpi;
-    term->font_is_sized_by_dpi = will_scale_using_dpi;
-
-    if (!need_font_reload)
-        return false;
-
-    return reload_fonts(term, false);
-}
-
-void
-term_font_subpixel_changed(struct terminal *term)
-{
-    enum fcft_subpixel subpixel = get_font_subpixel(term);
-
-    if (term->font_subpixel == subpixel)
-        return;
-
-#if defined(_DEBUG) && LOG_ENABLE_DBG
-    static const char *const str[] = {
-        [FCFT_SUBPIXEL_DEFAULT] = "default",
-        [FCFT_SUBPIXEL_NONE] = "disabled",
-        [FCFT_SUBPIXEL_HORIZONTAL_RGB] = "RGB",
-        [FCFT_SUBPIXEL_HORIZONTAL_BGR] = "BGR",
-        [FCFT_SUBPIXEL_VERTICAL_RGB] = "V-RGB",
-        [FCFT_SUBPIXEL_VERTICAL_BGR] = "V-BGR",
-    };
-
-    LOG_DBG("subpixel mode changed: %s -> %s", str[term->font_subpixel], str[subpixel]);
-#endif
-
-    term->font_subpixel = subpixel;
-    term_damage_view(term);
-    render_refresh(term);
-}
+/* term_fractional_scaling / term_preferred_buffer_scale / term_update_scale /
+ * term_font_dpi_changed / term_font_subpixel_changed: ported to terminal.zig */
 
 /* term_font_baseline: ported to terminal.zig */
 

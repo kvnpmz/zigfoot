@@ -430,6 +430,165 @@ export fn load_fonts_from_conf(term: *types.Terminal) callconv(.c) bool {
     return reload_fonts(term, true);
 }
 
+//
+// Chunk T9d — DPI and subpixel selection.
+//
+// The policy lives here; the Wayland data it needs (the monitor tlls, the
+// window scale fields) stays behind terminal-shim.c accessors until
+// wayland.c is ported. That is deliberate: mirroring struct monitor and two
+// tllists now would duplicate the phase-3 work and add ABI surface for four
+// floats and an enum.
+//
+
+const Monitor = opaque {};
+
+extern fn terminal_shim_window_last_output(term: *const types.Terminal) callconv(.c) ?*const Monitor;
+extern fn terminal_shim_first_monitor(term: *const types.Terminal) callconv(.c) ?*const Monitor;
+extern fn terminal_shim_monitor_scale(mon: *const Monitor) callconv(.c) f32;
+extern fn terminal_shim_monitor_dpi_physical(mon: *const Monitor) callconv(.c) f32;
+extern fn terminal_shim_monitor_dpi_scaled(mon: *const Monitor) callconv(.c) f32;
+extern fn terminal_shim_monitor_subpixel(mon: *const Monitor) callconv(.c) c_int;
+extern fn terminal_shim_has_fractional_scale_manager(term: *const types.Terminal) callconv(.c) bool;
+extern fn terminal_shim_window_scale(term: *const types.Terminal) callconv(.c) f32;
+extern fn terminal_shim_window_preferred_buffer_scale(term: *const types.Terminal) callconv(.c) c_int;
+
+// fcft_subpixel and wl_output_subpixel have the same ordering, but map
+// explicitly: a change in either enum must not silently change rendering.
+const FCFT_SUBPIXEL_DEFAULT: c_int = 0;
+const FCFT_SUBPIXEL_NONE: c_int = 1;
+const FCFT_SUBPIXEL_HORIZONTAL_RGB: c_int = 2;
+const FCFT_SUBPIXEL_HORIZONTAL_BGR: c_int = 3;
+const FCFT_SUBPIXEL_VERTICAL_RGB: c_int = 4;
+const FCFT_SUBPIXEL_VERTICAL_BGR: c_int = 5;
+
+const WL_OUTPUT_SUBPIXEL_UNKNOWN: c_int = 0;
+const WL_OUTPUT_SUBPIXEL_NONE: c_int = 1;
+const WL_OUTPUT_SUBPIXEL_HORIZONTAL_RGB: c_int = 2;
+const WL_OUTPUT_SUBPIXEL_HORIZONTAL_BGR: c_int = 3;
+const WL_OUTPUT_SUBPIXEL_VERTICAL_RGB: c_int = 4;
+const WL_OUTPUT_SUBPIXEL_VERTICAL_BGR: c_int = 5;
+
+export fn term_fractional_scaling(term: *const types.Terminal) callconv(.c) bool {
+    return terminal_shim_has_fractional_scale_manager(term) and
+        terminal_shim_window_scale(term) > 0.0;
+}
+
+export fn term_preferred_buffer_scale(term: *const types.Terminal) callconv(.c) bool {
+    return terminal_shim_window_preferred_buffer_scale(term) > 0;
+}
+
+fn getFontDpi(term: *const types.Terminal) f32 {
+    var mon = terminal_shim_window_last_output(term);
+
+    if (mon == null) {
+        // Prefer the last known good DPI; avoids flicker when a window is
+        // unmapped/remapped on a mixed-DPI setup.
+        if (term.font_dpi_before_unmap > 0.0)
+            return term.font_dpi_before_unmap;
+
+        mon = terminal_shim_first_monitor(term);
+    }
+
+    const monitor_dpi: f32 = if (mon) |m|
+        if (term_fractional_scaling(term))
+            terminal_shim_monitor_dpi_physical(m)
+        else
+            terminal_shim_monitor_dpi_scaled(m)
+    else
+        96.0;
+
+    return if (monitor_dpi > 0.0) monitor_dpi else 96.0;
+}
+
+export fn get_font_dpi(term: *const types.Terminal) callconv(.c) f32 {
+    return getFontDpi(term);
+}
+
+fn getFontSubpixel(term: *const types.Terminal) c_int {
+    // Can't do subpixel rendering on a transparent background.
+    if (term.colors.alpha != 0xffff)
+        return FCFT_SUBPIXEL_NONE;
+
+    var wl_subpixel: c_int = undefined;
+
+    if (terminal_shim_window_last_output(term)) |m|
+        wl_subpixel = terminal_shim_monitor_subpixel(m)
+    else if (terminal_shim_first_monitor(term)) |m|
+        wl_subpixel = terminal_shim_monitor_subpixel(m)
+    else
+        wl_subpixel = WL_OUTPUT_SUBPIXEL_UNKNOWN;
+
+    return switch (wl_subpixel) {
+        WL_OUTPUT_SUBPIXEL_UNKNOWN => FCFT_SUBPIXEL_DEFAULT,
+        WL_OUTPUT_SUBPIXEL_NONE => FCFT_SUBPIXEL_NONE,
+        WL_OUTPUT_SUBPIXEL_HORIZONTAL_RGB => FCFT_SUBPIXEL_HORIZONTAL_RGB,
+        WL_OUTPUT_SUBPIXEL_HORIZONTAL_BGR => FCFT_SUBPIXEL_HORIZONTAL_BGR,
+        WL_OUTPUT_SUBPIXEL_VERTICAL_RGB => FCFT_SUBPIXEL_VERTICAL_RGB,
+        WL_OUTPUT_SUBPIXEL_VERTICAL_BGR => FCFT_SUBPIXEL_VERTICAL_BGR,
+        else => FCFT_SUBPIXEL_DEFAULT,
+    };
+}
+
+export fn get_font_subpixel(term: *const types.Terminal) callconv(.c) c_int {
+    return getFontSubpixel(term);
+}
+
+export fn term_update_scale(term: *types.Terminal) callconv(.c) bool {
+    const new_scale: f32 = if (term_fractional_scaling(term))
+        terminal_shim_window_scale(term)
+    else if (term_preferred_buffer_scale(term))
+        @floatFromInt(terminal_shim_window_preferred_buffer_scale(term))
+    else if (terminal_shim_window_last_output(term)) |m|
+        terminal_shim_monitor_scale(m)
+    else if (term.scale_before_unmap > 0.0)
+        term.scale_before_unmap
+    else if (terminal_shim_first_monitor(term)) |m|
+        terminal_shim_monitor_scale(m)
+    else
+        1.0;
+
+    if (new_scale == term.scale)
+        return false;
+
+    term.scale_before_unmap = new_scale;
+    term.scale = new_scale;
+    return true;
+}
+
+export fn term_font_dpi_changed(term: *types.Terminal, old_scale: f32) callconv(.c) bool {
+    const dpi = getFontDpi(term);
+    std.debug.assert(term.scale > 0.0);
+
+    const was_scaled_using_dpi = term.font_is_sized_by_dpi;
+    const will_scale_using_dpi = term.conf.?.dpi_aware;
+
+    const need_font_reload = was_scaled_using_dpi != will_scale_using_dpi or
+        (if (will_scale_using_dpi)
+            term.font_dpi != dpi
+        else
+            old_scale != term.scale);
+
+    term.font_dpi = dpi;
+    term.font_dpi_before_unmap = dpi;
+    term.font_is_sized_by_dpi = will_scale_using_dpi;
+
+    if (!need_font_reload)
+        return false;
+
+    return reload_fonts(term, false);
+}
+
+export fn term_font_subpixel_changed(term: *types.Terminal) callconv(.c) void {
+    const subpixel = getFontSubpixel(term);
+
+    if (term.font_subpixel == subpixel)
+        return;
+
+    term.font_subpixel = subpixel;
+    term_damage_view(term);
+    render_refresh(term);
+}
+
 fn termResetGraphemeState(term: *types.Terminal) void {
     // Without utf8proc the fields don't exist in `struct vt` and C's
     // term_reset_grapheme_state() is a no-op; keep `term` "used" so the
@@ -2629,7 +2788,6 @@ export fn term_disable_app_sync_updates(term: *types.Terminal) void {
 //
 
 extern fn wayl_win_alpha_changed(window: ?*anyopaque) callconv(.c) void;
-extern fn term_font_subpixel_changed(term: *types.Terminal) callconv(.c) void;
 extern fn is_valid_utf8_and_printable(value: [*:0]const u8) callconv(.c) bool;
 extern fn spawn(
     reaper: ?*anyopaque,
