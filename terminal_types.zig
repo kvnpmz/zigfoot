@@ -30,6 +30,10 @@ const terminal_grapheme_shaping_offset: usize = abi.Terminal_grapheme_shaping;
 /// probe does not know about and the error tells you to regenerate it.
 fn expectAbi(comptime T: type, comptime key_prefix: []const u8) void {
     comptime {
+        // The wayland mirrors (B1/B2) have hundreds of fields; the default
+        // comptime branch quota of 1000 is not enough for the recursion.
+        @setEvalBranchQuota(100_000);
+
         const info = @typeInfo(T);
         const size_key = key_prefix ++ "__size";
 
@@ -890,8 +894,8 @@ pub const Terminal = extern struct {
             len: usize,
         },
     },
-    wl: ?*anyopaque,
-    window: ?*anyopaque,
+    wl: ?*Wayland,
+    window: ?*WlWindow,
     visual_focus: bool,
     kbd_focus: bool,
     active_surface: TermSurface,
@@ -1159,6 +1163,599 @@ pub const FcftGlyph = extern struct {
     is_color_glyph: bool,
 };
 
+//
+// Wayland-client mirror (wayland.h), chunk B1: every struct except
+// `struct seat` (that is B2). Nothing here has behaviour yet; the point is
+// that Zig code can read `term->window`, `wayl->monitors` and friends
+// directly instead of going through terminal_shim_* accessors.
+//
+// Gating assumptions, enforced in meson.build: HAVE_XDG_TOPLEVEL_TAG and
+// HAVE_EXT_BACKGROUND_EFFECT are always set (wayland-protocols >= 1.45).
+//
+
+/// tllist.h: a list node. The item is the *first* member - tll_front() and
+/// tll_back() hand out `&node->item`, so a mirror that reordered these would
+/// silently read the wrong field.
+pub fn TllNode(comptime T: type) type {
+    return extern struct {
+        item: T,
+        prev: ?*anyopaque,
+        next: ?*anyopaque,
+    };
+}
+
+/// tllist.h: `tll(T)` is a three-word list head. The node layout is
+/// `{ item, prev, next }` (see TllInt), but nothing here dereferences the
+/// nodes yet, so only the head is mirrored.
+pub fn Tll(comptime T: type) type {
+    _ = T;
+    return extern struct {
+        head: ?*anyopaque,
+        tail: ?*anyopaque,
+        length: usize,
+    };
+}
+
+/// wayland.h: enum data_offer_mime_type
+pub const DataOfferMimeType = enum(c_int) {
+    unset = 0,
+    text_plain,
+    text_utf8,
+    uri_list,
+    text_text,
+    text_string,
+    text_utf8_string,
+};
+
+/// wayland.h: enum touch_state
+pub const TouchState = enum(c_int) {
+    inhibited = -1,
+    idle = 0,
+    held,
+    dragging,
+    scrolling,
+};
+
+/// wayland.h: enum csd_mode
+pub const CsdMode = enum(c_int) {
+    unknown = 0,
+    no,
+    yes,
+};
+
+/// wayland.h: enum csd_surface, plus the CSD_SURF_COUNT array length.
+pub const CsdSurface = enum(c_int) {
+    title = 0,
+    left,
+    right,
+    top,
+    bottom,
+    minimize,
+    maximize,
+    close,
+};
+
+pub const CSD_SURF_COUNT: usize = 8;
+
+/// wayland-client: enum wl_output_subpixel
+pub const WlOutputSubpixel = enum(c_int) {
+    unknown = 0,
+    rgb,
+    bgr,
+    vertical_rgb,
+    vertical_bgr,
+};
+
+/// wayland-client: enum wl_output_transform
+pub const WlOutputTransform = enum(c_int) {
+    normal = 0,
+    rot_90,
+    rot_180,
+    rot_270,
+    flipped,
+    flipped_90,
+    flipped_180,
+    flipped_270,
+};
+
+pub const WaylSurface = extern struct {
+    surf: ?*anyopaque,
+    viewport: ?*anyopaque,
+    color_management: ?*anyopaque,
+    background_effect: ?*anyopaque,
+};
+
+pub const WaylSubSurface = extern struct {
+    surface: WaylSurface,
+    sub: ?*anyopaque,
+};
+
+pub const WlClipboard = extern struct {
+    window: ?*anyopaque,
+    data_source: ?*anyopaque,
+    data_offer: ?*anyopaque,
+    mime_type: DataOfferMimeType,
+    text: ?[*:0]u8,
+    serial: u32,
+};
+
+pub const WlPrimary = extern struct {
+    data_source: ?*anyopaque,
+    data_offer: ?*anyopaque,
+    mime_type: DataOfferMimeType,
+    text: ?[*:0]u8,
+    serial: u32,
+};
+
+/// wayland.h: `struct button_tracker`
+pub const ButtonTracker = extern struct {
+    button: c_int,
+    surf_kind: c_int,
+    send_to_client: bool,
+};
+
+/// wayland.h: `struct rect`
+pub const WlRect = extern struct {
+    x: c_int,
+    y: c_int,
+    width: c_int,
+    height: c_int,
+};
+
+pub const Monitor = extern struct {
+    wayl: ?*anyopaque,
+    output: ?*anyopaque,
+    xdg: ?*anyopaque,
+    wl_name: u32,
+
+    x: c_int,
+    y: c_int,
+
+    dim: extern struct {
+        /// Physical size, in mm
+        mm: extern struct {
+            width: c_int,
+            height: c_int,
+        },
+
+        /// Physical size, in pixels
+        px_real: extern struct {
+            width: c_int,
+            height: c_int,
+        },
+
+        /// Scaled size, in pixels
+        px_scaled: extern struct {
+            width: c_int,
+            height: c_int,
+        },
+    },
+
+    ppi: extern struct {
+        /// PPI, based on physical size
+        real: extern struct {
+            x: c_int,
+            y: c_int,
+        },
+
+        /// PPI, logical, based on scaled size
+        scaled: extern struct {
+            x: c_int,
+            y: c_int,
+        },
+    },
+
+    dpi: extern struct {
+        scaled: f32,
+        physical: f32,
+    },
+
+    scale: c_int,
+    refresh: f32,
+    subpixel: WlOutputSubpixel,
+    transform: WlOutputTransform,
+
+    /// From wl_output
+    make: ?[*:0]u8,
+    model: ?[*:0]u8,
+
+    /// From xdg_output
+    name: ?[*:0]u8,
+    description: ?[*:0]u8,
+
+    inch: f32, // e.g. 24"
+    use_output_release: bool,
+};
+
+/// wayland.h: `struct wl_url`
+pub const WlUrl = extern struct {
+    url: ?*const anyopaque, // const struct url *
+    surf: WaylSubSurface,
+};
+
+/// wayland.h: `activation_token_cb_t`
+pub const ActivationTokenCb = *const fn (token: [*:0]const u8, data: ?*anyopaque) callconv(.c) void;
+
+pub const XdgActivationTokenContext = extern struct {
+    /// Need for win->xdg_tokens
+    win: ?*anyopaque,
+    /// Used to match the token in done()
+    xdg_token: ?*anyopaque,
+    /// User provided callback
+    cb: ActivationTokenCb,
+    /// Callback user pointer
+    cb_data: ?*anyopaque,
+};
+
+/// `wm_capabilities`: two single-bit bools, i.e. one byte in C.
+pub const WmCapabilities = packed struct(u8) {
+    maximize: bool,
+    minimize: bool,
+    _unused: u6,
+};
+
+/// `configure`: width/height, 13 single-bit bools packed into two bytes (gcc
+/// allocates them in units of the declared type, bool = 1 byte), then the
+/// pending CSD mode. Only the size and the offset of `csd_mode` are pinned by
+/// the probe; the bit positions follow the C declaration order (LSB first).
+pub const WlWindowConfigure = extern struct {
+    width: c_int,
+    height: c_int,
+    flags: packed struct(u16) {
+        is_activated: bool,
+        is_suspended: bool,
+        is_fullscreen: bool,
+        is_maximized: bool,
+        is_resizing: bool,
+        is_tiled_top: bool,
+        is_tiled_bottom: bool,
+        is_tiled_left: bool,
+        is_tiled_right: bool,
+        is_constrained_top: bool,
+        is_constrained_bottom: bool,
+        is_constrained_left: bool,
+        is_constrained_right: bool,
+        _unused: u3,
+    },
+    _pad: [2]u8,
+    csd_mode: CsdMode,
+};
+
+pub const WlWindowCsd = extern struct {
+    surface: [CSD_SURF_COUNT]WaylSubSurface,
+    font: ?*anyopaque, // struct fcft_font *
+    move_timeout_fd: c_int,
+    serial: u32,
+};
+
+pub const WlWindow = extern struct {
+    term: ?*anyopaque, // struct terminal *
+    surface: WaylSurface,
+    xdg_surface: ?*anyopaque,
+    xdg_toplevel: ?*anyopaque,
+    fractional_scale: ?*anyopaque,
+
+    xdg_tokens: Tll(?*XdgActivationTokenContext),
+    urgency_token_is_pending: bool,
+
+    unmapped: bool,
+    scale: f32,
+    preferred_buffer_scale: c_int,
+
+    xdg_toplevel_decoration: ?*anyopaque,
+
+    csd_mode: CsdMode,
+
+    csd: WlWindowCsd,
+
+    wm_capabilities: WmCapabilities,
+
+    search: WaylSubSurface,
+    scrollback_indicator: WaylSubSurface,
+    render_timer: WaylSubSurface,
+    overlay: WaylSubSurface,
+
+    frame_callback: ?*anyopaque,
+
+    on_outputs: Tll(?*const Monitor), // Outputs we're mapped on
+    urls: Tll(WlUrl),
+
+    is_configured: bool,
+    is_fullscreen: bool,
+    is_maximized: bool,
+    is_resizing: bool,
+    is_suspended: bool,
+    is_tiled_top: bool,
+    is_tiled_bottom: bool,
+    is_tiled_left: bool,
+    is_tiled_right: bool,
+    /// At least one of is_tiled_{top,bottom,left,right} is true
+    is_tiled: bool,
+
+    is_constrained_top: bool,
+    is_constrained_bottom: bool,
+    is_constrained_left: bool,
+    is_constrained_right: bool,
+
+    configure: WlWindowConfigure,
+
+    resize_timeout_fd: c_int,
+};
+
+pub const Wayland = extern struct {
+    fdm: ?*anyopaque,
+    key_binding_manager: ?*anyopaque,
+
+    fd: c_int,
+
+    display: ?*anyopaque,
+    registry: ?*anyopaque,
+    fixes: ?*anyopaque,
+    fixes_version: c_int,
+
+    compositor: ?*anyopaque,
+    sub_compositor: ?*anyopaque,
+    shm: ?*anyopaque,
+
+    xdg_output_manager: ?*anyopaque,
+
+    shell: ?*anyopaque,
+    xdg_decoration_manager: ?*anyopaque,
+
+    data_device_manager: ?*anyopaque,
+    primary_selection_device_manager: ?*anyopaque,
+
+    xdg_activation: ?*anyopaque,
+
+    viewporter: ?*anyopaque,
+    fractional_scale_manager: ?*anyopaque,
+
+    cursor_shape_manager: ?*anyopaque,
+    shape_manager_version: c_int,
+
+    single_pixel_manager: ?*anyopaque,
+
+    toplevel_icon_manager: ?*anyopaque,
+
+    system_bell: ?*anyopaque,
+
+    color_management: extern struct {
+        manager: ?*anyopaque,
+        img_description: ?*anyopaque,
+        have_intent_perceptual: bool,
+        have_feat_parametric: bool,
+        have_tf_ext_linear: bool,
+        have_primaries_srgb: bool,
+    },
+
+    presentation_timings: bool,
+    presentation: ?*anyopaque,
+    presentation_clock_id: u32,
+
+    toplevel_tag_manager: ?*anyopaque,
+
+    background_effect_manager: ?*anyopaque,
+    have_background_blur: bool,
+
+    text_input_manager: ?*anyopaque,
+
+    monitors: Tll(Monitor), // All available outputs
+    seats: Tll(Seat),
+
+    terms: Tll(?*anyopaque), // tll(struct terminal *)
+
+    /// WL_SHM >= 2
+    use_shm_release: bool,
+
+    /// The three `bool ...:1` SHM format flags C packs into the final byte.
+    /// C has no offsetof() for bit-fields, so the probe cannot pin them
+    /// individually; the byte is mirrored as a packed struct and only the
+    /// struct size is checked.
+    _shm_format_bits: packed struct(u8) {
+        argb2101010: bool,
+        abgr2101010: bool,
+        abgr161616: bool,
+        _unused: u5,
+    },
+};
+
+//
+// Chunk B2: `struct seat`, the last mirror that was missing from wayland.h.
+// input.c touches seat->~350 times and render.c ~90 times, so this is what
+// unlocks Track D.
+//
+
+/// cursor-shape.h: enum cursor_shape
+pub const CursorShape = enum(c_int) {
+    none = 0,
+    custom,
+    hidden,
+
+    left_ptr,
+    text,
+    top_left_corner,
+    top_right_corner,
+    bottom_left_corner,
+    bottom_right_corner,
+    left_side,
+    right_side,
+    top_side,
+    bottom_side,
+};
+
+pub const SeatKbd = extern struct {
+    serial: u32,
+
+    xkb: ?*anyopaque,
+    xkb_keymap: ?*anyopaque,
+    xkb_state: ?*anyopaque,
+    xkb_compose_table: ?*anyopaque,
+    xkb_compose_state: ?*anyopaque,
+
+    repeat: extern struct {
+        fd: c_int,
+
+        dont_re_repeat: bool,
+        delay: i32,
+        rate: i32,
+        key: u32,
+    },
+
+    mod_shift: u32, // xkb_mod_index_t
+    mod_alt: u32,
+    mod_ctrl: u32,
+    mod_super: u32,
+    mod_caps: u32,
+    mod_num: u32,
+
+    /// Significant modifiers for the legacy keyboard protocol
+    legacy_significant: u32, // xkb_mod_mask_t
+    /// Significant modifiers for the kitty keyboard protocol
+    kitty_significant: u32,
+
+    /// Set of modifiers to completely ignore
+    virtual_modifiers: u32,
+
+    key_arrow_up: u32, // xkb_keycode_t
+    key_arrow_down: u32,
+
+    /// Enabled modifiers
+    shift: bool,
+    alt: bool,
+    ctrl: bool,
+    super: bool,
+
+    last_shortcut_sym: u32, // xkb_keysym_t
+};
+
+pub const SeatPointer = extern struct {
+    serial: u32,
+
+    /// Client-side cursor
+    surface: WaylSurface,
+    theme: ?*anyopaque,
+    cursor: ?*anyopaque,
+
+    /// Server-side cursor
+    shape_device: ?*anyopaque,
+
+    scale: f32,
+    hidden: bool,
+    shape: CursorShape,
+    last_custom_xcursor: ?[*:0]u8,
+
+    xcursor_callback: ?*anyopaque,
+    xcursor_pending: bool,
+};
+
+pub const SeatTouch = extern struct {
+    state: TouchState,
+
+    serial: u32,
+    time: u32,
+    surface: ?*anyopaque,
+    surface_kind: c_int,
+    id: i32,
+};
+
+pub const SeatMouse = extern struct {
+    x: c_int,
+    y: c_int,
+    col: c_int,
+    row: c_int,
+
+    /// Mouse buttons currently being pressed, and their "owning" surfaces
+    buttons: Tll(ButtonTracker),
+
+    /// Double- and triple click state
+    count: c_int,
+    last_released_button: c_int,
+    last_time: Timespec,
+
+    /// We used a discrete axis event in the current pointer frame
+    aggregated: [2]f64,
+    aggregated_120: [2]f64,
+    have_discrete: bool,
+};
+
+pub const SeatIme = extern struct {
+    cursor_rect: extern struct {
+        pending: WlRect,
+        sent: WlRect,
+    },
+
+    preedit: extern struct {
+        pending: extern struct {
+            text: ?[*:0]u8,
+            cursor_begin: i32,
+            cursor_end: i32,
+        },
+
+        text: ?[*]u32, // char32_t *
+        cells: ?*anyopaque, // struct cell *
+        count: c_int,
+        cursor: extern struct {
+            hidden: bool,
+            /// Cell index, inclusive
+            start: c_int,
+            /// Cell index, exclusive
+            end: c_int,
+        },
+    },
+
+    commit: extern struct {
+        pending: extern struct {
+            text: ?[*:0]u8,
+        },
+    },
+
+    surrounding: extern struct {
+        pending: extern struct {
+            before_length: u32,
+            after_length: u32,
+        },
+    },
+
+    serial: u32,
+};
+
+pub const Seat = extern struct {
+    wayl: ?*Wayland,
+    wl_seat: ?*anyopaque,
+    wl_name: u32,
+    name: ?[*:0]u8,
+
+    /// Focused terminals
+    kbd_focus: ?*Terminal,
+    mouse_focus: ?*Terminal,
+    ime_focus: ?*Terminal,
+
+    /// Keyboard state
+    wl_keyboard: ?*anyopaque,
+    kbd: SeatKbd,
+
+    /// Pointer state
+    wl_pointer: ?*anyopaque,
+    pointer: SeatPointer,
+
+    /// Touch state
+    wl_touch: ?*anyopaque,
+    touch: SeatTouch,
+
+    mouse: SeatMouse,
+
+    /// Clipboard
+    data_device: ?*anyopaque,
+    primary_selection_device: ?*anyopaque,
+
+    clipboard: WlClipboard,
+    primary: WlPrimary,
+
+    /// Input Method Editor
+    wl_text_input: ?*anyopaque,
+    ime: SeatIme,
+};
+
 // Every mirror that is handed to/from C must match the C layout exactly.
 // The values come from `c_layout.zig`, generated from the real headers by
 // `abi_probe.c`; see `scripts/gen_abi_probe.py`.
@@ -1195,6 +1792,27 @@ comptime {
     expectAbi(Blink, "Blink");
     expectAbi(Margins, "Margins");
     expectAbi(Terminal, "Terminal");
+
+    // Chunk B1: wayland.h except struct seat.
+    expectAbi(WaylSurface, "WaylSurface");
+    expectAbi(WaylSubSurface, "WaylSubSurface");
+    expectAbi(WlClipboard, "WlClipboard");
+    expectAbi(WlPrimary, "WlPrimary");
+    expectAbi(ButtonTracker, "ButtonTracker");
+    expectAbi(WlRect, "WlRect");
+    expectAbi(Monitor, "Monitor");
+    expectAbi(WlUrl, "WlUrl");
+    expectAbi(XdgActivationTokenContext, "XdgActivationTokenContext");
+    expectAbi(WlWindow, "WlWindow");
+    expectAbi(Wayland, "Wayland");
+
+    // Chunk B2: struct seat and its nested state blocks.
+    expectAbi(SeatKbd, "Seat_kbd");
+    expectAbi(SeatPointer, "Seat_pointer");
+    expectAbi(SeatTouch, "Seat_touch");
+    expectAbi(SeatMouse, "Seat_mouse");
+    expectAbi(SeatIme, "Seat_ime");
+    expectAbi(Seat, "Seat");
 }
 
 comptime {

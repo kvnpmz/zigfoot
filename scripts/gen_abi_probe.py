@@ -85,6 +85,18 @@ C_TYPES: dict[str, str] = {
     "PixmanRegion32": "pixman_region32_t",
     "BoxBuf": "struct buf",
     "FcftGlyph": "struct fcft_glyph",
+    "WaylSurface": "struct wayl_surface",
+    "WaylSubSurface": "struct wayl_sub_surface",
+    "WlClipboard": "struct wl_clipboard",
+    "WlPrimary": "struct wl_primary",
+    "ButtonTracker": "struct button_tracker",
+    "WlRect": "struct rect",
+    "Monitor": "struct monitor",
+    "WlUrl": "struct wl_url",
+    "XdgActivationTokenContext": "struct xdg_activation_token_context",
+    "WlWindow": "struct wl_window",
+    "Wayland": "struct wayland",
+    "Seat": "struct seat",
     "Buffer": "struct buffer",
     "ShmBufferPool": "struct buffer_pool",
     "ShmBufferPrivate": "struct buffer_private",
@@ -108,11 +120,11 @@ SKIP: set[str] = {
 }
 
 # C packed structs: the size is checkable, individual members are bit-fields.
-PACKED: set[str] = {"Attributes", "CsdColorFlags"}
+PACKED: set[str] = {"Attributes", "CsdColorFlags", "WlWindowConfigure"}
 
 # Inline structs whose members are C bit-fields: only the size is checkable.
 # Keyed by field name, since only inline structs can hit this.
-OPAQUE_FIELDS: set[str] = {"use_custom"}
+OPAQUE_FIELDS: set[str] = {"use_custom", "wm_capabilities", "configure"}
 
 FIELD_RE = re.compile(
     r'^(?:@"([^"]+)"|([A-Za-z_][A-Za-z0-9_]*))\s*:\s*(.*)$')
@@ -306,6 +318,7 @@ def generate() -> str:
         '#include "notify.h"',
         '#include "shm.h"',
         '#include "terminal.h"',
+        '#include "wayland.h"',
         "",
         "int main(int argc, char **argv) {",
         "    FILE *out = stdout;",
