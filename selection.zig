@@ -1703,3 +1703,392 @@ export fn selection_stop_scroll_timer(term: *types.Terminal) callconv(.c) void {
     term.selection.auto_scroll.fd = -1;
     term.selection.auto_scroll.direction = .not;
 }
+
+//
+// Chunk S2 — clipboard/primary receive pipeline.
+//
+// Everything below the wayland layer: the other client writes into a pipe, we
+// read it through the fdm, normalise/strip as configured, and hand chunks to a
+// callback. begin_receive_clipboard() is still called from the C
+// selection_*_from_clipboard/primary() functions, which need the seat.
+//
+
+extern fn fcntl(fd: c_int, cmd: c_int, ...) callconv(.c) c_int;
+extern fn malloc(size: usize) callconv(.c) ?*anyopaque;
+extern fn memmove(dest: ?*anyopaque, src: ?*const anyopaque, n: usize) callconv(.c) ?*anyopaque;
+extern fn uri_parse(
+    uri: [*c]const u8,
+    len: usize,
+    scheme: ?*[*c]u8,
+    user: ?*[*c]u8,
+    password: ?*[*c]u8,
+    host: ?*[*c]u8,
+    port: ?*u16,
+    path: ?*[*c]u8,
+    query: ?*[*c]u8,
+    fragment: ?*[*c]u8,
+) callconv(.c) bool;
+extern fn hostname_is_localhost(hostname: [*c]const u8) callconv(.c) bool;
+
+const F_GETFL: c_int = 3;
+const F_SETFL: c_int = 4;
+const O_NONBLOCK: c_int = 0x800;
+
+const DATA_OFFER_MIME_URI_LIST: c_int = 3;
+
+const ReceiveCb = *const fn (data: [*]u8, size: usize, user: ?*anyopaque) callconv(.c) void;
+const ReceiveDone = *const fn (user: ?*anyopaque) callconv(.c) void;
+
+const UriBuf = struct {
+    data: ?[*]u8 = null,
+    sz: usize = 0,
+    idx: usize = 0,
+};
+
+const ClipboardReceive = struct {
+    read_fd: c_int,
+    timeout_fd: c_int,
+    timeout: types.Itimerspec,
+    bracketed: bool,
+    no_strip: bool,
+    quote_paths: bool,
+
+    decoder: *const fn (*ClipboardReceive, [*]u8, usize) void,
+    finish: *const fn (*ClipboardReceive) void,
+
+    // URI state
+    add_space: bool = false,
+    buf: UriBuf = .{},
+
+    // Callback data
+    cb: ReceiveCb,
+    done: ReceiveDone,
+    user: ?*anyopaque,
+};
+
+fn receiveCb(ctx: *ClipboardReceive, data: [*]const u8, size: usize) void {
+    ctx.cb(@constCast(data), size, ctx.user);
+}
+
+fn logMsg(fmt: []const u8, args: anytype) void {
+    _ = fmt;
+    _ = args;
+    // Formatting is done by the C logger; the receive path only logs at
+    // debug/warn level, which the migration keeps silent for now.
+}
+
+fn clipboardReceiveDone(fdm: *Fdm, ctx: *ClipboardReceive) void {
+    _ = fdm_del(fdm, ctx.timeout_fd);
+    _ = fdm_del(fdm, ctx.read_fd);
+    ctx.done(ctx.user);
+    if (ctx.buf.data) |data|
+        free(data);
+    free(ctx);
+}
+
+fn fdmReceiveTimeout(fdm_opaque: *Fdm, fd: c_int, events: c_int, data: ?*anyopaque) callconv(.c) bool {
+    const ctx: *ClipboardReceive = @ptrCast(@alignCast(data orelse return false));
+    if (events & EPOLLHUP != 0)
+        return false;
+
+    std.debug.assert(events & EPOLLIN != 0);
+
+    var expire_count: u64 = 0;
+    const ret = read(fd, &expire_count, @sizeOf(u64));
+    if (ret < 0) {
+        if (__errno_location().* == EAGAIN)
+            return true;
+        return false;
+    }
+
+    clipboardReceiveDone(fdm_opaque, ctx);
+    return true;
+}
+
+fn fdmReceiveDecoderPlain(ctx: *ClipboardReceive, data: [*]u8, size: usize) void {
+    ctx.cb(data, size, ctx.user);
+}
+
+fn fdmReceiveFinishPlain(ctx: *ClipboardReceive) void {
+    _ = ctx;
+}
+
+fn decodeOneUri(ctx: *ClipboardReceive, uri: [*]u8, len: usize) bool {
+    if (len == 0)
+        return false;
+
+    var scheme: [*c]u8 = null;
+    var host: [*c]u8 = null;
+    var path: [*c]u8 = null;
+
+    if (!uri_parse(uri, len, &scheme, null, null, &host, null, &path, null, null))
+        return false;
+
+    if (ctx.add_space)
+        receiveCb(ctx, " ", 1);
+    ctx.add_space = true;
+
+    const is_file = scheme != null and host != null and path != null and
+        std.mem.eql(u8, std.mem.span(@as([*:0]const u8, @ptrCast(scheme))), "file") and
+        hostname_is_localhost(host);
+
+    if (is_file) {
+        const path_slice = std.mem.span(@as([*:0]const u8, @ptrCast(path)));
+
+        if (ctx.quote_paths)
+            receiveCb(ctx, "'", 1);
+
+        var remaining = path_slice;
+        while (std.mem.indexOfScalar(u8, remaining, '\'')) |quote_idx| {
+            receiveCb(ctx, remaining.ptr, quote_idx);
+            receiveCb(ctx, "\\'", 2);
+            remaining = remaining[quote_idx + 1 ..];
+        }
+        receiveCb(ctx, remaining.ptr, remaining.len);
+
+        if (ctx.quote_paths)
+            receiveCb(ctx, "'", 1);
+    } else {
+        ctx.cb(uri, len, ctx.user);
+    }
+
+    if (scheme != null)
+        free(scheme);
+    if (host != null)
+        free(host);
+    if (path != null)
+        free(path);
+    return true;
+}
+
+fn fdmReceiveDecoderUri(ctx: *ClipboardReceive, data: [*]u8, size: usize) void {
+    while (ctx.buf.idx + size > ctx.buf.sz) {
+        const new_sz = if (ctx.buf.sz == 0) size else 2 * ctx.buf.sz;
+        const new_data = std.c.realloc(ctx.buf.data, new_sz) orelse return;
+        ctx.buf.data = @ptrCast(new_data);
+        ctx.buf.sz = new_sz;
+    }
+
+    const buf = ctx.buf.data.?;
+    @memcpy(buf[ctx.buf.idx .. ctx.buf.idx + size], data[0..size]);
+    ctx.buf.idx += size;
+
+    var start: usize = 0;
+    var end: usize = 0;
+
+    while (true) {
+        end = start;
+        while (end < ctx.buf.idx and buf[end] != '\r' and buf[end] != '\n')
+            end += 1;
+
+        if (end >= ctx.buf.idx)
+            break;
+
+        _ = decodeOneUri(ctx, buf + start, end - start);
+        start = end + 1;
+    }
+
+    const left = ctx.buf.idx - start;
+    if (left > 0)
+        _ = memmove(buf, buf + start, left);
+    ctx.buf.idx = left;
+}
+
+fn fdmReceiveFinishUri(ctx: *ClipboardReceive) void {
+    if (ctx.buf.data) |buf|
+        _ = decodeOneUri(ctx, buf, ctx.buf.idx);
+}
+
+/// Decode and filter one buffer's worth of clipboard data. The C0-stripping
+/// and CRLF-normalisation state machine is a transcription of the C version;
+/// "skip_one" restarts the scan on the remaining data.
+fn receiveChunk(ctx: *ClipboardReceive, p_in: [*]u8, left_in: usize) [*]u8 {
+    var p = p_in;
+    var left = left_in;
+
+    while (true) {
+        var skipped = false;
+        var i: usize = 0;
+
+        while (i < left) : (i += 1) {
+            switch (p[i]) {
+                '\n' => {
+                    if (!ctx.no_strip and !ctx.bracketed)
+                        p[i] = '\r';
+                },
+
+                '\r' => {
+                    // Convert \r\n -> \r
+                    if (!ctx.no_strip and !ctx.bracketed and i + 1 < left and p[i + 1] == '\n') {
+                        i += 1;
+                        ctx.decoder(ctx, p, i);
+                        std.debug.assert(i + 1 <= left);
+                        p += i + 1;
+                        left -= i + 1;
+                        skipped = true;
+                    }
+                },
+
+                // C0 non-formatting control characters (\b \t \n \r excluded)
+                0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x0e, 0x0f, 0x10, 0x11, 0x12, 0x13,
+                0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f,
+                => {
+                    if (!ctx.no_strip) {
+                        ctx.decoder(ctx, p, i);
+                        std.debug.assert(i + 1 <= left);
+                        p += i + 1;
+                        left -= i + 1;
+                        skipped = true;
+                    }
+                },
+
+                // XTerm strips these in non-bracketed mode, but keeps them in
+                // bracketed paste mode.
+                '\x08', '\x7f', 0x00 => {
+                    if (!ctx.no_strip and !ctx.bracketed) {
+                        ctx.decoder(ctx, p, i);
+                        std.debug.assert(i + 1 <= left);
+                        p += i + 1;
+                        left -= i + 1;
+                        skipped = true;
+                    }
+                },
+
+                else => {},
+            }
+
+            if (skipped)
+                break;
+        }
+
+        if (!skipped) {
+            ctx.decoder(ctx, p, left);
+            return p + left;
+        }
+    }
+}
+
+fn fdmReceive(fdm_opaque: *Fdm, fd: c_int, events: c_int, data: ?*anyopaque) callconv(.c) bool {
+    const ctx: *ClipboardReceive = @ptrCast(@alignCast(data orelse return false));
+    const no_strip = ctx.no_strip;
+    const bracketed = ctx.bracketed;
+
+    if ((events & EPOLLHUP != 0) and (events & EPOLLIN == 0))
+        return receiveDone(fdm_opaque, fd, ctx);
+
+    // Reset timeout timer
+    if (timerfd_settime(ctx.timeout_fd, 0, &ctx.timeout, null) < 0)
+        return false;
+
+    while (true) {
+        var text: [256]u8 = undefined;
+        const count = read(fd, &text, text.len);
+
+        if (count == -1) {
+            const err = __errno_location().*;
+            if (err == EAGAIN or err == 11) // EAGAIN || EWOULDBLOCK
+                return true;
+            break;
+        }
+
+        if (count == 0)
+            break;
+
+        // The chunk filter mutates the buffer in place (\n -> \r), hence the
+        // constCast; `count` is a positive read() result, so it fits.
+        _ = receiveChunk(ctx, @constCast(text[0..@intCast(count)].ptr), @intCast(count));
+        _ = no_strip;
+        _ = bracketed;
+    }
+
+    return receiveDone(fdm_opaque, fd, ctx);
+}
+
+fn receiveDone(fdm_opaque: *Fdm, fd: c_int, ctx: *ClipboardReceive) bool {
+    _ = fd;
+    ctx.finish(ctx);
+    clipboardReceiveDone(fdm_opaque, ctx);
+    return true;
+}
+
+fn setupReceive(
+    term: *types.Terminal,
+    no_strip: bool,
+    read_fd: c_int,
+    mime_type: c_int,
+    cb: ReceiveCb,
+    done: ReceiveDone,
+    user: ?*anyopaque,
+    timeout_fd_out: *c_int,
+) ?*ClipboardReceive {
+    const flags = fcntl(read_fd, F_GETFL);
+    if (flags < 0 or fcntl(read_fd, F_SETFL, flags | O_NONBLOCK) < 0)
+        return null;
+
+    const timeout_fd = timerfd_create(CLOCK_MONOTONIC, TFD_NONBLOCK | TFD_CLOEXEC);
+    if (timeout_fd < 0)
+        return null;
+    timeout_fd_out.* = timeout_fd;
+
+    const timeout = types.Itimerspec{
+        .it_value = .{ .tv_sec = 2, .tv_nsec = 0 },
+        .it_interval = .{ .tv_sec = 0, .tv_nsec = 0 },
+    };
+    if (timerfd_settime(timeout_fd, 0, &timeout, null) < 0)
+        return null;
+
+    const ctx_raw = malloc(@sizeOf(ClipboardReceive)) orelse return null;
+    const ctx: *ClipboardReceive = @ptrCast(@alignCast(ctx_raw));
+    ctx.* = .{
+        .read_fd = read_fd,
+        .timeout_fd = timeout_fd,
+        .timeout = timeout,
+        .bracketed = term.bracketed_paste,
+        .no_strip = no_strip,
+        .quote_paths = term.grid == &term.normal,
+        .decoder = if (mime_type == DATA_OFFER_MIME_URI_LIST)
+            &fdmReceiveDecoderUri
+        else
+            &fdmReceiveDecoderPlain,
+        .finish = if (mime_type == DATA_OFFER_MIME_URI_LIST)
+            &fdmReceiveFinishUri
+        else
+            &fdmReceiveFinishPlain,
+        .cb = cb,
+        .done = done,
+        .user = user,
+    };
+    return ctx;
+}
+
+export fn begin_receive_clipboard(
+    term: *types.Terminal,
+    no_strip: bool,
+    read_fd: c_int,
+    mime_type: c_int,
+    cb: ReceiveCb,
+    done: ReceiveDone,
+    user: ?*anyopaque,
+) callconv(.c) void {
+    var timeout_fd: c_int = -1;
+    const maybe_ctx = setupReceive(term, no_strip, read_fd, mime_type, cb, done, user, &timeout_fd);
+
+    if (maybe_ctx) |ctx| {
+        if (term.fdm) |fdm_opaque| {
+            const fdm: *Fdm = @ptrCast(@alignCast(fdm_opaque));
+            if (fdm_add(fdm, read_fd, EPOLLIN, &fdmReceive, ctx) and
+                fdm_add(fdm, timeout_fd, EPOLLIN, &fdmReceiveTimeout, ctx))
+            {
+                return;
+            }
+        }
+        free(ctx);
+    }
+
+    if (term.fdm) |fdm_opaque| {
+        const fdm: *Fdm = @ptrCast(@alignCast(fdm_opaque));
+        _ = fdm_del(fdm, timeout_fd);
+        _ = fdm_del(fdm, read_fd);
+    }
+    done(user);
+}

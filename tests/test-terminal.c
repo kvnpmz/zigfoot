@@ -13,6 +13,8 @@
 #include "terminal.h"
 #include "grid.h"
 #include "config.h"
+#include "fdm.h"
+#include "wayland.h"
 #include "xmalloc.h"
 
 #include <stdio.h>
@@ -28,6 +30,11 @@
 /* Ported to terminal.zig; internal helpers, not part of terminal.h. */
 void print_insert(struct terminal *term, int width);
 void erase_cell_range(struct terminal *term, struct row *row, int start, int end);
+void begin_receive_clipboard(
+    struct terminal *term, bool no_strip, int read_fd,
+    enum data_offer_mime_type mime_type,
+    void (*cb)(char *data, size_t size, void *user),
+    void (*done)(void *user), void *user);
 void erase_line(struct terminal *term, struct row *row);
 void print_linewrap(struct terminal *term);
 
@@ -641,6 +648,198 @@ test_print_insert(void)
     term_free(term);
 }
 
+/* ── clipboard receive pipeline ─────────────────────────────────────────── */
+
+struct collector {
+    char buf[4096];
+    size_t len;
+    bool done;
+};
+
+static void
+collect_cb(char *data, size_t size, void *user)
+{
+    struct collector *c = user;
+    xassert(c->len + size < sizeof(c->buf));
+    memcpy(c->buf + c->len, data, size);
+    c->len += size;
+    c->buf[c->len] = '\0';
+}
+
+static void
+collect_done(void *user)
+{
+    struct collector *c = user;
+    c->done = true;
+}
+
+/*
+ * Feed `input` through begin_receive_clipboard(), pumping the fdm until the
+ * done callback fires, and return what the callback produced.
+ */
+static void
+receive(struct collector *c, bool no_strip, bool bracketed,
+        enum data_offer_mime_type mime_type, const char *input)
+{
+    struct terminal *term = term_new();
+    struct fdm *fdm = fdm_init();
+    xassert(fdm != NULL);
+    term->fdm = fdm;
+    term->bracketed_paste = bracketed;
+
+    int fds[2];
+    xassert(pipe(fds) == 0);
+    xassert(write(fds[1], input, strlen(input)) == (ssize_t)strlen(input));
+    close(fds[1]);   /* so the reader sees EOF */
+
+    memset(c, 0, sizeof(*c));
+    begin_receive_clipboard(term, no_strip, fds[0], mime_type,
+                            collect_cb, collect_done, c);
+
+    while (!c->done)
+        fdm_poll(fdm);
+
+    fdm_destroy(fdm);
+    term_free(term);
+}
+
+static void
+test_receive_paste_normalisation(void)
+{
+    struct collector c;
+
+    /* Non-bracketed: \r\n -> \r and \n -> \r */
+    receive(&c, false, false, DATA_OFFER_MIME_TEXT_PLAIN, "a\r\nb\nc");
+    check_text(c.buf, "a\rb\rc", "non-bracketed paste normalises newlines");
+
+    /* Bracketed: newlines are preserved */
+    receive(&c, false, true, DATA_OFFER_MIME_TEXT_PLAIN, "a\r\nb\nc");
+    check_text(c.buf, "a\r\nb\nc", "bracketed paste preserves newlines");
+
+    /* no-strip (e.g. OSC 52 with no-strip set) leaves everything alone */
+    receive(&c, true, false, DATA_OFFER_MIME_TEXT_PLAIN, "a\r\nb\nc");
+    check_text(c.buf, "a\r\nb\nc", "no_strip disables normalisation");
+
+    /* C0 controls are stripped, formatting ones (\t \r \n) kept */
+    receive(&c, false, false, DATA_OFFER_MIME_TEXT_PLAIN, "a\001b\033c\td");
+    check_text(c.buf, "abc\td", "non-formatting C0 controls are stripped");
+
+    receive(&c, false, false, DATA_OFFER_MIME_TEXT_PLAIN, "a\010b\177c");
+    check_text(c.buf, "abc", "BS and DEL are stripped when not bracketed");
+
+    receive(&c, false, true, DATA_OFFER_MIME_TEXT_PLAIN, "a\010b");
+    check_text(c.buf, "a\010b", "BS survives a bracketed paste");
+}
+
+static void
+test_receive_uri_list(void)
+{
+    struct collector c;
+    struct terminal *unused;
+
+    /* quote_paths is true when the grid is the normal one, which the harness
+     * always is: local file paths come out single-quoted, space separated. */
+    receive(&c, false, false, DATA_OFFER_MIME_URI_LIST,
+            "file:///tmp/foo\nfile://localhost/tmp/bar\n");
+    check_text(c.buf, "'/tmp/foo' '/tmp/bar'", "uri-list: local paths are quoted");
+
+    /* Embedded single quotes are escaped */
+    receive(&c, false, false, DATA_OFFER_MIME_URI_LIST, "file:///tmp/a'b\n");
+    check_text(c.buf, "'/tmp/a\\'b'", "uri-list: embedded quotes are escaped");
+
+    /* Remote URIs are passed through untouched */
+    receive(&c, false, false, DATA_OFFER_MIME_URI_LIST, "https://example.com/x\n");
+    check_text(c.buf, "https://example.com/x", "uri-list: non-file URIs pass through");
+
+    /* The final URI has no trailing newline; the finish callback flushes it */
+    receive(&c, false, false, DATA_OFFER_MIME_URI_LIST,
+            "file:///tmp/one\nfile:///tmp/two");
+    check_text(c.buf, "'/tmp/one' '/tmp/two'", "uri-list: unterminated last URI is flushed");
+
+    /* Not on the alternate screen: quote_paths stays true either way here */
+    (void)unused;
+}
+
+/*
+ * Same, but the data arrives in two reads. This is the case the URI buffer
+ * exists for: a line boundary may fall inside a read() or between two.
+ */
+static void
+receive_split(struct collector *c, const char *part1, const char *part2,
+              bool silent_after_part1)
+{
+    struct terminal *term = term_new();
+    struct fdm *fdm = fdm_init();
+    xassert(fdm != NULL);
+    term->fdm = fdm;
+
+    int fds[2];
+    xassert(pipe(fds) == 0);
+
+    memset(c, 0, sizeof(*c));
+    begin_receive_clipboard(term, false, fds[0], DATA_OFFER_MIME_URI_LIST,
+                            collect_cb, collect_done, c);
+
+    xassert(write(fds[1], part1, strlen(part1)) == (ssize_t)strlen(part1));
+    fdm_poll(fdm);   /* consume part1; an incomplete line must be buffered */
+    if (silent_after_part1) {
+        check(c->len == 0, "split URI: no callback while the line is incomplete");
+    }
+
+    xassert(write(fds[1], part2, strlen(part2)) == (ssize_t)strlen(part2));
+    close(fds[1]);
+
+    while (!c->done)
+        fdm_poll(fdm);
+
+    fdm_destroy(fdm);
+    term_free(term);
+}
+
+static void
+test_receive_uri_split_reads(void)
+{
+    struct collector c;
+
+    /* Boundary in the middle of the first URI */
+    receive_split(&c, "file:///tmp/fo", "o\nfile:///tmp/bar", true);
+    check_text(c.buf, "'/tmp/foo' '/tmp/bar'", "uri-list: partial line spans two reads");
+
+    /* Boundary exactly on the newline, and two URIs in the second read */
+    receive_split(&c, "file:///tmp/one\n", "file:///tmp/two\nfile:///tmp/three", false);
+    check_text(c.buf, "'/tmp/one' '/tmp/two' '/tmp/three'",
+               "uri-list: multiple URIs across reads");
+}
+
+static void
+test_receive_timeout(void)
+{
+    /* A pipe that never gets data nor EOF: the 2s timer must fire and call
+     * done() so we don't leak the context. */
+    struct terminal *term = term_new();
+    struct fdm *fdm = fdm_init();
+    xassert(fdm != NULL);
+    term->fdm = fdm;
+
+    struct collector c;
+    memset(&c, 0, sizeof(c));
+
+    int fds[2];
+    xassert(pipe(fds) == 0);
+
+    begin_receive_clipboard(term, false, fds[0], DATA_OFFER_MIME_TEXT_PLAIN,
+                            collect_cb, collect_done, &c);
+    while (!c.done)
+        fdm_poll(fdm);
+
+    check(c.len == 0, "timeout: no data was collected");
+    check(c.done, "timeout: done callback was called");
+
+    close(fds[1]);
+    fdm_destroy(fdm);
+    term_free(term);
+}
+
 /* erase_cell_range()/erase_line(): blanking cells, honouring the current bg */
 static void
 test_erase_cell_range(void)
@@ -782,6 +981,10 @@ main(void)
     test_osc8();
     test_size_notifications();
     test_flash();
+    test_receive_paste_normalisation();
+    test_receive_uri_list();
+    test_receive_uri_split_reads();
+    test_receive_timeout();
     test_erase_cell_range();
     test_bell();
     test_kbd_focus_in();
