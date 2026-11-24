@@ -74,8 +74,13 @@ def main():
     for arg in sys.argv[3:]:
         if "=" in arg:
             name, value = arg.split("=", 1)
-            if value not in ("true", "false"):
-                sys.exit(f"compile_zig.py: {name}: expected true/false")
+            # A value is either a bool or a Zig string literal ("...").
+            # The latter mirrors C string #defines (e.g. a path).
+            is_string = len(value) >= 2 and value[0] == '"' and value[-1] == '"'
+            if value not in ("true", "false") and not is_string:
+                sys.exit(
+                    f"compile_zig.py: {name}: expected true/false or a "
+                    f'quoted string, got {value!r}')
             extra_options[name] = value
         elif arg in ("true", "false"):
             grapheme_clustering = arg

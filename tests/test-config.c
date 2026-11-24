@@ -19,6 +19,10 @@ extern bool config_resolve_key_binding_collisions(
 extern size_t config_action_map_count(int kind);
 extern const char *config_action_map_name(int kind, int action);
 
+/* Ported to config.zig (C2m): the default URL regex, and the tables it
+ * replaces. The regex' own UNITTEST moved here with it. */
+extern const char *config_default_url_regex_string(void);
+
 enum { MAP_KIND_KEY, MAP_KIND_SEARCH, MAP_KIND_URL };
 
 #define ALEN(v) (sizeof(v) / sizeof((v)[0]))
@@ -1601,6 +1605,109 @@ test_section_tweak(void)
     config_free(&conf);
 }
 
+/*
+ * The default URL regex (C2m).
+ *
+ * This used to be a UNITTEST in config.c; it followed the string into
+ * config.zig, where the UNITTEST framework does not reach, so it lives here
+ * with the rest of the oracle.
+ */
+
+static void
+check_url_match(const char *url, const char *expected_match, regmatch_t match)
+{
+    const size_t mlen = match.rm_eo - match.rm_so;
+    const size_t start = &url[match.rm_so] - url;
+
+    if (mlen != strlen(expected_match) ||
+        memcmp(&url[start], expected_match, mlen) != 0)
+    {
+        BUG("url: %s\n"
+            "  expected match: %s\n"
+            "  match:          %.*s",
+            url, expected_match, (int)mlen, &url[start]);
+    }
+}
+
+static void
+test_default_url_regex(void)
+{
+    const char *regex = config_default_url_regex_string();
+    regex_t re;
+    int r = regcomp(&re, regex, REG_EXTENDED);
+    xassert(r == 0);
+    xassert(re.re_nsub >= 1);
+
+    static const struct {
+        const char *url;
+        const char *expected_match;
+    } test_cases[] = {
+        {"https://www.foobar.com/[a](b)\"c\"'d'efg.html?foo=bar&bar=foo",
+         "https://www.foobar.com/[a](b)\"c\"'d'efg.html?foo=bar&bar=foo"},
+
+        /* Trailing quotes are not matched */
+        {"https://quote-at-the-end'", "https://quote-at-the-end"},
+        {"https://quote-at-the-end\"", "https://quote-at-the-end"},
+
+        /* That includes quoted URLs too */
+        {"'https://quote-at-the-end''", "https://quote-at-the-end"},
+        {"\"https://quote-at-the-end\"\"", "https://quote-at-the-end"},
+
+        /* Allow '-quotes in the middle */
+        {"https://unbalanced'not-at-the-end",
+         "https://unbalanced'not-at-the-end"},
+
+        /* But not "-quotes */
+        {"https://unbalanced\"not-at-the-end", "https://unbalanced"},
+
+        /* "Balanced" quotes are allowed, at the end... */
+        {"https://balanced-'quote'", "https://balanced-'quote'"},
+
+        /* ... and in the middle */
+        {"https://balanced-'quote'-in-the-middle",
+         "https://balanced-'quote'-in-the-middle"},
+
+        /* Balanced "-quotes too */
+        {"https://balanced-\"quote\"", "https://balanced-\"quote\""},
+        {"https://balanced-\"quote\"-in-the-middle",
+         "https://balanced-\"quote\"-in-the-middle"},
+
+        /* Quoted URLs should match the URL part, not the quotes */
+        {"'https://quoted-url'", "https://quoted-url"},
+        {"\"https://quoted-url\"", "https://quoted-url"},
+        {"\"https://quoted-url-with-'-inside\"",
+         "https://quoted-url-with-'-inside"},
+
+        {"'https://abc' foobar", "https://abc"},
+
+        {"https://foo[bar", "https://foo"},
+        {"https://foo[]bar", "https://foo"},
+        {"https://foo[abc]", "https://foo[abc]"},
+        {"https://foo[abc]bar", "https://foo[abc]bar"},
+
+        {"https://foo(bar", "https://foo"},
+        {"https://foo()bar", "https://foo"},
+        {"https://foo(abc)", "https://foo(abc)"},
+        {"https://foo(abc)bar", "https://foo(abc)bar"},
+
+        {"https://foo{bar", "https://foo"},
+        {"https://foo{}bar", "https://foo"},
+        {"https://foo{abc}bar", "https://foo"},
+    };
+
+    for (size_t i = 0; i < ALEN(test_cases); i++) {
+        const char *const url = test_cases[i].url;
+        const char *const expected_match = test_cases[i].expected_match;
+
+        regmatch_t matches[8] = {0};
+        int m = regexec(&re, url, ALEN(matches), matches, 0);
+        xassert(m == 0);
+        check_url_match(url, expected_match, matches[1]);
+    }
+
+    regfree(&re);
+}
+
 int
 main(int argc, const char *const *argv)
 {
@@ -1630,6 +1737,7 @@ main(int argc, const char *const *argv)
     test_section_text_bindings();
     test_section_environment();
     test_section_tweak();
+    test_default_url_regex();
     log_deinit();
     FcFini();
     return 0;

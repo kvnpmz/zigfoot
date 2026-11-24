@@ -381,6 +381,11 @@ config_obj = custom_target(
     # [tweak] surface-bit-depth only accepts "16-bit" when the C build has
     # HAVE_PIXMAN_RGBA_16.
     'pixman_rgba_16=' + pixman_rgba_16.to_string(),
+    # config_load() mirrors the FOOT_DEFAULT_TERM / UTMP_DEFAULT_HELPER_PATH
+    # / _DEBUG #defines the C build passes on the command line.
+    'default_terminfo="' + get_option('default-terminfo') + '"',
+    'utmp_helper_path="' + (utmp_backend != 'none' ? utmp_default_helper_path : '') + '"',
+    'debug_build=' + is_debug_build.to_string(),
   ]
 )
 

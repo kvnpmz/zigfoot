@@ -1120,6 +1120,88 @@ export fn modifiers_to_str(
     return @ptrCast(ret);
 }
 
+// ── config defaults (C2m) ─────────────────────────────────────────
+
+const default_foreground: u32 = 0xffffff;
+const default_background: u32 = 0x242424;
+
+const default_color_table = [256]u32{
+    0x242424, 0xf62b5a, 0x47b413, 0xe3c401, 0x24acd4, 0xf2affd, 0x13c299, 0xe6e6e6,
+    0x616161, 0xff4d51, 0x35d450, 0xe9e836, 0x5dc5f8, 0xfeabf2, 0x24dfc4, 0xffffff,
+    0x000000, 0x00005f, 0x000087, 0x0000af, 0x0000d7, 0x0000ff, 0x005f00, 0x005f5f,
+    0x005f87, 0x005faf, 0x005fd7, 0x005fff, 0x008700, 0x00875f, 0x008787, 0x0087af,
+    0x0087d7, 0x0087ff, 0x00af00, 0x00af5f, 0x00af87, 0x00afaf, 0x00afd7, 0x00afff,
+    0x00d700, 0x00d75f, 0x00d787, 0x00d7af, 0x00d7d7, 0x00d7ff, 0x00ff00, 0x00ff5f,
+    0x00ff87, 0x00ffaf, 0x00ffd7, 0x00ffff, 0x5f0000, 0x5f005f, 0x5f0087, 0x5f00af,
+    0x5f00d7, 0x5f00ff, 0x5f5f00, 0x5f5f5f, 0x5f5f87, 0x5f5faf, 0x5f5fd7, 0x5f5fff,
+    0x5f8700, 0x5f875f, 0x5f8787, 0x5f87af, 0x5f87d7, 0x5f87ff, 0x5faf00, 0x5faf5f,
+    0x5faf87, 0x5fafaf, 0x5fafd7, 0x5fafff, 0x5fd700, 0x5fd75f, 0x5fd787, 0x5fd7af,
+    0x5fd7d7, 0x5fd7ff, 0x5fff00, 0x5fff5f, 0x5fff87, 0x5fffaf, 0x5fffd7, 0x5fffff,
+    0x870000, 0x87005f, 0x870087, 0x8700af, 0x8700d7, 0x8700ff, 0x875f00, 0x875f5f,
+    0x875f87, 0x875faf, 0x875fd7, 0x875fff, 0x878700, 0x87875f, 0x878787, 0x8787af,
+    0x8787d7, 0x8787ff, 0x87af00, 0x87af5f, 0x87af87, 0x87afaf, 0x87afd7, 0x87afff,
+    0x87d700, 0x87d75f, 0x87d787, 0x87d7af, 0x87d7d7, 0x87d7ff, 0x87ff00, 0x87ff5f,
+    0x87ff87, 0x87ffaf, 0x87ffd7, 0x87ffff, 0xaf0000, 0xaf005f, 0xaf0087, 0xaf00af,
+    0xaf00d7, 0xaf00ff, 0xaf5f00, 0xaf5f5f, 0xaf5f87, 0xaf5faf, 0xaf5fd7, 0xaf5fff,
+    0xaf8700, 0xaf875f, 0xaf8787, 0xaf87af, 0xaf87d7, 0xaf87ff, 0xafaf00, 0xafaf5f,
+    0xafaf87, 0xafafaf, 0xafafd7, 0xafafff, 0xafd700, 0xafd75f, 0xafd787, 0xafd7af,
+    0xafd7d7, 0xafd7ff, 0xafff00, 0xafff5f, 0xafff87, 0xafffaf, 0xafffd7, 0xafffff,
+    0xd70000, 0xd7005f, 0xd70087, 0xd700af, 0xd700d7, 0xd700ff, 0xd75f00, 0xd75f5f,
+    0xd75f87, 0xd75faf, 0xd75fd7, 0xd75fff, 0xd78700, 0xd7875f, 0xd78787, 0xd787af,
+    0xd787d7, 0xd787ff, 0xd7af00, 0xd7af5f, 0xd7af87, 0xd7afaf, 0xd7afd7, 0xd7afff,
+    0xd7d700, 0xd7d75f, 0xd7d787, 0xd7d7af, 0xd7d7d7, 0xd7d7ff, 0xd7ff00, 0xd7ff5f,
+    0xd7ff87, 0xd7ffaf, 0xd7ffd7, 0xd7ffff, 0xff0000, 0xff005f, 0xff0087, 0xff00af,
+    0xff00d7, 0xff00ff, 0xff5f00, 0xff5f5f, 0xff5f87, 0xff5faf, 0xff5fd7, 0xff5fff,
+    0xff8700, 0xff875f, 0xff8787, 0xff87af, 0xff87d7, 0xff87ff, 0xffaf00, 0xffaf5f,
+    0xffaf87, 0xffafaf, 0xffafd7, 0xffafff, 0xffd700, 0xffd75f, 0xffd787, 0xffd7af,
+    0xffd7d7, 0xffd7ff, 0xffff00, 0xffff5f, 0xffff87, 0xffffaf, 0xffffd7, 0xffffff,
+    0x080808, 0x121212, 0x1c1c1c, 0x262626, 0x303030, 0x3a3a3a, 0x444444, 0x4e4e4e,
+    0x585858, 0x626262, 0x6c6c6c, 0x767676, 0x808080, 0x8a8a8a, 0x949494, 0x9e9e9e,
+    0xa8a8a8, 0xb2b2b2, 0xbcbcbc, 0xc6c6c6, 0xd0d0d0, 0xdadada, 0xe4e4e4, 0xeeeeee,
+};
+
+
+/// VT330/VT340 default colour map (sixel).
+const default_sixel_colors = [16]u32{
+    0xff000000, 0xff3333cc, 0xffcc2121, 0xff33cc33,
+    0xffcc33cc, 0xff33cccc, 0xffcccc33, 0xff878787,
+    0xff424242, 0xff545499, 0xff994242, 0xff549954,
+    0xff995499, 0xff549999, 0xff999954, 0xffcccccc,
+};
+
+
+const default_url_regex_string: [:0]const u8 =
+    "(" ++
+    "(" ++
+    "(https?://|mailto:|ftp://|file:|ssh:|ssh://|git://|tel:|magnet:|ipfs://|ipns://|gemini://|gopher://|news:)" ++
+    "|" ++
+    "www\\." ++
+    ")" ++
+    "(" ++
+    "[0-9a-zA-Z:/?#@!$&*+,;=.~_%^'\\-]+" ++
+    "|" ++
+    "\\([]\\[\"0-9a-zA-Z:/?#@!$&'*+,;=.~_%^\\-]+\\)" ++
+    "|" ++
+    "\\[[\\(\\)\"0-9a-zA-Z:/?#@!$&'*+,;=.~_%^\\-]+\\]" ++
+    "|" ++
+    "\"[]\\[\\(\\)0-9a-zA-Z:/?#@!$&'*+,;=.~_%^\\-]+\"" ++
+    "|" ++
+    "'[]\\[\\(\\)0-9a-zA-Z:/?#@!$&*+,;=.~_%^\\-]+'" ++
+    ")+" ++
+    "(" ++
+    "[0-9a-zA-Z/#@$&*+=~_%^\\-]" ++
+    "|" ++
+    "\\([]\\[\"0-9a-zA-Z:/?#@!$&'*+,;=.~_%^\\-]+\\)" ++
+    "|" ++
+    "\\[[\\(\\)\"0-9a-zA-Z:/?#@!$&'*+,;=.~_%^\\-]+\\]" ++
+    "|" ++
+    "\"[]\\[\\(\\)0-9a-zA-Z:/?#@!$&'*+,;=.~_%^\\-]+\"" ++
+    "|" ++
+    "'[]\\[\\(\\)0-9a-zA-Z:/?#@!$&*+,;=.~_%^\\-]+'" ++
+    ")" ++
+    ")";
+
+
 // ── default bindings and server socket path (C2l) ────────────────
 
 const DefaultBinding = struct {
@@ -3281,4 +3363,330 @@ export fn config_override_apply(
     conf.csd.border_width = @max(min_csd_border_width, conf.csd.border_width_visible);
 
     return config_bindings_finalize(conf);
+}
+
+// ── defaults and config_load() (C2m) ──────────────────────────────
+//
+// Everything below is the `*conf = (struct config){...}` literal plus the
+// fixups that follow it. Zig has no designated initialisers, so the C
+// zero-fill semantics are reproduced with `std.mem.zeroes()` followed by
+// explicit assignments for every field C names (keeping the same set makes
+// the two versions diffable).
+
+extern fn xc32dup(str: ?[*:0]const u32) callconv(.c) ?[*:0]u32;
+extern fn open(path: [*:0]const u8, flags: c_int, ...) callconv(.c) c_int;
+extern fn close(fd: c_int) callconv(.c) c_int;
+extern fn access(path: [*:0]const u8, mode: c_int) callconv(.c) c_int;
+extern fn fdopen(fd: c_int, mode: [*:0]const u8) callconv(.c) ?*anyopaque;
+extern fn sysconf(name: c_int) callconv(.c) c_long;
+extern fn fcft_capabilities() callconv(.c) c_int;
+extern fn config_font_parse(pattern: [*:0]const u8, font: *types.ConfigFont) callconv(.c) bool;
+extern fn config_font_list_clone(
+    dst: *types.ConfigFontList,
+    src: *const types.ConfigFontList,
+) callconv(.c) void;
+extern fn get_shell() callconv(.c) ?[*:0]u8;
+
+/// C: `struct config_file`
+const ConfigFile = extern struct {
+    path: ?[*:0]u8,
+    fd: c_int,
+};
+extern fn open_config() callconv(.c) ConfigFile;
+
+const O_RDONLY: c_int = 0;
+const X_OK: c_int = 1;
+/// Linux: `_SC_NPROCESSORS_ONLN`. (Zig's std.c does not name the opaque
+/// sysconf keys, and this is the only one the port needs.)
+const sc_nprocessors_onln: c_int = 84;
+const FCFT_CAPABILITY_GRAPHEME_SHAPING: c_int = 0x1;
+const FCFT_SCALING_FILTER_LANCZOS3: c_int = 4;
+
+/// U",│`|:\"'()[]{}<>"
+const default_word_delimiters = [_:0]u32{
+    ',', 0x2502, '`', '|', ':', '"', '\'', '(', ')', '[', ']', '{', '}', '<', '>',
+};
+/// U"sadfjklewcmpgh"
+const default_url_label_letters = [_:0]u32{ 's', 'a', 'd', 'f', 'j', 'k', 'l', 'e', 'w', 'c', 'm', 'p', 'g', 'h' };
+
+/// The URL regex the [url] section starts with (C: `default_url_regex_string`).
+export fn config_default_url_regex_string() callconv(.c) [*:0]const u8 {
+    return default_url_regex_string.ptr;
+}
+
+const FILE = *anyopaque;
+
+fn notifyErrno(
+    conf: *types.Config,
+    src: std.builtin.SourceLocation,
+    comptime fmt: []const u8,
+    args: anytype,
+) void {
+    var buf: [1024]u8 = undefined;
+    const msg: [:0]const u8 = std.fmt.bufPrintZ(&buf, fmt, args) catch "invalid value";
+    log_and_notify_errno(conf, src.file, @intCast(src.line), "%s", msg.ptr);
+}
+
+export fn config_load(
+    conf: *types.Config,
+    conf_path: ?[*:0]const u8,
+    initial_user_notifications: *types.UserNotifications,
+    overrides: *Overrides,
+    errors_are_fatal: bool,
+    as_server: bool,
+) callconv(.c) bool {
+    var ret = true;
+    const fcft_caps = fcft_capabilities();
+
+    conf.* = std.mem.zeroes(types.Config);
+
+    conf.conf_path = if (conf_path) |p| xstrdup(p) else null;
+    conf.term = xstrdup(build_options.default_terminfo.ptr);
+    conf.shell = get_shell();
+    conf.title = xstrdup("foot");
+    conf.app_id = xstrdup(if (as_server) "footclient" else "foot");
+    conf.toplevel_tag = xstrdup("");
+    conf.word_delimiters = xc32dup(&default_word_delimiters);
+    conf.size = .{ .type = .px, .width = 700, .height = 500 };
+    conf.pad_left = 0;
+    conf.pad_top = 0;
+    conf.pad_right = 0;
+    conf.pad_bottom = 0;
+    conf.center_when = .maximized_and_fullscreen;
+    conf.resize_by_cells = true;
+    conf.resize_keep_grid = true;
+    conf.resize_delay_ms = 100;
+    conf.dim = .{ .amount = 1.5 };
+    conf.bold_in_bright = .{ .enabled = false, .palette_based = false, .amount = 1.3 };
+    conf.startup_mode = .windowed;
+    conf.font_size_adjustment = .{ .percent = 0.0, .pt_or_px = .{ .pt = 0.5, .px = 0 } };
+    conf.line_height = .{ .pt = 0, .px = -1 };
+    conf.letter_spacing = .{ .pt = 0, .px = 0 };
+    conf.horizontal_letter_offset = .{ .pt = 0, .px = 0 };
+    conf.vertical_letter_offset = .{ .pt = 0, .px = 0 };
+    conf.use_custom_underline_offset = false;
+    conf.box_drawings_uses_font_glyphs = false;
+    conf.underline_thickness = .{ .pt = 0.0, .px = -1 };
+    conf.strikeout_thickness = .{ .pt = 0.0, .px = -1 };
+    conf.dpi_aware = false;
+    conf.gamma_correct = false;
+    conf.uppercase_regex_insert = true;
+    conf.security = .{ .osc52 = .enabled };
+    conf.bell = .{
+        .urgent = false,
+        .notify = false,
+        .flash = false,
+        .system_bell = true,
+        .command = .{ .argv = .{ .args = null } },
+        .command_focused = false,
+    };
+    conf.url.label_letters = xc32dup(&default_url_label_letters);
+    conf.url.osc8_underline = .url_mode;
+    conf.url.style = .dotted;
+    conf.can_shape_grapheme = (fcft_caps & FCFT_CAPABILITY_GRAPHEME_SHAPING) != 0;
+    conf.scrollback = .{
+        .lines = 1000,
+        .indicator = .{
+            .position = .relative,
+            .format = .text,
+            .text = xc32dup(&[_:0]u32{}),
+        },
+        .multiplier = 3.0,
+    };
+    conf.colors_dark = std.mem.zeroes(types.ColorTheme);
+    conf.colors_dark.fg = default_foreground;
+    conf.colors_dark.bg = default_background;
+    conf.colors_dark.flash = 0x7f7f00;
+    conf.colors_dark.flash_alpha = 0x7fff;
+    conf.colors_dark.alpha = 0xffff;
+    conf.colors_dark.alpha_mode = .default;
+    conf.colors_dark.dim_blend_towards = .blend_towards_black;
+    conf.colors_dark.selection_fg = 0x80000000; // Use default bg
+    conf.colors_dark.selection_bg = 0x80000000; // Use default fg
+    conf.initial_color_theme = .dark;
+    conf.cursor = .{
+        .style = .block,
+        .unfocused_style = .hollow,
+        .blink = .{ .enabled = false, .rate_ms = 500 },
+        .beam_thickness = .{ .pt = 1.5, .px = 0 },
+        .underline_thickness = .{ .pt = 0.0, .px = -1 },
+    };
+    conf.mouse = .{
+        .hide_when_typing = false,
+        .alternate_scroll_mode = true,
+        .selection_override_modifiers = std.mem.zeroes(types.TllStr),
+    };
+    conf.csd = std.mem.zeroes(@TypeOf(conf.csd));
+    conf.csd.preferred = .prefer_server;
+    conf.csd.hide_when_maximized = false;
+    conf.csd.double_click_to_maximize = true;
+    conf.csd.title_height = 26;
+    conf.csd.border_width = 5;
+    conf.csd.border_width_visible = 0;
+    conf.csd.button_width = 26;
+
+    // C truncates the long to uint16_t.
+    conf.render_worker_count = @truncate(@as(c_ulong, @bitCast(sysconf(sc_nprocessors_onln))));
+    conf.server_socket_path = get_server_socket_path();
+    conf.presentation_timings = false;
+    conf.selection_target = .primary;
+    conf.hold_at_exit = false;
+    conf.desktop_notifications = .{
+        .command = .{ .argv = .{ .args = null } },
+        .command_action_arg = .{ .argv = .{ .args = null } },
+        .close = .{ .argv = .{ .args = null } },
+        .inhibit_when_focused = true,
+    };
+    conf.tweak = std.mem.zeroes(@TypeOf(conf.tweak));
+    conf.tweak.fcft_filter = FCFT_SCALING_FILTER_LANCZOS3;
+    conf.tweak.overflowing_glyphs = true;
+    if (build_options.grapheme_clustering)
+        conf.tweak.grapheme_shaping = (fcft_caps & FCFT_CAPABILITY_GRAPHEME_SHAPING) != 0;
+    conf.tweak.grapheme_width_method = .double;
+    conf.tweak.delayed_render_lower_ns = 500000; // 0.5ms
+    conf.tweak.delayed_render_upper_ns = @divTrunc(16666666, 2); // half a frame (60Hz)
+    conf.tweak.max_shm_pool_size = 512 * 1024 * 1024;
+    conf.tweak.render_timer = .none;
+    conf.tweak.damage_whole_window = false;
+    conf.tweak.box_drawing_base_thickness = 0.04;
+    conf.tweak.box_drawing_solid_shades = true;
+    conf.tweak.font_monospace_warn = true;
+    conf.tweak.sixel = true;
+    conf.tweak.surface_bit_depth = .auto;
+    conf.tweak.min_stride_alignment = 256;
+    conf.tweak.preapply_damage = true;
+    conf.touch = .{ .long_press_delay = 400 };
+    conf.env_vars = std.mem.zeroes(types.EnvVarList);
+    {
+        // #if defined(UTMP_DEFAULT_HELPER_PATH): the C build always defines
+        // it, possibly as the empty string.
+        const helper: [*:0]const u8 = build_options.utmp_helper_path.ptr;
+        conf.utmp_helper_path =
+            if (helper[0] != 0 and access(helper, X_OK) == 0) xstrdup(helper) else null;
+    }
+    conf.notifications = std.mem.zeroes(types.UserNotifications);
+
+    conf.colors_dark.table = default_color_table;
+    conf.colors_dark.sixel = default_sixel_colors;
+    conf.colors_light = conf.colors_dark;
+    conf.colors_light.dim_blend_towards = .blend_towards_white;
+
+    parse_modifiers("Shift", 5, &conf.mouse.selection_override_modifiers);
+
+    _ = tokenize_cmdline(
+        "notify-send --wait --app-name ${app-id} --icon ${app-id} --category ${category} --urgency ${urgency} --expire-time ${expire-time} --hint STRING:image-path:${icon} --hint BOOLEAN:suppress-sound:${muted} --hint STRING:sound-name:${sound-name} --replace-id ${replace-id} ${action-argument} --print-id -- ${title} ${body}",
+        &conf.desktop_notifications.command.argv.args,
+    );
+    _ = tokenize_cmdline(
+        "--action ${action-name}=${action-label}",
+        &conf.desktop_notifications.command_action_arg.argv.args,
+    );
+    _ = tokenize_cmdline("xdg-open ${url}", &conf.url.launch.argv.args);
+
+    {
+        var err_buf: [1024]u8 = undefined;
+        const r = config_regex_compile(
+            default_url_regex_string.ptr,
+            @ptrCast(&conf.url.preg),
+            &err_buf,
+            err_buf.len,
+        );
+        // C: xassert(r == 0); xassert(conf->url.preg.re_nsub >= 1);
+        // config_regex_compile() folds the re_nsub check into -2.
+        std.debug.assert(r == 0);
+        conf.url.regex = xstrdup(default_url_regex_string.ptr);
+    }
+
+    {
+        const Notifications = tll.Tll(types.UserNotification);
+        const src: *Notifications = @ptrCast(initial_user_notifications);
+        const dst: *Notifications = @ptrCast(&conf.notifications);
+        while (src.head) |node| {
+            const item = node.item;
+            dst.pushBack(item);
+            src.removeNode(node);
+        }
+    }
+
+    add_default_key_bindings(conf);
+    add_default_search_bindings(conf);
+    add_default_url_bindings(conf);
+    add_default_mouse_bindings(conf);
+
+    var conf_file = ConfigFile{ .path = null, .fd = -1 };
+    if (conf_path) |p| {
+        const fd = open(p, O_RDONLY);
+        if (fd < 0) {
+            notifyErrno(conf, @src(), "{s}: failed to open", .{std.mem.span(p)});
+            ret = !errors_are_fatal;
+        } else {
+            conf_file.path = xstrdup(p);
+            conf_file.fd = fd;
+        }
+    } else {
+        conf_file = open_config();
+        if (conf_file.fd < 0) {
+            logWarn(@src(), "no configuration found, using defaults");
+            ret = !errors_are_fatal;
+        }
+    }
+
+    if (conf_file.path != null and conf_file.fd >= 0) {
+        const path = conf_file.path.?;
+        logInfoFmt(@src(), "loading configuration from {s}", .{std.mem.span(path)});
+
+        const f: ?FILE = fdopen(conf_file.fd, "r");
+        if (f == null) {
+            notifyErrno(conf, @src(), "{s}: failed to open", .{std.mem.span(path)});
+            ret = !errors_are_fatal;
+        } else {
+            if (!parse_config_file(f.?, conf, path, errors_are_fatal))
+                ret = !errors_are_fatal;
+
+            _ = fclose(f.?);
+            conf_file.fd = -1;
+        }
+    }
+
+    if (!config_override_apply(conf, overrides, errors_are_fatal))
+        ret = !errors_are_fatal;
+
+    if (ret and conf.fonts[0].count == 0) {
+        var font: types.ConfigFont = undefined;
+        if (!config_font_parse("monospace", &font)) {
+            log_msg(
+                LOG_CLASS_ERROR,
+                "config",
+                @src().file,
+                @intCast(@src().line),
+                "%s",
+                "failed to load font 'monospace' - no fonts installed?",
+            );
+            ret = false;
+        } else {
+            conf.fonts[0].count = 1;
+            const arr = xmalloc(@sizeOf(types.ConfigFont)).?;
+            conf.fonts[0].arr = @ptrCast(@alignCast(arr));
+            conf.fonts[0].arr.?[0] = font;
+        }
+    }
+
+    if (ret and conf.csd.font.count == 0)
+        config_font_list_clone(&conf.csd.font, &conf.fonts[0]);
+
+    if (build_options.debug_build) {
+        for (conf.bindings.key.arr.?[0..conf.bindings.key.count]) |b|
+            std.debug.assert(b.action != 0); // BIND_ACTION_NONE
+        for (conf.bindings.search.arr.?[0..conf.bindings.search.count]) |b|
+            std.debug.assert(b.action != 0); // BIND_ACTION_SEARCH_NONE
+        for (conf.bindings.url.arr.?[0..conf.bindings.url.count]) |b|
+            std.debug.assert(b.action != 0); // BIND_ACTION_URL_NONE
+    }
+
+    if (conf_file.path) |p|
+        free(@ptrCast(p));
+    if (conf_file.fd >= 0)
+        _ = close(conf_file.fd);
+
+    return ret;
 }
