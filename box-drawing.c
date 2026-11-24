@@ -23,673 +23,88 @@
 static const pixman_color_t white = {0xffff, 0xffff, 0xffff, 0xffff};
 
 
-static void
-draw_box_drawings_light_horizontal(struct buf *buf)
-{
-    hline_middle(LIGHT);
-}
-
-static void
-draw_box_drawings_heavy_horizontal(struct buf *buf)
-{
-    hline_middle(HEAVY);
-}
-
-static void
-draw_box_drawings_light_vertical(struct buf *buf)
-{
-    vline_middle(LIGHT);
-}
-
-static void
-draw_box_drawings_heavy_vertical(struct buf *buf)
-{
-    vline_middle(HEAVY);
-}
-
-static void
-draw_box_drawings_dash_horizontal(struct buf *buf, int count, int thick, int gap)
-{
-    int width = buf->width;
-    int height = buf->height;
-
-    xassert(count >= 2 && count <= 4);
-    const int gap_count = count - 1;
-
-    int dash_width = (width - (gap_count * gap)) / count;
-    while (dash_width <= 0 && gap > 1) {
-        gap--;
-        dash_width = (width - (gap_count * gap)) / count;
-    }
-
-    if (dash_width <= 0) {
-        hline_middle(LIGHT);
-        return;
-    }
-
-    xassert(count * dash_width + gap_count * gap <= width);
-
-    int remaining = width - count * dash_width - gap_count * gap;
-
-    int x[4] = {0};
-    int w[4] = {dash_width, dash_width, dash_width, dash_width};
-
-    x[0] = 0;
-
-    x[1] = x[0] + w[0] + gap;
-    if (count == 2)
-        w[1] = width - x[1];
-    else if (count == 3)
-        w[1] += remaining;
-    else
-        w[1] += remaining / 2;
-
-    if (count >= 3) {
-        x[2] = x[1] + w[1] + gap;
-        if (count == 3)
-            w[2] = width - x[2];
-        else
-            w[2] += remaining - remaining / 2;
-    }
-
-    if (count >= 4) {
-        x[3] = x[2] + w[2] + gap;
-        w[3] = width - x[3];
-    }
-
-    hline(x[0], x[0] + w[0], (height - thick) / 2, thick);
-    hline(x[1], x[1] + w[1], (height - thick) / 2, thick);
-    if (count >= 3)
-        hline(x[2], x[2] + w[2], (height - thick) / 2, thick);
-    if (count >= 4)
-        hline(x[3], x[3] + w[3], (height - thick) / 2, thick);
-}
-
-static void
-draw_box_drawings_dash_vertical(struct buf *buf, int count, int thick, int gap)
-{
-    int width = buf->width;
-    int height = buf->height;
-
-    xassert(count >= 2 && count <= 4);
-    const int gap_count = count - 1;
-
-    int dash_height = (height - (gap_count * gap)) / count;
-    while (dash_height <= 0 && gap > 1) {
-        gap--;
-        dash_height = (height - (gap_count * gap)) / count;
-    }
-
-    if (dash_height <= 0) {
-        vline_middle(LIGHT);
-        return;
-    }
-
-    xassert(count * dash_height + gap_count * gap <= height);
-
-    int remaining = height - count * dash_height - gap_count * gap;
-
-    int y[4] = {0};
-    int h[4] = {dash_height, dash_height, dash_height, dash_height};
-
-    y[0] = 0;
-
-    y[1] = y[0] + h[0] + gap;
-    if (count == 2)
-        h[1] = height - y[1];
-    else if (count == 3)
-        h[1] += remaining;
-    else
-        h[1] += remaining / 2;
-
-    if (count >= 3) {
-        y[2] = y[1] + h[1] + gap;
-        if (count == 3)
-            h[2] = height - y[2];
-        else
-            h[2] += remaining - remaining / 2;
-    }
-
-    if (count >= 4) {
-        y[3] = y[2] + h[2] + gap;
-        h[3] = height - y[3];
-    }
-
-    vline(y[0], y[0] + h[0], (width - thick) / 2, thick);
-    vline(y[1], y[1] + h[1], (width - thick) / 2, thick);
-    if (count >= 3)
-        vline(y[2], y[2] + h[2], (width - thick) / 2, thick);
-    if (count >= 4)
-        vline(y[3], y[3] + h[3], (width - thick) / 2, thick);
-}
-
-static void
-draw_box_drawings_light_triple_dash_horizontal(struct buf *buf)
-{
-    draw_box_drawings_dash_horizontal(buf, 3, thickness(LIGHT), thickness(LIGHT));
-}
-
-static void
-draw_box_drawings_heavy_triple_dash_horizontal(struct buf *buf)
-{
-    draw_box_drawings_dash_horizontal(buf, 3, thickness(HEAVY), thickness(LIGHT));
-}
-
-static void
-draw_box_drawings_light_triple_dash_vertical(struct buf *buf)
-{
-    draw_box_drawings_dash_vertical(buf, 3, thickness(LIGHT), thickness(HEAVY));
-}
-
-static void
-draw_box_drawings_heavy_triple_dash_vertical(struct buf *buf)
-{
-    draw_box_drawings_dash_vertical(buf, 3, thickness(HEAVY), thickness(HEAVY));
-}
-
-static void
-draw_box_drawings_light_quadruple_dash_horizontal(struct buf *buf)
-{
-    draw_box_drawings_dash_horizontal(buf, 4, thickness(LIGHT), thickness(LIGHT));
-}
-
-static void
-draw_box_drawings_heavy_quadruple_dash_horizontal(struct buf *buf)
-{
-    draw_box_drawings_dash_horizontal(buf, 4, thickness(HEAVY), thickness(LIGHT));
-}
-
-static void
-draw_box_drawings_light_quadruple_dash_vertical(struct buf *buf)
-{
-    draw_box_drawings_dash_vertical(buf, 4, thickness(LIGHT), thickness(LIGHT));
-}
-
-static void
-draw_box_drawings_heavy_quadruple_dash_vertical(struct buf *buf)
-{
-    draw_box_drawings_dash_vertical(buf, 4, thickness(HEAVY), thickness(LIGHT));
-}
-
-static void
-draw_box_drawings_light_down_and_right(struct buf *buf)
-{
-    hline_middle_right(LIGHT);
-    vline_middle_down(LIGHT);
-}
-
-static void
-draw_box_drawings_down_light_and_right_heavy(struct buf *buf)
-{
-    hline_middle_right_mixed(LIGHT, HEAVY);
-    vline_middle_down(LIGHT);
-}
-
-static void
-draw_box_drawings_down_heavy_and_right_light(struct buf *buf)
-{
-    hline_middle_right(LIGHT);
-    vline_middle_down_mixed(HEAVY, LIGHT);
-}
-
-static void
-draw_box_drawings_heavy_down_and_right(struct buf *buf)
-{
-    hline_middle_right(HEAVY);
-    vline_middle_down(HEAVY);
-}
-
-static void
-draw_box_drawings_light_down_and_left(struct buf *buf)
-{
-    hline_middle_left(LIGHT);
-    vline_middle_down(LIGHT);
-}
-
-static void
-draw_box_drawings_down_light_and_left_heavy(struct buf *buf)
-{
-    hline_middle_left_mixed(LIGHT, HEAVY);
-    vline_middle_down(LIGHT);
-}
-
-static void
-draw_box_drawings_down_heavy_and_left_light(struct buf *buf)
-{
-    hline_middle_left(LIGHT);
-    vline_middle_down_mixed(HEAVY, LIGHT);
-}
-
-static void
-draw_box_drawings_heavy_down_and_left(struct buf *buf)
-{
-    hline_middle_left(HEAVY);
-    vline_middle_down(HEAVY);
-}
-
-static void
-draw_box_drawings_light_up_and_right(struct buf *buf)
-{
-    hline_middle_right(LIGHT);
-    vline_middle_up(LIGHT);
-}
-
-static void
-draw_box_drawings_up_light_and_right_heavy(struct buf *buf)
-{
-    hline_middle_right_mixed(LIGHT, HEAVY);
-    vline_middle_up(LIGHT);
-}
-
-static void
-draw_box_drawings_up_heavy_and_right_light(struct buf *buf)
-{
-    hline_middle_right(LIGHT);
-    vline_middle_up_mixed(HEAVY, LIGHT);
-}
-
-static void
-draw_box_drawings_heavy_up_and_right(struct buf *buf)
-{
-    hline_middle_right(HEAVY);
-    vline_middle_up(HEAVY);
-}
-
-static void
-draw_box_drawings_light_up_and_left(struct buf *buf)
-{
-    hline_middle_left(LIGHT);
-    vline_middle_up(LIGHT);
-}
-
-static void
-draw_box_drawings_up_light_and_left_heavy(struct buf *buf)
-{
-    hline_middle_left_mixed(LIGHT, HEAVY);
-    vline_middle_up(LIGHT);
-}
-
-static void
-draw_box_drawings_up_heavy_and_left_light(struct buf *buf)
-{
-    hline_middle_left(LIGHT);
-    vline_middle_up_mixed(HEAVY, LIGHT);
-}
-
-static void
-draw_box_drawings_heavy_up_and_left(struct buf *buf)
-{
-    hline_middle_left(HEAVY);
-    vline_middle_up(HEAVY);
-}
-
-static void
-draw_box_drawings_light_vertical_and_right(struct buf *buf)
-{
-    hline_middle_right(LIGHT);
-    vline_middle(LIGHT);
-}
-
-static void
-draw_box_drawings_vertical_light_and_right_heavy(struct buf *buf)
-{
-    hline_middle_right_mixed(LIGHT, HEAVY);
-    vline_middle(LIGHT);
-}
-
-static void
-draw_box_drawings_up_heavy_and_right_down_light(struct buf *buf)
-{
-    hline_middle_right(LIGHT);
-    vline_middle_up_mixed(HEAVY, LIGHT);
-    vline_middle_down(LIGHT);
-}
-
-static void
-draw_box_drawings_down_heavy_and_right_up_light(struct buf *buf)
-{
-    hline_middle_right(LIGHT);
-    vline_middle_up(LIGHT);
-    vline_middle_down_mixed(HEAVY, LIGHT);
-}
-
-static void
-draw_box_drawings_vertical_heavy_and_right_light(struct buf *buf)
-{
-    hline_middle_right(LIGHT);
-    vline_middle(HEAVY);
-}
-
-static void
-draw_box_drawings_down_light_and_right_up_heavy(struct buf *buf)
-{
-    hline_middle_right(HEAVY);
-    vline_middle_up(HEAVY);
-    vline_middle_down(LIGHT);
-}
-
-static void
-draw_box_drawings_up_light_and_right_down_heavy(struct buf *buf)
-{
-    hline_middle_right(HEAVY);
-    vline_middle_up(LIGHT);
-    vline_middle_down(HEAVY);
-}
-
-static void
-draw_box_drawings_heavy_vertical_and_right(struct buf *buf)
-{
-    hline_middle_right(HEAVY);
-    vline_middle(HEAVY);
-}
-
-static void
-draw_box_drawings_light_vertical_and_left(struct buf *buf)
-{
-    hline_middle_left(LIGHT);
-    vline_middle(LIGHT);
-}
-
-static void
-draw_box_drawings_vertical_light_and_left_heavy(struct buf *buf)
-{
-    hline_middle_left_mixed(LIGHT, HEAVY);
-    vline_middle(LIGHT);
-}
-
-static void
-draw_box_drawings_up_heavy_and_left_down_light(struct buf *buf)
-{
-    hline_middle_left(LIGHT);
-    vline_middle_up_mixed(HEAVY, LIGHT);
-    vline_middle_down(LIGHT);
-}
-
-static void
-draw_box_drawings_down_heavy_and_left_up_light(struct buf *buf)
-{
-    hline_middle_left(LIGHT);
-    vline_middle_up(LIGHT);
-    vline_middle_down_mixed(HEAVY, LIGHT);
-}
-
-static void
-draw_box_drawings_vertical_heavy_and_left_light(struct buf *buf)
-{
-    hline_middle_left(LIGHT);
-    vline_middle(HEAVY);
-}
-
-static void
-draw_box_drawings_down_light_and_left_up_heavy(struct buf *buf)
-{
-    hline_middle_left(HEAVY);
-    vline_middle_up(HEAVY);
-    vline_middle_down(LIGHT);
-}
-
-static void
-draw_box_drawings_up_light_and_left_down_heavy(struct buf *buf)
-{
-    hline_middle_left(HEAVY);
-    vline_middle_up(LIGHT);
-    vline_middle_down(HEAVY);
-}
-
-static void
-draw_box_drawings_heavy_vertical_and_left(struct buf *buf)
-{
-    hline_middle_left(HEAVY);
-    vline_middle(HEAVY);
-}
-
-static void
-draw_box_drawings_light_down_and_horizontal(struct buf *buf)
-{
-    hline_middle(LIGHT);
-    vline_middle_down(LIGHT);
-}
-
-static void
-draw_box_drawings_left_heavy_and_right_down_light(struct buf *buf)
-{
-    hline_middle_left_mixed(LIGHT, HEAVY);
-    hline_middle_right(LIGHT);
-    vline_middle_down(LIGHT);
-}
-
-static void
-draw_box_drawings_right_heavy_and_left_down_light(struct buf *buf)
-{
-    hline_middle_left(LIGHT);
-    hline_middle_right_mixed(LIGHT, HEAVY);
-    vline_middle_down(LIGHT);
-}
-
-static void
-draw_box_drawings_down_light_and_horizontal_heavy(struct buf *buf)
-{
-    hline_middle(HEAVY);
-    vline_middle_down(LIGHT);
-}
-
-static void
-draw_box_drawings_down_heavy_and_horizontal_light(struct buf *buf)
-{
-    hline_middle(LIGHT);
-    vline_middle_down_mixed(HEAVY, LIGHT);
-}
-
-static void
-draw_box_drawings_right_light_and_left_down_heavy(struct buf *buf)
-{
-    hline_middle_left(HEAVY);
-    hline_middle_right(LIGHT);
-    vline_middle_down(HEAVY);
-}
-
-static void
-draw_box_drawings_left_light_and_right_down_heavy(struct buf *buf)
-{
-    hline_middle_left(LIGHT);
-    hline_middle_right(HEAVY);
-    vline_middle_down(HEAVY);
-}
-
-static void
-draw_box_drawings_heavy_down_and_horizontal(struct buf *buf)
-{
-    hline_middle(HEAVY);
-    vline_middle_down(HEAVY);
-}
-
-static void
-draw_box_drawings_light_up_and_horizontal(struct buf *buf)
-{
-    hline_middle(LIGHT);
-    vline_middle_up(LIGHT);
-}
-
-static void
-draw_box_drawings_left_heavy_and_right_up_light(struct buf *buf)
-{
-    hline_middle_left_mixed(LIGHT, HEAVY);
-    hline_middle_right(LIGHT);
-    vline_middle_up(LIGHT);
-}
-
-static void
-draw_box_drawings_right_heavy_and_left_up_light(struct buf *buf)
-{
-    hline_middle_left(LIGHT);
-    hline_middle_right_mixed(LIGHT, HEAVY);
-    vline_middle_up(LIGHT);
-}
-
-static void
-draw_box_drawings_up_light_and_horizontal_heavy(struct buf *buf)
-{
-    hline_middle(HEAVY);
-    vline_middle_up(LIGHT);
-}
-
-static void
-draw_box_drawings_up_heavy_and_horizontal_light(struct buf *buf)
-{
-    hline_middle(LIGHT);
-    vline_middle_up_mixed(HEAVY, LIGHT);
-}
-
-static void
-draw_box_drawings_right_light_and_left_up_heavy(struct buf *buf)
-{
-    hline_middle_left(HEAVY);
-    hline_middle_right(LIGHT);
-    vline_middle_up(HEAVY);
-}
-
-static void
-draw_box_drawings_left_light_and_right_up_heavy(struct buf *buf)
-{
-    hline_middle_left(LIGHT);
-    hline_middle_right(HEAVY);
-    vline_middle_up(HEAVY);
-}
-
-static void
-draw_box_drawings_heavy_up_and_horizontal(struct buf *buf)
-{
-    hline_middle(HEAVY);
-    vline_middle_up(HEAVY);
-}
-
-static void
-draw_box_drawings_light_vertical_and_horizontal(struct buf *buf)
-{
-    hline_middle(LIGHT);
-    vline_middle(LIGHT);
-}
-
-static void
-draw_box_drawings_left_heavy_and_right_vertical_light(struct buf *buf)
-{
-    hline_middle_left_mixed(LIGHT, HEAVY);
-    hline_middle_right(LIGHT);
-    vline_middle(LIGHT);
-}
-
-static void
-draw_box_drawings_right_heavy_and_left_vertical_light(struct buf *buf)
-{
-    hline_middle_left(LIGHT);
-    hline_middle_right_mixed(LIGHT, HEAVY);
-    vline_middle(LIGHT);
-}
-
-static void
-draw_box_drawings_vertical_light_and_horizontal_heavy(struct buf *buf)
-{
-    hline_middle(HEAVY);
-    vline_middle(LIGHT);
-}
-
-static void
-draw_box_drawings_up_heavy_and_down_horizontal_light(struct buf *buf)
-{
-    hline_middle(LIGHT);
-    vline_middle_up_mixed(HEAVY, LIGHT);
-    vline_middle_down(LIGHT);
-}
-
-static void
-draw_box_drawings_down_heavy_and_up_horizontal_light(struct buf *buf)
-{
-    hline_middle(LIGHT);
-    vline_middle_up(LIGHT);
-    vline_middle_down_mixed(HEAVY, LIGHT);
-}
-
-static void
-draw_box_drawings_vertical_heavy_and_horizontal_light(struct buf *buf)
-{
-    hline_middle(LIGHT);
-    vline_middle(HEAVY);
-}
-
-static void
-draw_box_drawings_left_up_heavy_and_right_down_light(struct buf *buf)
-{
-    hline_middle_left(HEAVY);
-    hline_middle_right(LIGHT);
-    vline_middle_up(HEAVY);
-    vline_middle_down(LIGHT);
-}
-
-static void
-draw_box_drawings_right_up_heavy_and_left_down_light(struct buf *buf)
-{
-    hline_middle_left(LIGHT);
-    hline_middle_right(HEAVY);
-    vline_middle_up(HEAVY);
-    vline_middle_down(LIGHT);
-}
-
-static void
-draw_box_drawings_left_down_heavy_and_right_up_light(struct buf *buf)
-{
-    hline_middle_left(HEAVY);
-    hline_middle_right(LIGHT);
-    vline_middle_up(LIGHT);
-    vline_middle_down(HEAVY);
-}
-
-static void
-draw_box_drawings_right_down_heavy_and_left_up_light(struct buf *buf)
-{
-    hline_middle_left(LIGHT);
-    hline_middle_right(HEAVY);
-    vline_middle_up(LIGHT);
-    vline_middle_down(HEAVY);
-}
-
-static void
-draw_box_drawings_down_light_and_up_horizontal_heavy(struct buf *buf)
-{
-    hline_middle(HEAVY);
-    vline_middle_up(HEAVY);
-    vline_middle_down(LIGHT);
-}
-
-static void
-draw_box_drawings_up_light_and_down_horizontal_heavy(struct buf *buf)
-{
-    hline_middle(HEAVY);
-    vline_middle_up(LIGHT);
-    vline_middle_down(HEAVY);
-}
-
-static void
-draw_box_drawings_right_light_and_left_vertical_heavy(struct buf *buf)
-{
-    hline_middle_left(HEAVY);
-    hline_middle_right(LIGHT);
-    vline_middle(HEAVY);
-}
-
-static void
-draw_box_drawings_left_light_and_right_vertical_heavy(struct buf *buf)
-{
-    hline_middle_left(LIGHT);
-    hline_middle_right(HEAVY);
-    vline_middle(HEAVY);
-}
-
-static void
-draw_box_drawings_heavy_vertical_and_horizontal(struct buf *buf)
-{
-    hline_middle(HEAVY);
-    vline_middle(HEAVY);
-}
+/* Chunk A2: the U+2500..U+254B single-line family is ported to
+ * box-drawing.zig. */
+void draw_box_drawings_light_horizontal(struct buf *buf);
+void draw_box_drawings_heavy_horizontal(struct buf *buf);
+void draw_box_drawings_light_vertical(struct buf *buf);
+void draw_box_drawings_heavy_vertical(struct buf *buf);
+void draw_box_drawings_dash_horizontal(
+    struct buf *buf, int count, int thick, int gap);
+void draw_box_drawings_dash_vertical(
+    struct buf *buf, int count, int thick, int gap);
+void draw_box_drawings_light_triple_dash_horizontal(struct buf *buf);
+void draw_box_drawings_heavy_triple_dash_horizontal(struct buf *buf);
+void draw_box_drawings_light_triple_dash_vertical(struct buf *buf);
+void draw_box_drawings_heavy_triple_dash_vertical(struct buf *buf);
+void draw_box_drawings_light_quadruple_dash_horizontal(struct buf *buf);
+void draw_box_drawings_heavy_quadruple_dash_horizontal(struct buf *buf);
+void draw_box_drawings_light_quadruple_dash_vertical(struct buf *buf);
+void draw_box_drawings_heavy_quadruple_dash_vertical(struct buf *buf);
+void draw_box_drawings_light_down_and_right(struct buf *buf);
+void draw_box_drawings_down_light_and_right_heavy(struct buf *buf);
+void draw_box_drawings_down_heavy_and_right_light(struct buf *buf);
+void draw_box_drawings_heavy_down_and_right(struct buf *buf);
+void draw_box_drawings_light_down_and_left(struct buf *buf);
+void draw_box_drawings_down_light_and_left_heavy(struct buf *buf);
+void draw_box_drawings_down_heavy_and_left_light(struct buf *buf);
+void draw_box_drawings_heavy_down_and_left(struct buf *buf);
+void draw_box_drawings_light_up_and_right(struct buf *buf);
+void draw_box_drawings_up_light_and_right_heavy(struct buf *buf);
+void draw_box_drawings_up_heavy_and_right_light(struct buf *buf);
+void draw_box_drawings_heavy_up_and_right(struct buf *buf);
+void draw_box_drawings_light_up_and_left(struct buf *buf);
+void draw_box_drawings_up_light_and_left_heavy(struct buf *buf);
+void draw_box_drawings_up_heavy_and_left_light(struct buf *buf);
+void draw_box_drawings_heavy_up_and_left(struct buf *buf);
+void draw_box_drawings_light_vertical_and_right(struct buf *buf);
+void draw_box_drawings_vertical_light_and_right_heavy(struct buf *buf);
+void draw_box_drawings_up_heavy_and_right_down_light(struct buf *buf);
+void draw_box_drawings_down_heavy_and_right_up_light(struct buf *buf);
+void draw_box_drawings_vertical_heavy_and_right_light(struct buf *buf);
+void draw_box_drawings_down_light_and_right_up_heavy(struct buf *buf);
+void draw_box_drawings_up_light_and_right_down_heavy(struct buf *buf);
+void draw_box_drawings_heavy_vertical_and_right(struct buf *buf);
+void draw_box_drawings_light_vertical_and_left(struct buf *buf);
+void draw_box_drawings_vertical_light_and_left_heavy(struct buf *buf);
+void draw_box_drawings_up_heavy_and_left_down_light(struct buf *buf);
+void draw_box_drawings_down_heavy_and_left_up_light(struct buf *buf);
+void draw_box_drawings_vertical_heavy_and_left_light(struct buf *buf);
+void draw_box_drawings_down_light_and_left_up_heavy(struct buf *buf);
+void draw_box_drawings_up_light_and_left_down_heavy(struct buf *buf);
+void draw_box_drawings_heavy_vertical_and_left(struct buf *buf);
+void draw_box_drawings_light_down_and_horizontal(struct buf *buf);
+void draw_box_drawings_left_heavy_and_right_down_light(struct buf *buf);
+void draw_box_drawings_right_heavy_and_left_down_light(struct buf *buf);
+void draw_box_drawings_down_light_and_horizontal_heavy(struct buf *buf);
+void draw_box_drawings_down_heavy_and_horizontal_light(struct buf *buf);
+void draw_box_drawings_right_light_and_left_down_heavy(struct buf *buf);
+void draw_box_drawings_left_light_and_right_down_heavy(struct buf *buf);
+void draw_box_drawings_heavy_down_and_horizontal(struct buf *buf);
+void draw_box_drawings_light_up_and_horizontal(struct buf *buf);
+void draw_box_drawings_left_heavy_and_right_up_light(struct buf *buf);
+void draw_box_drawings_right_heavy_and_left_up_light(struct buf *buf);
+void draw_box_drawings_up_light_and_horizontal_heavy(struct buf *buf);
+void draw_box_drawings_up_heavy_and_horizontal_light(struct buf *buf);
+void draw_box_drawings_right_light_and_left_up_heavy(struct buf *buf);
+void draw_box_drawings_left_light_and_right_up_heavy(struct buf *buf);
+void draw_box_drawings_heavy_up_and_horizontal(struct buf *buf);
+void draw_box_drawings_light_vertical_and_horizontal(struct buf *buf);
+void draw_box_drawings_left_heavy_and_right_vertical_light(struct buf *buf);
+void draw_box_drawings_right_heavy_and_left_vertical_light(struct buf *buf);
+void draw_box_drawings_vertical_light_and_horizontal_heavy(struct buf *buf);
+void draw_box_drawings_up_heavy_and_down_horizontal_light(struct buf *buf);
+void draw_box_drawings_down_heavy_and_up_horizontal_light(struct buf *buf);
+void draw_box_drawings_vertical_heavy_and_horizontal_light(struct buf *buf);
+void draw_box_drawings_left_up_heavy_and_right_down_light(struct buf *buf);
+void draw_box_drawings_right_up_heavy_and_left_down_light(struct buf *buf);
+void draw_box_drawings_left_down_heavy_and_right_up_light(struct buf *buf);
+void draw_box_drawings_right_down_heavy_and_left_up_light(struct buf *buf);
+void draw_box_drawings_down_light_and_up_horizontal_heavy(struct buf *buf);
+void draw_box_drawings_up_light_and_down_horizontal_heavy(struct buf *buf);
+void draw_box_drawings_right_light_and_left_vertical_heavy(struct buf *buf);
+void draw_box_drawings_left_light_and_right_vertical_heavy(struct buf *buf);
+void draw_box_drawings_heavy_vertical_and_horizontal(struct buf *buf);
 
 static void
 draw_box_drawings_light_double_dash_horizontal(struct buf *buf)

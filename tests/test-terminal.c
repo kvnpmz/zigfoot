@@ -2451,6 +2451,47 @@ glyph_occupancy(const struct fcft_glyph *glyph, bool *rows, bool *cols)
     }
 }
 
+/* FNV-1a over the rendered bitmap, for manual differential checks:
+ * FOOT_BOX_DUMP=1 ./tests/test-terminal prints one line per codepoint. */
+static uint64_t
+glyph_hash(const struct fcft_glyph *glyph)
+{
+    const uint8_t *data = (const uint8_t *)pixman_image_get_data(glyph->pix);
+    const int stride = pixman_image_get_stride(glyph->pix);
+
+    uint64_t h = 1469598103934665603ull;
+    for (int y = 0; y < glyph->height; y++) {
+        for (int x = 0; x < stride; x++) {
+            h ^= data[y * stride + x];
+            h *= 1099511628211ull;
+        }
+    }
+    return h;
+}
+
+static void
+box_dump(struct terminal *term)
+{
+    static const struct {
+        char32_t first, last;
+    } ranges[] = {
+        {0x2500, 0x259f},
+        {0x1fb00, 0x1fb8b},
+        {0x1cc00, 0x1cde5},
+    };
+
+    for (size_t r = 0; r < sizeof(ranges) / sizeof(ranges[0]); r++) {
+        for (char32_t cp = ranges[r].first; cp <= ranges[r].last; cp++) {
+            struct fcft_glyph *g = box_drawing(term, cp);
+            if (g == NULL)
+                continue;
+            printf("BOX 0x%05x %d %d %016llx\n", (unsigned)cp, g->width,
+                   g->height, (unsigned long long)glyph_hash(g));
+            free(g);
+        }
+    }
+}
+
 /* Structural invariants of box-drawing.c's rendering. Font-independent:
  * nothing here assumes a particular cell size, only proportions. */
 static void
@@ -2466,6 +2507,12 @@ test_box_drawing(void)
 
     const int width = term->cell_width;
     const int height = term->cell_height;
+
+    if (getenv("FOOT_BOX_DUMP") != NULL) {
+        box_dump(term);
+        term_with_fonts_free(term);
+        return;
+    }
 
     if (pixman_image_get_format(box_drawing(term, 0x2500)->pix) != PIXMAN_a8) {
         printf("skip: box drawing renders without an alpha channel\n");
