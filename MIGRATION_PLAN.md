@@ -2,30 +2,31 @@
 
 Status snapshot and a concrete continuation plan.
 Prepared 2026-11-23 against `feature/zig-migration` @ `a1d9d288`.
-Refreshed 2026-11-24 against @ `7b08b7fa` (Phase 0, Phase 1a and config
-C1-C2g landed).
+Refreshed 2026-11-24 against @ `f8501a70` (Phase 0, Phase 1a, upstream merge,
+and config C1-C2o landed — the config parser is finished).
 
 ---
 
 ## 1. Where the migration stands
 
-The branch is **88 commits ahead of `origin/master`** (upstream foot 1.28.0),
-starting 2026-09-30. Measured on this checkout, **19,547 of 48,830 top-level
-foot-owned C lines are gone (40.0%)**, replaced by ~20.1k lines of Zig
-(including ~2k lines of Zig tests). About **29.3k lines of C remain**, plus
-1,142 lines of `*-shim.c` accessors and the generated `abi_probe.c` (2,211).
+The branch is **98 commits ahead of `origin/master`** (upstream foot 1.28.0),
+starting 2026-09-30. Measured on this checkout, **21,826 of 48,830 top-level
+foot-owned C lines are gone (44.7%)**, replaced by ~22.7k lines of Zig
+(including ~2k lines of Zig tests). About **27.0k lines of C remain**, plus
+1,142 lines of `*-shim.c` accessors and the generated `abi_probe.c` (2,215).
 
 | State | Modules |
 |---|---|
-| **Ported, C deleted** (24) | `async`, `base64`, `char32`, `commands`, `composed`, `csi`, `cursor-shape`, `dcs`, `extract`, `fdm`, `grid`, `hsl`, `misc`, `notify`, `osc`, `reaper`, `sixel`, `spawn`, `spawn_template`, `tokenize`, `uri`, `vt`, `xmalloc`, `xsnprintf` |
-| **In progress** (Zig + remaining C + shims) | `terminal.c` (2,400 left), `config.c` (2,720 left), `selection.c` (844 left) |
+| **Ported, C deleted** (25) | `async`, `base64`, `char32`, `commands`, `composed`, `csi`, `cursor-shape`, `dcs`, `extract`, `fdm`, `grid`, `hsl`, `misc`, `notify`, `osc`, `reaper`, `sixel`, `spawn`, `spawn_template`, `tokenize`, `uri`, `vt`, `xmalloc`, `xsnprintf`, and **`config`** (the parser is Zig; the 335 surviving C lines are the variadic loggers, `config_regex_compile()` and two fcft field accessors — see §6.3) |
+| **In progress** (Zig + remaining C + shims) | `terminal.c` (2,410 left), `selection.c` (844 left) |
 | **Untouched** (19 modules, ~23.3k lines) | `box-drawing` (3,450), `render` (5,479), `input` (3,690), `wayland` (2,881), `search` (1,512), `shm` (1,110), `url-mode` (833), `main` (751), `server` (688), `key-binding` (661), `client` (629), `slave` (573), `ime` (532), `log` (231), `unicode-mode` (110), `quirks` (86), `debug` (47), `foot-features` (42), `user-notification` (14) |
-| **Dead file** | `esc.zig` is a 4-line stub; `esc_dispatch` actually lives in `vt.zig`. Delete it. |
 
-**Progress read two ways:** 40% by C volume, but roughly **30-35% by effort**,
+**Progress read two ways:** 45% by C volume, but roughly **35% by effort**,
 because what remains is the hard core (`render`, `input`, `wayland`, the
 `terminal` init/font tail) rather than the leaves. By module count it is
-24 of 46 ported, 3 in progress, 19 untouched.
+25 of 46 ported, 2 in progress, 19 untouched. The highest-leverage module
+(`config`, nine dependents) is done, so the `conf_*` accessor shims and the
+"blocked on config" markers are gone too.
 
 Dependency layering (headers included by other project modules, leaves first):
 
@@ -340,20 +341,93 @@ Port in this order; each module is a small, reviewable series of chunks.
      messages and the NULL `context.section` until after the empty-name check.
      Collision resolution needs the static binding action tables, so it stays
      in C as `config_bindings_finalize()`. config.c is now **2,720 lines**
-     (from 4,374). What is left there is the binding machinery
-     (`parse_key_binding_section`, `value_to_key_combos`, modifier parsing,
-     clone/free/compare helpers, collision resolution), `[url]`/`[regex]`
-     (`regex_t.re_nsub` is libc-private), `config_load`/`config_clone`/
-     `config_free`, the default binding tables, and `config_font_parse()` /
-     `value_to_fonts()` (fontconfig);
+     (from 4,374);
+   * **C2h–C2o done — the config parser is finished; `config.c` is 335
+     lines** (from 4,374), none of which is parsing logic:
+     * **C2h** `[url]`/`[regex]`. `regex_t` stays opaque: its size comes from
+       the generated C layout, and a 20-line `config_regex_compile()` in C
+       does `regcomp()` + the `re_nsub >= 1` check + `regerror()` (returns
+       0/-1/-2). Only at Phase 4, if ever, is this removable.
+     * **C2i** the binding helpers: `parse_modifiers()`, the four colours of
+       free (`free_binding_aux`/`free_key_binding`/`free_key_binding_list`),
+       `binding_aux_equal`, `mouse_button_name_to_code` and friends,
+       `modifiers_equal/disjoint/to_str`. `button_map` moved to Zig, so the
+       oracle reads it through `config_button_map_len/code/name()`.
+     * **C2j** `pipe_argv_from_value()`, `regex_name_from_value()` and
+       `value_to_key_combos()`. One deliberate deviation: C sized its VLA by
+       counting spaces and `memcpy`'d that many entries, so a double space
+       inserted *uninitialised* bindings; Zig counts real tokens. Identical
+       for well-formed input, no garbage.
+     * **C2k** the action tables (as `enum(c_int)` + `?[*:0]const u8` arrays
+       generated mechanically from `key-binding.h`, to avoid transcription
+       drift), the five `-bindings` section parsers, collision resolution and
+       `config_bindings_finalize()`. The C UNITTEST for
+       `parse_key_binding_section` used a synthetic map and could not
+       survive; its scenario is now `test_key_binding_sequences()` in the
+       oracle. Tests reach the tables via `config_action_map_count/name()`.
+     * **C2l** the four `default_*_bindings` tables (73 entries; keysym values
+       obtained by compiling against xkbcommon, since `XKB_KEY_*` are macros,
+       not symbols) and `get_server_socket_path()`.
+     * **C2m** `config_load()` and the default tables. Zig has no designated
+       initialisers, so the C zero-fill is `std.mem.zeroes()` + one assignment
+       per named field. Three new `build_options` mirror C `#define`s
+       (`default_terminfo`, `utmp_helper_path`, `debug_build`), which is also
+       where `FOOT_IME_ENABLED`/`HAVE_XDG_TOPLEVEL_TAG` would go for
+       `foot-features`. **Both default tables are generated, not typed**: the
+       256-entry colour map by compiling the C `cube6()/cube36()` macros, the
+       URL regex by re-escaping the C string literals — a hand-typed copy of
+       the regex silently failed to compile (unmatched parenthesis), which is
+       exactly the drift the generator avoids.
+     * **C2n** `config_clone()`, `config_free()`, `config_font_list_clone()`,
+       `key_binding_list_clone()` and `open_config()`. Ownership is the whole
+       difficulty: inside one binding list, the first binding with
+       `master_copy` set owns the argv/text/regex-name allocation and the
+       remaining combos alias it, so the clone must reproduce that aliasing
+       *into the clone* or `config_free()` frees the same argv twice.
+     * **C2o** `value_to_fonts()`, `config_font_parse()`,
+       `config_font_list_destroy()`, `check_if_font_is_monospaced()` and
+       `get_shell()`. Fontconfig types are opaque, so nothing is mirrored;
+       `check_if_font_is_monospaced()` reads exactly two fcft fields, which go
+       through accessors rather than mirroring ~30 fields of layout.
+       `get_shell()` mirrors Linux `struct passwd` (7 pointers + uid/gid).
+
+     **What remains in config.c, and why** (all of it is deliberate):
+     `log_and_notify[_va]()`, `log_and_notify_errno[_va]()`,
+     `log_contextual[_errno]()` — Zig cannot *define* variadic functions, so
+     they either stay here or move to `log.c` (open decision D-less: §12.7);
+     `config_regex_compile()` (`regex_t`); `config_fcft_glyph_advance_x()` /
+     `config_fcft_font_name()` (fcft layout); and a dead `#if 0
+     conf_modifiers_to_mask()` that upstream deleted.
+
+     **Test coverage grew with it.** `tests/test-config.c` (the oracle: it
+     `#include`s `config.c` *and* links `config.o`) gained
+     `test_key_binding_sequences()`, `test_default_url_regex()` (all 27 cases
+     of the UNITTEST that had to move with the string),
+     `test_config_load()` (every default `config_load()` assigns, then a
+     clone/free round trip that includes a multi-combo pipe binding and a
+     `[regex]` binding to exercise the `master_copy` aliasing),
+     `test_config_load_from_xdg()` (`$HOME/.config`, `$XDG_CONFIG_HOME`, the
+     no-config fallback, `errors_are_fatal`) and `test_font_helpers()`.
+
+     **Two live bugs surfaced in C2n, both invisible to the test suite:**
+     `xstrjoin()` copied `n2+1` bytes from an `n2`-byte source (only reachable
+     through `open_config()`, which the tests bypass by passing an explicit
+     `conf_path` — `scripts/smoke.sh` aborted instantly); and the empty
+     scrollback-indicator string used `xc32dup(&[_:0]u32{})`, whose backing
+     array has size 0, so the dup walked off the end (the replaced C UNITTEST
+     only passed because the adjacent rodata happened to be zero). **Lesson:
+     `meson test` is necessary but not sufficient — a chunk that touches
+     start-up paths needs `scripts/smoke.sh` too.**
    * C3: per-section option tables, one section per commit (`main`, `cursor`,
      `mouse`, `colors`, `key-bindings`, `url`, `bell`, `scrollback`, …).
 4. **Mid-tier (~3.5k):** `ime`, `key-binding`, `url-mode`, `search`.
 5. **Standalone binaries:** `client` (footclient) and `server` — they share
    `main`'s setup; port once `config`/`wayland` are stable.
 
-**Exit criteria:** `config.c` gone; `terminal` T9/T10 unblocked; shim line
-count reduced by at least a third.
+**Exit criteria:** `config.c` reduced to the variadic loggers (+ the two
+`regex_t`/fcft accessors); `terminal` T9/T10 unblocked; shim line count
+reduced by at least a third. (`config.c` cannot reach zero while it defines
+variadic functions — see §12.7.)
 
 ---
 
@@ -497,26 +571,46 @@ utmp backends where available.
    mirrored (recommended) vs a final sweep.
 6. **Port `config` before finishing `terminal`'s font/init chunks** —
    recommended yes, because it unblocks T9–T11 and removes many accessors.
+   **Done** (C2o): T9/T10/T11 are unblocked.
+7. **Where do the variadic loggers live?** `config.c` still defines
+   `log_and_notify*()`/`log_contextual*()`, which only config.zig calls. Zig
+   cannot define variadic functions, so they either stay in `config.c` (and
+   `config.c` never reaches zero) or move to `log.c` (which is where the rest
+   of the logging lives) and `config.c` disappears. Recommendation: move them
+   to `log.c` in Phase 4, and amend Definition-of-Done #1 to "no
+   module-specific C left", not "no C left".
 
 ---
 
 ## 13. Suggested immediate actions (next two weeks)
 
-1. **Finish `config` (C2h+):** port the binding machinery with
-   `tests/test-config.c` as the oracle, then `[url]`/`[regex]` (add a small
-   C accessor for `regex_t.re_nsub` or a musl/glibc-safe mirror), then
-   `config_load`/`config_clone`/`config_free`, the default binding tables,
-   and `config_font_parse()`/`value_to_fonts()`. Target: `config.c` gone,
-   `config_bindings_finalize()` deleted.
-2. **Then terminal T9/T10** (font stack + size/scale, ~640 C lines) — they
-   were blocked on config's font fields, not on wayland.
-3. **`slave` + `shm` (~1.7k)** in parallel with the config tail; shm is the
-   foundation for `render`, and both are testable without a compositor.
+1. ~~**Finish `config` (C2h+)**~~ — **done** (C2h–C2o). `config.c` is down to
+   the variadic loggers, the `regex_t` helper and two fcft accessors; the
+   parser, the bindings, `config_load`/`clone`/`free` and the font helpers are
+   Zig, and the oracle covers them.
+2. **Now: terminal T9/T10** (font stack + size/scale, ~640 C lines). They
+   were blocked on config's font fields, not on wayland, and they are the
+   last thing separating `terminal.c` from `wayland`/`render`.
+3. **`slave` + `shm` (~1.7k)** in parallel; shm is the foundation for
+   `render`, and both are testable without a compositor.
 4. **Keep the safety net moving:** add a Zig test whenever a chunk ports
-   logic with a pure core, and run `meson test` + `scripts/smoke.sh` before
-   each commit.
+   logic with a pure core, and run `meson test` in all three build dirs plus
+   `scripts/smoke.sh` before each commit.
 5. **Merge `origin/master` weekly** (R7) and port upstream fixes into ported
    modules immediately.
+
+**Rough effort from here:** Phase 1b ~2 weeks; rest of Phase 2
+(slave/shm + ime/key-binding/url-mode/search) 3–5 weeks; Phase 3 4–6 weeks;
+Phase 4 1–2 weeks. About **2 months for one developer**, or **4–6 weeks with
+2–3 parallel workers**.
+
+**Caveat on the smoke test in this container:** `scripts/smoke.sh` uses
+`$WAYLAND_DISPLAY` when set, and here it points at a host compositor that
+currently reports "no monitors available"; the window launches therefore fail
+for environmental reasons. `env -u WAYLAND_DISPLAY scripts/smoke.sh` skips
+them (no weston installed), and `foot -C -c <file>` still exercises the whole
+config/font path. Do not read a smoke failure as a port regression without
+checking which branch of the script ran.
 
 **Rough effort from here:** config tail 1–1.5 weeks; Phase 1b ~2 weeks;
 rest of Phase 2 (slave/shm + ime/key-binding/url-mode/search) 3–5 weeks;
