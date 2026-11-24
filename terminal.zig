@@ -589,6 +589,106 @@ export fn term_font_subpixel_changed(term: *types.Terminal) callconv(.c) void {
     render_refresh(term);
 }
 
+//
+// Chunk T10a — font-size adjustments (the fontSize shortcuts). These only
+// mutate the runtime font sizes and reload; the configured fonts are left
+// untouched so a reset can restore them.
+//
+
+fn fontSizeList(term: *types.Terminal, i: usize) [*]types.ConfigFont {
+    return @ptrCast(term.font_sizes[i].?);
+}
+
+fn adjustFontSizeByPoints(term: *types.Terminal, amount: f32) bool {
+    const conf = term.conf.?;
+    const dpi: f32 = if (term.font_is_sized_by_dpi) term.font_dpi else 96.0;
+
+    for (0..4) |i| {
+        const list = conf.fonts[i];
+        const sizes = fontSizeList(term, i);
+
+        for (0..list.count) |j| {
+            var old_pt_size = sizes[j].pt_size;
+
+            if (sizes[j].px_size > 0)
+                old_pt_size = @as(f32, @floatFromInt(sizes[j].px_size)) * 72.0 / dpi;
+
+            sizes[j].pt_size = @max(old_pt_size + amount, 0.0);
+            sizes[j].px_size = -1;
+        }
+    }
+
+    return reload_fonts(term, true);
+}
+
+fn adjustFontSizeByPixels(term: *types.Terminal, amount: c_int) bool {
+    const conf = term.conf.?;
+    const dpi: f32 = if (term.font_is_sized_by_dpi) term.font_dpi else 96.0;
+
+    for (0..4) |i| {
+        const list = conf.fonts[i];
+        const sizes = fontSizeList(term, i);
+
+        for (0..list.count) |j| {
+            var old_px_size = sizes[j].px_size;
+
+            if (sizes[j].px_size <= 0)
+                old_px_size = @intFromFloat(sizes[j].pt_size * dpi / 72.0);
+
+            sizes[j].px_size = @max(old_px_size + amount, 1);
+        }
+    }
+
+    return reload_fonts(term, true);
+}
+
+fn adjustFontSizeByPercent(term: *types.Terminal, increment: bool, percent: f32) bool {
+    const conf = term.conf.?;
+    const multiplier: f32 = if (increment) 1.0 + percent else 1.0 / (1.0 + percent);
+
+    for (0..4) |i| {
+        const list = conf.fonts[i];
+        const sizes = fontSizeList(term, i);
+
+        for (0..list.count) |j| {
+            if (sizes[j].px_size > 0) {
+                const scaled = @as(f32, @floatFromInt(sizes[j].px_size)) * multiplier;
+                sizes[j].px_size = @intFromFloat(@max(scaled, 1.0));
+            } else {
+                sizes[j].pt_size = @max(sizes[j].pt_size * multiplier, 0.0);
+            }
+        }
+    }
+
+    return reload_fonts(term, true);
+}
+
+export fn term_font_size_increase(term: *types.Terminal) callconv(.c) bool {
+    const inc_dec = term.conf.?.font_size_adjustment;
+
+    if (inc_dec.percent > 0.0)
+        return adjustFontSizeByPercent(term, true, inc_dec.percent)
+    else if (inc_dec.pt_or_px.px > 0)
+        return adjustFontSizeByPixels(term, inc_dec.pt_or_px.px)
+    else
+        return adjustFontSizeByPoints(term, inc_dec.pt_or_px.pt);
+}
+
+export fn term_font_size_decrease(term: *types.Terminal) callconv(.c) bool {
+    const inc_dec = term.conf.?.font_size_adjustment;
+
+    if (inc_dec.percent > 0.0)
+        return adjustFontSizeByPercent(term, false, inc_dec.percent)
+    else if (inc_dec.pt_or_px.px > 0)
+        return adjustFontSizeByPixels(term, -inc_dec.pt_or_px.px)
+    else
+        return adjustFontSizeByPoints(term, -inc_dec.pt_or_px.pt);
+}
+
+export fn term_font_size_reset(term: *types.Terminal) callconv(.c) bool {
+    return load_fonts_from_conf(term);
+}
+
 fn termResetGraphemeState(term: *types.Terminal) void {
     // Without utf8proc the fields don't exist in `struct vt` and C's
     // term_reset_grapheme_state() is a no-op; keep `term` "used" so the

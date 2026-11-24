@@ -1373,6 +1373,69 @@ test_dpi_and_scale(void)
     term_free(term);
 }
 
+/* The fontSize shortcuts: per-step pixel/point/percent adjustments, and reset. */
+static void
+test_font_size_adjustments(void)
+{
+    struct config conf = {0};
+    struct config_font cfg_font = {
+        .pattern = "monospace", .pt_size = 8.0f, .px_size = 0};
+    conf.fonts[0] = (struct config_font_list){.count = 1, .arr = &cfg_font};
+    conf.line_height = (struct pt_or_px){.px = -1, .pt = 0};
+
+    struct terminal *term = term_new();
+    term->conf = &conf;
+    term->scale = 1.0f;
+    struct wl_window win = {0};
+    term->window = &win;
+
+    struct config_font cur = {.pattern = NULL, .pt_size = 8.0f, .px_size = 0};
+    struct config_font empty[3] = {0};
+    term->font_sizes[0] = &cur;
+    term->font_sizes[1] = &empty[0];
+    term->font_sizes[2] = &empty[1];
+    term->font_sizes[3] = &empty[2];
+
+    check(load_fonts_from_conf(term), "font-size test starts from the config");
+    const int initial_width = term->cell_width;
+
+    /* One pixel per step. */
+    conf.font_size_adjustment =
+        (struct font_size_adjustment){.pt_or_px = {.px = 1, .pt = 0}, .percent = 0};
+    check(term_font_size_increase(term), "font-size increase succeeds");
+    check(cur.px_size > 0, "increase switches to a pixel size");
+    check(cur.px_size == 11, "pixel increase adds one pixel to 8pt at 96dpi");
+    check(term->cell_width > initial_width, "increase widens the cell");
+
+    check(term_font_size_decrease(term), "font-size decrease succeeds");
+    check(cur.px_size == 10, "pixel decrease removes one pixel");
+
+    /* Percent steps. */
+    check(term_font_size_reset(term), "reset before percent test");
+    conf.font_size_adjustment =
+        (struct font_size_adjustment){.pt_or_px = {0, 0}, .percent = 0.1f};
+    check(term_font_size_increase(term), "percent increase succeeds");
+    check(fabsf(cur.pt_size - 8.8f) < 0.001f, "percent increase scales the pt size");
+    check(term_font_size_decrease(term), "percent decrease succeeds");
+    check(fabsf(cur.pt_size - 8.0f) < 0.001f, "percent decrease restores the size");
+
+    /* Point steps. */
+    check(term_font_size_reset(term), "reset before point test");
+    conf.font_size_adjustment =
+        (struct font_size_adjustment){.pt_or_px = {.px = 0, .pt = 2.0f}, .percent = 0};
+    check(term_font_size_increase(term), "point increase succeeds");
+    check(fabsf(cur.pt_size - 10.0f) < 0.001f, "point increase adds points");
+
+    check(term_font_size_reset(term), "final reset succeeds");
+    check(fabsf(cur.pt_size - 8.0f) < 0.001f && cur.px_size == 0,
+          "reset restores the configured size");
+    check(term->cell_width == initial_width, "reset restores the cell width");
+
+    for (size_t i = 0; i < 4; i++)
+        fcft_destroy(term->fonts[i]);
+    term_free(term);
+}
+
 int
 main(void)
 {
@@ -1411,6 +1474,7 @@ main(void)
     test_set_fonts();
     test_reload_fonts();
     test_dpi_and_scale();
+    test_font_size_adjustments();
 
     fcft_fini();
 
