@@ -16,166 +16,12 @@
 
 #define clamp(x, lower, upper) (min(upper, max(x, lower)))
 
-enum thickness {
-    LIGHT,
-    HEAVY,
-};
+/* struct buf, the drawing primitives and change_buffer_format(): ported to
+ * box-drawing.zig (chunk A1) and declared in box-drawing.h. */
 
-struct buf {
-    uint8_t *data;
-    pixman_image_t *pix;
-    pixman_format_code_t format;
-    int width;
-    int height;
-    int stride;
-    bool solid_shades;
-
-    int thickness[2];
-
-    /* For octants, sextants and wedges */
-    int x_halfs[2];
-    int y_thirds[2];
-
-    /* For octants */
-    int y_quads[3];
-};
-
+/* Only the wedge shapes still fill from a solid source image. */
 static const pixman_color_t white = {0xffff, 0xffff, 0xffff, 0xffff};
 
-static void
-change_buffer_format(struct buf *buf, pixman_format_code_t new_format)
-{
-    int stride = stride_for_format_and_width(new_format, buf->width);
-    uint8_t *new_data = xcalloc(buf->height * stride, 1);
-    pixman_image_t *new_pix = pixman_image_create_bits_no_clear(
-        new_format, buf->width, buf->height, (uint32_t *)new_data, stride);
-
-    if (new_pix == NULL) {
-        errno = ENOMEM;
-        perror(__func__);
-        abort();
-    }
-
-    pixman_image_unref(buf->pix);
-    free(buf->data);
-
-    buf->data = new_data;
-    buf->pix = new_pix;
-    buf->format = new_format;
-    buf->stride = stride;
-}
-
-static int NOINLINE
-_thickness(int base_thickness, enum thickness thick)
-{
-    int multiplier = thick * 2 + 1;
-
-    xassert(base_thickness >= 1);
-    xassert((thick == LIGHT && multiplier == 1) ||
-            (thick == HEAVY && multiplier == 3));
-
-    return base_thickness * multiplier;
-}
-#define thickness(thick) buf->thickness[thick]
-
-static void NOINLINE
-_hline(struct buf *buf, int x1, int x2, int y, int thick)
-{
-    pixman_box32_t box = {
-        .x1 = min(max(x1, 0), buf->width),
-        .x2 = min(max(x2, 0), buf->width),
-        .y1 = min(max(y, 0), buf->height),
-        .y2 = min(max(y + thick, 0), buf->height),
-    };
-    pixman_image_fill_boxes(PIXMAN_OP_SRC, buf->pix, &white, 1, &box);
-}
-
-#define hline(x1, x2, y, thick) _hline(buf, x1, x2, y, thick)
-
-static void NOINLINE
-_vline(struct buf *buf, int y1, int y2, int x, int thick)
-{
-    pixman_box32_t box = {
-        .x1 = min(max(x, 0), buf->width),
-        .x2 = min(max(x + thick, 0), buf->width),
-        .y1 = min(max(y1, 0), buf->height),
-        .y2 = min(max(y2, 0), buf->height),
-    };
-    pixman_image_fill_boxes(PIXMAN_OP_SRC, buf->pix, &white, 1, &box);
-}
-
-#define vline(y1, y2, x, thick) _vline(buf, y1, y2, x, thick)
-
-static void NOINLINE
-_rect(struct buf *buf, int x1, int y1, int x2, int y2)
-{
-    pixman_box32_t box = {
-        .x1 = min(max(x1, 0), buf->width),
-        .y1 = min(max(y1, 0), buf->height),
-        .x2 = min(max(x2, 0), buf->width),
-        .y2 = min(max(y2, 0), buf->height),
-    };
-    pixman_image_fill_boxes(PIXMAN_OP_SRC, buf->pix, &white, 1, &box);
-}
-
-#define rect(x1, y1, x2, y2) _rect(buf, x1, y1, x2, y2)
-
-static void NOINLINE
-_hline_middle(struct buf *buf, enum thickness _thick)
-{
-    int thick = thickness(_thick);
-    hline(0, buf->width, (buf->height - thick) / 2, thick);
-}
-
-static void NOINLINE
-_hline_middle_left(struct buf *buf, enum thickness _vthick, enum thickness _hthick)
-{
-    int vthick = thickness(_vthick);
-    int hthick = thickness(_hthick);
-    _hline(buf, 0, (buf->width + vthick) / 2, (buf->height - hthick) / 2, hthick);
-}
-
-static void NOINLINE
-_hline_middle_right(struct buf *buf, enum thickness _vthick, enum thickness _hthick)
-{
-    int vthick = thickness(_vthick);
-    int hthick = thickness(_hthick);
-    hline((buf->width - vthick) / 2, buf->width, (buf->height - hthick) / 2, hthick);
-}
-
-static void NOINLINE
-_vline_middle(struct buf *buf, enum thickness _thick)
-{
-    int thick = thickness(_thick);
-    vline(0, buf->height, (buf->width - thick) / 2, thick);
-}
-
-static void NOINLINE
-_vline_middle_up(struct buf *buf, enum thickness _vthick, enum thickness _hthick)
-{
-    int vthick = thickness(_vthick);
-    int hthick = thickness(_hthick);
-    vline(0, (buf->height + hthick) / 2, (buf->width - vthick) / 2, vthick);
-}
-
-static void NOINLINE
-_vline_middle_down(struct buf *buf, enum thickness _vthick, enum thickness _hthick)
-{
-    int vthick = thickness(_vthick);
-    int hthick = thickness(_hthick);
-    vline((buf->height - hthick) / 2, buf->height, (buf->width - vthick) / 2, vthick);
-}
-
-#define hline_middle(thick) _hline_middle(buf, thick)
-#define hline_middle_left(thick) _hline_middle_left(buf, thick, thick)
-#define hline_middle_right(thick) _hline_middle_right(buf, thick, thick)
-#define hline_middle_left_mixed(vthick, hthick) _hline_middle_left(buf, vthick, hthick)
-#define hline_middle_right_mixed(vthick, hthick) _hline_middle_right(buf, vthick, hthick)
-#define vline_middle(thick) _vline_middle(buf, thick)
-#define vline_middle_up(thick) _vline_middle_up(buf, thick, thick)
-#define vline_middle_down(thick) _vline_middle_down(buf, thick, thick)
-#define vline_middle_up_mixed(vthick, hthick) _vline_middle_up(buf, vthick, hthick)
-#define vline_middle_down_mixed(vthick, hthick) _vline_middle_down(buf, vthick, hthick)
 
 static void
 draw_box_drawings_light_horizontal(struct buf *buf)
@@ -1880,9 +1726,9 @@ draw_light_shade(struct buf *buf)
     pixman_format_code_t fmt = buf->format;
 
     if (buf->solid_shades && fmt == PIXMAN_a1)
-        change_buffer_format(buf, PIXMAN_a8);
+        box_change_buffer_format(buf, PIXMAN_a8);
     else if (!buf->solid_shades && fmt == PIXMAN_a8)
-        change_buffer_format(buf, PIXMAN_a1);
+        box_change_buffer_format(buf, PIXMAN_a1);
 
     if (buf->solid_shades)
         draw_pixman_shade(buf, 0x4000);
@@ -1903,9 +1749,9 @@ draw_medium_shade(struct buf *buf)
     pixman_format_code_t fmt = buf->format;
 
     if (buf->solid_shades && fmt == PIXMAN_a1)
-        change_buffer_format(buf, PIXMAN_a8);
+        box_change_buffer_format(buf, PIXMAN_a8);
     else if (!buf->solid_shades && fmt == PIXMAN_a8)
-        change_buffer_format(buf, PIXMAN_a1);
+        box_change_buffer_format(buf, PIXMAN_a1);
 
     if (buf->solid_shades)
         draw_pixman_shade(buf, 0x8000);
@@ -1926,9 +1772,9 @@ draw_dark_shade(struct buf *buf)
     pixman_format_code_t fmt = buf->format;
 
     if (buf->solid_shades && fmt == PIXMAN_a1)
-        change_buffer_format(buf, PIXMAN_a8);
+        box_change_buffer_format(buf, PIXMAN_a8);
     else if (!buf->solid_shades && fmt == PIXMAN_a8)
-        change_buffer_format(buf, PIXMAN_a1);
+        box_change_buffer_format(buf, PIXMAN_a1);
 
     if (buf->solid_shades)
         draw_pixman_shade(buf, 0xc000);
@@ -3406,8 +3252,8 @@ box_drawing(const struct terminal *term, char32_t wc)
         .solid_shades = term->conf->tweak.box_drawing_solid_shades,
 
         .thickness = {
-            [LIGHT] = _thickness(base_thickness, LIGHT),
-            [HEAVY] = _thickness(base_thickness, HEAVY),
+            [LIGHT] = box_thickness(base_thickness, LIGHT),
+            [HEAVY] = box_thickness(base_thickness, HEAVY),
         },
 
         /* Overlap when width is odd */

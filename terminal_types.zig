@@ -1774,6 +1774,26 @@ test "line height update" {
 
 // ── shm.c internals (shared with shm.zig) ─────────────────────────
 
+/// Mirrors `struct buf` in box-drawing.h (the box-drawing rendering buffer).
+pub const BoxBuf = extern struct {
+    data: ?[*]u8,
+    pix: ?*anyopaque,
+    format: u32, // pixman_format_code_t
+    width: c_int,
+    height: c_int,
+    stride: c_int,
+    solid_shades: bool,
+
+    thickness: [2]c_int,
+
+    /// For octants, sextants and wedges
+    x_halfs: [2]c_int,
+    y_thirds: [2]c_int,
+
+    /// For octants
+    y_quads: [3]c_int,
+};
+
 pub const PixmanBox32 = extern struct {
     x1: i32,
     y1: i32,
@@ -1846,6 +1866,10 @@ pub const ShmBufferChain = extern struct {
     release_cb: ?*const anyopaque,
     cb_data: ?*anyopaque,
 };
+
+test "box-drawing buffer layout matches C probe" {
+    expectAbi(BoxBuf, "BoxBuf");
+}
 
 test "shm layout matches C probe" {
     expectAbi(PixmanBox32, "PixmanBox32");

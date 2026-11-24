@@ -556,6 +556,18 @@ unicode_mode_obj = custom_target(
   ]
 )
 
+box_drawing_obj = custom_target(
+  'box_drawing_obj',
+  input: 'box-drawing.zig',
+  depend_files: files('terminal_types.zig'),
+  output: 'box-drawing.o',
+  depends: c_layout,
+  command: [
+    python, files('compile_zig.py'), '@INPUT@', '@OUTPUT@',
+    grapheme_clustering_zig,
+  ]
+)
+
 log_obj = custom_target(
   'log_obj',
   input: 'log.zig',
@@ -721,7 +733,7 @@ foot_deps = [math, threads, libepoll, pixman, wayland_client, wayland_cursor,
 footlib = static_library(
   'footlib',
   async_obj, 'async.h',
-  'box-drawing.c', 'box-drawing.h',
+  box_drawing_obj, 'box-drawing.c', 'box-drawing.h',
   'config.c', config_obj, 'config.h',
   commands_obj, 'commands.h',
   extract_obj, 'extract.h',

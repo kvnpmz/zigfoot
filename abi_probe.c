@@ -10,6 +10,7 @@
 #include <stdbool.h>
 
 #include "composed.h"
+#include "box-drawing.h"
 #include "config.h"
 #include "grid.h"
 #include "notify.h"
@@ -2114,6 +2115,29 @@ fprintf(out, "pub const PixmanRegion32_extents_y2__size: usize = %zu;\n", sizeof
 fprintf(out, "pub const PixmanRegion32_extents_y2: usize = %zu;\n", offsetof(pixman_region32_t, extents.y2) - offsetof(pixman_region32_t, extents));
 fprintf(out, "pub const PixmanRegion32_data__size: usize = %zu;\n", sizeof(((pixman_region32_t *)0)->data));
 fprintf(out, "pub const PixmanRegion32_data: usize = %zu;\n", offsetof(pixman_region32_t, data));
+fprintf(out, "pub const BoxBuf__size: usize = %zu;\n", sizeof(struct buf));
+fprintf(out, "pub const BoxBuf_data__size: usize = %zu;\n", sizeof(((struct buf *)0)->data));
+fprintf(out, "pub const BoxBuf_data: usize = %zu;\n", offsetof(struct buf, data));
+fprintf(out, "pub const BoxBuf_pix__size: usize = %zu;\n", sizeof(((struct buf *)0)->pix));
+fprintf(out, "pub const BoxBuf_pix: usize = %zu;\n", offsetof(struct buf, pix));
+fprintf(out, "pub const BoxBuf_format__size: usize = %zu;\n", sizeof(((struct buf *)0)->format));
+fprintf(out, "pub const BoxBuf_format: usize = %zu;\n", offsetof(struct buf, format));
+fprintf(out, "pub const BoxBuf_width__size: usize = %zu;\n", sizeof(((struct buf *)0)->width));
+fprintf(out, "pub const BoxBuf_width: usize = %zu;\n", offsetof(struct buf, width));
+fprintf(out, "pub const BoxBuf_height__size: usize = %zu;\n", sizeof(((struct buf *)0)->height));
+fprintf(out, "pub const BoxBuf_height: usize = %zu;\n", offsetof(struct buf, height));
+fprintf(out, "pub const BoxBuf_stride__size: usize = %zu;\n", sizeof(((struct buf *)0)->stride));
+fprintf(out, "pub const BoxBuf_stride: usize = %zu;\n", offsetof(struct buf, stride));
+fprintf(out, "pub const BoxBuf_solid_shades__size: usize = %zu;\n", sizeof(((struct buf *)0)->solid_shades));
+fprintf(out, "pub const BoxBuf_solid_shades: usize = %zu;\n", offsetof(struct buf, solid_shades));
+fprintf(out, "pub const BoxBuf_thickness__size: usize = %zu;\n", sizeof(((struct buf *)0)->thickness));
+fprintf(out, "pub const BoxBuf_thickness: usize = %zu;\n", offsetof(struct buf, thickness));
+fprintf(out, "pub const BoxBuf_x_halfs__size: usize = %zu;\n", sizeof(((struct buf *)0)->x_halfs));
+fprintf(out, "pub const BoxBuf_x_halfs: usize = %zu;\n", offsetof(struct buf, x_halfs));
+fprintf(out, "pub const BoxBuf_y_thirds__size: usize = %zu;\n", sizeof(((struct buf *)0)->y_thirds));
+fprintf(out, "pub const BoxBuf_y_thirds: usize = %zu;\n", offsetof(struct buf, y_thirds));
+fprintf(out, "pub const BoxBuf_y_quads__size: usize = %zu;\n", sizeof(((struct buf *)0)->y_quads));
+fprintf(out, "pub const BoxBuf_y_quads: usize = %zu;\n", offsetof(struct buf, y_quads));
 fprintf(out, "pub const Buffer__size: usize = %zu;\n", sizeof(struct buffer));
 fprintf(out, "pub const Buffer_width__size: usize = %zu;\n", sizeof(((struct buffer *)0)->width));
 fprintf(out, "pub const Buffer_width: usize = %zu;\n", offsetof(struct buffer, width));
