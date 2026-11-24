@@ -2,9 +2,10 @@
 
 Status snapshot and a concrete continuation plan.
 Prepared 2026-11-23 against `feature/zig-migration` @ `a1d9d288`.
-Refreshed 2026-11-24 against @ `0a037632` (Phase 0, Phase 1a, upstream merge,
-config C1-C2o, the terminal font/DPI/size stack T9/T10, and `shm` S1-S5 —
-the config parser and the SHM allocator/cache/scroller are Zig).
+Refreshed 2026-11-24 against @ `c87988db` (Phase 0, Phase 1a, upstream merge,
+config C1-C2o, the terminal font/DPI/size stack T9/T10, `shm` S1-S5 and
+`slave` — the config parser, the SHM allocator/cache/scroller and the
+spawn/exec path are Zig).
 
 ---
 
@@ -19,8 +20,8 @@ foot-owned C lines are gone (44.7%)**, replaced by ~22.7k lines of Zig
 | State | Modules |
 |---|---|
 | **Ported, C deleted** (25) | `async`, `base64`, `char32`, `commands`, `composed`, `csi`, `cursor-shape`, `dcs`, `extract`, `fdm`, `grid`, `hsl`, `misc`, `notify`, `osc`, `reaper`, `sixel`, `spawn`, `spawn_template`, `tokenize`, `uri`, `vt`, `xmalloc`, `xsnprintf`, and **`config`** (the parser is Zig; the 335 surviving C lines are the variadic loggers, `config_regex_compile()` and two fcft field accessors — see §6.3) |
-| **In progress** (Zig + remaining C + shims) | `terminal.c` (1,780 left), `selection.c` (844 left), `shm.c` (329 left — globals, 32-bit/punch-hole `#ifdef` shims, the `wl_buffer_listener` and the `wl_shm` protocol stubs; `shm.zig` is 1,014 lines) |
-| **Untouched** (18 modules, ~22.2k lines) | `box-drawing` (3,450), `render` (5,479), `input` (3,690), `wayland` (2,881), `search` (1,512), `url-mode` (833), `main` (751), `server` (688), `key-binding` (661), `client` (629), `slave` (573), `ime` (532), `log` (231), `unicode-mode` (110), `quirks` (86), `debug` (47), `foot-features` (42), `user-notification` (14) |
+| **In progress** (Zig + remaining C + shims) | `terminal.c` (1,780 left), `selection.c` (844 left), `shm.c` (329 left — globals, 32-bit/punch-hole `#ifdef` shims, the `wl_buffer_listener` and the `wl_shm` protocol stubs; `shm.zig` is 1,014 lines), `slave.c` (158 left — O_*/F_*/TIOCSCTTY/_CS_PATH constants, the IUTF8 termios block, signal-mask restoration and the execvpe shim; `slave.zig` is 663 lines) |
+| **Untouched** (17 modules, ~21.6k lines) | `box-drawing` (3,450), `render` (5,479), `input` (3,690), `wayland` (2,881), `search` (1,512), `url-mode` (833), `main` (751), `server` (688), `key-binding` (661), `client` (629), `ime` (532), `log` (231), `unicode-mode` (110), `quirks` (86), `debug` (47), `foot-features` (42), `user-notification` (14) |
 
 **Progress read two ways:** 45% by C volume, but roughly **35% by effort**,
 because what remains is the hard core (`render`, `input`, `wayland`, the
@@ -616,7 +617,11 @@ utmp backends where available.
 3. ~~**`slave` + `shm` (~1.7k)**~~ — **`shm` done** (S1-S5: lifetime, allocation,
    cache, chain API, scrolling), with 40+ headless harness assertions using a
    NULL-`wl_shm` sentinel so real memfd/mmap/fallocate paths run without a
-   compositor. **Next: `slave` (573)** — no Wayland coupling, fully testable.
+   compositor. **`slave` also done**: `slave_spawn()` (fork/exec, environment
+   scrubbing, /etc/shells validation, the user-notification banner) is Zig and
+   is exercised end-to-end by the harness through a real pty.
+   **Next: `log` (231) + `unicode-mode` (110), then `box-drawing` (3,450)** —
+   or `ime`/`key-binding` if the seat mirror lands first.
 4. **Keep the safety net moving:** add a Zig test whenever a chunk ports
    logic with a pure core, and run `meson test` in all three build dirs plus
    `scripts/smoke.sh` before each commit.

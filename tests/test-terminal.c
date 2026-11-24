@@ -17,6 +17,7 @@
 #include "fdm.h"
 #include "wayland.h"
 #include "shm.h"
+#include "slave.h"
 #include "xmalloc.h"
 
 #include <stdio.h>
@@ -26,6 +27,8 @@
 #include "input.h"
 #include <sys/timerfd.h>
 #include <sys/mman.h>
+#include <sys/wait.h>
+#include <poll.h>
 #include <errno.h>
 #include <unistd.h>
 #include <stdlib.h>
@@ -1794,6 +1797,181 @@ test_shm_scroll(void)
     shm_chain_free(chain);
 }
 
+
+/* Read from a pty master until EOF/EIO or the deadline. */
+static size_t
+read_pty(int fd, char *buf, size_t cap)
+{
+    size_t len = 0;
+    while (len < cap - 1) {
+        struct pollfd pfd = {.fd = fd, .events = POLLIN};
+        if (poll(&pfd, 1, 2000) <= 0)
+            break;
+
+        ssize_t n = read(fd, buf + len, cap - len - 1);
+        if (n <= 0)
+            break;
+        len += n;
+    }
+    buf[len] = '\0';
+    return len;
+}
+
+static int
+open_ptmx(void)
+{
+    return open("/dev/ptmx", O_RDWR | O_NOCTTY);
+}
+
+/* slave_spawn(): fork/exec of the child, its environment and the
+ * user-notification banner. Runs for real against a pty. */
+static void
+test_slave_spawn(void)
+{
+    static char out[4096];
+    int status;
+    pid_t pid;
+
+    /* 1. argv mode: TERM/COLORTERM/PWD are set, terminal-identifying
+     *    variables from the parent's environment are removed, and extra
+     *    env vars from the config are applied (empty value = unset). */
+    int ptmx = open_ptmx();
+    if (ptmx < 0) {
+        printf("skip: cannot open /dev/ptmx\n");
+        return;
+    }
+
+    env_var_list_t extra = tll_init();
+    tll_push_back(extra, ((struct env_var){"FOOT_TEST_EXTRA", "extra-value"}));
+    tll_push_back(extra, ((struct env_var){"KITTY_PID", ""}));
+
+    user_notifications_t notifications = tll_init();
+
+    char *argv[] = {
+        "/bin/sh", "-c",
+        "printf '%s|%s|%s|%s|%s' \"$TERM\" \"$COLORTERM\" \"$PWD\" "
+        "\"$FOOT_TEST_EXTRA\" \"${KITTY_PID-unset}\"",
+        NULL,
+    };
+    char *envp[] = {
+        "PATH=/usr/bin:/bin",
+        "TERM=inherited-term",
+        "KITTY_PID=1234",
+        "KITTY_WINDOW_ID=99",
+        NULL,
+    };
+
+    pid = slave_spawn(
+        ptmx, 3, "/tmp", argv, (const char *const *)envp, &extra,
+        "foot-extra", "/bin/sh", false, &notifications);
+
+    check(pid > 0, "slave_spawn forks a child");
+
+    const char *expect = "foot-extra|truecolor|/tmp|extra-value|unset";
+    size_t len = pid > 0 ? read_pty(ptmx, out, sizeof(out)) : 0;
+    check(len > 0 && strstr(out, expect) != NULL,
+          "child environment is prepared (TERM/COLORTERM/PWD/del_from_env)");
+
+    if (pid > 0 && waitpid(pid, &status, 0) == pid)
+        check(WIFEXITED(status), "child exits normally");
+    close(ptmx);
+    tll_free(extra);
+    tll_free(notifications);
+
+    /* 2. User notifications are written to the pty before exec:
+     *    errors first, then warnings, then deprecations. */
+    ptmx = open_ptmx();
+    extra = (env_var_list_t){0};
+    notifications = (user_notifications_t){0};
+
+    user_notification_add(&notifications, USER_NOTIFICATION_DEPRECATED,
+                          strdup("deprecated-message"));
+    user_notification_add(&notifications, USER_NOTIFICATION_WARNING,
+                          strdup("warning-message"));
+    user_notification_add(&notifications, USER_NOTIFICATION_ERROR,
+                          strdup("error-message"));
+
+    char *argv2[] = {"/bin/sh", "-c", "printf 'shell-output'", NULL};
+    pid = slave_spawn(
+        ptmx, 3, "/tmp", argv2, (const char *const *)envp, &extra,
+        "foot", "/bin/sh", false, &notifications);
+
+    check(pid > 0, "slave_spawn forks a child for notifications");
+
+    len = pid > 0 ? read_pty(ptmx, out, sizeof(out)) : 0;
+    const char *err_at = strstr(out, "error-message");
+    const char *warn_at = strstr(out, "warning-message");
+    const char *depr_at = strstr(out, "deprecated-message");
+    check(err_at && warn_at && depr_at,
+          "all user notifications are emitted");
+    check(err_at && warn_at && depr_at &&
+          err_at < warn_at && warn_at < depr_at,
+          "notifications are ordered error, warning, deprecated");
+    check(strstr(out, "\033[31;1merror\033[39;22m: foot: ") != NULL,
+          "notifications use the coloured prefix");
+    check(strstr(out, "shell-output") != NULL,
+          "the shell runs after the notifications");
+
+    if (pid > 0)
+        waitpid(pid, &status, 0);
+    close(ptmx);
+    tll_free(extra);
+    user_notifications_free(&notifications);
+
+    /* 3. Login shell: argv[0] is prefixed with '-', and the executable is
+     *    still resolved from the un-prefixed path. */
+    ptmx = open_ptmx();
+    extra = (env_var_list_t){0};
+    notifications = (user_notifications_t){0};
+
+    char *argv3[] = {"/bin/sh", "-c", "printf '%s' \"$0\"", NULL};
+    pid = slave_spawn(
+        ptmx, 3, "/tmp", argv3, (const char *const *)envp, &extra,
+        "foot", "/bin/sh", true, &notifications);
+
+    check(pid > 0, "slave_spawn forks a login shell");
+    len = pid > 0 ? read_pty(ptmx, out, sizeof(out)) : 0;
+    check(len > 0 && out[0] == '-',
+          "login shell argv[0] gets a leading dash");
+
+    if (pid > 0)
+        waitpid(pid, &status, 0);
+    close(ptmx);
+    tll_free(extra);
+    tll_free(notifications);
+
+    /* 4. A non-existent command fails without leaving a zombie behind. */
+    ptmx = open_ptmx();
+    extra = (env_var_list_t){0};
+    notifications = (user_notifications_t){0};
+
+    char *argv4[] = {"/nonexistent/foot-harness-no-such-binary", NULL};
+    pid = slave_spawn(
+        ptmx, 1, "/tmp", argv4, (const char *const *)envp, &extra,
+        "foot", "/bin/sh", false, &notifications);
+
+    check(pid == -1, "slave_spawn reports a failed exec");
+    close(ptmx);
+    tll_free(extra);
+    tll_free(notifications);
+
+    /* 5. A bad working directory fails before exec. */
+    ptmx = open_ptmx();
+    extra = (env_var_list_t){0};
+    notifications = (user_notifications_t){0};
+
+    char *argv5[] = {"/bin/sh", "-c", "exit 0", NULL};
+    pid = slave_spawn(
+        ptmx, 3, "/nonexistent/foot-harness-cwd", argv5,
+        (const char *const *)envp, &extra, "foot", "/bin/sh", false,
+        &notifications);
+
+    check(pid == -1, "slave_spawn reports a failed chdir");
+    close(ptmx);
+    tll_free(extra);
+    tll_free(notifications);
+}
+
 int
 main(void)
 {
@@ -1837,6 +2015,7 @@ main(void)
     test_shm_cache();
     test_shm_chain();
     test_shm_scroll();
+    test_slave_spawn();
 
     fcft_fini();
 
