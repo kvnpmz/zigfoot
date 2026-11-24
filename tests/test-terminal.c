@@ -20,6 +20,7 @@
 #include "slave.h"
 #include "log.h"
 #include "box-drawing.h"
+#include "foot-features.h"
 #include <pixman.h>
 #include "user-notification.h"
 #include "debug.h"
@@ -2026,6 +2027,36 @@ log_capture_end(struct log_capture *cap, char *buf, size_t cap_len)
     return len;
 }
 
+/* foot-features.zig: the --version feature line, now assembled at comptime
+ * from build options instead of #ifdefs. Check the shape it must keep: the
+ * "version: " prefix, then the six feature tokens in their fixed order, each
+ * either enabled or disabled. */
+static void
+test_version_and_features(void)
+{
+    static const char *const order[] = {
+        "pgo", "ime", "graphemes", "toplevel-tag", "blur", "assertions",
+    };
+
+    check(strncmp(version_and_features, "version: ", 9) == 0,
+          "version string starts with \"version: \"");
+
+    const char *p = version_and_features;
+    bool ordered = true;
+    for (size_t i = 0; i < sizeof(order) / sizeof(order[0]); i++) {
+        const char *hit = strstr(p, order[i]);
+        if (hit == NULL || (hit[-1] != '+' && hit[-1] != '-'))
+            ordered = false;
+        else
+            p = hit;
+    }
+    check(ordered, "version string lists the features in order");
+
+    /* Nothing may follow the last token. */
+    check(p[strlen(order[5])] == '\0',
+          "version string ends after the last feature");
+}
+
 /* log.c: level filtering, formatting, errno suffix, colour and the level
  * name helpers. */
 static void
@@ -2707,6 +2738,7 @@ main(void)
     test_shm_chain();
     test_shm_scroll();
     test_slave_spawn();
+    test_version_and_features();
     test_log();
     test_debug();
     test_unicode_mode();

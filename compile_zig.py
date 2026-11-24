@@ -64,6 +64,15 @@ def meson_buildtype():
     return None
 
 
+def version_from_header(path):
+    """Return FOOT_VERSION's literal (including quotes) from generate-version.sh's header."""
+    with open(path, "r", encoding="utf-8") as f:
+        for line in f:
+            if line.startswith("#define FOOT_VERSION "):
+                return line[len("#define FOOT_VERSION "):].strip()
+    sys.exit(f"compile_zig.py: no FOOT_VERSION in {path}")
+
+
 def main():
     if len(sys.argv) < 3:
         sys.exit(__doc__)
@@ -74,6 +83,13 @@ def main():
     for arg in sys.argv[3:]:
         if "=" in arg:
             name, value = arg.split("=", 1)
+            # `version=<path to version.h>`: the version string is generated
+            # by generate-version.sh at build time, so read it from the header
+            # and re-emit FOOT_VERSION's literal verbatim (C and Zig string
+            # literal escapes happen to agree).
+            if name == "version":
+                extra_options["foot_version"] = version_from_header(value)
+                continue
             # A value is either a bool or a Zig string literal ("...").
             # The latter mirrors C string #defines (e.g. a path).
             is_string = len(value) >= 2 and value[0] == '"' and value[-1] == '"'

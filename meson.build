@@ -556,6 +556,26 @@ unicode_mode_obj = custom_target(
   ]
 )
 
+foot_features_obj = custom_target(
+  'foot_features_obj',
+  input: 'foot-features.zig',
+  output: 'foot-features.o',
+  depends: version,
+  command: [
+    python, files('compile_zig.py'), '@INPUT@', '@OUTPUT@',
+    grapheme_clustering_zig,
+    # foot-features.c is a chain of #defines built from the configure-time
+    # feature set; mirror the same set as build options. `version=` reads
+    # FOOT_VERSION out of the generated version.h.
+    'version=version.h',
+    'pgo=' + (get_option('b_pgo') == 'use').to_string(),
+    'ime=' + get_option('ime').to_string(),
+    'toplevel_tag=' + (wayland_protocols.version().version_compare('>=1.43')).to_string(),
+    'blur=' + (wayland_protocols.version().version_compare('>=1.45')).to_string(),
+    'assertions=' + is_debug_build.to_string(),
+  ]
+)
+
 box_drawing_obj = custom_target(
   'box_drawing_obj',
   input: 'box-drawing.zig',
@@ -738,7 +758,7 @@ footlib = static_library(
   commands_obj, 'commands.h',
   extract_obj, 'extract.h',
   fdm_obj, 'fdm.h',
-  'foot-features.c', 'foot-features.h',
+  foot_features_obj, 'foot-features.h',
   'ime.c', 'ime.h',
   'input.c', 'input.h',
   'key-binding.c', 'key-binding.h',
@@ -772,7 +792,7 @@ executable(
 executable(
   'footclient',
   'client.c', 'client-protocol.h',
-  'foot-features.c', 'foot-features.h',
+  foot_features_obj, 'foot-features.h',
   'macros.h',
   'util.h',
   version,
