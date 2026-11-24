@@ -1120,6 +1120,175 @@ export fn modifiers_to_str(
     return @ptrCast(ret);
 }
 
+// ── default bindings and server socket path (C2l) ────────────────
+
+const DefaultBinding = struct {
+    action: c_int,
+    mods: [:0]const u8,
+    sym: u32 = 0,
+    button: c_int = 0,
+    count: c_int = 0,
+};
+
+const default_key_bindings = [_]DefaultBinding{
+    .{ .action = @intFromEnum(BindAction.scrollback_up_page), .mods = "Shift", .sym = 65365 }, // XKB_KEY_Prior
+    .{ .action = @intFromEnum(BindAction.scrollback_up_page), .mods = "Shift", .sym = 65434 }, // XKB_KEY_KP_Prior
+    .{ .action = @intFromEnum(BindAction.scrollback_down_page), .mods = "Shift", .sym = 65366 }, // XKB_KEY_Next
+    .{ .action = @intFromEnum(BindAction.scrollback_down_page), .mods = "Shift", .sym = 65435 }, // XKB_KEY_KP_Next
+    .{ .action = @intFromEnum(BindAction.clipboard_copy), .mods = "Control+Shift", .sym = 99 }, // XKB_KEY_c
+    .{ .action = @intFromEnum(BindAction.clipboard_copy), .mods = "none", .sym = 269025111 }, // XKB_KEY_XF86Copy
+    .{ .action = @intFromEnum(BindAction.clipboard_paste), .mods = "Control+Shift", .sym = 118 }, // XKB_KEY_v
+    .{ .action = @intFromEnum(BindAction.clipboard_paste), .mods = "none", .sym = 269025133 }, // XKB_KEY_XF86Paste
+    .{ .action = @intFromEnum(BindAction.primary_paste), .mods = "Shift", .sym = 65379 }, // XKB_KEY_Insert
+    .{ .action = @intFromEnum(BindAction.search_start), .mods = "Control+Shift", .sym = 114 }, // XKB_KEY_r
+    .{ .action = @intFromEnum(BindAction.font_size_up), .mods = "Control", .sym = 43 }, // XKB_KEY_plus
+    .{ .action = @intFromEnum(BindAction.font_size_up), .mods = "Control", .sym = 61 }, // XKB_KEY_equal
+    .{ .action = @intFromEnum(BindAction.font_size_up), .mods = "Control", .sym = 65451 }, // XKB_KEY_KP_Add
+    .{ .action = @intFromEnum(BindAction.font_size_down), .mods = "Control", .sym = 45 }, // XKB_KEY_minus
+    .{ .action = @intFromEnum(BindAction.font_size_down), .mods = "Control", .sym = 65453 }, // XKB_KEY_KP_Subtract
+    .{ .action = @intFromEnum(BindAction.font_size_reset), .mods = "Control", .sym = 48 }, // XKB_KEY_0
+    .{ .action = @intFromEnum(BindAction.font_size_reset), .mods = "Control", .sym = 65456 }, // XKB_KEY_KP_0
+    .{ .action = @intFromEnum(BindAction.spawn_terminal), .mods = "Control+Shift", .sym = 110 }, // XKB_KEY_n
+    .{ .action = @intFromEnum(BindAction.show_urls_launch), .mods = "Control+Shift", .sym = 111 }, // XKB_KEY_o
+    .{ .action = @intFromEnum(BindAction.unicode_input), .mods = "Control+Shift", .sym = 117 }, // XKB_KEY_u
+    .{ .action = @intFromEnum(BindAction.prompt_prev), .mods = "Control+Shift", .sym = 122 }, // XKB_KEY_z
+    .{ .action = @intFromEnum(BindAction.prompt_next), .mods = "Control+Shift", .sym = 120 }, // XKB_KEY_x
+};
+
+const default_search_bindings = [_]DefaultBinding{
+    .{ .action = @intFromEnum(SearchBindAction.scrollback_up_page), .mods = "Shift", .sym = 65365 }, // XKB_KEY_Prior
+    .{ .action = @intFromEnum(SearchBindAction.scrollback_up_page), .mods = "Shift", .sym = 65434 }, // XKB_KEY_KP_Prior
+    .{ .action = @intFromEnum(SearchBindAction.scrollback_down_page), .mods = "Shift", .sym = 65366 }, // XKB_KEY_Next
+    .{ .action = @intFromEnum(SearchBindAction.scrollback_down_page), .mods = "Shift", .sym = 65435 }, // XKB_KEY_KP_Next
+    .{ .action = @intFromEnum(SearchBindAction.cancel), .mods = "Control", .sym = 99 }, // XKB_KEY_c
+    .{ .action = @intFromEnum(SearchBindAction.cancel), .mods = "Control", .sym = 103 }, // XKB_KEY_g
+    .{ .action = @intFromEnum(SearchBindAction.cancel), .mods = "none", .sym = 65307 }, // XKB_KEY_Escape
+    .{ .action = @intFromEnum(SearchBindAction.commit), .mods = "none", .sym = 65293 }, // XKB_KEY_Return
+    .{ .action = @intFromEnum(SearchBindAction.commit), .mods = "none", .sym = 65421 }, // XKB_KEY_KP_Enter
+    .{ .action = @intFromEnum(SearchBindAction.find_prev), .mods = "Control", .sym = 114 }, // XKB_KEY_r
+    .{ .action = @intFromEnum(SearchBindAction.find_next), .mods = "Control", .sym = 115 }, // XKB_KEY_s
+    .{ .action = @intFromEnum(SearchBindAction.edit_left), .mods = "none", .sym = 65361 }, // XKB_KEY_Left
+    .{ .action = @intFromEnum(SearchBindAction.edit_left), .mods = "Control", .sym = 98 }, // XKB_KEY_b
+    .{ .action = @intFromEnum(SearchBindAction.edit_left_word), .mods = "Control", .sym = 65361 }, // XKB_KEY_Left
+    .{ .action = @intFromEnum(SearchBindAction.edit_left_word), .mods = "Alt", .sym = 98 }, // XKB_KEY_b
+    .{ .action = @intFromEnum(SearchBindAction.edit_right), .mods = "none", .sym = 65363 }, // XKB_KEY_Right
+    .{ .action = @intFromEnum(SearchBindAction.edit_right), .mods = "Control", .sym = 102 }, // XKB_KEY_f
+    .{ .action = @intFromEnum(SearchBindAction.edit_right_word), .mods = "Control", .sym = 65363 }, // XKB_KEY_Right
+    .{ .action = @intFromEnum(SearchBindAction.edit_right_word), .mods = "Alt", .sym = 102 }, // XKB_KEY_f
+    .{ .action = @intFromEnum(SearchBindAction.edit_home), .mods = "none", .sym = 65360 }, // XKB_KEY_Home
+    .{ .action = @intFromEnum(SearchBindAction.edit_home), .mods = "Control", .sym = 97 }, // XKB_KEY_a
+    .{ .action = @intFromEnum(SearchBindAction.edit_end), .mods = "none", .sym = 65367 }, // XKB_KEY_End
+    .{ .action = @intFromEnum(SearchBindAction.edit_end), .mods = "Control", .sym = 101 }, // XKB_KEY_e
+    .{ .action = @intFromEnum(SearchBindAction.delete_prev), .mods = "none", .sym = 65288 }, // XKB_KEY_BackSpace
+    .{ .action = @intFromEnum(SearchBindAction.delete_prev_word), .mods = "Control", .sym = 65288 }, // XKB_KEY_BackSpace
+    .{ .action = @intFromEnum(SearchBindAction.delete_prev_word), .mods = "Alt", .sym = 65288 }, // XKB_KEY_BackSpace
+    .{ .action = @intFromEnum(SearchBindAction.delete_next), .mods = "none", .sym = 65535 }, // XKB_KEY_Delete
+    .{ .action = @intFromEnum(SearchBindAction.delete_next_word), .mods = "Control", .sym = 65535 }, // XKB_KEY_Delete
+    .{ .action = @intFromEnum(SearchBindAction.delete_next_word), .mods = "Alt", .sym = 100 }, // XKB_KEY_d
+    .{ .action = @intFromEnum(SearchBindAction.delete_to_start), .mods = "Control", .sym = 117 }, // XKB_KEY_u
+    .{ .action = @intFromEnum(SearchBindAction.delete_to_end), .mods = "Control", .sym = 107 }, // XKB_KEY_k
+    .{ .action = @intFromEnum(SearchBindAction.extend_char), .mods = "Shift", .sym = 65363 }, // XKB_KEY_Right
+    .{ .action = @intFromEnum(SearchBindAction.extend_word), .mods = "Control+Shift", .sym = 65363 }, // XKB_KEY_Right
+    .{ .action = @intFromEnum(SearchBindAction.extend_word), .mods = "Control", .sym = 119 }, // XKB_KEY_w
+    .{ .action = @intFromEnum(SearchBindAction.extend_word_ws), .mods = "Control+Shift", .sym = 119 }, // XKB_KEY_w
+    .{ .action = @intFromEnum(SearchBindAction.extend_line_down), .mods = "Shift", .sym = 65364 }, // XKB_KEY_Down
+    .{ .action = @intFromEnum(SearchBindAction.extend_backward_char), .mods = "Shift", .sym = 65361 }, // XKB_KEY_Left
+    .{ .action = @intFromEnum(SearchBindAction.extend_backward_word), .mods = "Control+Shift", .sym = 65361 }, // XKB_KEY_Left
+    .{ .action = @intFromEnum(SearchBindAction.extend_line_up), .mods = "Shift", .sym = 65362 }, // XKB_KEY_Up
+    .{ .action = @intFromEnum(SearchBindAction.clipboard_paste), .mods = "Control", .sym = 118 }, // XKB_KEY_v
+    .{ .action = @intFromEnum(SearchBindAction.clipboard_paste), .mods = "Control+Shift", .sym = 118 }, // XKB_KEY_v
+    .{ .action = @intFromEnum(SearchBindAction.clipboard_paste), .mods = "Control", .sym = 121 }, // XKB_KEY_y
+    .{ .action = @intFromEnum(SearchBindAction.clipboard_paste), .mods = "none", .sym = 269025133 }, // XKB_KEY_XF86Paste
+    .{ .action = @intFromEnum(SearchBindAction.primary_paste), .mods = "Shift", .sym = 65379 }, // XKB_KEY_Insert
+};
+
+const default_url_bindings = [_]DefaultBinding{
+    .{ .action = @intFromEnum(UrlBindAction.cancel), .mods = "Control", .sym = 99 }, // XKB_KEY_c
+    .{ .action = @intFromEnum(UrlBindAction.cancel), .mods = "Control", .sym = 103 }, // XKB_KEY_g
+    .{ .action = @intFromEnum(UrlBindAction.cancel), .mods = "Control", .sym = 100 }, // XKB_KEY_d
+    .{ .action = @intFromEnum(UrlBindAction.cancel), .mods = "none", .sym = 65307 }, // XKB_KEY_Escape
+    .{ .action = @intFromEnum(UrlBindAction.toggle_url_on_jump_label), .mods = "none", .sym = 116 }, // XKB_KEY_t
+};
+
+const default_mouse_bindings = [_]DefaultBinding{
+    .{ .action = @intFromEnum(BindAction.scrollback_up_mouse), .mods = "none", .button = 0x11c, .count = 1 }, // BTN_WHEEL_BACK
+    .{ .action = @intFromEnum(BindAction.scrollback_down_mouse), .mods = "none", .button = 0x11d, .count = 1 }, // BTN_WHEEL_FORWARD
+    .{ .action = @intFromEnum(BindAction.primary_paste), .mods = "none", .button = 0x112, .count = 1 }, // BTN_MIDDLE
+    .{ .action = @intFromEnum(BindAction.select_begin), .mods = "none", .button = 0x110, .count = 1 }, // BTN_LEFT
+    .{ .action = @intFromEnum(BindAction.select_begin_block), .mods = "Control", .button = 0x110, .count = 1 }, // BTN_LEFT
+    .{ .action = @intFromEnum(BindAction.select_extend), .mods = "none", .button = 0x111, .count = 1 }, // BTN_RIGHT
+    .{ .action = @intFromEnum(BindAction.select_extend_char_wise), .mods = "Control", .button = 0x111, .count = 1 }, // BTN_RIGHT
+    .{ .action = @intFromEnum(BindAction.select_word), .mods = "none", .button = 0x110, .count = 2 }, // BTN_LEFT
+    .{ .action = @intFromEnum(BindAction.select_word_ws), .mods = "Control", .button = 0x110, .count = 2 }, // BTN_LEFT
+    .{ .action = @intFromEnum(BindAction.select_quote), .mods = "none", .button = 0x110, .count = 3 }, // BTN_LEFT
+    .{ .action = @intFromEnum(BindAction.select_row), .mods = "none", .button = 0x110, .count = 4 }, // BTN_LEFT
+    .{ .action = @intFromEnum(BindAction.font_size_up), .mods = "Control", .button = 0x11c, .count = 1 }, // BTN_WHEEL_BACK
+    .{ .action = @intFromEnum(BindAction.font_size_down), .mods = "Control", .button = 0x11d, .count = 1 }, // BTN_WHEEL_FORWARD
+};
+
+fn addDefaultBindings(list: []const DefaultBinding, target: *types.ConfigKeyBindingList) void {
+    const arr: [*]types.ConfigKeyBinding = @ptrCast(@alignCast(
+        xmalloc(list.len * @sizeOf(types.ConfigKeyBinding)) orelse unreachable,
+    ));
+
+    for (list, 0..) |d, i| {
+        var binding = std.mem.zeroes(types.ConfigKeyBinding);
+        binding.action = d.action;
+        parse_modifiers(d.mods.ptr, d.mods.len, &binding.modifiers);
+        if (d.button != 0) {
+            binding._u.m = .{ .button = d.button, .count = d.count };
+        } else {
+            binding._u.k.sym = d.sym;
+        }
+        arr[i] = binding;
+    }
+
+    target.arr = arr;
+    target.count = list.len;
+}
+
+export fn add_default_key_bindings(conf: *types.Config) callconv(.c) void {
+    addDefaultBindings(&default_key_bindings, &conf.bindings.key);
+}
+
+export fn add_default_search_bindings(conf: *types.Config) callconv(.c) void {
+    addDefaultBindings(&default_search_bindings, &conf.bindings.search);
+}
+
+export fn add_default_url_bindings(conf: *types.Config) callconv(.c) void {
+    addDefaultBindings(&default_url_bindings, &conf.bindings.url);
+}
+
+export fn add_default_mouse_bindings(conf: *types.Config) callconv(.c) void {
+    addDefaultBindings(&default_mouse_bindings, &conf.bindings.mouse);
+}
+
+export fn get_server_socket_path() callconv(.c) ?[*:0]u8 {
+    const xdg_runtime = getenv("XDG_RUNTIME_DIR") orelse
+        return xstrdup("/tmp/foot.sock");
+
+    const wayland_display = getenv("WAYLAND_DISPLAY") orelse
+        return strJoin3(xdg_runtime, "/foot.sock", "");
+
+    // "%s/foot-%s.sock"
+    const runtime = std.mem.span(xdg_runtime);
+    const display = std.mem.span(wayland_display);
+    const parts = [_][]const u8{ runtime, "/foot-", display, ".sock" };
+
+    var len: usize = 0;
+    for (parts) |part| len += part.len;
+
+    const buf: [*]u8 = @ptrCast(@alignCast(xmalloc(len + 1) orelse return null));
+
+    var idx: usize = 0;
+    for (parts) |part| {
+        @memcpy(buf[idx .. idx + part.len], part);
+        idx += part.len;
+    }
+    buf[len] = 0;
+    return @ptrCast(buf);
+}
+
 // ── key-binding action tables (C2k) ───────────────────────────────
 
 const BindAction = enum(c_int) {
