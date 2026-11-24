@@ -623,9 +623,14 @@ utmp backends where available.
 
 ## 13. Sequenced backlog (refreshed 2026-11-24)
 
-State: **24,222 of 48,830 C lines gone (49.6%)**, ~35% by effort, 28 modules
-ported, 287 harness assertions, `meson test` 5/5 in three build dirs.
-Remaining C: 24,608 hand-written lines + 1,253 shim lines.
+State: **27,782 of 48,830 C lines gone (56.9%)**, ~40% by effort, 29 modules
+ported, 309 harness assertions, `meson test` 5/5 in three build dirs.
+Remaining C: 21,048 hand-written lines + 1,275 shim lines.
+
+`box-drawing` is finished (A1-A5c, commits 10cd275b..effdbe5d): the module is
+3,374 lines of Zig, `box-drawing.c` is deleted, and every shape family is
+verified byte-identical against the last C build through the FOOT_BOX_DUMP
+differential oracle (786 codepoints in three ranges, FNV-1a per glyph).
 
 Every chunk below is one commit, follows §9's recipe, and passes §10's
 verification contract (3 build dirs + smoke + ABI probe + new tests).
@@ -638,22 +643,25 @@ order and in parallel with someone starting Track B.
 
 | Chunk | Work | Files | Est. |
 |---|---|---|---|
-| **A1** | `box-drawing` scaffolding: move `struct buf` to `box-drawing.h`, mirror it in `terminal_types.zig` (+ `expectAbi`), port `_thickness`, `_hline`/`_vline`/`_rect`/`_*_middle` primitives, `change_buffer_format` | box-drawing.c/h, terminal_types.zig | 0.5d |
-| **A2** | `box-drawing` line family: 0x2500–0x254x light/heavy/double h & v lines, all dash variants, the 0x250c–0x254b corners and tees | box-drawing.c/.zig | 1d |
-| **A3** | `box-drawing` mixed/diagonal/arc family: 0x254c–0x257f (mixed light/heavy, arcs, diagonals, half lines) | box-drawing.c/.zig | 1d |
-| **A4** | `box-drawing` blocks: 0x2580–0x259f blocks/shades/quadrants, 0x25e2–0x25e5 triangles, 0x1fb00–0x1fb8b sextants/octants/wedges/eighth blocks, 0x1cc00+ legacy computing tables | box-drawing.c/.zig | 1.5d |
-| **A5** | `box-drawing` dispatch: the 251-case `draw_glyph()` switch, `box_drawing()` itself (glyph allocation, metrics, `fcft_glyph` fill-in), delete `box-drawing.c` | box-drawing.c/.zig | 1d |
+| **A1** done | `box-drawing` scaffolding: move `struct buf` to `box-drawing.h`, mirror it in `terminal_types.zig` (+ `expectAbi`), port `_thickness`, `_hline`/`_vline`/`_rect`/`_*_middle` primitives, `change_buffer_format` | box-drawing.c/h, terminal_types.zig | 0.5d |
+| **A2** done | `box-drawing` line family: 0x2500–0x254x light/heavy/double h & v lines, all dash variants, the 0x250c–0x254b corners and tees | box-drawing.c/.zig | 1d |
+| **A3** done | `box-drawing` mixed/diagonal/arc family: 0x254c–0x257f (mixed light/heavy, arcs, diagonals, half lines) | box-drawing.c/.zig | 1d |
+| **A4** done | `box-drawing` blocks: 0x2580–0x259f blocks/shades/quadrants, 0x25e2–0x25e5 triangles, 0x1fb00–0x1fb8b sextants/octants/wedges/eighth blocks, 0x1cc00+ legacy computing tables | box-drawing.c/.zig | 1.5d |
+| **A5** done | `box-drawing` dispatch: the 251-case `draw_glyph()` switch, `box_drawing()` itself (glyph allocation, metrics, `fcft_glyph` fill-in), delete `box-drawing.c` | box-drawing.c/.zig | 1d |
 | **A6** | `quirks` (86): weston detection + CSD subsurface desync, 4 shims for `wl_subsurface_set_{de,}sync` and the csd surface array | quirks.c/.zig, terminal-shim.c | 0.5d |
 | **A7** | `foot-features` (42): pass `foot_version`, `pgo`, `ime`, `graphemes`, `toplevel-tag`, `blur`, `assertions` as `compile_zig.py` build options and build the string in Zig | foot-features.c/.zig, meson.build | 0.25d |
 | **A8** | shim audit: document the removal criterion in each `*-shim.c`, delete anything already dead (e.g. leftover monitor/window accessors that Track B replaces) | *-shim.c | 0.25d |
 
-`box-drawing` verification (A1–A5): during the port keep a temporary
-differential harness test that renders ~48 representative codepoints through
-both the C and Zig path and compares the pixman buffers byte-for-byte; when
-`box-drawing.c` is deleted, replace it with structural assertions (light
-horizontal fills exactly `width × thickness` pixels in the middle rows, full
-block fills the cell, each quadrant ≈ ¼ of the cell, ...) so the test does not
-depend on the installed font.
+`box-drawing` verification (A1-A5, done): the differential oracle is a
+harness mode (`FOOT_BOX_DUMP=1`) that renders U+2500..U+259F,
+U+1FB00..U+1FB8B and U+1CC00..U+1CDE5 (786 codepoints) and prints an FNV-1a
+hash of each pixmap; the old and new builds are diffed for byte-identical
+output. It caught a real bug (wrong PIXMAN_a8/PIXMAN_a1 constants making the
+shade format switch a no-op). The permanent test is structural and
+font-independent: band contiguity, thickness <= height/3, full-cell coverage
+for the full block, monotonic shade coverage, quadrant corner checks,
+solid-shade uniformity at 0x40/0x80/0xc0. `FOOT_BOX_PIXELS=<cp>` dumps one
+glyph's raw pixmap next to its hash.
 
 ### Track B — the mirrors that unlock the core (~1 week) [gate for C/D]
 
