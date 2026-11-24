@@ -16,10 +16,18 @@
 #include "xmalloc.h"
 
 #include <stdio.h>
+#include <fcntl.h>
+#include <termios.h>
+#include <linux/input-event-codes.h>
+#include "input.h"
 #include <sys/timerfd.h>
 #include <unistd.h>
 #include <stdlib.h>
 #include <string.h>
+
+/* Ported to terminal.zig; internal helpers, not part of terminal.h. */
+void print_insert(struct terminal *term, int width);
+void print_linewrap(struct terminal *term);
 
 #define SCROLLBACK_ROWS 16
 #define TERM_ROWS 5
@@ -112,6 +120,57 @@ term_new(void)
 
     populate(term);
     return term;
+}
+
+/*
+ * Give the terminal a real pty so term_to_slave() output can be captured:
+ * term->ptmx is the master, and we read the escapes back from the slave.
+ */
+static int
+term_capture_begin(struct terminal *term)
+{
+    int master = posix_openpt(O_RDWR | O_NOCTTY);
+    xassert(master >= 0);
+    xassert(grantpt(master) == 0);
+    xassert(unlockpt(master) == 0);
+
+    /* Canonical mode would line-buffer the input queue and hide our
+     * escape sequences; foot puts the pty in raw mode, so do the same. */
+    struct termios tio;
+    xassert(tcgetattr(master, &tio) == 0);
+    cfmakeraw(&tio);
+    xassert(tcsetattr(master, TCSANOW, &tio) == 0);
+
+    const char *slave_name = ptsname(master);
+    xassert(slave_name != NULL);
+
+    int slave = open(slave_name, O_RDWR | O_NOCTTY | O_NONBLOCK);
+    xassert(slave >= 0);
+
+    term->ptmx = master;
+    return slave;
+}
+
+static void
+term_capture_end(struct terminal *term, int slave)
+{
+    close(slave);
+    close(term->ptmx);
+    term->ptmx = -1;
+}
+
+/* Read whatever term_to_slave() wrote, as a NUL-terminated string. */
+static void
+term_capture_read(int slave, char *buf, size_t size)
+{
+    size_t len = 0;
+    while (len + 1 < size) {
+        ssize_t n = read(slave, buf + len, size - len - 1);
+        if (n <= 0)
+            break;
+        len += (size_t)n;
+    }
+    buf[len] = '\0';
 }
 
 static void
@@ -438,6 +497,148 @@ test_size_notifications(void)
     term_free(term);
 }
 
+/* Mouse reporting: the escape sequences must match foot's C output byte for
+ * byte, so these read them back out of a real pty. */
+static void
+test_mouse_reporting(void)
+{
+    struct terminal *term = term_new();
+    term->kbd_focus = true;
+
+    int slave = term_capture_begin(term);
+    char buf[256];
+
+    /* SGR, button press/release */
+    term->mouse_tracking = MOUSE_CLICK;
+    term->mouse_reporting = MOUSE_SGR;
+
+    term_mouse_down(term, BTN_LEFT, 2, 3, 0, 0, false, false, false);
+    term_capture_read(slave, buf, sizeof(buf));
+    check_text(buf, "\033[<0;4;3M", "SGR button press");
+
+    term_mouse_up(term, BTN_LEFT, 2, 3, 0, 0, false, false, false);
+    term_capture_read(slave, buf, sizeof(buf));
+    check_text(buf, "\033[<0;4;3m", "SGR button release");
+
+    /* Modifiers only apply while the terminal has keyboard focus */
+    term_mouse_down(term, BTN_LEFT, 0, 0, 0, 0, true, true, true);
+    term_capture_read(slave, buf, sizeof(buf));
+    check_text(buf, "\033[<28;1;1M", "SGR with shift+alt+ctrl");
+
+    term->kbd_focus = false;
+    term_mouse_down(term, BTN_LEFT, 0, 0, 0, 0, true, true, true);
+    term_capture_read(slave, buf, sizeof(buf));
+    check_text(buf, "\033[<0;1;1M", "modifiers ignored without focus");
+    term->kbd_focus = true;
+
+    /* Scroll wheel: BTN_WHEEL_FORWARD maps to X button 5, encoded 65 */
+    term_mouse_down(term, BTN_WHEEL_FORWARD, 0, 0, 0, 0, false, false, false);
+    term_capture_read(slave, buf, sizeof(buf));
+    check_text(buf, "\033[<65;1;1M", "SGR wheel-up");
+
+    /* No release events for the vertical wheel */
+    term_mouse_up(term, BTN_WHEEL_FORWARD, 0, 0, 0, 0, false, false, false);
+    term_capture_read(slave, buf, sizeof(buf));
+    check_text(buf, "", "wheel-up has no release event");
+
+    /* X10 style: ESC [ M <button+32> <col+32+1> <row+32+1> */
+    term->mouse_reporting = MOUSE_NORMAL;
+    term_mouse_down(term, BTN_MIDDLE, 0, 1, 0, 0, false, false, false);
+    term_capture_read(slave, buf, sizeof(buf));
+    check_text(buf, "\033[M\041\042\041", "X10/normal button press");
+
+    term_mouse_up(term, BTN_MIDDLE, 0, 1, 0, 0, false, false, false);
+    term_capture_read(slave, buf, sizeof(buf));
+    check_text(buf, "\033[M\043\042\041", "X10/normal button release");
+
+    /* urxvt */
+    term->mouse_reporting = MOUSE_URXVT;
+    term_mouse_down(term, BTN_RIGHT, 4, 5, 0, 0, false, false, false);
+    term_capture_read(slave, buf, sizeof(buf));
+    check_text(buf, "\033[34;6;5M", "urxvt button press");
+
+    /* SGR in pixels uses the pixel coordinates, clamped at 0 */
+    term->mouse_reporting = MOUSE_SGR_PIXELS;
+    term_mouse_down(term, BTN_LEFT, 4, 5, 40, 50, false, false, false);
+    term_capture_read(slave, buf, sizeof(buf));
+    check_text(buf, "\033[<0;51;41M", "SGR-pixels button press");
+
+    /* utf8 reporting is unimplemented and must stay silent */
+    term->mouse_reporting = MOUSE_UTF8;
+    term_mouse_down(term, BTN_LEFT, 0, 0, 0, 0, false, false, false);
+    term_capture_read(slave, buf, sizeof(buf));
+    check_text(buf, "", "utf8 reporting is silent");
+
+    /* Motion: MOUSE_CLICK never reports, MOUSE_DRAG needs a button */
+    term->mouse_reporting = MOUSE_SGR;
+    term->mouse_tracking = MOUSE_CLICK;
+    term_mouse_motion(term, BTN_LEFT, 1, 1, 0, 0, false, false, false);
+    term_capture_read(slave, buf, sizeof(buf));
+    check_text(buf, "", "no motion reports in MOUSE_CLICK");
+
+    term->mouse_tracking = MOUSE_DRAG;
+    term_mouse_motion(term, 0, 1, 1, 0, 0, false, false, false);
+    term_capture_read(slave, buf, sizeof(buf));
+    check_text(buf, "", "no motion without a button in MOUSE_DRAG");
+
+    term_mouse_motion(term, BTN_LEFT, 1, 1, 0, 0, false, false, false);
+    term_capture_read(slave, buf, sizeof(buf));
+    check_text(buf, "\033[<32;2;2M", "drag motion with button");
+
+    term->mouse_tracking = MOUSE_MOTION;
+    term_mouse_motion(term, 0, 1, 2, 0, 0, false, false, false);
+    term_capture_read(slave, buf, sizeof(buf));
+    check_text(buf, "\033[<35;3;2M", "motion with button released");
+
+    /* Tracking disabled: nothing is reported */
+    term->mouse_tracking = MOUSE_NONE;
+    term_mouse_down(term, BTN_LEFT, 0, 0, 0, 0, false, false, false);
+    term_capture_read(slave, buf, sizeof(buf));
+    check_text(buf, "", "no reports when tracking is off");
+
+    term_capture_end(term, slave);
+    term_free(term);
+}
+
+/* print_insert(): shifts the rest of the row right */
+static void
+test_print_insert(void)
+{
+    struct terminal *term = term_new();
+    term->normal.offset = 11;
+    term->normal.view = 11;
+    term->normal.cursor.point.row = 0;
+    term->normal.cursor.point.col = 1;
+    term->normal.cur_row = term->normal.rows[11];
+
+    term->insert_mode = true;
+
+    struct row *r = term->normal.rows[11];
+    for (int c = 0; c < COLS; c++) {
+        r->cells[c].wc = 'a' + c;
+        r->cells[c].attrs.clean = true;
+    }
+
+    print_insert(term, 2);
+    /* cursor at col 1, width 2, 5 columns: cells[3..5] <- cells[1..3] */
+    check(r->cells[0].wc == 'a' && r->cells[1].wc == 'b' &&
+          r->cells[2].wc == 'c' && r->cells[3].wc == 'b' &&
+          r->cells[4].wc == 'c',
+          "print_insert shifts cells right");
+    check(!r->cells[3].attrs.clean && !r->cells[4].attrs.clean,
+          "print_insert marks shifted cells dirty");
+    check(r->cells[1].attrs.clean, "print_insert leaves cells before the cursor alone");
+
+    /* Without insert mode it is a no-op */
+    term->insert_mode = false;
+    for (int c = 0; c < COLS; c++)
+        r->cells[c].wc = 'a' + c;
+    print_insert(term, 2);
+    check(r->cells[1].wc == 'b', "print_insert is a no-op outside insert mode");
+
+    term_free(term);
+}
+
 /* term_flash(): arms the timer and marks the terminal as flashing */
 static void
 test_flash(void)
@@ -467,6 +668,8 @@ main(void)
     test_osc8();
     test_size_notifications();
     test_flash();
+    test_mouse_reporting();
+    test_print_insert();
     test_theme_apply();
     test_theme_get();
     test_term_icon();

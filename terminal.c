@@ -2169,103 +2169,13 @@ term_kbd_focus_out(struct terminal *term)
         term_to_slave(term, "\033[O", 3);
 }
 
-static int
-linux_mouse_button_to_x(int button)
-{
-    /* Note: on X11, scroll events where reported as buttons. Not so
-     * on Wayland. We manually map scroll events to custom "button"
-     * defines (BTN_WHEEL_*).
-     */
-    switch (button) {
-    case BTN_LEFT:          return 1;
-    case BTN_MIDDLE:        return 2;
-    case BTN_RIGHT:         return 3;
-    case BTN_WHEEL_BACK:    return 4;  /* Foot custom define */
-    case BTN_WHEEL_FORWARD: return 5;  /* Foot custom define */
-    case BTN_WHEEL_LEFT:    return 6;  /* Foot custom define */
-    case BTN_WHEEL_RIGHT:   return 7;  /* Foot custom define */
-    case BTN_SIDE:          return 8;
-    case BTN_EXTRA:         return 9;
-    case BTN_FORWARD:       return 10;
-    case BTN_BACK:          return 11;
-    case BTN_TASK:          return 12; /* Guessing... */
+/* mouse reporting: ported to terminal.zig */
 
-    default:
-        LOG_WARN("unrecognized mouse button: %d (0x%x)", button, button);
-        return -1;
-    }
-}
 
-static int
-encode_xbutton(int xbutton)
-{
-    switch (xbutton) {
-    case 1: case 2: case 3:
-        return xbutton - 1;
 
-    case 4: case 5: case 6: case 7:
-        /* Like button 1 and 2, but with 64 added */
-        return xbutton - 4 + 64;
 
-    case 8: case 9: case 10: case 11:
-        /* Similar to 4 and 5, but adding 128 instead of 64 */
-        return xbutton - 8 + 128;
 
-    default:
-        LOG_ERR("cannot encode X mouse button: %d", xbutton);
-        return -1;
-    }
-}
 
-static void
-report_mouse_click(struct terminal *term, int encoded_button, int row, int col,
-                   int row_pixels, int col_pixels, bool release)
-{
-    char response[128];
-
-    switch (term->mouse_reporting) {
-    case MOUSE_NORMAL: {
-        int encoded_col = 32 + col + 1;
-        int encoded_row = 32 + row + 1;
-        if (encoded_col > 255 || encoded_row > 255)
-            return;
-
-        snprintf(response, sizeof(response), "\033[M%c%c%c",
-                 32 + (release ? 3 : encoded_button), encoded_col, encoded_row);
-        break;
-    }
-
-    case MOUSE_SGR:
-        snprintf(response, sizeof(response), "\033[<%d;%d;%d%c",
-                 encoded_button, col + 1, row + 1, release ? 'm' : 'M');
-        break;
-
-    case MOUSE_SGR_PIXELS: {
-        const int bounded_col = max(col_pixels, 0);
-        const int bounded_row = max(row_pixels, 0);
-        snprintf(response, sizeof(response), "\033[<%d;%d;%d%c",
-                 encoded_button, bounded_col + 1, bounded_row + 1, release ? 'm' : 'M');
-        break;
-    }
-
-    case MOUSE_URXVT:
-        snprintf(response, sizeof(response), "\033[%d;%d;%dM",
-                 32 + (release ? 3 : encoded_button), col + 1, row + 1);
-        break;
-
-    case MOUSE_UTF8:
-        /* Unimplemented */
-        return;
-    }
-
-    term_to_slave(term, response, strlen(response));
-}
-
-static void
-report_mouse_motion(struct terminal *term, int encoded_button, int row, int col, int row_pixels, int col_pixels)
-{
-    report_mouse_click(term, encoded_button, row, col, row_pixels, col_pixels, false);
-}
 
 bool
 term_mouse_grabbed(const struct terminal *term, const struct seat *seat)
@@ -2288,135 +2198,11 @@ term_mouse_grabbed(const struct terminal *term, const struct seat *seat)
         (seat->kbd_focus == term && override_mods_pressed);
 }
 
-void
-term_mouse_down(struct terminal *term, int button, int row, int col,
-                int row_pixels, int col_pixels,
-                bool _shift, bool _alt, bool _ctrl)
-{
-    /* Map libevent button event code to X button number */
-    int xbutton = linux_mouse_button_to_x(button);
-    if (xbutton == -1)
-        return;
-
-    int encoded = encode_xbutton(xbutton);
-    if (encoded == -1)
-        return;
+/* term_mouse_down/up/motion: ported to terminal.zig */
 
 
-    bool has_focus = term->kbd_focus;
-    bool shift = has_focus ? _shift : false;
-    bool alt = has_focus ? _alt : false;
-    bool ctrl = has_focus ? _ctrl : false;
 
-    encoded += (shift ? 4 : 0) + (alt ? 8 : 0) + (ctrl ? 16 : 0);
 
-    switch (term->mouse_tracking) {
-    case MOUSE_NONE:
-        break;
-
-    case MOUSE_CLICK:
-    case MOUSE_DRAG:
-    case MOUSE_MOTION:
-        report_mouse_click(term, encoded, row, col, row_pixels, col_pixels, false);
-        break;
-
-    case MOUSE_X10:
-        /* Never enabled */
-        BUG("X10 mouse mode not implemented");
-        break;
-    }
-}
-
-void
-term_mouse_up(struct terminal *term, int button, int row, int col,
-              int row_pixels, int col_pixels,
-              bool _shift, bool _alt, bool _ctrl)
-{
-    /* Map libevent button event code to X button number */
-    int xbutton = linux_mouse_button_to_x(button);
-    if (xbutton == -1)
-        return;
-
-    if (xbutton == 4 || xbutton == 5) {
-        /* No release events for vertical scroll wheel buttons */
-        return;
-    }
-
-    int encoded = encode_xbutton(xbutton);
-    if (encoded == -1)
-        return;
-
-    bool has_focus = term->kbd_focus;
-    bool shift = has_focus ? _shift : false;
-    bool alt = has_focus ? _alt : false;
-    bool ctrl = has_focus ? _ctrl : false;
-
-    encoded += (shift ? 4 : 0) + (alt ? 8 : 0) + (ctrl ? 16 : 0);
-
-    switch (term->mouse_tracking) {
-    case MOUSE_NONE:
-        break;
-
-    case MOUSE_CLICK:
-    case MOUSE_DRAG:
-    case MOUSE_MOTION:
-        report_mouse_click(term, encoded, row, col, row_pixels, col_pixels, true);
-        break;
-
-    case MOUSE_X10:
-        /* Never enabled */
-        BUG("X10 mouse mode not implemented");
-        break;
-    }
-}
-
-void
-term_mouse_motion(struct terminal *term, int button, int row, int col,
-                  int row_pixels, int col_pixels,
-                  bool _shift, bool _alt, bool _ctrl)
-{
-    int encoded = 0;
-
-    if (button != 0) {
-        /* Map libevent button event code to X button number */
-        int xbutton = linux_mouse_button_to_x(button);
-        if (xbutton == -1)
-            return;
-
-        encoded = encode_xbutton(xbutton);
-        if (encoded == -1)
-            return;
-    } else
-        encoded = 3;  /* "released" */
-
-    bool has_focus = term->kbd_focus;
-    bool shift = has_focus ? _shift : false;
-    bool alt = has_focus ? _alt : false;
-    bool ctrl = has_focus ? _ctrl : false;
-
-    encoded += 32; /* Motion event */
-    encoded += (shift ? 4 : 0) + (alt ? 8 : 0) + (ctrl ? 16 : 0);
-
-    switch (term->mouse_tracking) {
-    case MOUSE_NONE:
-    case MOUSE_CLICK:
-        return;
-
-    case MOUSE_DRAG:
-        if (button == 0)
-            return;
-        /* FALLTHROUGH */
-
-    case MOUSE_MOTION:
-        report_mouse_motion(term, encoded, row, col, row_pixels, col_pixels);
-        break;
-
-    case MOUSE_X10:
-        /* Never enabled */
-        BUG("X10 mouse mode not implemented");
-        break;
-    }
-}
 
 void
 term_xcursor_update_for_seat(struct terminal *term, struct seat *seat)
@@ -2535,55 +2321,9 @@ term_bell(struct terminal *term)
 
 /* term_disable_app_sync_updates: ported to terminal.zig */
 
-void
-print_linewrap(struct terminal *term)
-{
-    if (likely(!term->grid->cursor.lcf)) {
-        /* Not and end of line */
-        return;
-    }
+/* print_linewrap/print_insert: ported to terminal.zig */
 
-    if (unlikely(!term->auto_margin)) {
-        /* Auto-wrap disabled */
-        return;
-    }
 
-    term->grid->cur_row->linebreak = false;
-    term->grid->cursor.lcf = false;
-
-    const int row = term->grid->cursor.point.row;
-
-    if (row == term->scroll_region.end - 1)
-        term_scroll(term, 1);
-    else {
-        const int new_row = min(row + 1, term->rows - 1);
-        term->grid->cursor.point.row = new_row;
-        term->grid->cur_row = grid_row(term->grid, new_row);
-    }
-
-    term->grid->cursor.point.col = 0;
-}
-
-void
-print_insert(struct terminal *term, int width)
-{
-    if (likely(!term->insert_mode))
-        return;
-
-    xassert(width > 0);
-
-    struct row *row = term->grid->cur_row;
-    const size_t move_count = max(0, term->cols - term->grid->cursor.point.col - width);
-
-    memmove(
-        &row->cells[term->grid->cursor.point.col + width],
-        &row->cells[term->grid->cursor.point.col],
-        move_count * sizeof(struct cell));
-
-    /* Mark moved cells as dirty */
-    for (size_t i = term->grid->cursor.point.col + width; i < term->cols; i++)
-        row->cells[i].attrs.clean = 0;
-}
 
 /* print_spacer: ported to terminal.zig */
 

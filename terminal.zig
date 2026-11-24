@@ -741,8 +741,6 @@ export fn term_reverse_index(term: *types.Terminal) callconv(.c) void {
 // linewrap/insert helpers (all still C), and sixel_overwrite_* (Zig).
 
 extern fn erase_cell_range(term: *types.Terminal, row: *types.Row, start: c_int, end: c_int) callconv(.c) void;
-extern fn print_linewrap(term: *types.Terminal) callconv(.c) void;
-extern fn print_insert(term: *types.Terminal, width: c_int) callconv(.c) void;
 
 extern fn grid_row_uri_range_put(row: *types.Row, col: c_int, uri: [*:0]const u8, id: u64) callconv(.c) void;
 extern fn grid_row_uri_range_erase(row: *types.Row, start: c_int, end: c_int) callconv(.c) void;
@@ -2410,4 +2408,327 @@ export fn term_theme_get(term: *const types.Terminal) *const types.ColorTheme {
         terminal_shim_conf_colors_dark(term)
     else
         terminal_shim_conf_colors_light(term);
+}
+
+//
+// Chunk T7 (part 1) — mouse reporting. term_mouse_grabbed() and the
+// xcursor functions stay in C: they need the seat and the key-binding
+// manager (phase 3).
+//
+
+const BTN_LEFT: c_int = 0x110;
+const BTN_RIGHT: c_int = 0x111;
+const BTN_MIDDLE: c_int = 0x112;
+const BTN_SIDE: c_int = 0x113;
+const BTN_EXTRA: c_int = 0x114;
+const BTN_FORWARD: c_int = 0x115;
+const BTN_BACK: c_int = 0x116;
+const BTN_TASK: c_int = 0x117;
+
+// Foot custom defines (input.h), not Linux input event codes.
+const BTN_WHEEL_BACK: c_int = 0x11c;
+const BTN_WHEEL_FORWARD: c_int = 0x11d;
+const BTN_WHEEL_LEFT: c_int = 0x11e;
+const BTN_WHEEL_RIGHT: c_int = 0x11f;
+
+fn linuxMouseButtonToX(button: c_int) c_int {
+    // On X11, scroll events were reported as buttons. Not so on Wayland, so
+    // map scroll events to custom "button" defines (BTN_WHEEL_*).
+    return switch (button) {
+        BTN_LEFT => 1,
+        BTN_MIDDLE => 2,
+        BTN_RIGHT => 3,
+        BTN_WHEEL_BACK => 4,
+        BTN_WHEEL_FORWARD => 5,
+        BTN_WHEEL_LEFT => 6,
+        BTN_WHEEL_RIGHT => 7,
+        BTN_SIDE => 8,
+        BTN_EXTRA => 9,
+        BTN_FORWARD => 10,
+        BTN_BACK => 11,
+        BTN_TASK => 12,
+        else => -1,
+    };
+}
+
+fn encodeXbutton(xbutton: c_int) c_int {
+    return switch (xbutton) {
+        1, 2, 3 => xbutton - 1,
+
+        // Like button 1 and 2, but with 64 added
+        4, 5, 6, 7 => xbutton - 4 + 64,
+
+        // Similar to 4 and 5, but adding 128 instead of 64
+        8, 9, 10, 11 => xbutton - 8 + 128,
+
+        else => -1,
+    };
+}
+
+fn reportMouseClick(
+    term: *types.Terminal,
+    encoded_button: c_int,
+    row_idx: c_int,
+    col: c_int,
+    row_pixels: c_int,
+    col_pixels: c_int,
+    release: bool,
+) void {
+    var response: [128]u8 = undefined;
+
+    const out: []const u8 = switch (term.mouse_reporting) {
+        .normal => blk: {
+            const encoded_col = 32 + col + 1;
+            const encoded_row = 32 + row_idx + 1;
+            if (encoded_col > 255 or encoded_row > 255)
+                return;
+
+            response[0] = 0x1b;
+            response[1] = '[';
+            response[2] = 'M';
+            response[3] = @intCast(32 + (if (release) 3 else encoded_button));
+            response[4] = @intCast(encoded_col);
+            response[5] = @intCast(encoded_row);
+            break :blk response[0..6];
+        },
+
+        .sgr => std.fmt.bufPrint(
+            &response,
+            "\x1b[<{d};{d};{d}{c}",
+            .{ encoded_button, col + 1, row_idx + 1, if (release) @as(u8, 'm') else 'M' },
+        ) catch return,
+
+        .sgr_pixels => std.fmt.bufPrint(
+            &response,
+            "\x1b[<{d};{d};{d}{c}",
+            .{
+                encoded_button,
+                @max(col_pixels, 0) + 1,
+                @max(row_pixels, 0) + 1,
+                if (release) @as(u8, 'm') else 'M',
+            },
+        ) catch return,
+
+        .urxvt => std.fmt.bufPrint(
+            &response,
+            "\x1b[{d};{d};{d}M",
+            .{ 32 + (if (release) 3 else encoded_button), col + 1, row_idx + 1 },
+        ) catch return,
+
+        // Unimplemented
+        .utf8 => return,
+    };
+
+    _ = term_to_slave(term, @ptrCast(out.ptr), out.len);
+}
+
+fn reportMouseMotion(
+    term: *types.Terminal,
+    encoded_button: c_int,
+    row_idx: c_int,
+    col: c_int,
+    row_pixels: c_int,
+    col_pixels: c_int,
+) void {
+    reportMouseClick(term, encoded_button, row_idx, col, row_pixels, col_pixels, false);
+}
+
+fn encodeWithModifiers(term: *types.Terminal, encoded: c_int, shift: bool, alt: bool, ctrl: bool) c_int {
+    _ = term;
+    return encoded +
+        (if (shift) @as(c_int, 4) else 0) +
+        (if (alt) @as(c_int, 8) else 0) +
+        (if (ctrl) @as(c_int, 16) else 0);
+}
+
+export fn term_mouse_down(
+    term: *types.Terminal,
+    button: c_int,
+    row_idx: c_int,
+    col: c_int,
+    row_pixels: c_int,
+    col_pixels: c_int,
+    shift_in: bool,
+    alt_in: bool,
+    ctrl_in: bool,
+) void {
+    // Map libinput button event code to X button number
+    const xbutton = linuxMouseButtonToX(button);
+    if (xbutton == -1)
+        return;
+
+    var encoded = encodeXbutton(xbutton);
+    if (encoded == -1)
+        return;
+
+    const has_focus = term.kbd_focus;
+    const shift = has_focus and shift_in;
+    const alt = has_focus and alt_in;
+    const ctrl = has_focus and ctrl_in;
+
+    encoded = encodeWithModifiers(term, encoded, shift, alt, ctrl);
+
+    switch (term.mouse_tracking) {
+        .none => {},
+        .click, .drag, .motion => reportMouseClick(
+            term,
+            encoded,
+            row_idx,
+            col,
+            row_pixels,
+            col_pixels,
+            false,
+        ),
+        .x10 => unreachable, // Never enabled
+    }
+}
+
+export fn term_mouse_up(
+    term: *types.Terminal,
+    button: c_int,
+    row_idx: c_int,
+    col: c_int,
+    row_pixels: c_int,
+    col_pixels: c_int,
+    shift_in: bool,
+    alt_in: bool,
+    ctrl_in: bool,
+) void {
+    const xbutton = linuxMouseButtonToX(button);
+    if (xbutton == -1)
+        return;
+
+    if (xbutton == 4 or xbutton == 5) {
+        // No release events for vertical scroll wheel buttons
+        return;
+    }
+
+    var encoded = encodeXbutton(xbutton);
+    if (encoded == -1)
+        return;
+
+    const has_focus = term.kbd_focus;
+    const shift = has_focus and shift_in;
+    const alt = has_focus and alt_in;
+    const ctrl = has_focus and ctrl_in;
+
+    encoded = encodeWithModifiers(term, encoded, shift, alt, ctrl);
+
+    switch (term.mouse_tracking) {
+        .none => {},
+        .click, .drag, .motion => reportMouseClick(
+            term,
+            encoded,
+            row_idx,
+            col,
+            row_pixels,
+            col_pixels,
+            true,
+        ),
+        .x10 => unreachable, // Never enabled
+    }
+}
+
+export fn term_mouse_motion(
+    term: *types.Terminal,
+    button: c_int,
+    row_idx: c_int,
+    col: c_int,
+    row_pixels: c_int,
+    col_pixels: c_int,
+    shift_in: bool,
+    alt_in: bool,
+    ctrl_in: bool,
+) void {
+    var encoded: c_int = 0;
+
+    if (button != 0) {
+        const xbutton = linuxMouseButtonToX(button);
+        if (xbutton == -1)
+            return;
+
+        encoded = encodeXbutton(xbutton);
+        if (encoded == -1)
+            return;
+    } else {
+        encoded = 3; // "released"
+    }
+
+    const has_focus = term.kbd_focus;
+    const shift = has_focus and shift_in;
+    const alt = has_focus and alt_in;
+    const ctrl = has_focus and ctrl_in;
+
+    encoded += 32; // Motion event
+    encoded = encodeWithModifiers(term, encoded, shift, alt, ctrl);
+
+    switch (term.mouse_tracking) {
+        .none, .click => return,
+
+        .drag => {
+            if (button == 0)
+                return;
+            reportMouseMotion(term, encoded, row_idx, col, row_pixels, col_pixels);
+        },
+
+        .motion => reportMouseMotion(term, encoded, row_idx, col, row_pixels, col_pixels),
+        .x10 => unreachable, // Never enabled
+    }
+}
+
+//
+// print_linewrap / print_insert — helpers used by term_print().
+//
+
+
+export fn print_linewrap(term: *types.Terminal) void {
+    const grid = term.grid.?;
+
+    if (!grid.cursor.lcf)
+        return; // Not at the end of the line
+
+    if (!term.auto_margin)
+        return; // Auto-wrap disabled
+
+    grid.cur_row.?.linebreak = false;
+    grid.cursor.lcf = false;
+
+    const cursor_row = grid.cursor.point.row;
+
+    if (cursor_row == term.scroll_region.end - 1) {
+        term_scroll(term, 1);
+    } else {
+        const new_row = @min(cursor_row + 1, term.rows - 1);
+        grid.cursor.point.row = new_row;
+        grid.cur_row = terminal_shim_grid_row(grid, new_row);
+    }
+
+    grid.cursor.point.col = 0;
+}
+
+export fn print_insert(term: *types.Terminal, width: c_int) void {
+    if (!term.insert_mode)
+        return;
+
+    std.debug.assert(width > 0);
+
+    const grid = term.grid.?;
+    const cur_row = grid.cur_row.?;
+    const cells = cur_row.cells.?;
+    const col: usize = @intCast(grid.cursor.point.col);
+    const width_u: usize = @intCast(width);
+    const cols: usize = @intCast(term.cols);
+
+    const move_count: usize = if (cols > col + width_u) cols - col - width_u else 0;
+
+    std.mem.copyBackwards(
+        types.Cell,
+        cells[col + width_u .. col + width_u + move_count],
+        cells[col .. col + move_count],
+    );
+
+    // Mark moved cells as dirty
+    var i: usize = col + width_u;
+    while (i < cols) : (i += 1)
+        cells[i].attrs.clean = false;
 }
