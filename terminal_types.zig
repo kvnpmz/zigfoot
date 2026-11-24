@@ -798,18 +798,26 @@ pub const Terminal = extern struct {
     tab_stops: TllInt,
     composed_count: usize,
     composed: ?*Composed,
-    // Mirrors terminal.h (112 bytes):
-    //   struct { bool is_armed; int lower_fd; int upper_fd; } delayed_render_timer;
-    //   struct fcft_font *fonts[4];
-    //   struct config_font *font_sizes[4];
-    //   struct pt_or_px font_line_height;
-    //   float font_dpi, font_dpi_before_unmap;
-    //   bool font_is_sized_by_dpi;
-    //   int16_t font_x_ofs, font_y_ofs, font_baseline;
-    //   enum fcft_subpixel font_subpixel;
-    // NB: was [104]u8 — 8 bytes short, which shifted `selection` and
-    // `is_searching` 8 bytes too low (see the ABI test at the bottom).
-    _font_state: [112]u8 = undefined,
+    // Font state (terminal.h). Was an opaque 112-byte blob until T9; the
+    // blob had to be exactly right or `selection`/`is_searching` shifted
+    // (it was 8 bytes short once, see the ABI test at the bottom), so the
+    // fields are real now and the probe checks each one.
+    /// struct { bool is_armed; int lower_fd; int upper_fd; }
+    delayed_render_timer: extern struct {
+        is_armed: bool,
+        lower_fd: c_int,
+        upper_fd: c_int,
+    },
+    fonts: [4]?*anyopaque, // struct fcft_font *
+    font_sizes: [4]?*ConfigFont,
+    font_line_height: PtOrPx,
+    font_dpi: f32,
+    font_dpi_before_unmap: f32,
+    font_is_sized_by_dpi: bool,
+    font_x_ofs: i16,
+    font_y_ofs: i16,
+    font_baseline: i16,
+    font_subpixel: c_int, // enum fcft_subpixel
     custom_glyphs: extern struct {
         box_drawing: ?*anyopaque,
         braille: ?*anyopaque,
