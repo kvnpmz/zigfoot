@@ -192,8 +192,7 @@ pub const Colors = extern struct {
     active_theme: WhichColorTheme,
 };
 
-/// Mirrors `struct color_theme` in config.h. Kept here (rather than in a
-/// config mirror) because the terminal only ever reads it through a shim.
+/// Mirrors `struct color_theme` in config.h.
 pub const ColorTheme = extern struct {
     fg: u32,
     bg: u32,
@@ -763,7 +762,7 @@ pub const AsciiPrinterBits = packed struct(u8) {
 pub const Terminal = extern struct {
     fdm: ?*anyopaque,
     reaper: ?*anyopaque,
-    conf: ?*const anyopaque,
+    conf: ?*const Config,
     ascii_printer: ?*const anyopaque,
     bits_affecting_ascii_printer: extern union {
         _: AsciiPrinterBits,

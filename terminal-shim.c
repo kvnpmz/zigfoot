@@ -14,55 +14,6 @@ bool terminal_shim_urls_mode_active(const struct terminal *term) {
     return urls_mode_is_active(term);
 }
 
-/* Read-only accessors into the (still C-owned) conf. */
-const struct color_theme *terminal_shim_conf_colors_dark(
-    const struct terminal *term)
-{
-    return &term->conf->colors_dark;
-}
-
-const struct color_theme *terminal_shim_conf_colors_light(
-    const struct terminal *term)
-{
-    return &term->conf->colors_light;
-}
-
-bool terminal_shim_conf_bell_urgent(const struct terminal *term) {
-    return term->conf->bell.urgent;
-}
-
-bool terminal_shim_conf_bell_system_bell(const struct terminal *term) {
-    return term->conf->bell.system_bell;
-}
-
-bool terminal_shim_conf_bell_notify(const struct terminal *term) {
-    return term->conf->bell.notify;
-}
-
-bool terminal_shim_conf_bell_flash(const struct terminal *term) {
-    return term->conf->bell.flash;
-}
-
-bool terminal_shim_conf_bell_command_focused(const struct terminal *term) {
-    return term->conf->bell.command_focused;
-}
-
-char *const *terminal_shim_conf_bell_command_argv(const struct terminal *term) {
-    return term->conf->bell.command.argv.args;
-}
-
-bool terminal_shim_conf_locked_title(const struct terminal *term) {
-    return term->conf->locked_title;
-}
-
-const char *terminal_shim_conf_app_id(const struct terminal *term) {
-    return term->conf->app_id;
-}
-
-const char *terminal_shim_conf_conf_path(const struct terminal *term) {
-    return term->conf->conf_path;
-}
-
 /* The null checks are defensive: in foot itself `window` is always set, but
  * the headless harness runs these paths without a wayland window. */
 bool terminal_shim_window_is_suspended(struct terminal *term) {
@@ -71,10 +22,6 @@ bool terminal_shim_window_is_suspended(struct terminal *term) {
 
 bool terminal_shim_window_is_configured(struct terminal *term) {
     return term->window != NULL && term->window->is_configured;
-}
-
-int terminal_shim_conf_cursor_blink_rate_ms(struct terminal *term) {
-    return term->conf->cursor.blink.rate_ms;
 }
 
 struct row *terminal_shim_grid_row_in_view(struct grid *grid, int row) {
@@ -109,23 +56,12 @@ void terminal_shim_term_reset_grapheme_state(struct terminal *term) {
     term_reset_grapheme_state(term);
 }
 
-int terminal_shim_conf_url_osc8_underline(struct terminal *term) {
-    return term->conf->url.osc8_underline;
-}
-
 
 /* ── term_process_and_print_non_ascii() support ──────────────────── */
 
 #include <stdlib.h>
 
-#include "config.h"
 #include "emoji-variation-sequences.h"
-
-int
-terminal_shim_conf_grapheme_width_method(const struct terminal *term)
-{
-    return term->conf->tweak.grapheme_width_method;
-}
 
 uint32_t
 terminal_shim_precompose(struct terminal *term, uint32_t base, uint32_t wc,
@@ -212,14 +148,3 @@ void terminal_shim_delayed_render_set_armed(struct terminal *term, bool armed) {
     term->delayed_render_timer.is_armed = armed;
 }
 
-uint32_t terminal_shim_conf_delayed_render_lower_ns(struct terminal *term) {
-    return term->conf->tweak.delayed_render_lower_ns;
-}
-
-uint32_t terminal_shim_conf_delayed_render_upper_ns(struct terminal *term) {
-    return term->conf->tweak.delayed_render_upper_ns;
-}
-
-bool terminal_shim_conf_hold_at_exit(struct terminal *term) {
-    return term->conf->hold_at_exit;
-}

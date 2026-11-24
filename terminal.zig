@@ -347,7 +347,6 @@ extern fn close(fd: c_int) callconv(.c) c_int;
 extern fn __errno_location() callconv(.c) *c_int;
 extern fn terminal_shim_window_surface(term: *types.Terminal) callconv(.c) ?*anyopaque;
 extern fn terminal_shim_window_is_configured(term: *types.Terminal) callconv(.c) bool;
-extern fn terminal_shim_conf_cursor_blink_rate_ms(term: *types.Terminal) callconv(.c) c_int;
 extern fn terminal_shim_grid_row_in_view(grid: *types.Grid, row: c_int) callconv(.c) ?*types.Row;
 extern fn terminal_shim_wl_surface_commit(surf: ?*anyopaque) callconv(.c) void;
 
@@ -510,7 +509,7 @@ export fn cursor_blink_rearm_timer(term: *types.Terminal) callconv(.c) bool {
         term.cursor_blink.fd = fd;
     }
 
-    const rate_ms = terminal_shim_conf_cursor_blink_rate_ms(term);
+    const rate_ms = term.conf.?.cursor.blink.rate_ms;
     const secs: i64 = @divTrunc(@as(i64, rate_ms), 1000);
     const nsecs: i64 = @mod(@as(i64, rate_ms), 1000) * 1_000_000;
 
@@ -750,12 +749,6 @@ extern fn sixel_overwrite_by_row(term: *types.Terminal, row: c_int, col: c_int, 
 extern fn sixel_overwrite_by_rectangle(term: *types.Terminal, row: c_int, col: c_int, height: c_int, width: c_int) callconv(.c) void;
 extern fn sixel_overwrite_at_cursor(term: *types.Terminal, width: c_int) callconv(.c) void;
 
-extern fn terminal_shim_conf_url_osc8_underline(term: *types.Terminal) callconv(.c) c_int;
-
-// OSC8_UNDERLINE_ALWAYS = 0, OSC8_UNDERLINE_URL_MODE = 1 (from config.h)
-const OSC8_UNDERLINE_ALWAYS: c_int = 0;
-const OSC8_UNDERLINE_URL_MODE: c_int = 1;
-
 
 export fn term_erase(
     term: *types.Terminal,
@@ -809,7 +802,7 @@ export fn term_fill(
 
     const attrs = if (use_sgr_attrs) term.vt.attrs else std.mem.zeroes(types.Attributes);
 
-    const osc8_underline = terminal_shim_conf_url_osc8_underline(term);
+    const osc8_underline = term.conf.?.url.osc8_underline;
 
     var i: usize = 0;
     while (i < count) : (i += 1) {
@@ -826,7 +819,7 @@ export fn term_fill(
                 term.vt.osc8.id,
             );
 
-            if (osc8_underline == OSC8_UNDERLINE_ALWAYS) {
+            if (osc8_underline == .always) {
                 cell.attrs.url = true;
             }
         }
@@ -909,7 +902,7 @@ export fn term_print(
     cell.attrs = term.vt.attrs;
 
     if (term.vt.osc8.uri != null) {
-        const osc8_underline = terminal_shim_conf_url_osc8_underline(term);
+        const osc8_underline = term.conf.?.url.osc8_underline;
         var i: c_int = 0;
         while (i < width and (col + i) < term.cols) : (i += 1) {
             grid_row_uri_range_put(
@@ -919,7 +912,7 @@ export fn term_print(
                 term.vt.osc8.id,
             );
         }
-        if (osc8_underline == OSC8_UNDERLINE_ALWAYS) {
+        if (osc8_underline == .always) {
             cell.attrs.url = true;
         }
     } else if (current_row.extra != null) {
@@ -1032,10 +1025,6 @@ const CELL_COMB_CHARS_LO: u32 = 0x0020_0000;
 const CELL_COMB_CHARS_HI: u32 = CELL_COMB_CHARS_LO + 0x3fff_ffff;
 const CELL_SPACER: u32 = CELL_COMB_CHARS_HI + 1;
 
-const GRAPHEME_WIDTH_WCSWIDTH: c_int = 0;
-const GRAPHEME_WIDTH_DOUBLE: c_int = 1;
-const GRAPHEME_WIDTH_MAX: c_int = 2;
-
 const LOG_CLASS_WARNING: c_int = 2;
 
 extern fn c32width(c: u32) c_int;
@@ -1071,7 +1060,6 @@ extern fn terminal_shim_precompose(
     comb_from_primary: *bool,
     pre_from_primary: *bool,
 ) u32;
-extern fn terminal_shim_conf_grapheme_width_method(term: *const types.Terminal) c_int;
 extern fn terminal_shim_emoji_vs_width(cp: u32, wc: u32) c_int;
 
 export fn term_process_and_print_non_ascii(
@@ -1246,10 +1234,10 @@ export fn term_process_and_print_non_ascii(
 
         const grapheme_width: c_int = if (composed) |c| c.width else base_width;
 
-        switch (terminal_shim_conf_grapheme_width_method(term)) {
-            GRAPHEME_WIDTH_MAX => new_cc.width = @intCast(@max(grapheme_width, width)),
+        switch (term.conf.?.tweak.grapheme_width_method) {
+            .max => new_cc.width = @intCast(@max(grapheme_width, width)),
 
-            GRAPHEME_WIDTH_DOUBLE => {
+            .double => {
                 new_cc.width = @intCast(@min(grapheme_width + width, 2));
 
                 // Handle VS-15 and VS-16 variation selectors
@@ -1265,9 +1253,7 @@ export fn term_process_and_print_non_ascii(
                 }
             },
 
-            GRAPHEME_WIDTH_WCSWIDTH => new_cc.width = @intCast(grapheme_width + width),
-
-            else => unreachable,
+            .wcswidth => new_cc.width = @intCast(grapheme_width + width),
         }
 
         term.composed_count += 1;
@@ -1544,9 +1530,6 @@ extern fn terminal_shim_delayed_render_lower_fd(term: *types.Terminal) callconv(
 extern fn terminal_shim_delayed_render_upper_fd(term: *types.Terminal) callconv(.c) c_int;
 extern fn terminal_shim_delayed_render_is_armed(term: *types.Terminal) callconv(.c) bool;
 extern fn terminal_shim_delayed_render_set_armed(term: *types.Terminal, armed: bool) callconv(.c) void;
-extern fn terminal_shim_conf_delayed_render_lower_ns(term: *types.Terminal) callconv(.c) u32;
-extern fn terminal_shim_conf_delayed_render_upper_ns(term: *types.Terminal) callconv(.c) u32;
-extern fn terminal_shim_conf_hold_at_exit(term: *types.Terminal) callconv(.c) bool;
 
 // PTMX_TIMING is 0 in terminal.c; the timing instrumentation is omitted
 // until that build-time option exists in build_options.
@@ -1618,8 +1601,8 @@ export fn fdm_ptmx(
         // See the C version for why we delay: batching client updates
         // avoids rendering "intermediate" frames. The lower timeout is
         // re-armed on every read; the upper one only when we render.
-        const lower_ns = terminal_shim_conf_delayed_render_lower_ns(term);
-        const upper_ns = terminal_shim_conf_delayed_render_upper_ns(term);
+        const lower_ns = term.conf.?.tweak.delayed_render_lower_ns;
+        const upper_ns = term.conf.?.tweak.delayed_render_upper_ns;
 
         if (lower_ns > 0 and upper_ns > 0) {
             std.debug.assert(lower_ns < 1_000_000_000);
@@ -1668,7 +1651,7 @@ export fn fdm_ptmx(
         // option), there _is_ no client application. That is, foot does
         // *not* fork+exec anything, and thus the only way to shutdown is
         // to wait for the PTY to be closed.
-        if (term.slave < 0 and !terminal_shim_conf_hold_at_exit(term))
+        if (term.slave < 0 and !term.conf.?.hold_at_exit)
             term_shutdown(term);
     }
 
@@ -2221,8 +2204,8 @@ export fn term_disable_app_sync_updates(term: *types.Terminal) void {
 
 //
 // Chunk T6 (part 1) — window title / app-id / icon / respawn, and the
-// colour-theme switches. The config is still C-owned; read-only access goes
-// through terminal_shim_conf_*() accessors until phase 2 ports it.
+// colour-theme switches. The config is still parsed by C, but its layout is
+// mirrored in terminal_types.zig, so these read `term.conf` directly.
 //
 
 extern fn wayl_win_alpha_changed(window: ?*anyopaque) callconv(.c) void;
@@ -2239,11 +2222,6 @@ extern fn spawn(
     cb_data: ?*anyopaque,
     xdg_activation_token: [*c]const u8,
 ) callconv(.c) c_int;
-extern fn terminal_shim_conf_colors_dark(term: *const types.Terminal) callconv(.c) *const types.ColorTheme;
-extern fn terminal_shim_conf_colors_light(term: *const types.Terminal) callconv(.c) *const types.ColorTheme;
-extern fn terminal_shim_conf_locked_title(term: *const types.Terminal) callconv(.c) bool;
-extern fn terminal_shim_conf_app_id(term: *const types.Terminal) callconv(.c) ?[*:0]const u8;
-extern fn terminal_shim_conf_conf_path(term: *const types.Terminal) callconv(.c) ?[*:0]const u8;
 
 fn streq(a: [*:0]const u8, b: [*:0]const u8) bool {
     return std.mem.eql(u8, std.mem.span(a), std.mem.span(b));
@@ -2256,7 +2234,7 @@ fn replaceStr(dst: *?[*:0]u8, value: [*:0]const u8) void {
 }
 
 export fn term_set_window_title(term: *types.Terminal, title: [*:0]const u8) void {
-    if (terminal_shim_conf_locked_title(term) and term.window_title_has_been_set)
+    if (term.conf.?.locked_title and term.window_title_has_been_set)
         return;
 
     if (term.window_title) |current| {
@@ -2317,7 +2295,7 @@ export fn term_set_app_id(term: *types.Terminal, app_id_in: ?[*:0]const u8) void
 }
 
 export fn term_icon(term: *const types.Terminal) [*:0]const u8 {
-    const app_id = if (term.app_id) |id| id else terminal_shim_conf_app_id(term).?;
+    const app_id = if (term.app_id) |id| id else term.conf.?.app_id.?;
 
     return if (streq(app_id, "footclient")) "foot" else app_id;
 }
@@ -2326,7 +2304,7 @@ export fn term_spawn_new(term: *const types.Terminal) bool {
     var argv: [4]?[*:0]const u8 = .{ term.foot_exe, null, null, null };
     var argc: usize = 1;
 
-    if (terminal_shim_conf_conf_path(term)) |conf_path| {
+    if (term.conf.?.conf_path) |conf_path| {
         argv[argc] = "--config";
         argc += 1;
         argv[argc] = conf_path;
@@ -2360,8 +2338,8 @@ export fn term_theme_apply(term: *types.Terminal, theme: *const types.ColorTheme
 
 fn themeSwitch(term: *types.Terminal, theme: types.WhichColorTheme, report: []const u8) void {
     const colors = switch (theme) {
-        .dark => terminal_shim_conf_colors_dark(term),
-        else => terminal_shim_conf_colors_light(term),
+        .dark => &term.conf.?.colors_dark,
+        else => &term.conf.?.colors_light,
     };
 
     term_theme_apply(term, colors);
@@ -2401,9 +2379,9 @@ export fn term_theme_toggle(term: *types.Terminal) void {
 
 export fn term_theme_get(term: *const types.Terminal) *const types.ColorTheme {
     return if (term.colors.active_theme == .dark)
-        terminal_shim_conf_colors_dark(term)
+        &term.conf.?.colors_dark
     else
-        terminal_shim_conf_colors_light(term);
+        &term.conf.?.colors_light;
 }
 
 //
@@ -2738,12 +2716,6 @@ extern fn wayl_win_set_urgent(window: ?*anyopaque) callconv(.c) bool;
 extern fn wayl_win_ring_bell(window: ?*anyopaque) void;
 extern fn notify_notify(term: *types.Terminal, notif: *types.Notification) callconv(.c) bool;
 extern fn open(path: [*:0]const u8, flags: c_int, ...) callconv(.c) c_int;
-extern fn terminal_shim_conf_bell_urgent(term: *const types.Terminal) callconv(.c) bool;
-extern fn terminal_shim_conf_bell_system_bell(term: *const types.Terminal) callconv(.c) bool;
-extern fn terminal_shim_conf_bell_notify(term: *const types.Terminal) callconv(.c) bool;
-extern fn terminal_shim_conf_bell_flash(term: *const types.Terminal) callconv(.c) bool;
-extern fn terminal_shim_conf_bell_command_focused(term: *const types.Terminal) callconv(.c) bool;
-extern fn terminal_shim_conf_bell_command_argv(term: *const types.Terminal) callconv(.c) [*c]const [*c]u8;
 
 const O_RDONLY: c_int = 0;
 
@@ -2751,7 +2723,7 @@ export fn term_bell(term: *types.Terminal) void {
     if (!term.bell_action_enabled)
         return;
 
-    if (terminal_shim_conf_bell_urgent(term) and !term.kbd_focus) {
+    if (term.conf.?.bell.urgent and !term.kbd_focus) {
         if (!wayl_win_set_urgent(term.window)) {
             // Urgency (xdg-activation) is relatively new in Wayland. Fall
             // back to the old, "faked", urgency: red window margins.
@@ -2760,10 +2732,10 @@ export fn term_bell(term: *types.Terminal) void {
         }
     }
 
-    if (terminal_shim_conf_bell_system_bell(term))
+    if (term.conf.?.bell.system_bell)
         wayl_win_ring_bell(term.window);
 
-    if (terminal_shim_conf_bell_notify(term)) {
+    if (term.conf.?.bell.notify) {
         var notif = std.mem.zeroes(types.Notification);
         notif.title = xstrdup("Bell");
         notif.body = xstrdup("Bell in terminal");
@@ -2772,14 +2744,16 @@ export fn term_bell(term: *types.Terminal) void {
         _ = notify_notify(term, &notif);
     }
 
-    if (terminal_shim_conf_bell_flash(term))
+    if (term.conf.?.bell.flash)
         term_flash(term, 100);
 
-    if (terminal_shim_conf_bell_command_argv(term) != null and
-        (!term.kbd_focus or terminal_shim_conf_bell_command_focused(term)))
+    const bell_command = term.conf.?.bell.command.argv.args;
+    if (bell_command != null and
+        (!term.kbd_focus or term.conf.?.bell.command_focused))
     {
+        const argv: [*c]const [*c]u8 = @ptrCast(bell_command.?);
         const devnull = open("/dev/null", O_RDONLY);
-        _ = spawn(term.reaper, null, terminal_shim_conf_bell_command_argv(term), devnull, -1, -1, null, null, null);
+        _ = spawn(term.reaper, null, argv, devnull, -1, -1, null, null, null);
 
         if (devnull >= 0)
             _ = close(devnull);
