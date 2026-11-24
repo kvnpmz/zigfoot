@@ -167,7 +167,7 @@ Phase 1 is roughly **4× Phase 0**, and it splits cleanly in two:
 
 | Part | Content | ~C lines left | Effort | Blocked on |
 |---|---|---|---|---|
-| **1a** | T1–T7, S1, S2 | ~1.7k | 8–10 days | nothing — shims suffice |
+| **1a** | T1–T3, T5–T7, S1, S2 (T4 needs the seats) | ~1.7k | 8–10 days | nothing — shims suffice |
 | **1b** | T8–T11, S3 | ~2.1k | 10–12 days | Phase 2 `config` (T9/T10/T11), Phase 3 `wayland` (T8/S3), `render`/`slave` (T11) |
 
 Phase 0 was 4 commits and ~600 lines of *infrastructure* (probe, tests, CI,
@@ -176,14 +176,32 @@ smoke script) with no behaviour ported. Phase 1a alone is ~1.7k lines of
 the smoke test green. So yes: longer, and the tail of Phase 1 cannot be
 finished in Phase 1 at all — it is a Phase 2/3 deliverable by construction.
 
-**Progress:** T1 ✅ `term_erase_scrollback` (the existing C `UNITTEST` in
-`terminal.c` now exercises the Zig port), T2 ✅ `rows_to_text` +
-`term_scrollback_to_text` / `term_view_to_text` / `term_command_output_to_text`
-(covered by the new headless harness, `tests/test-terminal.c`, which links the
-real code through `footlib` — everything except `main.c` — so no wayland, pty or
-config file is needed). Next: T3.
+**Progress:** six chunks landed (terminal.c 3363 → 2400 lines, 1029 C lines
+removed for 1211 Zig lines added, harness at 87 checks):
 
-Order of work inside 1a: **~~T1 → T2~~ → T3 → T4 → T5 → T6 → T7 → S2 → S1**, i.e.
+| Chunk | Status |
+|---|---|
+| T1 `term_erase_scrollback` | ✅ (existing C `UNITTEST` now drives the Zig code) |
+| T2 text extraction | ✅ (headless harness) |
+| T3 accessors | ✅ except IME — see T4 |
+| T4 IME | ⛔ **blocked**: needs `term->wl->seats` (and `ime_enabled` + `FOOT_IME_ENABLED` in build_options) |
+| T5 app-sync + throttle timers | ✅ |
+| T6 focus/bell/title/icon/spawn | ✅ except `term_kbd_focus_out` (seats) and `term_surface_kind` (window CSD) |
+| T7 mouse reporting | ✅ except `term_mouse_grabbed` + `term_xcursor_update*` (seats/key-bindings) |
+| extra | `erase_cell_range`, `erase_line`, `print_linewrap`, `print_insert` |
+
+The harness (`tests/test-terminal.c`) now fakes a `struct terminal`, a real
+pty (for `term_to_slave` output), a real `struct config` and a timerfd, so it
+covers erase, extraction, osc8, size notifications, flash, bell, focus-in,
+theme apply/get, term_icon, mouse reporting in all five styles, and
+insert-mode shifting.
+
+What is left in `terminal.c` is T8–T11 — i.e. exactly the parts that need
+`config`, `wayland` and `render` — so 1a is done: the remaining ~2.4k lines
+cannot move until phase 2/3 land.
+
+Order of work inside 1a: **~~T1 → T2 → T3 → T5 → T6 → T7~~**, with T4 pushed
+to 1b, then **S2 → S1**., i.e.
 cheapest and most testable first, and `T2` early because the text-extraction
 helpers become the primary assertion surface for every later chunk.
 
