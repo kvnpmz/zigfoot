@@ -1,10 +1,9 @@
-// Value-parsing helpers for the config parser (Phase 2, chunk C2a).
+// The config parser (Phase 2, chunks C2a-C2g).
 //
-// config.c still owns the parser itself (sections, key/value tokenizing,
-// include handling, the option tables). This file owns the leaf conversions
-// every option handler goes through: strings, booleans, integers, colours,
-// pt/px values, command-line templates and the tll-backed argv clone/free
-// pair.
+// This file owns the section tables, key/value tokenizing, include handling,
+// the override loop and the option handlers that have been ported. config.c
+// still owns the key-binding sections ([url], [regex], the four *-bindings)
+// and the C binding tables, which the ported loop reaches through externs.
 //
 // The C versions were kept only as thin wrappers; `tests/test-config.c`
 // (#include "../config.c") is the oracle for the behaviour below, so every
@@ -648,12 +647,19 @@ export fn parse_section_environment(ctx: *Context) callconv(.c) bool {
 
 extern fn value_to_fonts(ctx: *Context) callconv(.c) types.ConfigFontList;
 extern fn config_font_list_destroy(list: *types.ConfigFontList) callconv(.c) void;
-extern fn parse_config_file(
-    f: *anyopaque,
+extern fn log_and_notify_errno(
     conf: *types.Config,
-    path: [*:0]const u8,
-    errors_are_fatal: bool,
-) callconv(.c) bool;
+    file: [*:0]const u8,
+    lineno: c_int,
+    fmt: [*:0]const u8,
+    ...
+) callconv(.c) void;
+extern fn getline(
+    lineptr: *?[*]u8,
+    n: *usize,
+    stream: *anyopaque,
+) callconv(.c) isize;
+extern fn strchr(s: [*:0]const u8, c: c_int) callconv(.c) ?[*:0]u8;
 extern fn log_contextual_errno(
     ctx: *Context,
     file: [*:0]const u8,
@@ -1342,4 +1348,441 @@ export fn parse_section_main(ctx: *Context) callconv(.c) bool {
         return value_to_bool(ctx, &conf.uppercase_regex_insert);
 
     return invalidOption(ctx, key);
+}
+
+// ── the config file loop (C2f) ────────────────────────────────────
+//
+// This is the last non-binding piece of the parser: split lines into
+// key/value pairs, track the current section, dispatch to the section
+// parser. The key-binding sections and [url]/[regex] are still C, and are
+// reachable through the table below like any other parser.
+
+const ParserFun = *const fn (*Context) callconv(.c) bool;
+
+const SectionInfo = struct {
+    fun: ParserFun,
+    name: [:0]const u8,
+    allow_colon_suffix: bool = false,
+};
+
+extern fn parse_section_url(ctx: *Context) callconv(.c) bool;
+extern fn parse_section_regex(ctx: *Context) callconv(.c) bool;
+extern fn parse_section_key_bindings(ctx: *Context) callconv(.c) bool;
+extern fn parse_section_search_bindings(ctx: *Context) callconv(.c) bool;
+extern fn parse_section_url_bindings(ctx: *Context) callconv(.c) bool;
+extern fn parse_section_mouse_bindings(ctx: *Context) callconv(.c) bool;
+extern fn parse_section_text_bindings(ctx: *Context) callconv(.c) bool;
+
+const SECTION_MAIN = 0;
+const SECTION_COUNT = 20;
+
+const section_info = [SECTION_COUNT]SectionInfo{
+    .{ .fun = &parse_section_main, .name = "main" },
+    .{ .fun = &parse_section_security, .name = "security" },
+    .{ .fun = &parse_section_bell, .name = "bell" },
+    .{ .fun = &parse_section_desktop_notifications, .name = "desktop-notifications" },
+    .{ .fun = &parse_section_scrollback, .name = "scrollback" },
+    .{ .fun = &parse_section_url, .name = "url" },
+    .{ .fun = &parse_section_regex, .name = "regex", .allow_colon_suffix = true },
+    .{ .fun = &parse_section_colors_dark, .name = "colors-dark" },
+    .{ .fun = &parse_section_colors_light, .name = "colors-light" },
+    .{ .fun = &parse_section_cursor, .name = "cursor" },
+    .{ .fun = &parse_section_mouse, .name = "mouse" },
+    .{ .fun = &parse_section_csd, .name = "csd" },
+    .{ .fun = &parse_section_key_bindings, .name = "key-bindings" },
+    .{ .fun = &parse_section_search_bindings, .name = "search-bindings" },
+    .{ .fun = &parse_section_url_bindings, .name = "url-bindings" },
+    .{ .fun = &parse_section_mouse_bindings, .name = "mouse-bindings" },
+    .{ .fun = &parse_section_text_bindings, .name = "text-bindings" },
+    .{ .fun = &parse_section_environment, .name = "environment" },
+    .{ .fun = &parse_section_tweak, .name = "tweak" },
+    .{ .fun = &parse_section_touch, .name = "touch" },
+};
+
+fn isSpace(c: u8) bool {
+    return c == ' ' or c == '\t' or c == '\n' or c == 0x0b or c == 0x0c or c == '\r';
+}
+
+fn isBlank(c: u8) bool {
+    return c == ' ' or c == '\t';
+}
+
+fn strToSection(str: [*:0]u8, suffix: *?[*:0]u8) usize {
+    suffix.* = null;
+
+    const s = std.mem.span(str);
+
+    for (section_info, 0..) |info, i| {
+        if (std.mem.eql(u8, s, info.name))
+            return i;
+
+        if (info.allow_colon_suffix) {
+            // At least "section:" chars?
+            if (s.len > info.name.len + 1 and
+                std.mem.startsWith(u8, s, info.name) and
+                s[info.name.len] == ':')
+            {
+                str[info.name.len] = 0;
+                suffix.* = @ptrCast(str + info.name.len + 1);
+                return i;
+            }
+        }
+    }
+
+    return SECTION_COUNT;
+}
+
+/// Splits "key=value" (optionally "section.key=value"). Only the plain form
+/// is used by the file loop; the section form is kept because
+/// --override=section.key=value goes through it.
+fn parseKeyValue(
+    kv_in: [*:0]u8,
+    section_out: ?*?[*:0]const u8,
+    key: *?[*:0]const u8,
+    value: *?[*:0]const u8,
+) bool {
+    var kv: [*]u8 = kv_in;
+    var section_is_needed = section_out != null;
+
+    // Strip leading whitespace
+    while (isSpace(kv[0]))
+        kv += 1;
+
+    if (section_out) |out|
+        out.* = "main";
+
+    if (kv[0] == '=')
+        return false;
+
+    key.* = @ptrCast(kv);
+    value.* = null;
+
+    var kvlen = std.mem.len(@as([*:0]const u8, @ptrCast(kv)));
+    if (kvlen == 0)
+        return false;
+
+    // Strip trailing whitespace
+    while (isSpace(kv[kvlen - 1]))
+        kvlen -= 1;
+    kv[kvlen] = 0;
+
+    var i: usize = 0;
+    while (i < kvlen) : (i += 1) {
+        if (kv[i] == '.' and section_is_needed) {
+            section_is_needed = false;
+            if (section_out) |out|
+                out.* = @ptrCast(kv);
+            kv[i] = 0;
+            if (i == kvlen - 1 or kv[i + 1] == '=') {
+                key.* = null;
+                return false;
+            }
+            key.* = @ptrCast(kv + i + 1);
+        } else if (kv[i] == '=') {
+            kv[i] = 0;
+            if (i != kvlen - 1)
+                value.* = @ptrCast(kv + i + 1);
+            break;
+        }
+    }
+
+    if (value.* == null)
+        return false;
+
+    // Strip trailing whitespace from key (leading stripped earlier)
+    {
+        const k = key.*.?;
+        var end: [*]const u8 = k + std.mem.len(k) - 1;
+        while (isSpace(end[0]))
+            end -= 1;
+        @constCast(end)[1] = 0;
+    }
+
+    // Strip leading whitespace from value (trailing stripped earlier)
+    while (isSpace(value.*.?[0]))
+        value.* = value.*.? + 1;
+
+    return true;
+}
+
+export fn parse_config_file(
+    f: *anyopaque,
+    conf: *types.Config,
+    path: [*:0]const u8,
+    errors_are_fatal: bool,
+) callconv(.c) bool {
+    var section: usize = SECTION_MAIN;
+
+    var line_buf: ?[*]u8 = null;
+    var count: usize = 0;
+    var ret = true;
+
+    var section_name: ?[*:0]u8 = xstrdup("main");
+    var section_suffix: ?[*:0]u8 = null;
+
+    var context = types.ConfigContext{
+        .conf = conf,
+        .section = section_name,
+        .section_suffix = section_suffix,
+        .key = null,
+        .value = null,
+        .path = path,
+        .lineno = 0,
+        .errors_are_fatal = errors_are_fatal,
+    };
+    const ctx = &context;
+
+    __errno_location().* = 0;
+
+    parse: {
+        while (true) {
+            const got = getline(&line_buf, &count, f);
+            if (got == -1)
+                break;
+
+            ctx.key = null;
+            ctx.value = null;
+            ctx.lineno += 1;
+
+            var line: [*]u8 = line_buf.?;
+            var line_len: usize = @intCast(got);
+
+            // Strip leading whitespace
+            while (isSpace(line[0])) {
+                line += 1;
+                line_len -= 1;
+            }
+
+            // Empty line, or comment
+            if (line[0] == 0 or line[0] == '#')
+                continue;
+
+            // Strip the trailing newline - may be absent on the last line
+            if (line[line_len - 1] == '\n') {
+                line_len -= 1;
+                line[line_len] = 0;
+            }
+
+            // Split into key/value pair + trailing comment separated by blank
+            const key_value: [*]u8 = line;
+            var kv_trailing: [*]u8 = line + line_len - 1;
+            var comment: [*]u8 = line + 1;
+            while (comment[1] != 0) : (comment += 1) {
+                if (isBlank(comment[0]) and comment[1] == '#') {
+                    comment[1] = 0; // Terminate the key/value pair
+                    kv_trailing = comment;
+                    break;
+                }
+            }
+
+            // Strip trailing whitespace
+            while (isSpace(kv_trailing[0]))
+                kv_trailing -= 1;
+            kv_trailing[1] = 0;
+
+            // New section?
+            if (key_value[0] == '[') {
+                const name: [*]u8 = key_value + 1;
+
+                if (name[0] == ']') {
+                    contextualErr(ctx, @src(), "empty section name", .{});
+                    section = SECTION_COUNT;
+                    if (errors_are_fatal) {
+                        ret = false;
+                        break :parse;
+                    }
+                    continue;
+                }
+
+                const end = strchr(@ptrCast(name), ']') orelse {
+                    ctx.section = @ptrCast(name);
+                    contextualErr(ctx, @src(), "syntax error: no closing ']'", .{});
+                    ctx.section = section_name;
+                    section = SECTION_COUNT;
+                    if (errors_are_fatal) {
+                        ret = false;
+                        break :parse;
+                    }
+                    continue;
+                };
+
+                end[0] = 0;
+
+                if (end[1] != 0) {
+                    ctx.section = @ptrCast(name);
+                    contextualErr(ctx, @src(), "section declaration contains trailing characters", .{});
+                    ctx.section = section_name;
+                    section = SECTION_COUNT;
+                    if (errors_are_fatal) {
+                        ret = false;
+                        break :parse;
+                    }
+                    continue;
+                }
+
+                var maybe_suffix: ?[*:0]u8 = null;
+                section = strToSection(@ptrCast(name), &maybe_suffix);
+
+                if (section == SECTION_COUNT) {
+                    ctx.section = @ptrCast(name);
+                    contextualErr(ctx, @src(), "invalid section name: {s}", .{std.mem.span(@as([*:0]u8, @ptrCast(name)))});
+                    ctx.section = section_name;
+                    if (errors_are_fatal) {
+                        ret = false;
+                        break :parse;
+                    }
+                    continue;
+                }
+
+                if (section_name) |old|
+                    free(@ptrCast(old));
+                if (section_suffix) |old|
+                    free(@ptrCast(old));
+                section_name = xstrdup(@ptrCast(name));
+                section_suffix = if (maybe_suffix) |s| xstrdup(s) else null;
+                ctx.section = section_name;
+                ctx.section_suffix = section_suffix;
+
+                // Process next line
+                continue;
+            }
+
+            if (section >= SECTION_COUNT) {
+                // Last section name was invalid; ignore all keys in it
+                continue;
+            }
+
+            if (!parseKeyValue(@ptrCast(key_value), null, &ctx.key, &ctx.value)) {
+                contextualErr(
+                    ctx,
+                    @src(),
+                    "syntax error: key/value pair has no {s}",
+                    .{if (ctx.key == null) "key" else "value"},
+                );
+                if (errors_are_fatal) {
+                    ret = false;
+                    break :parse;
+                }
+                continue;
+            }
+
+            if (!section_info[section].fun(ctx)) {
+                if (errors_are_fatal) {
+                    ret = false;
+                    break :parse;
+                }
+                continue;
+            }
+
+            // For next iteration of getline()
+            __errno_location().* = 0;
+        }
+
+        if (__errno_location().* != 0) {
+            log_and_notify_errno(conf, @src().file, @intCast(@src().line), "%s", "failed to read from configuration");
+            if (errors_are_fatal)
+                ret = false;
+        }
+    }
+
+    if (section_name) |old|
+        free(@ptrCast(old));
+    if (section_suffix) |old|
+        free(@ptrCast(old));
+    if (line_buf) |old|
+        free(@ptrCast(old));
+
+    return ret;
+}
+
+// ── override loop (C2g) ───────────────────────────────────────────
+//
+// config_override_apply() was the last C piece of the parser proper. It is
+// the same key/value split as the file loop above, but without comments,
+// sections or include handling: each tll item is "section.key=value".
+// Collision resolution needs the C binding tables, so that stays in C.
+
+const tll = @import("tll.zig");
+const Overrides = tll.Tll(?[*:0]u8);
+
+extern fn config_bindings_finalize(conf: *types.Config) callconv(.c) bool;
+
+const SECTION_KEY_BINDINGS = 12;
+const SECTION_SEARCH_BINDINGS = 13;
+const SECTION_URL_BINDINGS = 14;
+const SECTION_MOUSE_BINDINGS = 15;
+
+/// C: `conf->csd.border_width = max(min_csd_border_width, visible)`
+const min_csd_border_width: u16 = 5;
+
+export fn config_override_apply(
+    conf: *types.Config,
+    overrides: *Overrides,
+    errors_are_fatal: bool,
+) callconv(.c) bool {
+    var section_name: ?[*:0]const u8 = null;
+
+    var context = types.ConfigContext{
+        .conf = conf,
+        .section = null,
+        .section_suffix = null,
+        .key = null,
+        .value = null,
+        .path = "override",
+        .lineno = 0,
+        .errors_are_fatal = errors_are_fatal,
+    };
+    const ctx = &context;
+
+    var it = overrides.foreach();
+    while (it.next()) |node| {
+        ctx.lineno += 1;
+
+        if (!parseKeyValue(node.item.?, &section_name, &ctx.key, &ctx.value)) {
+            contextualErr(
+                ctx,
+                @src(),
+                "syntax error: key/value pair has no {s}",
+                .{if (ctx.key == null) "key" else "value"},
+            );
+            if (errors_are_fatal)
+                return false;
+            continue;
+        }
+
+        if (section_name.?[0] == 0) {
+            contextualErr(ctx, @src(), "empty section name", .{});
+            if (errors_are_fatal)
+                return false;
+            continue;
+        }
+
+        var maybe_section_suffix: ?[*:0]u8 = null;
+        const section = strToSection(@constCast(section_name.?), &maybe_section_suffix);
+
+        ctx.section = section_name;
+        ctx.section_suffix = maybe_section_suffix;
+
+        if (section == SECTION_COUNT) {
+            contextualErr(
+                ctx,
+                @src(),
+                "invalid section name: {s}",
+                .{std.mem.span(section_name.?)},
+            );
+            if (errors_are_fatal)
+                return false;
+            continue;
+        }
+
+        if (!section_info[section].fun(ctx)) {
+            if (errors_are_fatal)
+                return false;
+            continue;
+        }
+    }
+
+    conf.csd.border_width = @max(min_csd_border_width, conf.csd.border_width_visible);
+
+    return config_bindings_finalize(conf);
 }

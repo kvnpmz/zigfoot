@@ -33,8 +33,6 @@
 static const uint32_t default_foreground = 0xffffff;
 static const uint32_t default_background = 0x242424;
 
-static const size_t min_csd_border_width = 5;
-
 #define cube6(r, g) \
     r|g|0x00, r|g|0x5f, r|g|0x87, r|g|0xaf, r|g|0xd7, r|g|0xff
 
@@ -369,7 +367,8 @@ log_and_notify_errno_va(struct config *conf, const char *file, int lineno,
     free(formatted_msg);
 }
 
-static void NOINLINE PRINTF(4)
+/* Non-static: config.zig's parse_config_file() logs through it. */
+void NOINLINE PRINTF(4)
 log_and_notify_errno(struct config *conf, const char *file, int lineno,
                      const char *fmt, ...)
 {
@@ -560,7 +559,7 @@ bool parse_config_file(
 /* parse_section_bell: ported to config.zig */
 /* parse_section_desktop_notifications: ported to config.zig */
 /* parse_section_scrollback: ported to config.zig */
-static bool
+bool
 parse_section_url(struct context *ctx)
 {
     struct config *conf = ctx->conf;
@@ -623,7 +622,7 @@ parse_section_url(struct context *ctx)
     }
 }
 
-static bool
+bool
 parse_section_regex(struct context *ctx)
 {
     struct config *conf = ctx->conf;
@@ -1423,7 +1422,7 @@ UNITTEST
     free(bindings.arr);
 }
 
-static bool
+bool
 parse_section_key_bindings(struct context *ctx)
 {
     return parse_key_binding_section(
@@ -1432,7 +1431,7 @@ parse_section_key_bindings(struct context *ctx)
         &ctx->conf->bindings.key);
 }
 
-static bool
+bool
 parse_section_search_bindings(struct context *ctx)
 {
     return parse_key_binding_section(
@@ -1441,7 +1440,7 @@ parse_section_search_bindings(struct context *ctx)
         &ctx->conf->bindings.search);
 }
 
-static bool
+bool
 parse_section_url_bindings(struct context *ctx)
 {
     return parse_key_binding_section(
@@ -1605,7 +1604,7 @@ resolve_key_binding_collisions(struct config *conf, const char *section_name,
     return ret;
 }
 
-static bool
+bool
 parse_section_mouse_bindings(struct context *ctx)
 {
     struct config *conf = ctx->conf;
@@ -1653,7 +1652,7 @@ parse_section_mouse_bindings(struct context *ctx)
     return false;
 }
 
-static bool
+bool
 parse_section_text_bindings(struct context *ctx)
 {
     struct config *conf = ctx->conf;
@@ -1733,317 +1732,8 @@ err:
 /* parse_section_tweak: ported to config.zig */
 
 /* parse_section_touch: ported to config.zig */
-static bool
-parse_key_value(char *kv, char **section, const char **key, const char **value)
-{
-    bool section_is_needed = section != NULL;
-
-    /* Strip leading whitespace */
-    while (isspace(kv[0]))
-        ++kv;
-
-    if (section_is_needed)
-        *section = "main";
-
-    if (kv[0] == '=')
-        return false;
-
-    *key = kv;
-    *value = NULL;
-
-    size_t kvlen = strlen(kv);
-
-    /* Strip trailing whitespace */
-    while (isspace(kv[kvlen - 1]))
-        kvlen--;
-    kv[kvlen] = '\0';
-
-    for (size_t i = 0; i < kvlen; ++i) {
-        if (kv[i] == '.' && section_is_needed) {
-            section_is_needed = false;
-            *section = kv;
-            kv[i] = '\0';
-            if (i == kvlen - 1 || kv[i + 1] == '=') {
-                *key = NULL;
-                return false;
-            }
-            *key = &kv[i + 1];
-        } else if (kv[i] == '=') {
-            kv[i] = '\0';
-            if (i != kvlen - 1)
-                *value = &kv[i + 1];
-            break;
-        }
-    }
-
-    if (*value == NULL)
-        return false;
-
-    /* Strip trailing whitespace from key (leading stripped earlier) */
-    {
-        xassert(!isspace(*key[0]));
-
-        char *end = (char *)*key + strlen(*key) - 1;
-        while (isspace(end[0]))
-            end--;
-        end[1] = '\0';
-    }
-
-    /* Strip leading whitespace from value (trailing stripped earlier) */
-    while (isspace(*value[0]))
-        ++*value;
-
-    return true;
-}
-
-enum section {
-    SECTION_MAIN,
-    SECTION_SECURITY,
-    SECTION_BELL,
-    SECTION_DESKTOP_NOTIFICATIONS,
-    SECTION_SCROLLBACK,
-    SECTION_URL,
-    SECTION_REGEX,
-    SECTION_COLORS_DARK,
-    SECTION_COLORS_LIGHT,
-    SECTION_CURSOR,
-    SECTION_MOUSE,
-    SECTION_CSD,
-    SECTION_KEY_BINDINGS,
-    SECTION_SEARCH_BINDINGS,
-    SECTION_URL_BINDINGS,
-    SECTION_MOUSE_BINDINGS,
-    SECTION_TEXT_BINDINGS,
-    SECTION_ENVIRONMENT,
-    SECTION_TWEAK,
-    SECTION_TOUCH,
-
-    SECTION_COUNT,
-};
-
-/* Function pointer, called for each key/value line */
-typedef bool (*parser_fun_t)(struct context *ctx);
-
-static const struct {
-    parser_fun_t fun;
-    const char *name;
-    bool allow_colon_suffix;
-} section_info[] = {
-    [SECTION_MAIN] =            {&parse_section_main, "main"},
-    [SECTION_SECURITY] =        {&parse_section_security, "security"},
-    [SECTION_BELL] =            {&parse_section_bell, "bell"},
-    [SECTION_DESKTOP_NOTIFICATIONS] = {&parse_section_desktop_notifications, "desktop-notifications"},
-    [SECTION_SCROLLBACK] =      {&parse_section_scrollback, "scrollback"},
-    [SECTION_URL] =             {&parse_section_url, "url"},
-    [SECTION_REGEX] =           {&parse_section_regex, "regex", true},
-    [SECTION_COLORS_DARK] =     {&parse_section_colors_dark, "colors-dark"},
-    [SECTION_COLORS_LIGHT] =    {&parse_section_colors_light, "colors-light"},
-    [SECTION_CURSOR] =          {&parse_section_cursor, "cursor"},
-    [SECTION_MOUSE] =           {&parse_section_mouse, "mouse"},
-    [SECTION_CSD] =             {&parse_section_csd, "csd"},
-    [SECTION_KEY_BINDINGS] =    {&parse_section_key_bindings, "key-bindings"},
-    [SECTION_SEARCH_BINDINGS] = {&parse_section_search_bindings, "search-bindings"},
-    [SECTION_URL_BINDINGS] =    {&parse_section_url_bindings, "url-bindings"},
-    [SECTION_MOUSE_BINDINGS] =  {&parse_section_mouse_bindings, "mouse-bindings"},
-    [SECTION_TEXT_BINDINGS] =   {&parse_section_text_bindings, "text-bindings"},
-    [SECTION_ENVIRONMENT] =     {&parse_section_environment, "environment"},
-    [SECTION_TWEAK] =           {&parse_section_tweak, "tweak"},
-    [SECTION_TOUCH] =           {&parse_section_touch, "touch"},
-};
-
-static_assert(ALEN(section_info) == SECTION_COUNT, "section info array size mismatch");
-
-static enum section
-str_to_section(char *str, char **suffix)
-{
-    *suffix = NULL;
-
-    for (enum section section = SECTION_MAIN; section < SECTION_COUNT; ++section) {
-        const char *name = section_info[section].name;
-
-        if (streq(str, name))
-            return section;
-
-        else if (section_info[section].allow_colon_suffix) {
-            const size_t str_len = strlen(str);
-            const size_t name_len = strlen(name);
-
-            /* At least "section:" chars? */
-            if (str_len > name_len + 1) {
-                if (strncmp(str, name, name_len) == 0 && str[name_len] == ':') {
-                    str[name_len] = '\0';
-                    *suffix = &str[name_len + 1];
-                    return section;
-                }
-            }
-        }
-    }
-    return SECTION_COUNT;
-}
-
-bool
-parse_config_file(FILE *f, struct config *conf, const char *path, bool errors_are_fatal)
-{
-    enum section section = SECTION_MAIN;
-
-    char *_line = NULL;
-    size_t count = 0;
-    bool ret = true;
-
-#define error_or_continue()                     \
-    {                                           \
-        if (errors_are_fatal) {                 \
-            ret = false;                        \
-            goto done;                          \
-        } else                                  \
-            continue;                           \
-    }
-
-    char *section_name = xstrdup("main");
-    char *section_suffix = NULL;
-
-    struct context context = {
-        .conf = conf,
-        .section = section_name,
-        .section_suffix = section_suffix,
-        .path = path,
-        .lineno = 0,
-        .errors_are_fatal = errors_are_fatal,
-    };
-    struct context *ctx = &context;  /* For LOG_AND_*() */
-
-    errno = 0;
-    ssize_t len;
-
-    while ((len = getline(&_line, &count, f)) != -1) {
-        context.key = NULL;
-        context.value = NULL;
-        context.lineno++;
-
-        char *line = _line;
-
-        /* Strip leading whitespace */
-        while (isspace(line[0])) {
-            line++;
-            len--;
-        }
-
-        /* Empty line, or comment */
-        if (line[0] == '\0' || line[0] == '#')
-            continue;
-
-        /* Strip the trailing newline - may be absent on the last line */
-        if (line[len - 1] == '\n')
-            line[--len] = '\0';
-
-        /* Split up into key/value pair + trailing comment separated by blank */
-        char *key_value = line;
-        char *kv_trailing = &line[len - 1];
-        char *comment = &line[1];
-        while (comment[1] != '\0') {
-            if (isblank(comment[0]) && comment[1] == '#') {
-                comment[1] = '\0'; /* Terminate key/value pair */
-                kv_trailing = comment++;
-                break;
-            }
-            comment++;
-        }
-        comment++;
-
-        /* Strip trailing whitespace */
-        while (isspace(kv_trailing[0]))
-            kv_trailing--;
-        kv_trailing[1] = '\0';
-
-        /* Check for new section */
-        if (key_value[0] == '[') {
-            key_value++;
-
-            if (key_value[0] == ']') {
-                LOG_CONTEXTUAL_ERR("empty section name");
-                section = SECTION_COUNT;
-                error_or_continue();
-            }
-
-            char *end = strchr(key_value, ']');
-
-            if (end == NULL) {
-                context.section = key_value;
-                LOG_CONTEXTUAL_ERR("syntax error: no closing ']'");
-                context.section = section_name;
-                section = SECTION_COUNT;
-                error_or_continue();
-            }
-
-            end[0] = '\0';
-
-            if (end[1] != '\0') {
-                context.section = key_value;
-                LOG_CONTEXTUAL_ERR("section declaration contains trailing "
-                                   "characters");
-                context.section = section_name;
-                section = SECTION_COUNT;
-                error_or_continue();
-            }
-
-            char *maybe_section_suffix;
-            section = str_to_section(key_value, &maybe_section_suffix);
-            if (section == SECTION_COUNT) {
-                context.section = key_value;
-                LOG_CONTEXTUAL_ERR("invalid section name: %s", key_value);
-                context.section = section_name;
-                error_or_continue();
-            }
-
-            free(section_name);
-            free(section_suffix);
-            section_name = xstrdup(key_value);
-            section_suffix = maybe_section_suffix != NULL ? xstrdup(maybe_section_suffix) : NULL;
-            context.section = section_name;
-            context.section_suffix = section_suffix;
-
-            /* Process next line */
-            continue;
-        }
-
-        if (section >= SECTION_COUNT) {
-            /* Last section name was invalid; ignore all keys in it */
-            continue;
-        }
-
-        if (!parse_key_value(key_value, NULL, &context.key, &context.value)) {
-            LOG_CONTEXTUAL_ERR("syntax error: key/value pair has no %s",
-                               context.key == NULL ? "key" : "value");
-            error_or_continue();
-        }
-
-        LOG_DBG("section=%s, key='%s', value='%s', comment='%s'",
-                section_info[section].name, context.key, context.value, comment);
-
-        xassert(section >= 0 && section < SECTION_COUNT);
-
-        parser_fun_t section_parser = section_info[section].fun;
-        xassert(section_parser != NULL);
-
-        if (!section_parser(ctx))
-            error_or_continue();
-
-        /* For next iteration of getline() */
-        errno = 0;
-    }
-
-    if (errno != 0) {
-        LOG_AND_NOTIFY_ERRNO("failed to read from configuration");
-        if (errors_are_fatal)
-            ret = false;
-    }
-
-done:
-    free(section_name);
-    free(section_suffix);
-    free(_line);
-    return ret;
-}
+/* enum section, section_info[], str_to_section(), parse_key_value() and
+ * parse_config_file(): ported to config.zig */
 
 static char *
 get_server_socket_path(void)
@@ -2486,77 +2176,23 @@ config_load(struct config *conf, const char *conf_path,
     return ret;
 }
 
+/* Reachable from config.zig: the override loop is ported, but the collision
+ * resolution below still needs the C binding lookup tables. */
 bool
-config_override_apply(struct config *conf, config_override_t *overrides,
-                      bool errors_are_fatal)
+config_bindings_finalize(struct config *conf)
 {
-    char *section_name = NULL;
-
-    struct context context = {
-        .conf = conf,
-        .path = "override",
-        .lineno = 0,
-        .errors_are_fatal = errors_are_fatal,
-    };
-    struct context *ctx = &context;
-
-    tll_foreach(*overrides, it) {
-        context.lineno++;
-
-        if (!parse_key_value(it->item, &section_name, &context.key, &context.value))
-        {
-            LOG_CONTEXTUAL_ERR("syntax error: key/value pair has no %s",
-                               context.key == NULL ? "key" : "value");
-            if (errors_are_fatal)
-                return false;
-            continue;
-        }
-
-        if (section_name[0] == '\0') {
-            LOG_CONTEXTUAL_ERR("empty section name");
-            if (errors_are_fatal)
-                return false;
-            continue;
-        }
-
-        char *maybe_section_suffix = NULL;
-        enum section section = str_to_section(section_name, &maybe_section_suffix);
-
-        context.section = section_name;
-        context.section_suffix = maybe_section_suffix;
-
-        if (section == SECTION_COUNT) {
-            LOG_CONTEXTUAL_ERR("invalid section name: %s", section_name);
-            if (errors_are_fatal)
-                return false;
-            continue;
-        }
-
-        parser_fun_t section_parser = section_info[section].fun;
-        xassert(section_parser != NULL);
-
-        if (!section_parser(ctx)) {
-            if (errors_are_fatal)
-                return false;
-            continue;
-        }
-    }
-
-    conf->csd.border_width = max(
-        min_csd_border_width, conf->csd.border_width_visible);
-
     return
         resolve_key_binding_collisions(
-            conf, section_info[SECTION_KEY_BINDINGS].name,
+            conf, "key-bindings",
             binding_action_map, &conf->bindings.key, KEY_BINDING) &&
         resolve_key_binding_collisions(
-            conf, section_info[SECTION_SEARCH_BINDINGS].name,
+            conf, "search-bindings",
             search_binding_action_map, &conf->bindings.search, KEY_BINDING) &&
         resolve_key_binding_collisions(
-            conf, section_info[SECTION_URL_BINDINGS].name,
+            conf, "url-bindings",
             url_binding_action_map, &conf->bindings.url, KEY_BINDING) &&
         resolve_key_binding_collisions(
-            conf, section_info[SECTION_MOUSE_BINDINGS].name,
+            conf, "mouse-bindings",
             binding_action_map, &conf->bindings.mouse, MOUSE_BINDING);
 }
 

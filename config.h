@@ -486,6 +486,9 @@ struct context {
 
 bool config_override_apply(struct config *conf, config_override_t *overrides,
     bool errors_are_fatal);
+/* config.c side of the override loop (ported to config.zig): resolves
+ * key-binding collisions once all overrides have been applied. */
+bool config_bindings_finalize(struct config *conf);
 bool config_load(
     struct config *conf, const char *path,
     user_notifications_t *initial_user_notifications,
