@@ -1,10 +1,28 @@
 #include <stdbool.h>
 #include <stdint.h>
+#include <stdlib.h>
 #include "terminal.h"
 #include "url-mode.h"
 #include "grid.h"
 #include "wayland.h"
 #include "shm.h"
+
+/* ── struct seat kbd state (unicode-mode) ─────────────────────────── */
+
+/* struct seat is wayland.h's business; unicode-mode.zig only reads one flag
+ * and sets one keysym. */
+bool terminal_shim_seat_kbd_ctrl(const struct seat *seat) {
+    return seat->kbd.ctrl;
+}
+
+void terminal_shim_seat_set_last_shortcut_sym(struct seat *seat, uint32_t sym) {
+    seat->kbd.last_shortcut_sym = sym;
+}
+
+/* MB_CUR_MAX is a C macro (it expands to a thread-local lookup). */
+size_t terminal_shim_mb_cur_max(void) {
+    return MB_CUR_MAX;
+}
 
 struct wl_surface *terminal_shim_window_surface(struct terminal *term) {
     return term->window->surface.surf;

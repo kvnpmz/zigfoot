@@ -19,9 +19,9 @@ foot-owned C lines are gone (44.7%)**, replaced by ~22.7k lines of Zig
 
 | State | Modules |
 |---|---|
-| **Ported, C deleted** (27) | `async`, `base64`, `char32`, `commands`, `composed`, `csi`, `cursor-shape`, `dcs`, `extract`, `fdm`, `grid`, `hsl`, `misc`, `notify`, `osc`, `reaper`, `sixel`, `spawn`, `spawn_template`, `tokenize`, `uri`, `log`, `user-notification`, `vt`, `xmalloc`, `xsnprintf`, and **`config`** (the parser, the logger tail and the fcft accessors are Zig; the 35 surviving C lines are `config_regex_compile()` only — see §6.3) |
+| **Ported, C deleted** (28) | `async`, `base64`, `char32`, `commands`, `composed`, `csi`, `cursor-shape`, `dcs`, `extract`, `fdm`, `grid`, `hsl`, `misc`, `notify`, `osc`, `reaper`, `sixel`, `spawn`, `spawn_template`, `tokenize`, `uri`, `log`, `user-notification`, `unicode-mode`, `vt`, `xmalloc`, `xsnprintf`, and **`config`** (the parser, the logger tail and the fcft accessors are Zig; the 35 surviving C lines are `config_regex_compile()` only — see §6.3) |
 | **In progress** (Zig + remaining C + shims) | `terminal.c` (1,780 left), `selection.c` (844 left), `shm.c` (329 left — globals, 32-bit/punch-hole `#ifdef` shims, the `wl_buffer_listener` and the `wl_shm` protocol stubs; `shm.zig` is 1,014 lines), `debug.c` (22 left — the ASAN stack-trace hook), `config.c` (35 left — the regex_t shim), `slave.c` (158 left — O_*/F_*/TIOCSCTTY/_CS_PATH constants, the IUTF8 termios block, signal-mask restoration and the execvpe shim; `slave.zig` is 663 lines) |
-| **Untouched** (14 modules, ~21.3k lines) | `box-drawing` (3,450), `render` (5,479), `input` (3,690), `wayland` (2,881), `search` (1,512), `url-mode` (833), `main` (751), `server` (688), `key-binding` (661), `client` (629), `ime` (532), `unicode-mode` (110), `quirks` (86), `foot-features` (42) |
+| **Untouched** (13 modules, ~21.2k lines) | `box-drawing` (3,450), `render` (5,479), `input` (3,690), `wayland` (2,881), `search` (1,512), `url-mode` (833), `main` (751), `server` (688), `key-binding` (661), `client` (629), `ime` (532), `quirks` (86), `foot-features` (42) |
 
 **Progress read two ways:** 45% by C volume, but roughly **35% by effort**,
 because what remains is the hard core (`render`, `input`, `wayland`, the

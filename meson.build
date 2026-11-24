@@ -544,6 +544,18 @@ user_notification_obj = custom_target(
   ]
 )
 
+unicode_mode_obj = custom_target(
+  'unicode_mode_obj',
+  input: 'unicode-mode.zig',
+  depend_files: files('terminal_types.zig'),
+  output: 'unicode-mode.o',
+  depends: c_layout,
+  command: [
+    python, files('compile_zig.py'), '@INPUT@', '@OUTPUT@',
+    grapheme_clustering_zig,
+  ]
+)
+
 log_obj = custom_target(
   'log_obj',
   input: 'log.zig',
@@ -728,7 +740,7 @@ footlib = static_library(
   slave_obj, 'slave.c', 'slave.h',
   spawn_obj, spawn_template_obj, 'spawn.h',
   tokenize_obj, 'tokenize.h',
-  'unicode-mode.c', 'unicode-mode.h',
+  unicode_mode_obj, 'unicode-mode.h',
   'url-mode.c', 'url-mode.h',
   user_notification_obj, 'user-notification.h',
   'wayland.c', 'wayland.h', 'shm-formats.h',
