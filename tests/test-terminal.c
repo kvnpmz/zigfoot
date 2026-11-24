@@ -19,6 +19,8 @@
 #include "shm.h"
 #include "slave.h"
 #include "log.h"
+#include "user-notification.h"
+#include "debug.h"
 #include "xmalloc.h"
 
 #include <stdio.h>
@@ -30,6 +32,7 @@
 #include <sys/mman.h>
 #include <sys/wait.h>
 #include <poll.h>
+#include <signal.h>
 #include <errno.h>
 #include <unistd.h>
 #include <stdlib.h>
@@ -2117,6 +2120,93 @@ test_log(void)
           "the level hint is built once");
 }
 
+
+/* Run `fn()` in a forked child with stderr redirected to a memfd, and
+ * return the captured output (in a static buffer) plus the wait status. */
+static char child_stderr[8192];
+
+static size_t
+capture_child_stderr(void (*fn)(void), int *status)
+{
+    fflush(stderr);
+
+    int cap = memfd_create("foot-harness-debug", 0);
+    check(cap >= 0, "memfd for stderr capture");
+
+    pid_t pid = fork();
+    if (pid == 0) {
+        dup2(cap, STDERR_FILENO);
+        fn();
+        _exit(0);
+    }
+
+    waitpid(pid, status, 0);
+
+    ssize_t n = -1;
+    if (lseek(cap, 0, SEEK_SET) >= 0)
+        n = read(cap, child_stderr, sizeof(child_stderr) - 1);
+    close(cap);
+
+    size_t len = n > 0 ? (size_t)n : 0;
+    child_stderr[len] = '\0';
+    return len;
+}
+
+static void
+call_bug(void)
+{
+    bug("file.c", 42, "my_func", "value=%d/%s", 7, "x");
+}
+
+static void
+call_fatal_error(void)
+{
+    fatal_error("fatal.c", 7, "boom", ENOENT);
+}
+
+/* user-notification.c and debug.c: the printf-style notification helper and
+ * the two abort paths. */
+static void
+test_debug(void)
+{
+    /* user_notification_add_fmt() formats and appends a notification. */
+    user_notifications_t notes = tll_init();
+    user_notification_add_fmt(&notes, USER_NOTIFICATION_WARNING,
+                              "value=%d/%s", 42, "x");
+    user_notification_add_fmt(&notes, USER_NOTIFICATION_ERROR, "second");
+
+    check(tll_length(notes) == 2, "user_notification_add_fmt appends");
+    check(tll_length(notes) == 2 &&
+          strcmp(tll_front(notes).text, "value=42/x") == 0,
+          "user_notification_add_fmt formats its arguments");
+    check(tll_length(notes) == 2 &&
+          tll_front(notes).kind == USER_NOTIFICATION_WARNING,
+          "user_notification_add_fmt keeps the kind");
+    check(tll_length(notes) == 2 &&
+          strcmp(tll_back(notes).text, "second") == 0,
+          "user_notification_add_fmt appends at the back");
+    user_notifications_free(&notes);
+
+
+    /* bug() reports the formatted message and aborts. */
+    int status = 0;
+    size_t len = capture_child_stderr(call_bug, &status);
+
+    check(WIFSIGNALED(status) && WTERMSIG(status) == SIGABRT,
+          "bug() aborts");
+    check(len > 0 && strstr(child_stderr, "file.c:42: BUG in my_func(): value=7/x") != NULL,
+          "bug() reports the formatted BUG message");
+
+    /* fatal_error() reports strerror() and aborts. */
+    len = capture_child_stderr(call_fatal_error, &status);
+
+    check(WIFSIGNALED(status) && WTERMSIG(status) == SIGABRT,
+          "fatal_error aborts");
+    check(len > 0 && strstr(child_stderr, "fatal.c:7: boom: ") != NULL &&
+          strstr(child_stderr, strerror(ENOENT)) != NULL,
+          "fatal_error reports strerror()");
+}
+
 int
 main(void)
 {
@@ -2162,6 +2252,7 @@ main(void)
     test_shm_scroll();
     test_slave_spawn();
     test_log();
+    test_debug();
 
     fcft_fini();
 

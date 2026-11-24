@@ -520,6 +520,30 @@ osc_obj = custom_target(
   ]
 )
 
+debug_obj = custom_target(
+  'debug_obj',
+  input: 'debug.zig',
+  depend_files: files('terminal_types.zig'),
+  output: 'debug.o',
+  depends: c_layout,
+  command: [
+    python, files('compile_zig.py'), '@INPUT@', '@OUTPUT@',
+    grapheme_clustering_zig,
+  ]
+)
+
+user_notification_obj = custom_target(
+  'user_notification_obj',
+  input: 'user-notification.zig',
+  depend_files: files('terminal_types.zig'),
+  output: 'user-notification.o',
+  depends: c_layout,
+  command: [
+    python, files('compile_zig.py'), '@INPUT@', '@OUTPUT@',
+    grapheme_clustering_zig,
+  ]
+)
+
 log_obj = custom_target(
   'log_obj',
   input: 'log.zig',
@@ -607,7 +631,7 @@ common = static_library(
   'common',
   log_obj, 'log.h',
   char32_obj, 'char32.h',
-  'debug.c', 'debug.h',
+  debug_obj, 'debug.c', 'debug.h',
   'macros.h',
   'xmalloc-shim.c',
     xmalloc_obj, 'xmalloc.h',
@@ -706,7 +730,7 @@ footlib = static_library(
   tokenize_obj, 'tokenize.h',
   'unicode-mode.c', 'unicode-mode.h',
   'url-mode.c', 'url-mode.h',
-  'user-notification.c', 'user-notification.h',
+  user_notification_obj, 'user-notification.h',
   'wayland.c', 'wayland.h', 'shm-formats.h',
   'xkbcommon-vmod.h',
   srgb_funcs, wl_proto_src + wl_proto_headers, version,

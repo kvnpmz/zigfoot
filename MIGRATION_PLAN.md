@@ -19,9 +19,9 @@ foot-owned C lines are gone (44.7%)**, replaced by ~22.7k lines of Zig
 
 | State | Modules |
 |---|---|
-| **Ported, C deleted** (26) | `async`, `base64`, `char32`, `commands`, `composed`, `csi`, `cursor-shape`, `dcs`, `extract`, `fdm`, `grid`, `hsl`, `misc`, `notify`, `osc`, `reaper`, `sixel`, `spawn`, `spawn_template`, `tokenize`, `uri`, `log`, `vt`, `xmalloc`, `xsnprintf`, and **`config`** (the parser is Zig; the 335 surviving C lines are the variadic loggers, `config_regex_compile()` and two fcft field accessors — see §6.3) |
-| **In progress** (Zig + remaining C + shims) | `terminal.c` (1,780 left), `selection.c` (844 left), `shm.c` (329 left — globals, 32-bit/punch-hole `#ifdef` shims, the `wl_buffer_listener` and the `wl_shm` protocol stubs; `shm.zig` is 1,014 lines), `slave.c` (158 left — O_*/F_*/TIOCSCTTY/_CS_PATH constants, the IUTF8 termios block, signal-mask restoration and the execvpe shim; `slave.zig` is 663 lines) |
-| **Untouched** (16 modules, ~21.4k lines) | `box-drawing` (3,450), `render` (5,479), `input` (3,690), `wayland` (2,881), `search` (1,512), `url-mode` (833), `main` (751), `server` (688), `key-binding` (661), `client` (629), `ime` (532), `unicode-mode` (110), `quirks` (86), `debug` (47), `foot-features` (42), `user-notification` (14) |
+| **Ported, C deleted** (27) | `async`, `base64`, `char32`, `commands`, `composed`, `csi`, `cursor-shape`, `dcs`, `extract`, `fdm`, `grid`, `hsl`, `misc`, `notify`, `osc`, `reaper`, `sixel`, `spawn`, `spawn_template`, `tokenize`, `uri`, `log`, `user-notification`, `vt`, `xmalloc`, `xsnprintf`, and **`config`** (the parser is Zig; the 335 surviving C lines are the variadic loggers, `config_regex_compile()` and two fcft field accessors — see §6.3) |
+| **In progress** (Zig + remaining C + shims) | `terminal.c` (1,780 left), `selection.c` (844 left), `shm.c` (329 left — globals, 32-bit/punch-hole `#ifdef` shims, the `wl_buffer_listener` and the `wl_shm` protocol stubs; `shm.zig` is 1,014 lines), `debug.c` (22 left — the ASAN stack-trace hook), `slave.c` (158 left — O_*/F_*/TIOCSCTTY/_CS_PATH constants, the IUTF8 termios block, signal-mask restoration and the execvpe shim; `slave.zig` is 663 lines) |
+| **Untouched** (14 modules, ~21.3k lines) | `box-drawing` (3,450), `render` (5,479), `input` (3,690), `wayland` (2,881), `search` (1,512), `url-mode` (833), `main` (751), `server` (688), `key-binding` (661), `client` (629), `ime` (532), `unicode-mode` (110), `quirks` (86), `foot-features` (42) |
 
 **Progress read two ways:** 45% by C volume, but roughly **35% by effort**,
 because what remains is the hard core (`render`, `input`, `wayland`, the
@@ -622,7 +622,9 @@ utmp backends where available.
    is exercised end-to-end by the harness through a real pty.
    **`log` (231) also done** (variadic entry points implemented in Zig with
    `@cVaStart`/`@cVaCopy`, output passed straight to `vfprintf`/`vsnprintf`).
-   **Next: `unicode-mode` (110), then `box-drawing` (3,450)** —
+   **`debug` + `user-notification` also done** (`fatal_error`/`bug` and the
+   printf-style notification helper are Zig; only the ASAN hook stays in C).
+   **Next: `box-drawing` (3,450)** —
    or `ime`/`key-binding` if the seat mirror lands first.
 4. **Keep the safety net moving:** add a Zig test whenever a chunk ports
    logic with a pure core, and run `meson test` in all three build dirs plus
