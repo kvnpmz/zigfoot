@@ -222,9 +222,7 @@ export fn shm_addref(buf: *types.Buffer) callconv(.c) void {
     private.ref_count += 1;
 }
 
-export fn shm_unref(buf_ptr: ?*types.Buffer) callconv(.c) void {
-    const buf = buf_ptr orelse return;
-    const private: *types.ShmBufferPrivate = @ptrCast(@alignCast(buf));
+fn unrefChainBuffer(private: *types.ShmBufferPrivate) void {
     const chain = private.chain.?;
 
     var node = listHead(&chain.bufs);
@@ -236,6 +234,78 @@ export fn shm_unref(buf_ptr: ?*types.Buffer) callconv(.c) void {
         }
         node = n.next;
     }
+}
+
+export fn shm_unref(buf_ptr: ?*types.Buffer) callconv(.c) void {
+    const buf = buf_ptr orelse return;
+    const private: *types.ShmBufferPrivate = @ptrCast(@alignCast(buf));
+    unrefChainBuffer(private);
+}
+
+export fn shm_get_many(
+    chain: *types.ShmBufferChain,
+    count: usize,
+    widths: [*]c_int,
+    heights: [*]c_int,
+    bufs: [*]?*types.Buffer,
+) callconv(.c) void {
+    getNewBuffers(chain, count, widths, heights, bufs, true);
+}
+
+export fn shm_get_buffer(
+    chain: *types.ShmBufferChain,
+    width: c_int,
+    height: c_int,
+) callconv(.c) ?*types.Buffer {
+    var cached: ?*types.ShmBufferPrivate = null;
+
+    // Snapshot the next pointer before a possible removal, like tll_foreach.
+    var node = listHead(&chain.bufs);
+    while (node) |n| {
+        const next = n.next;
+        const buf = n.item;
+
+        if (buf.public.width != width or buf.public.height != height) {
+            if (bufferUnrefNoRemoveFromChain(buf))
+                listRemove(&chain.bufs, n);
+            node = next;
+            continue;
+        }
+
+        if (buf.busy) {
+            buf.public.age += 1;
+        } else if (cached == null) {
+            cached = buf;
+        } else if (buf.public.age < cached.?.public.age) {
+            // Several reusable candidates: keep the youngest.
+            unrefChainBuffer(cached.?);
+            cached = buf;
+        } else {
+            if (bufferUnrefNoRemoveFromChain(buf))
+                listRemove(&chain.bufs, n);
+        }
+
+        node = next;
+    }
+
+    if (cached) |c| {
+        c.busy = true;
+
+        if (c.public.dirty) |dirty| {
+            const regions: [*]types.PixmanRegion32 = @ptrCast(@alignCast(dirty));
+            for (0..c.public.pix_instances) |i|
+                pixman_region32_clear(&regions[i]);
+        }
+
+        std.debug.assert(c.public.pix_instances == chain.pix_instances);
+        return &c.public;
+    }
+
+    var ret: ?*types.Buffer = null;
+    var w = width;
+    var h = height;
+    getNewBuffers(chain, 1, @ptrCast(&w), @ptrCast(&h), @ptrCast(&ret), false);
+    return ret;
 }
 
 //
@@ -290,6 +360,7 @@ extern fn pixman_image_create_bits_no_clear(
     rowstride: c_int,
 ) callconv(.c) ?*anyopaque;
 extern fn pixman_region32_init(region: ?*anyopaque) callconv(.c) void;
+extern fn pixman_region32_clear(region: ?*anyopaque) callconv(.c) void;
 extern fn shm_can_scroll(buf: ?*types.Buffer) callconv(.c) bool;
 
 fn logErr(msg: [*:0]const u8) void {

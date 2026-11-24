@@ -33,11 +33,21 @@
 
 /* wl_buffer_destroy()/wl_shm_pool_destroy() are static inline in the
  * generated protocol header, so shm.zig needs real symbols. */
+/* Headless harness has no wl_shm connection: chain->shm == NULL selects a
+ * pair of never-dereferenced sentinels, so allocation and cache logic can run
+ * without a compositor. */
+static struct wl_shm_pool *shm_stub_pool;
+static struct wl_buffer *shm_stub_buffer;
+
 void shm_shim_wl_buffer_destroy(struct wl_buffer *buffer) {
+    if (buffer == (struct wl_buffer *)&shm_stub_buffer)
+        return;
     wl_buffer_destroy(buffer);
 }
 
 void shm_shim_wl_shm_pool_destroy(struct wl_shm_pool *pool) {
+    if (pool == (struct wl_shm_pool *)&shm_stub_pool)
+        return;
     wl_shm_pool_destroy(pool);
 }
 
@@ -219,6 +229,8 @@ void shm_shim_seal_pool(int fd) {
 struct wl_shm_pool *shm_shim_wl_shm_create_pool(
     struct wl_shm *shm, int fd, int32_t size)
 {
+    if (shm == NULL)
+        return (struct wl_shm_pool *)&shm_stub_pool;
     return wl_shm_create_pool(shm, fd, size);
 }
 
@@ -226,11 +238,16 @@ struct wl_buffer *shm_shim_wl_shm_pool_create_buffer(
     struct wl_shm_pool *pool, int32_t offset, int32_t width, int32_t height,
     int32_t stride, uint32_t format)
 {
+    if (pool == (struct wl_shm_pool *)&shm_stub_pool)
+        return (struct wl_buffer *)&shm_stub_buffer;
+
     return wl_shm_pool_create_buffer(
         pool, offset, width, height, stride, format);
 }
 
 void shm_shim_wl_buffer_add_listener(struct wl_buffer *buffer, void *data) {
+    if (buffer == (struct wl_buffer *)&shm_stub_buffer)
+        return;
     wl_buffer_add_listener(buffer, &buffer_listener, data);
 }
 
@@ -238,80 +255,7 @@ void shm_shim_wl_buffer_add_listener(struct wl_buffer *buffer, void *data) {
 
 /* shm_did_not_use_buf: ported to shm.zig */
 
-void
-shm_get_many(struct buffer_chain *chain, size_t count,
-             int widths[static count], int heights[static count],
-             struct buffer *bufs[static count])
-{
-    get_new_buffers(chain, count, widths, heights, bufs, true);
-}
-
-struct buffer *
-shm_get_buffer(struct buffer_chain *chain, int width, int height)
-{
-    LOG_DBG(
-        "chain=%p: looking for a reusable %dx%d buffer "
-        "among %zu potential buffers",
-        (void *)chain, width, height, tll_length(chain->bufs));
-
-    struct buffer_private *cached = NULL;
-    tll_foreach(chain->bufs, it) {
-        struct buffer_private *buf = it->item;
-
-        if (buf->public.width != width || buf->public.height != height) {
-            LOG_DBG("purging mismatching buffer %p", (void *)buf);
-            if (buffer_unref_no_remove_from_chain(buf))
-                tll_remove(chain->bufs, it);
-            continue;
-        }
-
-        if (buf->busy)
-            buf->public.age++;
-        else
-#if FORCED_DOUBLE_BUFFERING
-            if (buf->public.age == 0)
-                buf->public.age++;
-            else
-#endif
-            {
-                if (cached == NULL) {
-                    cached = buf;
-                } else {
-                    /* We have multiple buffers eligible for
-                     * reuse. Pick the "youngest" one, and mark the
-                     * other one for purging */
-                    if (buf->public.age < cached->public.age) {
-                        shm_unref(&cached->public);
-                        cached = buf;
-                    } else {
-                        /*
-                         * TODO: I think we _can_ use shm_unref()
-                         * here...
-                         *
-                         * shm_unref() may remove 'it', but that
-                         * should be safe; "our" tll_foreach() already
-                         * holds the next pointer.
-                         */
-                        if (buffer_unref_no_remove_from_chain(buf))
-                            tll_remove(chain->bufs, it);
-                    }
-                }
-            }
-    }
-
-    if (cached != NULL) {
-        LOG_DBG("reusing buffer %p from cache", (void *)cached);
-        cached->busy = true;
-        for (size_t i = 0; i < cached->public.pix_instances; i++)
-            pixman_region32_clear(&cached->public.dirty[i]);
-        xassert(cached->public.pix_instances == chain->pix_instances);
-        return &cached->public;
-    }
-
-    struct buffer *ret;
-    get_new_buffers(chain, 1, &width, &height, &ret, false);
-    return ret;
-}
+/* shm_get_many / shm_get_buffer: ported to shm.zig */
 
 bool
 shm_can_scroll(const struct buffer *_buf)

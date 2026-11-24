@@ -1559,6 +1559,71 @@ test_shm_lifetime(void)
     free(chain);
 }
 
+/* shm_get_buffer()/shm_get_many(): allocation and cache behaviour.
+ * chain->shm == NULL uses shm.c's headless sentinels, so this runs without a
+ * compositor while still using real memfd/mmap and pixman images. */
+static void
+test_shm_cache(void)
+{
+    struct buffer_chain chain = {0};
+    chain.shm = NULL;
+    chain.pix_instances = 1;
+    chain.pixman_fmt = PIXMAN_a8r8g8b8;
+    chain.shm_format = WL_SHM_FORMAT_ARGB8888;
+    chain.scrollable = false;
+
+    struct buffer *a = shm_get_buffer(&chain, 8, 4);
+    check(a != NULL, "shm_get_buffer allocates");
+    check(a && a->width == 8 && a->height == 4,
+          "buffer has the requested size");
+    check(a && a->age == 1234, "new buffer is tagged for a full repaint");
+    check(a && a->data != NULL, "buffer has backing memory");
+    check(a && a->pix_instances == 1 && a->pix && a->pix[0] != NULL,
+          "pixman image created for the buffer");
+    check(tll_length(chain.bufs) == 1, "buffer is inserted into the chain");
+
+    struct buffer *b = shm_get_buffer(&chain, 8, 4);
+    check(b != NULL && b != a, "a busy buffer forces a new allocation");
+    check(a->age == 1235, "the busy buffer's age increments");
+    check(tll_length(chain.bufs) == 2, "the second buffer joins the chain");
+
+    /* Release both, then ask again: one is reused, not allocated. */
+    shm_did_not_use_buf(a);
+    shm_did_not_use_buf(b);
+    struct buffer *reused = shm_get_buffer(&chain, 8, 4);
+    check(reused == a || reused == b, "a released buffer is reused");
+    check(reused && ((struct buffer_private *)reused)->busy,
+          "the reused buffer is marked busy");
+    check(tll_length(chain.bufs) == 1,
+          "reuse keeps one buffer and drops the older candidate");
+
+    /* A size mismatch purges the cached buffers. */
+    shm_did_not_use_buf(reused);
+    struct buffer *big = shm_get_buffer(&chain, 16, 4);
+    check(big != NULL && big->width == 16, "a size mismatch allocates");
+    check(tll_length(chain.bufs) == 1, "mismatched buffers are purged");
+
+    /* shm_get_many(): immediate-purge buffers, not chain-cached. */
+    int widths[2] = {4, 4};
+    int heights[2] = {2, 2};
+    struct buffer *many[2] = {0};
+    shm_get_many(&chain, 2, widths, heights, many);
+    check(many[0] != NULL && many[1] != NULL && many[0] != many[1],
+          "shm_get_many allocates distinct buffers");
+    check(many[0]->age == 1234, "shm_get_many buffers are full-repaint");
+    check(tll_length(chain.bufs) == 1,
+          "shm_get_many buffers are not chain-cached");
+
+    /* destroy the immediate-purge buffers */
+    shm_fini();
+
+    /* shm_purge() unrefs the chain; the busy buffer is deferred, then freed
+     * by a second shm_fini(). */
+    shm_purge(&chain);
+    check(tll_length(chain.bufs) == 0, "shm_purge empties the chain");
+    shm_fini();
+}
+
 int
 main(void)
 {
@@ -1599,6 +1664,7 @@ main(void)
     test_dpi_and_scale();
     test_font_size_adjustments();
     test_shm_lifetime();
+    test_shm_cache();
 
     fcft_fini();
 
