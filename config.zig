@@ -13,6 +13,7 @@
 // and re-implementing them by hand would only introduce drift.
 
 const std = @import("std");
+const build_options = @import("build_options");
 const types = @import("terminal_types.zig");
 
 const Context = types.ConfigContext;
@@ -34,6 +35,14 @@ extern fn ambstoc32(s: [*:0]const u8) callconv(.c) ?[*]u32;
 
 // config.c
 extern fn tokenize_cmdline(cmdline: [*:0]const u8, argv: *?[*:null]?[*:0]u8) callconv(.c) bool;
+extern fn log_msg(
+    class: c_int,
+    module: [*:0]const u8,
+    file: [*:0]const u8,
+    lineno: c_int,
+    fmt: [*:0]const u8,
+    ...
+) callconv(.c) void;
 extern fn log_contextual(
     ctx: *Context,
     class: c_int,
@@ -872,4 +881,135 @@ export fn parse_section_csd(ctx: *Context) callconv(.c) bool {
         return value_to_bool(ctx, &conf.csd.double_click_to_maximize);
 
     return errValue(ctx, @src(), "not a valid action: {s}", .{std.mem.span(key)});
+}
+
+// ── [tweak] (C2d) ─────────────────────────────────────────────────
+
+fn logWarn(src: std.builtin.SourceLocation, msg: [*:0]const u8) void {
+    log_msg(LOG_CLASS_WARNING, "config", src.file, @intCast(src.line), "%s", msg);
+}
+
+export fn parse_section_tweak(ctx: *Context) callconv(.c) bool {
+    const conf = ctx.conf.?;
+    const key = ctx.key orelse return true;
+
+    if (eq(key, "scaling-filter")) {
+        // Index order matters: value_to_enum() stores the index, and the C
+        // table is designated-initialised by `enum fcft_scaling_filter`
+        // (NONE, NEAREST, BILINEAR, CUBIC, LANCZOS3, IMPULSE, BOX, LINEAR,
+        // GAUSSIAN, LANCZOS2, LANCZOS3_STRETCHED) — not the textual order
+        // in which config.c happens to write the entries.
+        return value_to_enum(
+            ctx,
+            valueMap(&.{
+                "none",     "nearest",  "bilinear", "cubic",
+                "lanczos3", "impulse",  "box",      "linear",
+                "gaussian", "lanczos2", "lanczos3-stretched",
+            }),
+            @ptrCast(&conf.tweak.fcft_filter),
+        );
+    }
+
+    if (eq(key, "overflowing-glyphs"))
+        return value_to_bool(ctx, &conf.tweak.overflowing_glyphs);
+    if (eq(key, "damage-whole-window"))
+        return value_to_bool(ctx, &conf.tweak.damage_whole_window);
+
+    if (eq(key, "grapheme-shaping")) {
+        if (!value_to_bool(ctx, &conf.tweak.grapheme_shaping))
+            return false;
+
+        if (comptime !build_options.grapheme_clustering) {
+            if (conf.tweak.grapheme_shaping) {
+                logWarn(@src(), "foot was not compiled with support for grapheme shaping");
+                conf.tweak.grapheme_shaping = false;
+            }
+        }
+
+        if (conf.tweak.grapheme_shaping and !conf.can_shape_grapheme) {
+            // Keep it enabled: it still makes us do grapheme clustering.
+            logWarn(@src(), "fcft was not compiled with support for grapheme shaping");
+        }
+
+        return true;
+    }
+
+    if (eq(key, "grapheme-width-method")) {
+        return value_to_enum(
+            ctx,
+            valueMap(&.{ "wcswidth", "double-width", "max" }),
+            @ptrCast(&conf.tweak.grapheme_width_method),
+        );
+    }
+
+    if (eq(key, "render-timer")) {
+        return value_to_enum(
+            ctx,
+            valueMap(&.{ "none", "osd", "log", "both" }),
+            @ptrCast(&conf.tweak.render_timer),
+        );
+    }
+
+    if (eq(key, "delayed-render-lower") or eq(key, "delayed-render-upper")) {
+        var ns: u32 = undefined;
+        if (!value_to_uint32(ctx, 10, &ns))
+            return false;
+
+        if (ns > 16666666)
+            return errValue(ctx, @src(), "timeout must not exceed 16ms", .{});
+
+        if (eq(key, "delayed-render-lower"))
+            conf.tweak.delayed_render_lower_ns = ns
+        else
+            conf.tweak.delayed_render_upper_ns = ns;
+        return true;
+    }
+
+    if (eq(key, "max-shm-pool-size-mb")) {
+        var mb: u32 = undefined;
+        if (!value_to_uint32(ctx, 10, &mb))
+            return false;
+
+        // C: min((int32_t)mb * 1024 * 1024, INT32_MAX) — the multiply wraps
+        // in `int`, then widens to off_t.
+        const bytes = @as(i32, @bitCast(mb)) *% 1024 *% 1024;
+        conf.tweak.max_shm_pool_size = @as(i64, @min(bytes, std.math.maxInt(i32)));
+        return true;
+    }
+
+    if (eq(key, "box-drawing-base-thickness"))
+        return value_to_float(ctx, &conf.tweak.box_drawing_base_thickness);
+    if (eq(key, "box-drawing-solid-shades"))
+        return value_to_bool(ctx, &conf.tweak.box_drawing_solid_shades);
+    if (eq(key, "font-monospace-warn"))
+        return value_to_bool(ctx, &conf.tweak.font_monospace_warn);
+    if (eq(key, "sixel"))
+        return value_to_bool(ctx, &conf.tweak.sixel);
+    if (eq(key, "dim-amount"))
+        return value_to_float(ctx, &conf.dim.amount);
+    if (eq(key, "bold-text-in-bright-amount"))
+        return value_to_float(ctx, &conf.bold_in_bright.amount);
+
+    if (eq(key, "surface-bit-depth")) {
+        if (comptime build_options.pixman_rgba_16) {
+            return value_to_enum(
+                ctx,
+                valueMap(&.{ "auto", "8-bit", "10-bit", "16-bit" }),
+                @ptrCast(&conf.tweak.surface_bit_depth),
+            );
+        } else {
+            return value_to_enum(
+                ctx,
+                valueMap(&.{ "auto", "8-bit", "10-bit" }),
+                @ptrCast(&conf.tweak.surface_bit_depth),
+            );
+        }
+    }
+
+    if (eq(key, "min-stride-alignment"))
+        return value_to_uint32(ctx, 10, &conf.tweak.min_stride_alignment);
+    if (eq(key, "pre-apply-damage"))
+        return value_to_bool(ctx, &conf.tweak.preapply_damage);
+
+    return invalidOption(ctx, key);
 }

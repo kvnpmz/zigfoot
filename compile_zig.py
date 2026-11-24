@@ -10,6 +10,11 @@ configuration:
   `terminal_types.zig` to check the ABI mirror at compile time
 
 Usage: compile_zig.py INPUT.zig OUTPUT.o [grapheme_clustering: true|false]
+                                [name=value ...]
+
+Extra `name=value` arguments are written to the generated `build_options`
+module as `pub const name = value;`, so a module can mirror any meson
+feature flag it needs.
 """
 
 import json
@@ -65,8 +70,17 @@ def main():
 
     input_file, output_file = sys.argv[1], sys.argv[2]
     grapheme_clustering = None
-    if len(sys.argv) > 3 and sys.argv[3] in ("true", "false"):
-        grapheme_clustering = sys.argv[3]
+    extra_options: dict[str, str] = {}
+    for arg in sys.argv[3:]:
+        if "=" in arg:
+            name, value = arg.split("=", 1)
+            if value not in ("true", "false"):
+                sys.exit(f"compile_zig.py: {name}: expected true/false")
+            extra_options[name] = value
+        elif arg in ("true", "false"):
+            grapheme_clustering = arg
+        else:
+            sys.exit(f"compile_zig.py: unexpected argument {arg!r}")
 
     check_version(zig_version())
 
@@ -79,12 +93,15 @@ def main():
     # likewise (unless the target predates the ABI probe).
     out_dir = os.path.dirname(os.path.abspath(output_file))
     opts_file = None
-    if grapheme_clustering is not None:
+    if grapheme_clustering is not None or extra_options:
         opts_file = output_file + ".build_options.zig"
         with open(opts_file, "w", encoding="utf-8") as f:
-            f.write(
-                "pub const grapheme_clustering = %s;\n"
-                % ("true" if grapheme_clustering == "true" else "false"))
+            if grapheme_clustering is not None:
+                f.write(
+                    "pub const grapheme_clustering = %s;\n"
+                    % ("true" if grapheme_clustering == "true" else "false"))
+            for name, value in extra_options.items():
+                f.write(f"pub const {name} = {value};\n")
 
     layout_file = os.path.join(out_dir, "c_layout.zig")
     if not os.path.exists(layout_file):

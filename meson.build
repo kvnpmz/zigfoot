@@ -163,7 +163,8 @@ endif
 # C code path (char32.zig's c32width()).
 grapheme_clustering_zig = utf8proc.found() ? 'true' : 'false'
 
-if pixman.version().version_compare('>=0.46.0')
+pixman_rgba_16 = pixman.version().version_compare('>=0.46.0')
+if pixman_rgba_16
   add_project_arguments('-DHAVE_PIXMAN_RGBA_16', language: 'c')
 endif
 
@@ -377,6 +378,9 @@ config_obj = custom_target(
   command: [
     python, files('compile_zig.py'), '@INPUT@', '@OUTPUT@',
     grapheme_clustering_zig,
+    # [tweak] surface-bit-depth only accepts "16-bit" when the C build has
+    # HAVE_PIXMAN_RGBA_16.
+    'pixman_rgba_16=' + pixman_rgba_16.to_string(),
   ]
 )
 

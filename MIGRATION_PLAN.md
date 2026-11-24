@@ -307,6 +307,14 @@ Port in this order; each module is a small, reviewable series of chunks.
      3.5k (from 4.4k) and the whole ini except `[main]`, `[tweak]`, the
      key-binding sections and the regex ones (`[url]`/`[regex]` need
      `regex_t.re_nsub`, which is libc-private) is Zig;
+     **C2d done** — `[tweak]`, which needed the first real `build_options`
+     feature flag (`pixman_rgba_16`, since `surface-bit-depth=16-bit` only
+     exists in builds with `HAVE_PIXMAN_RGBA_16`). `compile_zig.py` now
+     accepts `name=value` arguments and writes them into the per-module
+     `build_options`, so that plumbing is reusable for `FOOT_IME_ENABLED`,
+     `HAVE_XDG_TOPLEVEL_TAG`, … when `foot-features` is ported. Watch out for
+     `scaling-filter`: its values must be given in `enum fcft_scaling_filter`
+     order, not the order config.c writes them in;
    * C3: per-section option tables, one section per commit (`main`, `cursor`,
      `mouse`, `colors`, `key-bindings`, `url`, `bell`, `scrollback`, …).
 4. **Mid-tier (~3.5k):** `ime`, `key-binding`, `url-mode`, `search`.
