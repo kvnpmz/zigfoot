@@ -2,29 +2,38 @@
 
 Status snapshot and a concrete continuation plan.
 Prepared 2026-11-23 against `feature/zig-migration` @ `a1d9d288`.
+Refreshed 2026-11-24 against @ `7b08b7fa` (Phase 0, Phase 1a and config
+C1-C2g landed).
 
 ---
 
 ## 1. Where the migration stands
 
-The branch is **64 commits ahead of `origin/master`** (upstream foot 1.28.0),
-starting 2026-09-30. About **16.5k lines of C have been replaced by ~16k lines
-of Zig** (including ~2k lines of Zig tests). Roughly **30k lines of C remain**.
+The branch is **88 commits ahead of `origin/master`** (upstream foot 1.28.0),
+starting 2026-09-30. Measured on this checkout, **19,547 of 48,830 top-level
+foot-owned C lines are gone (40.0%)**, replaced by ~20.1k lines of Zig
+(including ~2k lines of Zig tests). About **29.3k lines of C remain**, plus
+1,142 lines of `*-shim.c` accessors and the generated `abi_probe.c` (2,211).
 
 | State | Modules |
 |---|---|
-| **Ported, C deleted** (22) | `async`, `base64`, `char32`, `composed`, `csi`, `cursor-shape`, `dcs`, `fdm`, `grid`, `hsl`, `misc`, `notify`, `osc`, `reaper`, `sixel`, `spawn`, `spawn_template`, `tokenize`, `uri`, `vt`, `xmalloc`, `xsnprintf` |
-| **In progress** (Zig + remaining C + shims) | `terminal.c` (3,363 lines left), `selection.c` (1,175 lines left) |
-| **Untouched** (20 modules, ~25.2k lines) | `box-drawing` (3,450), `config` (4,374), `render` (5,479), `input` (3,690), `wayland` (2,881), `search` (1,512), `shm` (1,110), `url-mode` (833), `main` (751), `server` (688), `key-binding` (661), `client` (629), `slave` (573), `ime` (532), `extract` (271), `log` (231), `commands` (115), `unicode-mode` (110), `quirks` (86), `debug` (47), `foot-features` (42), `user-notification` (14) |
+| **Ported, C deleted** (24) | `async`, `base64`, `char32`, `commands`, `composed`, `csi`, `cursor-shape`, `dcs`, `extract`, `fdm`, `grid`, `hsl`, `misc`, `notify`, `osc`, `reaper`, `sixel`, `spawn`, `spawn_template`, `tokenize`, `uri`, `vt`, `xmalloc`, `xsnprintf` |
+| **In progress** (Zig + remaining C + shims) | `terminal.c` (2,400 left), `config.c` (2,720 left), `selection.c` (844 left) |
+| **Untouched** (19 modules, ~23.3k lines) | `box-drawing` (3,450), `render` (5,479), `input` (3,690), `wayland` (2,881), `search` (1,512), `shm` (1,110), `url-mode` (833), `main` (751), `server` (688), `key-binding` (661), `client` (629), `slave` (573), `ime` (532), `log` (231), `unicode-mode` (110), `quirks` (86), `debug` (47), `foot-features` (42), `user-notification` (14) |
 | **Dead file** | `esc.zig` is a 4-line stub; `esc_dispatch` actually lives in `vt.zig`. Delete it. |
+
+**Progress read two ways:** 40% by C volume, but roughly **30-35% by effort**,
+because what remains is the hard core (`render`, `input`, `wayland`, the
+`terminal` init/font tail) rather than the leaves. By module count it is
+24 of 46 ported, 3 in progress, 19 untouched.
 
 Dependency layering (headers included by other project modules, leaves first):
 
 ```
-user-notification, foot-features, extract, quirks, debug, log
+user-notification, foot-features, quirks, debug, log
   → slave, shm, box-drawing, unicode-mode
     → config (9 dependents — biggest leverage)
-      → ime, commands, key-binding, url-mode
+      → ime, key-binding, url-mode
         → selection, wayland
           → input, render, search
             → terminal
@@ -73,7 +82,7 @@ branch. Every Zig change is currently unverified by CI.
 **F4 — The ABI mirror is hand-maintained and already drifted three times. — fixed in Phase 0 (generated probe).**
 `terminal_types.zig` mirrors C structs with hand-computed offsets/sizes,
 opaque blobs (`_font_state`, `xtsave`, `window`, `conf`, …) and ~175 shim
-accessor functions in 1.2k lines of `*-shim.c`. Three of the 64 commits are
+accessor functions in 1.2k lines of `*-shim.c`. Three of the early commits are
 drift fixes (`23b7587a`, `2e52e2ef`, `858f9dfa`), one of which made
 `build-disabled/foot` (grapheme clustering off) panic at startup. The layout
 "probe" numbers in the tests were produced by hand; there is no probe in the
@@ -177,8 +186,7 @@ the smoke test green. So yes: longer, and the tail of Phase 1 cannot be
 finished in Phase 1 at all — it is a Phase 2/3 deliverable by construction.
 
 **Progress:** seven chunks landed (terminal.c 3363 → 2400 lines, selection.c
-1175 → ~800; 1029 C lines removed for 1211 Zig lines added; harness at 102
-checks):
+1175 → 844; harness at 102 checks):
 
 | Chunk | Status |
 |---|---|
@@ -303,7 +311,7 @@ Port in this order; each module is a small, reviewable series of chunks.
      below it still pin the layout);
      **C2c done** — `[colors-dark]`/`[colors-light]` (`parse_color_theme()`,
      the palette/`regularN`/`brightN`/`dimN`/`sixelN` index arithmetic and
-     every named colour) and `[csd]`, another ~340 C lines. `config.c` is now
+     every named colour) and `[csd]`, another ~340 C lines. `config.c` was then
      3.5k (from 4.4k) and the whole ini except `[main]`, `[tweak]`, the
      key-binding sections and the regex ones (`[url]`/`[regex]` need
      `regex_t.re_nsub`, which is libc-private) is Zig;
@@ -320,11 +328,24 @@ Port in this order; each module is a small, reviewable series of chunks.
      `log_contextual_errno()` non-static, and a Zig `strJoin3()` because
      `xstrjoin3()` is `static inline`) and the `pad=` parser with its
      `center|center-when-fullscreen|center-when-maximized-and-fullscreen`
-     modes. config.c is down to 3.1k from 4.4k. What is left there is the
-     binding machinery, `[url]`/`[regex]` (`regex_t.re_nsub`), the file/
-     section/key-value loop itself, `config_load`/`config_clone`/
-     `config_free`, the default binding tables and `parse_color_theme`'s
-     fontconfig cousin `config_font_parse`;
+     modes. config.c was then down to 3.1k;
+     **C2f done** — the file/section/key-value loop itself
+     (`parse_key_value()`, `str_to_section()`, `section_info[]` and
+     `parse_config_file()`, ~320 C lines). The Zig table reaches the sections
+     that are still C (`[url]`, `[regex]`, the four `*-bindings`,
+     `[text-bindings]`) through `extern` declarations, so those parsers lost
+     their `static`;
+     **C2g done** — the override loop (`config_override_apply()`) is Zig. It
+     reuses `parseKeyValue()`/`strToSection()` from C2f and keeps C's error
+     messages and the NULL `context.section` until after the empty-name check.
+     Collision resolution needs the static binding action tables, so it stays
+     in C as `config_bindings_finalize()`. config.c is now **2,720 lines**
+     (from 4,374). What is left there is the binding machinery
+     (`parse_key_binding_section`, `value_to_key_combos`, modifier parsing,
+     clone/free/compare helpers, collision resolution), `[url]`/`[regex]`
+     (`regex_t.re_nsub` is libc-private), `config_load`/`config_clone`/
+     `config_free`, the default binding tables, and `config_font_parse()` /
+     `value_to_fonts()` (fontconfig);
    * C3: per-section option tables, one section per commit (`main`, `cursor`,
      `mouse`, `colors`, `key-bindings`, `url`, `bell`, `scrollback`, …).
 4. **Mid-tier (~3.5k):** `ime`, `key-binding`, `url-mode`, `search`.
@@ -479,18 +500,25 @@ utmp backends where available.
 
 ---
 
-## 13. Suggested immediate actions (this week)
+## 13. Suggested immediate actions (next two weeks)
 
-1. Commit the `grid.rows` NULL fix (verified) + a regression test.
-2. Add the `zig test` meson targets and make `meson test` run the 23 existing
-   tests; add the CI job with Zig 0.16.0.
-3. Add the generated ABI probe and replace the hardcoded offsets in
-   `terminal_types.zig`.
-4. Add `scripts/smoke.sh` (`foot -C`, `foot --version`, `foot --pty` under a
-   headless compositor) and run it in CI.
-5. Start Phase 1 with T1 (`term_erase_scrollback`) and T2 (text extraction),
-   plus the headless harness skeleton, which T2 makes easy.
+1. **Finish `config` (C2h+):** port the binding machinery with
+   `tests/test-config.c` as the oracle, then `[url]`/`[regex]` (add a small
+   C accessor for `regex_t.re_nsub` or a musl/glibc-safe mirror), then
+   `config_load`/`config_clone`/`config_free`, the default binding tables,
+   and `config_font_parse()`/`value_to_fonts()`. Target: `config.c` gone,
+   `config_bindings_finalize()` deleted.
+2. **Then terminal T9/T10** (font stack + size/scale, ~640 C lines) — they
+   were blocked on config's font fields, not on wayland.
+3. **`slave` + `shm` (~1.7k)** in parallel with the config tail; shm is the
+   foundation for `render`, and both are testable without a compositor.
+4. **Keep the safety net moving:** add a Zig test whenever a chunk ports
+   logic with a pure core, and run `meson test` + `scripts/smoke.sh` before
+   each commit.
+5. **Merge `origin/master` weekly** (R7) and port upstream fixes into ported
+   modules immediately.
 
-**Rough effort:** Phase 0 3–5 days; Phase 1 2–3 weeks; Phase 2 4–6 weeks;
-Phase 3 4–6 weeks; Phase 4 1–2 weeks. About **3–4 months for one developer**,
-or **6–8 weeks with 2–3 parallel workers** once Phase 0 lands.
+**Rough effort from here:** config tail 1–1.5 weeks; Phase 1b ~2 weeks;
+rest of Phase 2 (slave/shm + ime/key-binding/url-mode/search) 3–5 weeks;
+Phase 3 4–6 weeks; Phase 4 1–2 weeks. About **2–2.5 months for one
+developer**, or **5–7 weeks with 2–3 parallel workers**.
