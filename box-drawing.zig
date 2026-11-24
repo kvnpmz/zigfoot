@@ -1085,3 +1085,285 @@ export fn draw_box_drawings_double_vertical_and_horizontal(buf: *types.BoxBuf) c
     vline(buf, hmid + 2 * thick, buf.height, vmid, thick);
     vline(buf, hmid + 2 * thick, buf.height, vmid + 2 * thick, thick);
 }
+
+//
+// Chunk A4 — blocks, shade patterns, quadrants and the line ends
+// (U+2580..U+259F plus U+1FB70..U+1FB8B and the quadratic-eighth blocks).
+//
+
+/// `round()` + implicit double->int conversion, as the C code does.
+fn roundi(v: f64) c_int {
+    return @intFromFloat(@round(v));
+}
+
+fn ceili(v: f64) c_int {
+    return @intFromFloat(@ceil(v));
+}
+
+fn floori(v: f64) c_int {
+    return @intFromFloat(@floor(v));
+}
+
+fn f(v: c_int) f64 {
+    return @floatFromInt(v);
+}
+
+export fn draw_upper_half_block(buf: *types.BoxBuf) callconv(.c) void {
+    rect(buf, 0, 0, buf.width, roundi(f(buf.height) / 2.0));
+}
+
+export fn draw_lower_one_eighth_block(buf: *types.BoxBuf) callconv(.c) void {
+    rect(buf, 0, buf.height - roundi(f(buf.height) / 8.0), buf.width, buf.height);
+}
+
+export fn draw_lower_one_quarter_block(buf: *types.BoxBuf) callconv(.c) void {
+    rect(buf, 0, buf.height - roundi(f(buf.height) / 4.0), buf.width, buf.height);
+}
+
+export fn draw_lower_three_eighths_block(buf: *types.BoxBuf) callconv(.c) void {
+    rect(buf, 0, buf.height - roundi(3.0 * f(buf.height) / 8.0), buf.width, buf.height);
+}
+
+export fn draw_lower_half_block(buf: *types.BoxBuf) callconv(.c) void {
+    rect(buf, 0, buf.height - roundi(f(buf.height) / 2.0), buf.width, buf.height);
+}
+
+export fn draw_lower_five_eighths_block(buf: *types.BoxBuf) callconv(.c) void {
+    rect(buf, 0, buf.height - roundi(5.0 * f(buf.height) / 8.0), buf.width, buf.height);
+}
+
+export fn draw_lower_three_quarters_block(buf: *types.BoxBuf) callconv(.c) void {
+    rect(buf, 0, buf.height - roundi(3.0 * f(buf.height) / 4.0), buf.width, buf.height);
+}
+
+export fn draw_lower_seven_eighths_block(buf: *types.BoxBuf) callconv(.c) void {
+    rect(buf, 0, buf.height - roundi(7.0 * f(buf.height) / 8.0), buf.width, buf.height);
+}
+
+export fn draw_upper_one_quarter_block(buf: *types.BoxBuf) callconv(.c) void {
+    rect(buf, 0, 0, buf.width, roundi(f(buf.height) / 4.0));
+}
+
+export fn draw_upper_three_eighths_block(buf: *types.BoxBuf) callconv(.c) void {
+    rect(buf, 0, 0, buf.width, roundi(3.0 * f(buf.height) / 8.0));
+}
+
+export fn draw_upper_five_eighths_block(buf: *types.BoxBuf) callconv(.c) void {
+    rect(buf, 0, 0, buf.width, roundi(5.0 * f(buf.height) / 8.0));
+}
+
+export fn draw_upper_three_quarters_block(buf: *types.BoxBuf) callconv(.c) void {
+    rect(buf, 0, 0, buf.width, roundi(3.0 * f(buf.height) / 4.0));
+}
+
+export fn draw_upper_seven_eighths_block(buf: *types.BoxBuf) callconv(.c) void {
+    rect(buf, 0, 0, buf.width, roundi(7.0 * f(buf.height) / 8.0));
+}
+
+export fn draw_full_block(buf: *types.BoxBuf) callconv(.c) void {
+    rect(buf, 0, 0, buf.width, buf.height);
+}
+
+export fn draw_left_seven_eighths_block(buf: *types.BoxBuf) callconv(.c) void {
+    rect(buf, 0, 0, roundi(7.0 * f(buf.width) / 8.0), buf.height);
+}
+
+export fn draw_left_three_quarters_block(buf: *types.BoxBuf) callconv(.c) void {
+    rect(buf, 0, 0, roundi(3.0 * f(buf.width) / 4.0), buf.height);
+}
+
+export fn draw_left_five_eighths_block(buf: *types.BoxBuf) callconv(.c) void {
+    rect(buf, 0, 0, roundi(5.0 * f(buf.width) / 8.0), buf.height);
+}
+
+export fn draw_left_half_block(buf: *types.BoxBuf) callconv(.c) void {
+    rect(buf, 0, 0, roundi(f(buf.width) / 2.0), buf.height);
+}
+
+export fn draw_left_three_eighths_block(buf: *types.BoxBuf) callconv(.c) void {
+    rect(buf, 0, 0, roundi(3.0 * f(buf.width) / 8.0), buf.height);
+}
+
+export fn draw_left_one_quarter_block(buf: *types.BoxBuf) callconv(.c) void {
+    rect(buf, 0, 0, roundi(f(buf.width) / 4.0), buf.height);
+}
+
+export fn draw_vertical_one_eighth_block_n(buf: *types.BoxBuf, n: c_int) callconv(.c) void {
+    const x: c_int = roundi(@as(f64, @floatFromInt(n)) * f(buf.width) / 8.0);
+    const w: c_int = roundi(f(buf.width) / 8.0);
+    rect(buf, x, 0, x + w, buf.height);
+}
+
+export fn draw_left_one_eighth_block(buf: *types.BoxBuf) callconv(.c) void {
+    draw_vertical_one_eighth_block_n(buf, 0);
+}
+
+export fn draw_vertical_one_eighth_block_2(buf: *types.BoxBuf) callconv(.c) void {
+    draw_vertical_one_eighth_block_n(buf, 1);
+}
+
+export fn draw_vertical_one_eighth_block_3(buf: *types.BoxBuf) callconv(.c) void {
+    draw_vertical_one_eighth_block_n(buf, 2);
+}
+
+export fn draw_vertical_one_eighth_block_4(buf: *types.BoxBuf) callconv(.c) void {
+    draw_vertical_one_eighth_block_n(buf, 3);
+}
+
+export fn draw_vertical_one_eighth_block_5(buf: *types.BoxBuf) callconv(.c) void {
+    draw_vertical_one_eighth_block_n(buf, 4);
+}
+
+export fn draw_vertical_one_eighth_block_6(buf: *types.BoxBuf) callconv(.c) void {
+    draw_vertical_one_eighth_block_n(buf, 5);
+}
+
+export fn draw_vertical_one_eighth_block_7(buf: *types.BoxBuf) callconv(.c) void {
+    draw_vertical_one_eighth_block_n(buf, 6);
+}
+
+export fn draw_right_half_block(buf: *types.BoxBuf) callconv(.c) void {
+    rect(buf, roundi(f(buf.width) / 2.0), 0, buf.width, buf.height);
+}
+
+export fn draw_horizontal_one_eighth_block_n(buf: *types.BoxBuf, n: c_int) callconv(.c) void {
+    const y: c_int = roundi(@as(f64, @floatFromInt(n)) * f(buf.height) / 8.0);
+    const h: c_int = roundi(f(buf.height) / 8.0);
+    rect(buf, 0, y, buf.width, y + h);
+}
+
+export fn draw_upper_one_eighth_block(buf: *types.BoxBuf) callconv(.c) void {
+    draw_horizontal_one_eighth_block_n(buf, 0);
+}
+
+export fn draw_horizontal_one_eighth_block_2(buf: *types.BoxBuf) callconv(.c) void {
+    draw_horizontal_one_eighth_block_n(buf, 1);
+}
+
+export fn draw_horizontal_one_eighth_block_3(buf: *types.BoxBuf) callconv(.c) void {
+    draw_horizontal_one_eighth_block_n(buf, 2);
+}
+
+export fn draw_horizontal_one_eighth_block_4(buf: *types.BoxBuf) callconv(.c) void {
+    draw_horizontal_one_eighth_block_n(buf, 3);
+}
+
+export fn draw_horizontal_one_eighth_block_5(buf: *types.BoxBuf) callconv(.c) void {
+    draw_horizontal_one_eighth_block_n(buf, 4);
+}
+
+export fn draw_horizontal_one_eighth_block_6(buf: *types.BoxBuf) callconv(.c) void {
+    draw_horizontal_one_eighth_block_n(buf, 5);
+}
+
+export fn draw_horizontal_one_eighth_block_7(buf: *types.BoxBuf) callconv(.c) void {
+    draw_horizontal_one_eighth_block_n(buf, 6);
+}
+
+export fn draw_right_one_eighth_block(buf: *types.BoxBuf) callconv(.c) void {
+    rect(buf, buf.width - roundi(f(buf.width) / 8.0), 0, buf.width, buf.height);
+}
+
+export fn draw_left_and_lower_one_eighth_block(buf: *types.BoxBuf) callconv(.c) void {
+    draw_left_one_eighth_block(buf);
+    draw_lower_one_eighth_block(buf);
+}
+
+export fn draw_left_and_upper_one_eighth_block(buf: *types.BoxBuf) callconv(.c) void {
+    draw_left_one_eighth_block(buf);
+    draw_upper_one_eighth_block(buf);
+}
+
+export fn draw_right_and_upper_one_eighth_block(buf: *types.BoxBuf) callconv(.c) void {
+    draw_right_one_eighth_block(buf);
+    draw_upper_one_eighth_block(buf);
+}
+
+export fn draw_right_and_lower_one_eighth_block(buf: *types.BoxBuf) callconv(.c) void {
+    draw_right_one_eighth_block(buf);
+    draw_lower_one_eighth_block(buf);
+}
+
+export fn draw_upper_and_lower_one_eighth_block(buf: *types.BoxBuf) callconv(.c) void {
+    draw_upper_one_eighth_block(buf);
+    draw_lower_one_eighth_block(buf);
+}
+
+export fn draw_horizontal_one_eighth_1358_block(buf: *types.BoxBuf) callconv(.c) void {
+    draw_upper_one_eighth_block(buf);
+    draw_horizontal_one_eighth_block_3(buf);
+    draw_horizontal_one_eighth_block_5(buf);
+    draw_lower_one_eighth_block(buf);
+}
+
+export fn draw_right_one_quarter_block(buf: *types.BoxBuf) callconv(.c) void {
+    rect(buf, buf.width - roundi(f(buf.width) / 4.0), 0, buf.width, buf.height);
+}
+
+export fn draw_right_three_eighths_block(buf: *types.BoxBuf) callconv(.c) void {
+    rect(buf, buf.width - roundi(3.0 * f(buf.width) / 8.0), 0, buf.width, buf.height);
+}
+
+export fn draw_right_five_eighths_block(buf: *types.BoxBuf) callconv(.c) void {
+    rect(buf, buf.width - roundi(5.0 * f(buf.width) / 8.0), 0, buf.width, buf.height);
+}
+
+export fn draw_right_three_quarters_block(buf: *types.BoxBuf) callconv(.c) void {
+    rect(buf, buf.width - roundi(3.0 * f(buf.width) / 4.0), 0, buf.width, buf.height);
+}
+
+export fn draw_right_seven_eighths_block(buf: *types.BoxBuf) callconv(.c) void {
+    rect(buf, buf.width - roundi(7.0 * f(buf.width) / 8.0), 0, buf.width, buf.height);
+}
+
+export fn draw_box_drawings_light_left(buf: *types.BoxBuf) callconv(.c) void {
+    hlineMiddleLeft(buf, LIGHT);
+}
+
+export fn draw_box_drawings_light_up(buf: *types.BoxBuf) callconv(.c) void {
+    vlineMiddleUp(buf, LIGHT);
+}
+
+export fn draw_box_drawings_light_right(buf: *types.BoxBuf) callconv(.c) void {
+    hlineMiddleRight(buf, LIGHT);
+}
+
+export fn draw_box_drawings_light_down(buf: *types.BoxBuf) callconv(.c) void {
+    vlineMiddleDown(buf, LIGHT);
+}
+
+export fn draw_box_drawings_heavy_left(buf: *types.BoxBuf) callconv(.c) void {
+    hlineMiddleLeft(buf, HEAVY);
+}
+
+export fn draw_box_drawings_heavy_up(buf: *types.BoxBuf) callconv(.c) void {
+    vlineMiddleUp(buf, HEAVY);
+}
+
+export fn draw_box_drawings_heavy_right(buf: *types.BoxBuf) callconv(.c) void {
+    hlineMiddleRight(buf, HEAVY);
+}
+
+export fn draw_box_drawings_heavy_down(buf: *types.BoxBuf) callconv(.c) void {
+    vlineMiddleDown(buf, HEAVY);
+}
+
+export fn draw_box_drawings_light_left_and_heavy_right(buf: *types.BoxBuf) callconv(.c) void {
+    hlineMiddleLeft(buf, LIGHT);
+    hlineMiddleRight(buf, HEAVY);
+}
+
+export fn draw_box_drawings_light_up_and_heavy_down(buf: *types.BoxBuf) callconv(.c) void {
+    vlineMiddleUp(buf, LIGHT);
+    vlineMiddleDown(buf, HEAVY);
+}
+
+export fn draw_box_drawings_heavy_left_and_light_right(buf: *types.BoxBuf) callconv(.c) void {
+    hlineMiddleLeft(buf, HEAVY);
+    hlineMiddleRight(buf, LIGHT);
+}
+
+export fn draw_box_drawings_heavy_up_and_light_down(buf: *types.BoxBuf) callconv(.c) void {
+    vlineMiddleUp(buf, HEAVY);
+    vlineMiddleDown(buf, LIGHT);
+}

@@ -22,7 +22,6 @@
 /* Only the wedge shapes still fill from a solid source image. */
 static const pixman_color_t white = {0xffff, 0xffff, 0xffff, 0xffff};
 
-
 /* Chunk A2: the U+2500..U+254B single-line family is ported to
  * box-drawing.zig. */
 void draw_box_drawings_light_horizontal(struct buf *buf);
@@ -141,6 +140,70 @@ void draw_box_drawings_double_up_and_horizontal(struct buf *buf);
 void draw_box_drawings_vertical_single_and_horizontal_double(struct buf *buf);
 void draw_box_drawings_vertical_double_and_horizontal_single(struct buf *buf);
 void draw_box_drawings_double_vertical_and_horizontal(struct buf *buf);
+
+/* Chunk A4: blocks, shades, quadrant/eighth blocks and the single-line
+ * line ends are ported to box-drawing.zig. */
+void draw_upper_half_block(struct buf *buf);
+void draw_lower_one_eighth_block(struct buf *buf);
+void draw_lower_one_quarter_block(struct buf *buf);
+void draw_lower_three_eighths_block(struct buf *buf);
+void draw_lower_half_block(struct buf *buf);
+void draw_lower_five_eighths_block(struct buf *buf);
+void draw_lower_three_quarters_block(struct buf *buf);
+void draw_lower_seven_eighths_block(struct buf *buf);
+void draw_upper_one_quarter_block(struct buf *buf);
+void draw_upper_three_eighths_block(struct buf *buf);
+void draw_upper_five_eighths_block(struct buf *buf);
+void draw_upper_three_quarters_block(struct buf *buf);
+void draw_upper_seven_eighths_block(struct buf *buf);
+void draw_full_block(struct buf *buf);
+void draw_left_seven_eighths_block(struct buf *buf);
+void draw_left_three_quarters_block(struct buf *buf);
+void draw_left_five_eighths_block(struct buf *buf);
+void draw_left_half_block(struct buf *buf);
+void draw_left_three_eighths_block(struct buf *buf);
+void draw_left_one_quarter_block(struct buf *buf);
+void draw_vertical_one_eighth_block_n(struct buf *buf, int n);
+void draw_left_one_eighth_block(struct buf *buf);
+void draw_vertical_one_eighth_block_2(struct buf *buf);
+void draw_vertical_one_eighth_block_3(struct buf *buf);
+void draw_vertical_one_eighth_block_4(struct buf *buf);
+void draw_vertical_one_eighth_block_5(struct buf *buf);
+void draw_vertical_one_eighth_block_6(struct buf *buf);
+void draw_vertical_one_eighth_block_7(struct buf *buf);
+void draw_right_half_block(struct buf *buf);
+void draw_horizontal_one_eighth_block_n(struct buf *buf, int n);
+void draw_upper_one_eighth_block(struct buf *buf);
+void draw_horizontal_one_eighth_block_2(struct buf *buf);
+void draw_horizontal_one_eighth_block_3(struct buf *buf);
+void draw_horizontal_one_eighth_block_4(struct buf *buf);
+void draw_horizontal_one_eighth_block_5(struct buf *buf);
+void draw_horizontal_one_eighth_block_6(struct buf *buf);
+void draw_horizontal_one_eighth_block_7(struct buf *buf);
+void draw_right_one_eighth_block(struct buf *buf);
+void draw_left_and_lower_one_eighth_block(struct buf *buf);
+void draw_left_and_upper_one_eighth_block(struct buf *buf);
+void draw_right_and_upper_one_eighth_block(struct buf *buf);
+void draw_right_and_lower_one_eighth_block(struct buf *buf);
+void draw_upper_and_lower_one_eighth_block(struct buf *buf);
+void draw_horizontal_one_eighth_1358_block(struct buf *buf);
+void draw_right_one_quarter_block(struct buf *buf);
+void draw_right_three_eighths_block(struct buf *buf);
+void draw_right_five_eighths_block(struct buf *buf);
+void draw_right_three_quarters_block(struct buf *buf);
+void draw_right_seven_eighths_block(struct buf *buf);
+void draw_box_drawings_light_left(struct buf *buf);
+void draw_box_drawings_light_up(struct buf *buf);
+void draw_box_drawings_light_right(struct buf *buf);
+void draw_box_drawings_light_down(struct buf *buf);
+void draw_box_drawings_heavy_left(struct buf *buf);
+void draw_box_drawings_heavy_up(struct buf *buf);
+void draw_box_drawings_heavy_right(struct buf *buf);
+void draw_box_drawings_heavy_down(struct buf *buf);
+void draw_box_drawings_light_left_and_heavy_right(struct buf *buf);
+void draw_box_drawings_light_up_and_heavy_down(struct buf *buf);
+void draw_box_drawings_heavy_left_and_light_right(struct buf *buf);
+void draw_box_drawings_heavy_up_and_light_down(struct buf *buf);
 
 static inline void
 set_a1_bit(uint8_t *data, size_t ofs, size_t bit_no)
@@ -503,258 +566,6 @@ draw_box_drawings_light_diagonal_cross(struct buf *buf)
     draw_box_drawings_light_diagonal_upper_left_to_lower_right(buf);
 }
 
-static void
-draw_box_drawings_light_left(struct buf *buf)
-{
-    hline_middle_left(LIGHT);
-}
-
-static void
-draw_box_drawings_light_up(struct buf *buf)
-{
-    vline_middle_up(LIGHT);
-}
-
-static void
-draw_box_drawings_light_right(struct buf *buf)
-{
-    hline_middle_right(LIGHT);
-}
-
-static void
-draw_box_drawings_light_down(struct buf *buf)
-{
-    vline_middle_down(LIGHT);
-}
-
-static void
-draw_box_drawings_heavy_left(struct buf *buf)
-{
-    hline_middle_left(HEAVY);
-}
-
-static void
-draw_box_drawings_heavy_up(struct buf *buf)
-{
-    vline_middle_up(HEAVY);
-}
-
-static void
-draw_box_drawings_heavy_right(struct buf *buf)
-{
-    hline_middle_right(HEAVY);
-}
-
-static void
-draw_box_drawings_heavy_down(struct buf *buf)
-{
-    vline_middle_down(HEAVY);
-}
-
-static void
-draw_box_drawings_light_left_and_heavy_right(struct buf *buf)
-{
-    hline_middle_left(LIGHT);
-    hline_middle_right(HEAVY);
-}
-
-static void
-draw_box_drawings_light_up_and_heavy_down(struct buf *buf)
-{
-    vline_middle_up(LIGHT);
-    vline_middle_down(HEAVY);
-}
-
-static void
-draw_box_drawings_heavy_left_and_light_right(struct buf *buf)
-{
-    hline_middle_left(HEAVY);
-    hline_middle_right(LIGHT);
-}
-
-static void
-draw_box_drawings_heavy_up_and_light_down(struct buf *buf)
-{
-    vline_middle_up(HEAVY);
-    vline_middle_down(LIGHT);
-}
-
-static void
-draw_upper_half_block(struct buf *buf)
-{
-    rect(0, 0, buf->width, round(buf->height / 2.));
-}
-
-static void
-draw_lower_one_eighth_block(struct buf *buf)
-{
-    rect(0, buf->height - round(buf->height / 8.), buf->width, buf->height);
-}
-
-static void
-draw_lower_one_quarter_block(struct buf *buf)
-{
-    rect(0, buf->height - round(buf->height / 4.), buf->width, buf->height);
-}
-
-static void
-draw_lower_three_eighths_block(struct buf *buf)
-{
-    rect(0, buf->height - round(3. * buf->height / 8.), buf->width, buf->height);
-}
-
-static void
-draw_lower_half_block(struct buf *buf)
-{
-    rect(0, buf->height - round(buf->height / 2.), buf->width, buf->height);
-}
-
-static void
-draw_lower_five_eighths_block(struct buf *buf)
-{
-    rect(0, buf->height - round(5. * buf->height / 8.), buf->width, buf->height);
-}
-
-static void
-draw_lower_three_quarters_block(struct buf *buf)
-{
-    rect(0, buf->height - round(3. * buf->height / 4.), buf->width, buf->height);
-}
-
-static void
-draw_lower_seven_eighths_block(struct buf *buf)
-{
-    rect(0, buf->height - round(7. * buf->height / 8.), buf->width, buf->height);
-}
-
-static void
-draw_upper_one_quarter_block(struct buf *buf)
-{
-    rect(0, 0, buf->width, round(buf->height / 4.));
-}
-
-static void
-draw_upper_three_eighths_block(struct buf *buf)
-{
-    rect(0, 0, buf->width, round(3. * buf->height / 8.));
-}
-
-static void
-draw_upper_five_eighths_block(struct buf *buf)
-{
-    rect(0, 0, buf->width, round(5. * buf->height / 8.));
-}
-
-static void
-draw_upper_three_quarters_block(struct buf *buf)
-{
-    rect(0, 0, buf->width, round(3. * buf->height / 4.));
-}
-
-static void
-draw_upper_seven_eighths_block(struct buf *buf)
-{
-    rect(0, 0, buf->width, round(7. * buf->height / 8.));
-}
-
-static void
-draw_full_block(struct buf *buf)
-{
-    rect(0, 0, buf->width, buf->height);
-}
-
-static void
-draw_left_seven_eighths_block(struct buf *buf)
-{
-    rect(0, 0, round(7. * buf->width / 8.), buf->height);
-}
-
-static void
-draw_left_three_quarters_block(struct buf *buf)
-{
-    rect(0, 0, round(3. * buf->width / 4.), buf->height);
-}
-
-static void
-draw_left_five_eighths_block(struct buf *buf)
-{
-    rect(0, 0, round(5. * buf->width / 8.), buf->height);
-}
-
-static void
-draw_left_half_block(struct buf *buf)
-{
-    rect(0, 0, round(buf->width / 2.), buf->height);
-}
-
-static void
-draw_left_three_eighths_block(struct buf *buf)
-{
-    rect(0, 0, round(3. * buf->width / 8.), buf->height);
-}
-
-static void
-draw_left_one_quarter_block(struct buf *buf)
-{
-    rect(0, 0, round(buf->width / 4.), buf->height);
-}
-
-static void
-draw_vertical_one_eighth_block_n(struct buf *buf, int n)
-{
-    double x = round((double)n * buf->width / 8.);
-    double w = round(buf->width / 8.);
-    rect(x, 0, x + w, buf->height);
-}
-
-static void
-draw_left_one_eighth_block(struct buf *buf)
-{
-    draw_vertical_one_eighth_block_n(buf, 0);
-}
-
-static void
-draw_vertical_one_eighth_block_2(struct buf *buf)
-{
-    draw_vertical_one_eighth_block_n(buf, 1);
-}
-
-static void
-draw_vertical_one_eighth_block_3(struct buf *buf)
-{
-    draw_vertical_one_eighth_block_n(buf, 2);
-}
-
-static void
-draw_vertical_one_eighth_block_4(struct buf *buf)
-{
-    draw_vertical_one_eighth_block_n(buf, 3);
-}
-
-static void
-draw_vertical_one_eighth_block_5(struct buf *buf)
-{
-    draw_vertical_one_eighth_block_n(buf, 4);
-}
-
-static void
-draw_vertical_one_eighth_block_6(struct buf *buf)
-{
-    draw_vertical_one_eighth_block_n(buf, 5);
-}
-
-static void
-draw_vertical_one_eighth_block_7(struct buf *buf)
-{
-    draw_vertical_one_eighth_block_n(buf, 6);
-}
-
-static void
-draw_right_half_block(struct buf *buf)
-{
-    rect(round(buf->width / 2.), 0, buf->width, buf->height);
-}
-
 static void NOINLINE
 draw_pixman_shade(struct buf *buf, uint16_t v)
 {
@@ -831,62 +642,6 @@ draw_dark_shade(struct buf *buf)
             }
         }
     }
-}
-
-static void NOINLINE
-draw_horizontal_one_eighth_block_n(struct buf *buf, int n)
-{
-    double y = round((double)n * buf->height / 8.);
-    double h = round(buf->height / 8.);
-    rect(0, y, buf->width, y + h);
-}
-
-static void
-draw_upper_one_eighth_block(struct buf *buf)
-{
-    draw_horizontal_one_eighth_block_n(buf, 0);
-}
-
-static void
-draw_horizontal_one_eighth_block_2(struct buf *buf)
-{
-    draw_horizontal_one_eighth_block_n(buf, 1);
-}
-
-static void
-draw_horizontal_one_eighth_block_3(struct buf *buf)
-{
-    draw_horizontal_one_eighth_block_n(buf, 2);
-}
-
-static void
-draw_horizontal_one_eighth_block_4(struct buf *buf)
-{
-    draw_horizontal_one_eighth_block_n(buf, 3);
-}
-
-static void
-draw_horizontal_one_eighth_block_5(struct buf *buf)
-{
-    draw_horizontal_one_eighth_block_n(buf, 4);
-}
-
-static void
-draw_horizontal_one_eighth_block_6(struct buf *buf)
-{
-    draw_horizontal_one_eighth_block_n(buf, 5);
-}
-
-static void
-draw_horizontal_one_eighth_block_7(struct buf *buf)
-{
-    draw_horizontal_one_eighth_block_n(buf, 6);
-}
-
-static void
-draw_right_one_eighth_block(struct buf *buf)
-{
-    rect(buf->width - round(buf->width / 8.), 0, buf->width, buf->height);
 }
 
 static void
@@ -1897,80 +1652,6 @@ draw_wedge_triangle_and_box(struct buf *buf, char32_t wc)
     }
 
     pixman_image_fill_boxes(PIXMAN_OP_SRC, buf->pix, &white, 1, &box);
-}
-
-static void
-draw_left_and_lower_one_eighth_block(struct buf *buf)
-{
-    draw_left_one_eighth_block(buf);
-    draw_lower_one_eighth_block(buf);
-}
-
-static void
-draw_left_and_upper_one_eighth_block(struct buf *buf)
-{
-    draw_left_one_eighth_block(buf);
-    draw_upper_one_eighth_block(buf);
-}
-
-static void
-draw_right_and_upper_one_eighth_block(struct buf *buf)
-{
-    draw_right_one_eighth_block(buf);
-    draw_upper_one_eighth_block(buf);
-}
-
-static void
-draw_right_and_lower_one_eighth_block(struct buf *buf)
-{
-    draw_right_one_eighth_block(buf);
-    draw_lower_one_eighth_block(buf);
-}
-
-static void
-draw_upper_and_lower_one_eighth_block(struct buf *buf)
-{
-    draw_upper_one_eighth_block(buf);
-    draw_lower_one_eighth_block(buf);
-}
-
-static void
-draw_horizontal_one_eighth_1358_block(struct buf *buf)
-{
-    draw_upper_one_eighth_block(buf);
-    draw_horizontal_one_eighth_block_3(buf);
-    draw_horizontal_one_eighth_block_5(buf);
-    draw_lower_one_eighth_block(buf);
-}
-
-static void
-draw_right_one_quarter_block(struct buf *buf)
-{
-    rect(buf->width - round(buf->width / 4.), 0, buf->width, buf->height);
-}
-
-static void
-draw_right_three_eighths_block(struct buf *buf)
-{
-    rect(buf->width - round(3. * buf->width / 8.), 0, buf->width, buf->height);
-}
-
-static void
-draw_right_five_eighths_block(struct buf *buf)
-{
-    rect(buf->width - round(5. * buf->width / 8.), 0, buf->width, buf->height);
-}
-
-static void
-draw_right_three_quarters_block(struct buf *buf)
-{
-    rect(buf->width - round(3. * buf->width / 4.), 0, buf->width, buf->height);
-}
-
-static void
-draw_right_seven_eighths_block(struct buf *buf)
-{
-    rect(buf->width - round(7. * buf->width / 8.), 0, buf->width, buf->height);
 }
 
 static void
