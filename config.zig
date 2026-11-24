@@ -54,6 +54,7 @@ extern fn log_contextual(
 
 const LOG_CLASS_ERROR: c_int = 1;
 const LOG_CLASS_WARNING: c_int = 2;
+const LOG_CLASS_INFO: c_int = 3;
 
 // ── LOG_CONTEXTUAL_ERR() / _WARN() ────────────────────────────────
 //
@@ -647,6 +648,23 @@ export fn parse_section_environment(ctx: *Context) callconv(.c) bool {
 
 extern fn value_to_fonts(ctx: *Context) callconv(.c) types.ConfigFontList;
 extern fn config_font_list_destroy(list: *types.ConfigFontList) callconv(.c) void;
+extern fn parse_config_file(
+    f: *anyopaque,
+    conf: *types.Config,
+    path: [*:0]const u8,
+    errors_are_fatal: bool,
+) callconv(.c) bool;
+extern fn log_contextual_errno(
+    ctx: *Context,
+    file: [*:0]const u8,
+    lineno: c_int,
+    fmt: [*:0]const u8,
+    ...
+) callconv(.c) void;
+extern fn getenv(name: [*:0]const u8) callconv(.c) ?[*:0]const u8;
+extern fn fopen(path: [*:0]const u8, mode: [*:0]const u8) callconv(.c) ?*anyopaque;
+extern fn fclose(f: *anyopaque) callconv(.c) c_int;
+
 
 export fn parse_color_theme(ctx: *Context, theme: *types.ColorTheme) callconv(.c) bool {
     const key = ctx.key orelse return true;
@@ -1010,6 +1028,318 @@ export fn parse_section_tweak(ctx: *Context) callconv(.c) bool {
         return value_to_uint32(ctx, 10, &conf.tweak.min_stride_alignment);
     if (eq(key, "pre-apply-damage"))
         return value_to_bool(ctx, &conf.tweak.preapply_damage);
+
+    return invalidOption(ctx, key);
+}
+
+// ── [main] (C2e) ──────────────────────────────────────────────────
+
+fn logInfo(src: std.builtin.SourceLocation, msg: [*:0]const u8) void {
+    log_msg(LOG_CLASS_INFO, "config", src.file, @intCast(src.line), "%s", msg);
+}
+
+fn logInfoFmt(src: std.builtin.SourceLocation, comptime fmt: []const u8, args: anytype) void {
+    var buf: [1024]u8 = undefined;
+    const msg: [:0]const u8 = std.fmt.bufPrintZ(&buf, fmt, args) catch return;
+    logInfo(src, msg.ptr);
+}
+
+/// LOG_CONTEXTUAL_ERRNO(): like contextualErr(), plus strerror(errno).
+fn errValueErrno(
+    ctx: *Context,
+    src: std.builtin.SourceLocation,
+    comptime fmt: []const u8,
+    args: anytype,
+) bool {
+    var buf: [1024]u8 = undefined;
+    const msg: [:0]const u8 = std.fmt.bufPrintZ(&buf, fmt, args) catch "invalid value";
+    log_contextual_errno(ctx, src.file, @intCast(src.line), "%s", msg.ptr);
+    return false;
+}
+
+fn strJoin3(a: [*:0]const u8, b: [*:0]const u8, c: [*:0]const u8) ?[*:0]u8 {
+    const s1 = std.mem.span(a);
+    const s2 = std.mem.span(b);
+    const s3 = std.mem.span(c);
+
+    const len = s1.len + s2.len + s3.len;
+    const buf: [*]u8 = @ptrCast(@alignCast(xmalloc(len + 1) orelse return null));
+
+    @memcpy(buf[0..s1.len], s1);
+    @memcpy(buf[s1.len .. s1.len + s2.len], s2);
+    @memcpy(buf[s1.len + s2.len .. len], s3);
+    buf[len] = 0;
+
+    return @ptrCast(buf);
+}
+
+fn centerFromMode(mode: [*:0]const u8) types.CenterWhen {
+    if (strcasecmp(mode, "center") == 0)
+        return .always;
+    if (strcasecmp(mode, "center-when-fullscreen") == 0)
+        return .fullscreen;
+    if (strcasecmp(mode, "center-when-maximized-and-fullscreen") == 0)
+        return .maximized_and_fullscreen;
+    return .invalid;
+}
+
+export fn parse_section_main(ctx: *Context) callconv(.c) bool {
+    const conf = ctx.conf.?;
+    const key = ctx.key orelse return true;
+    const value = ctx.value;
+
+    if (eq(key, "include")) {
+        const val = value orelse return false;
+
+        var include_path: ?[*:0]const u8 = null;
+        var expanded: ?[*:0]u8 = null;
+
+        if (val[0] == '~' and val[1] == '/') {
+            const home_dir = getenv("HOME") orelse
+                return errValueErrno(ctx, @src(), "failed to expand '~'", .{});
+
+            // xstrjoin3() is `static inline` in xmalloc.h, so join here.
+            expanded = strJoin3(home_dir, "/", val + 2);
+            include_path = expanded;
+        } else {
+            include_path = val;
+        }
+
+        const path = include_path.?;
+
+        if (path[0] != '/') {
+            const ret = errValue(ctx, @src(), "not an absolute path", .{});
+            if (expanded) |p| free(@ptrCast(p));
+            return ret;
+        }
+
+        const file = fopen(path, "r") orelse {
+            const ret = errValueErrno(ctx, @src(), "failed to open", .{});
+            if (expanded) |p| free(@ptrCast(p));
+            return ret;
+        };
+
+        const ret = parse_config_file(file, conf, path, ctx.errors_are_fatal);
+        _ = fclose(file);
+
+        logInfoFmt(@src(), "imported sub-configuration from {s}", .{std.mem.span(path)});
+        if (expanded) |p| free(@ptrCast(p));
+        return ret;
+    }
+
+    if (eq(key, "term"))
+        return value_to_str(ctx, &conf.term);
+    if (eq(key, "shell"))
+        return value_to_str(ctx, &conf.shell);
+    if (eq(key, "login-shell"))
+        return value_to_bool(ctx, &conf.login_shell);
+    if (eq(key, "title"))
+        return value_to_str(ctx, &conf.title);
+    if (eq(key, "locked-title"))
+        return value_to_bool(ctx, &conf.locked_title);
+    if (eq(key, "app-id"))
+        return value_to_str(ctx, &conf.app_id);
+    if (eq(key, "toplevel-tag"))
+        return value_to_str(ctx, &conf.toplevel_tag);
+
+    if (eq(key, "initial-window-size-pixels")) {
+        if (!value_to_dimensions(ctx, &conf.size.width, &conf.size.height))
+            return false;
+
+        conf.size.type = .px;
+        return true;
+    }
+
+    if (eq(key, "initial-window-size-chars")) {
+        if (!value_to_dimensions(ctx, &conf.size.width, &conf.size.height))
+            return false;
+
+        conf.size.type = .cells;
+        return true;
+    }
+
+    if (eq(key, "pad")) {
+        const val = value orelse return false;
+
+        var x: c_uint = 0;
+        var y: c_uint = 0;
+        var left: c_uint = 0;
+        var top: c_uint = 0;
+        var right: c_uint = 0;
+        var bottom: c_uint = 0;
+        var mode: [64]u8 = [_]u8{0} ** 64;
+
+        var ret = sscanf(val, "%ux%ux%ux%u %63s", &left, &top, &right, &bottom, &mode);
+        var center: types.CenterWhen = .never;
+
+        if (ret == 5) {
+            center = centerFromMode(@ptrCast(&mode));
+        } else if (ret < 4) {
+            ret = sscanf(val, "%ux%u %63s", &x, &y, &mode);
+            if (ret >= 2) {
+                left = x;
+                right = x;
+                top = y;
+                bottom = y;
+                if (ret == 3)
+                    center = centerFromMode(@ptrCast(&mode));
+            }
+        }
+
+        if (ret < 2 or ret > 5 or center == .invalid) {
+            return errValue(
+                ctx,
+                @src(),
+                "invalid padding (must be in the form RIGHTxTOPxLEFTxBOTTOM or XxY " ++
+                    "[center|center-when-fullscreen|center-when-maximized-and-fullscreen])",
+                .{},
+            );
+        }
+
+        conf.pad_left = left;
+        conf.pad_top = top;
+        conf.pad_right = right;
+        conf.pad_bottom = bottom;
+        conf.center_when = if (ret == 4 or ret == 2) .never else center;
+        return true;
+    }
+
+    if (eq(key, "resize-delay-ms"))
+        return value_to_uint16(ctx, 10, &conf.resize_delay_ms);
+    if (eq(key, "resize-by-cells"))
+        return value_to_bool(ctx, &conf.resize_by_cells);
+    if (eq(key, "resize-keep-grid"))
+        return value_to_bool(ctx, &conf.resize_keep_grid);
+
+    if (eq(key, "bold-text-in-bright")) {
+        if (eq(value, "palette-based")) {
+            conf.bold_in_bright.enabled = true;
+            conf.bold_in_bright.palette_based = true;
+        } else {
+            if (!value_to_bool(ctx, &conf.bold_in_bright.enabled))
+                return false;
+            conf.bold_in_bright.palette_based = false;
+        }
+        return true;
+    }
+
+    if (eq(key, "initial-window-mode")) {
+        return value_to_enum(
+            ctx,
+            valueMap(&.{ "windowed", "maximized", "fullscreen" }),
+            @ptrCast(&conf.startup_mode),
+        );
+    }
+
+    if (eq(key, "font") or
+        eq(key, "font-bold") or
+        eq(key, "font-italic") or
+        eq(key, "font-bold-italic"))
+    {
+        const idx: usize =
+            if (eq(key, "font")) 0
+            else if (eq(key, "font-bold")) 1
+            else if (eq(key, "font-italic")) 2
+            else 3;
+
+        const new_list = value_to_fonts(ctx);
+        if (new_list.arr == null)
+            return false;
+
+        config_font_list_destroy(&conf.fonts[idx]);
+        conf.fonts[idx] = new_list;
+        return true;
+    }
+
+    if (eq(key, "font-size-adjustment")) {
+        const val = value orelse return false;
+        const len = std.mem.len(val);
+
+        if (len >= 1 and val[len - 1] == '%') {
+            __errno_location().* = 0;
+            var end: ?[*:0]u8 = null;
+
+            const percent = strtof(val, &end);
+            if (!(len > 1 and __errno_location().* == 0 and end == val + len - 1))
+                return errValue(ctx, @src(), "invalid percent value (must be in the form 10.5%)", .{});
+
+            conf.font_size_adjustment.percent = percent / 100.0;
+            conf.font_size_adjustment.pt_or_px.pt = 0;
+            conf.font_size_adjustment.pt_or_px.px = 0;
+            return true;
+        }
+
+        const ok = value_to_pt_or_px(ctx, &conf.font_size_adjustment.pt_or_px);
+        if (ok)
+            conf.font_size_adjustment.percent = 0.0;
+        return ok;
+    }
+
+    if (eq(key, "line-height"))
+        return value_to_pt_or_px(ctx, &conf.line_height);
+    if (eq(key, "letter-spacing"))
+        return value_to_pt_or_px(ctx, &conf.letter_spacing);
+    if (eq(key, "horizontal-letter-offset"))
+        return value_to_pt_or_px(ctx, &conf.horizontal_letter_offset);
+    if (eq(key, "vertical-letter-offset"))
+        return value_to_pt_or_px(ctx, &conf.vertical_letter_offset);
+
+    if (eq(key, "underline-offset")) {
+        if (!value_to_pt_or_px(ctx, &conf.underline_offset))
+            return false;
+        conf.use_custom_underline_offset = true;
+        return true;
+    }
+
+    if (eq(key, "underline-thickness"))
+        return value_to_pt_or_px(ctx, &conf.underline_thickness);
+    if (eq(key, "strikeout-thickness"))
+        return value_to_pt_or_px(ctx, &conf.strikeout_thickness);
+
+    if (eq(key, "dpi-aware"))
+        return value_to_bool(ctx, &conf.dpi_aware);
+    if (eq(key, "workers"))
+        return value_to_uint16(ctx, 10, &conf.render_worker_count);
+    if (eq(key, "word-delimiters"))
+        return value_to_wchars(ctx, &conf.word_delimiters);
+
+    if (eq(key, "selection-target")) {
+        return value_to_enum(
+            ctx,
+            valueMap(&.{ "none", "primary", "clipboard", "both" }),
+            @ptrCast(&conf.selection_target),
+        );
+    }
+
+    if (eq(key, "box-drawings-uses-font-glyphs"))
+        return value_to_bool(ctx, &conf.box_drawings_uses_font_glyphs);
+
+    if (eq(key, "utmp-helper")) {
+        if (!value_to_str(ctx, &conf.utmp_helper_path))
+            return false;
+
+        if (eq(conf.utmp_helper_path, "none")) {
+            if (conf.utmp_helper_path) |p|
+                free(@ptrCast(p));
+            conf.utmp_helper_path = null;
+        }
+
+        return true;
+    }
+
+    if (eq(key, "gamma-correct-blending"))
+        return value_to_bool(ctx, &conf.gamma_correct);
+
+    if (eq(key, "initial-color-theme")) {
+        return value_to_enum(
+            ctx,
+            valueMap(&.{ "dark", "light" }),
+            @ptrCast(&conf.initial_color_theme),
+        );
+    }
+
+    if (eq(key, "uppercase-regex-insert"))
+        return value_to_bool(ctx, &conf.uppercase_regex_insert);
 
     return invalidOption(ctx, key);
 }

@@ -315,6 +315,16 @@ Port in this order; each module is a small, reviewable series of chunks.
      `HAVE_XDG_TOPLEVEL_TAG`, … when `foot-features` is ported. Watch out for
      `scaling-filter`: its values must be given in `enum fcft_scaling_filter`
      order, not the order config.c writes them in;
+     **C2e done** — `[main]`, the last big section (~470 C lines), including
+     `include=` (which forced `parse_config_file()` and
+     `log_contextual_errno()` non-static, and a Zig `strJoin3()` because
+     `xstrjoin3()` is `static inline`) and the `pad=` parser with its
+     `center|center-when-fullscreen|center-when-maximized-and-fullscreen`
+     modes. config.c is down to 3.1k from 4.4k. What is left there is the
+     binding machinery, `[url]`/`[regex]` (`regex_t.re_nsub`), the file/
+     section/key-value loop itself, `config_load`/`config_clone`/
+     `config_free`, the default binding tables and `parse_color_theme`'s
+     fontconfig cousin `config_font_parse`;
    * C3: per-section option tables, one section per commit (`main`, `cursor`,
      `mouse`, `colors`, `key-bindings`, `url`, `bell`, `scrollback`, …).
 4. **Mid-tier (~3.5k):** `ime`, `key-binding`, `url-mode`, `search`.

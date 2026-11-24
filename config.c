@@ -290,6 +290,7 @@ extern bool parse_section_colors_dark(struct context *ctx);
 extern bool parse_section_colors_light(struct context *ctx);
 extern bool parse_section_csd(struct context *ctx);
 extern bool parse_section_tweak(struct context *ctx);
+extern bool parse_section_main(struct context *ctx);
 
 static const enum user_notification_kind log_class_to_notify_kind[LOG_CLASS_COUNT] = {
     [LOG_CLASS_WARNING] = USER_NOTIFICATION_WARNING,
@@ -378,7 +379,8 @@ log_and_notify_errno(struct config *conf, const char *file, int lineno,
     va_end(va);
 }
 
-static void NOINLINE PRINTF(4)
+/* Non-static: config.zig logs through it. */
+void NOINLINE PRINTF(4)
 log_contextual_errno(struct context *ctx, const char *file, int lineno,
                      const char *fmt, ...)
 {
@@ -548,299 +550,11 @@ err:
     return (struct config_font_list){.arr = NULL, .count = 0};
 }
 
-static bool parse_config_file(
+/* Non-static: config.zig's [main] parser handles `include=`. */
+bool parse_config_file(
     FILE *f, struct config *conf, const char *path, bool errors_are_fatal);
 
-static bool
-parse_section_main(struct context *ctx)
-{
-    struct config *conf = ctx->conf;
-    const char *key = ctx->key;
-    const char *value = ctx->value;
-    bool errors_are_fatal = ctx->errors_are_fatal;
-
-    if (streq(key, "include")) {
-        char *_include_path = NULL;
-        const char *include_path = NULL;
-
-        if (value[0] == '~' && value[1] == '/') {
-            const char *home_dir = getenv("HOME");
-
-            if (home_dir == NULL) {
-                LOG_CONTEXTUAL_ERRNO("failed to expand '~'");
-                return false;
-            }
-
-            _include_path = xstrjoin3(home_dir, "/", value + 2);
-            include_path = _include_path;
-        } else
-            include_path = value;
-
-        if (include_path[0] != '/') {
-            LOG_CONTEXTUAL_ERR("not an absolute path");
-            free(_include_path);
-            return false;
-        }
-
-        FILE *include = fopen(include_path, "r");
-
-        if (include == NULL) {
-            LOG_CONTEXTUAL_ERRNO("failed to open");
-            free(_include_path);
-            return false;
-        }
-
-        bool ret = parse_config_file(
-            include, conf, include_path, errors_are_fatal);
-        fclose(include);
-
-        LOG_INFO("imported sub-configuration from %s", include_path);
-        free(_include_path);
-        return ret;
-    }
-
-    else if (streq(key, "term"))
-        return value_to_str(ctx, &conf->term);
-
-    else if (streq(key, "shell"))
-        return value_to_str(ctx, &conf->shell);
-
-    else if (streq(key, "login-shell"))
-        return value_to_bool(ctx, &conf->login_shell);
-
-    else if (streq(key, "title"))
-        return value_to_str(ctx, &conf->title);
-
-    else if (streq(key, "locked-title"))
-        return value_to_bool(ctx, &conf->locked_title);
-
-    else if (streq(key, "app-id"))
-        return value_to_str(ctx, &conf->app_id);
-
-    else if (streq(key, "toplevel-tag"))
-        return value_to_str(ctx, &conf->toplevel_tag);
-
-    else if (streq(key, "initial-window-size-pixels")) {
-        if (!value_to_dimensions(ctx, &conf->size.width, &conf->size.height))
-            return false;
-
-        conf->size.type = CONF_SIZE_PX;
-        return true;
-    }
-
-    else if (streq(key, "initial-window-size-chars")) {
-        if (!value_to_dimensions(ctx, &conf->size.width, &conf->size.height))
-            return false;
-
-        conf->size.type = CONF_SIZE_CELLS;
-        return true;
-    }
-
-    else if (streq(key, "pad")) {
-        unsigned x, y, left, top, right, bottom;
-        char mode[64] = {0};
-        int ret = sscanf(value, "%ux%ux%ux%u %63s", &left, &top, &right, &bottom, mode);
-        enum center_when center = CENTER_NEVER;
-
-        if (ret == 5) {
-            if (strcasecmp(mode, "center") == 0)
-                center = CENTER_ALWAYS;
-            else if (strcasecmp(mode, "center-when-fullscreen") == 0)
-                center = CENTER_FULLSCREEN;
-            else if (strcasecmp(mode, "center-when-maximized-and-fullscreen") == 0)
-                center = CENTER_MAXIMIZED_AND_FULLSCREEN;
-            else
-                center = CENTER_INVALID;
-        } else if (ret < 4) {
-            ret = sscanf(value, "%ux%u %63s", &x, &y, mode);
-            if (ret >= 2) {
-                left = right = x;
-                top = bottom = y;
-                if (ret == 3) {
-                    if (strcasecmp(mode, "center") == 0)
-                        center = CENTER_ALWAYS;
-                    else if (strcasecmp(mode, "center-when-fullscreen") == 0)
-                        center = CENTER_FULLSCREEN;
-                    else if (strcasecmp(mode, "center-when-maximized-and-fullscreen") == 0)
-                        center = CENTER_MAXIMIZED_AND_FULLSCREEN;
-                    else
-                        center = CENTER_INVALID;
-                }
-            }
-        }
-
-        if ((ret < 2 || ret > 5) || center == CENTER_INVALID) {
-            LOG_CONTEXTUAL_ERR(
-                "invalid padding (must be in the form RIGHTxTOPxLEFTxBOTTOM or XxY "
-                "[center|"
-                "center-when-fullscreen|"
-                "center-when-maximized-and-fullscreen])");
-            return false;
-        }
-
-        conf->pad_left   = left;
-        conf->pad_top    = top;
-        conf->pad_right  = right;
-        conf->pad_bottom = bottom;
-        conf->center_when = (ret == 4 || ret == 2) ? CENTER_NEVER : center;
-        return true;
-    }
-
-    else if (streq(key, "resize-delay-ms"))
-        return value_to_uint16(ctx, 10, &conf->resize_delay_ms);
-
-    else if (streq(key, "resize-by-cells"))
-        return value_to_bool(ctx, &conf->resize_by_cells);
-
-    else if (streq(key, "resize-keep-grid"))
-        return value_to_bool(ctx, &conf->resize_keep_grid);
-
-    else if (streq(key, "bold-text-in-bright")) {
-        if (streq(value, "palette-based")) {
-            conf->bold_in_bright.enabled = true;
-            conf->bold_in_bright.palette_based = true;
-        } else {
-            if (!value_to_bool(ctx, &conf->bold_in_bright.enabled))
-                return false;
-            conf->bold_in_bright.palette_based = false;
-        }
-        return true;
-    }
-
-    else if (streq(key, "initial-window-mode")) {
-        _Static_assert(sizeof(conf->startup_mode) == sizeof(int),
-            "enum is not 32-bit");
-
-        return value_to_enum(
-                ctx,
-                (const char *[]){"windowed", "maximized", "fullscreen", NULL},
-                (int *)&conf->startup_mode);
-    }
-
-    else if (streq(key, "font") ||
-             streq(key, "font-bold") ||
-             streq(key, "font-italic") ||
-             streq(key, "font-bold-italic"))
-
-    {
-        size_t idx =
-            streq(key, "font") ? 0 :
-            streq(key, "font-bold") ? 1 :
-            streq(key, "font-italic") ? 2 : 3;
-
-        struct config_font_list new_list = value_to_fonts(ctx);
-        if (new_list.arr == NULL)
-            return false;
-
-        config_font_list_destroy(&conf->fonts[idx]);
-        conf->fonts[idx] = new_list;
-        return true;
-    }
-
-    else if (streq(key, "font-size-adjustment")) {
-        const size_t len = strlen(ctx->value);
-        if (len >= 1 && ctx->value[len - 1] == '%') {
-            errno = 0;
-            char *end = NULL;
-
-            float percent = strtof(ctx->value, &end);
-            if (!(len > 1 && errno == 0 && end == ctx->value + len - 1)) {
-                LOG_CONTEXTUAL_ERR(
-                    "invalid percent value (must be in the form 10.5%%)");
-                return false;
-            }
-
-            conf->font_size_adjustment.percent = percent / 100.;
-            conf->font_size_adjustment.pt_or_px.pt = 0;
-            conf->font_size_adjustment.pt_or_px.px = 0;
-            return true;
-        } else {
-            bool ret = value_to_pt_or_px(ctx, &conf->font_size_adjustment.pt_or_px);
-            if (ret)
-                conf->font_size_adjustment.percent = 0.;
-            return ret;
-        }
-    }
-
-    else if (streq(key, "line-height"))
-        return value_to_pt_or_px(ctx, &conf->line_height);
-
-    else if (streq(key, "letter-spacing"))
-        return value_to_pt_or_px(ctx, &conf->letter_spacing);
-
-    else if (streq(key, "horizontal-letter-offset"))
-        return value_to_pt_or_px(ctx, &conf->horizontal_letter_offset);
-
-    else if (streq(key, "vertical-letter-offset"))
-        return value_to_pt_or_px(ctx, &conf->vertical_letter_offset);
-
-    else if (streq(key, "underline-offset")) {
-        if (!value_to_pt_or_px(ctx, &conf->underline_offset))
-            return false;
-        conf->use_custom_underline_offset = true;
-        return true;
-    }
-
-    else if (streq(key, "underline-thickness"))
-        return value_to_pt_or_px(ctx, &conf->underline_thickness);
-
-    else if (streq(key, "strikeout-thickness"))
-        return value_to_pt_or_px(ctx, &conf->strikeout_thickness);
-
-    else if (streq(key, "dpi-aware"))
-        return value_to_bool(ctx, &conf->dpi_aware);
-
-    else if (streq(key, "workers"))
-        return value_to_uint16(ctx, 10, &conf->render_worker_count);
-
-    else if (streq(key, "word-delimiters"))
-        return value_to_wchars(ctx, &conf->word_delimiters);
-
-    else if (streq(key, "selection-target")) {
-        _Static_assert(sizeof(conf->selection_target) == sizeof(int),
-                       "enum is not 32-bit");
-
-        return value_to_enum(
-            ctx,
-            (const char *[]){"none", "primary", "clipboard", "both", NULL},
-            (int *)&conf->selection_target);
-    }
-
-    else if (streq(key, "box-drawings-uses-font-glyphs"))
-        return value_to_bool(ctx, &conf->box_drawings_uses_font_glyphs);
-
-    else if (streq(key, "utmp-helper")) {
-        if (!value_to_str(ctx, &conf->utmp_helper_path))
-            return false;
-
-        if (streq(conf->utmp_helper_path, "none")) {
-            free(conf->utmp_helper_path);
-            conf->utmp_helper_path = NULL;
-        }
-
-        return true;
-    }
-
-    else if (streq(key, "gamma-correct-blending"))
-        return value_to_bool(ctx, &conf->gamma_correct);
-
-    else if (streq(key, "initial-color-theme")) {
-        _Static_assert(
-            sizeof(conf->initial_color_theme) == sizeof(int),
-            "enum is not 32-bit");
-
-        return value_to_enum(ctx, (const char*[]){
-            "dark", "light", NULL}, (int *)&conf->initial_color_theme);
-    }
-
-    else if (streq(key, "uppercase-regex-insert"))
-        return value_to_bool(ctx, &conf->uppercase_regex_insert);
-
-    else {
-        LOG_CONTEXTUAL_ERR("not a valid option: %s", key);
-        return false;
-    }
-}
+/* parse_section_main: ported to config.zig */
 
 /* parse_section_security: ported to config.zig */
 /* parse_section_bell: ported to config.zig */
@@ -2167,7 +1881,7 @@ str_to_section(char *str, char **suffix)
     return SECTION_COUNT;
 }
 
-static bool
+bool
 parse_config_file(FILE *f, struct config *conf, const char *path, bool errors_are_fatal)
 {
     enum section section = SECTION_MAIN;
