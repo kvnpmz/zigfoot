@@ -257,6 +257,16 @@ Port in this order; each module is a small, reviewable series of chunks.
 1. **Trivial leaves (~0.9k):** `user-notification`, `foot-features`, `quirks`,
    `debug`, `log`, `commands`, `unicode-mode`, `extract`. Good warm-up and
    they delete C↔C call glue.
+
+   **Progress:** `extract` ✅ (271 lines gone; `term_*_to_text()` is now Zig
+   end to end) and `commands` ✅ (115 lines). The rest of this group turned out
+   not to be worth it yet: `quirks` needs `wl_subsurface` + `term->window`,
+   `unicode-mode`'s main entry point takes `struct seat *`, `debug`/`log` are
+   varargs-to-C loggers, `foot-features` is a preprocessor string whose macros
+   (`FOOT_IME_ENABLED`, `HAVE_XDG_TOPLEVEL_TAG`, …) are not in Zig's
+   build_options yet, and `user-notification` is one `va_list` wrapper around
+   `xvasprintf()`. Revisit them after `config`, when build_options grows the
+   feature flags.
 2. **`slave` (573) + `shm` (1,110):** syscall/`mmap`/SCM_RIGHTS heavy; `shm` is
    the foundation for `render` and `wayland`. Port with tests around fd passing.
 3. **`config` (4,374) — do it here, not last.** It has nine dependents and is
