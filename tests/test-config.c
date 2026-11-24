@@ -23,6 +23,13 @@ extern const char *config_action_map_name(int kind, int action);
  * replaces. The regex' own UNITTEST moved here with it. */
 extern const char *config_default_url_regex_string(void);
 
+/* Ported to config.zig (C2o): the font helpers. */
+extern struct config_font_list value_to_fonts(struct context *ctx);
+extern bool config_font_parse(const char *pattern, struct config_font *font);
+extern void config_font_list_destroy(struct config_font_list *font_list);
+extern bool check_if_font_is_monospaced(
+    const char *pattern, user_notifications_t *notifications);
+
 enum { MAP_KIND_KEY, MAP_KIND_SEARCH, MAP_KIND_URL };
 
 #define ALEN(v) (sizeof(v) / sizeof((v)[0]))
@@ -1935,6 +1942,74 @@ test_config_load_from_xdg(void)
     tll_free(nots);
 }
 
+/*
+ * Font helpers (C2o): value_to_fonts() -> config_font_parse() ->
+ * config_font_list_destroy(), plus the fcft accessors used by
+ * check_if_font_is_monospaced().
+ */
+
+static void
+test_font_helpers(void)
+{
+    struct config conf = {0};
+    struct context ctx = {
+        .conf = &conf, .section = "main", .path = "unittest", .key = "font"};
+
+    /* A comma separated list of patterns; the fontconfig size/pixelsize
+     * options are stripped from the pattern and kept as numbers. */
+    ctx.value = "monospace:size=10, serif:size=12";
+    struct config_font_list fonts = value_to_fonts(&ctx);
+    xassert(fonts.count == 2);
+    xassert(strcmp(fonts.arr[0].pattern, "monospace") == 0);
+    xassert(fonts.arr[0].pt_size == 10.0);
+    xassert(fonts.arr[0].px_size == -1);
+    xassert(strcmp(fonts.arr[1].pattern, "serif") == 0);
+    xassert(fonts.arr[1].pt_size == 12.0);
+    config_font_list_destroy(&fonts);
+    xassert(fonts.count == 0);
+    xassert(fonts.arr == NULL);
+
+    /* Leading whitespace is trimmed, empty entries are skipped. Trailing
+     * whitespace is *not* trimmed (upstream quirk: the family keeps it). */
+    ctx.value = " monospace,  , serif";
+    fonts = value_to_fonts(&ctx);
+    xassert(fonts.count == 2);
+    xassert(strcmp(fonts.arr[0].pattern, "monospace") == 0);
+    xassert(strcmp(fonts.arr[1].pattern, "serif") == 0);
+    config_font_list_destroy(&fonts);
+
+    ctx.value = "monospace ,";
+    fonts = value_to_fonts(&ctx);
+    xassert(fonts.count == 1);
+    xassert(strcmp(fonts.arr[0].pattern, "monospace ") == 0);
+    config_font_list_destroy(&fonts);
+
+    /* No size given: fontconfig's configured default, then foot's 8pt */
+    ctx.value = "monospace";
+    fonts = value_to_fonts(&ctx);
+    xassert(fonts.count == 1);
+    xassert(fonts.arr[0].pt_size == 8.0);
+    xassert(fonts.arr[0].px_size == -1);
+    config_font_list_destroy(&fonts);
+
+    /* pixelsize= is kept as a pixel size, not converted to points */
+    ctx.value = "monospace:pixelsize=15";
+    fonts = value_to_fonts(&ctx);
+    xassert(fonts.count == 1);
+    xassert(fonts.arr[0].px_size == 15);
+    xassert(fonts.arr[0].pt_size == -1.0);
+    config_font_list_destroy(&fonts);
+
+    /* check_if_font_is_monospaced() reads fcft_font.name and
+     * fcft_glyph.advance.x through the C accessors. */
+    fcft_init(FCFT_LOG_COLORIZE_NEVER, false, FCFT_LOG_CLASS_NONE);
+    user_notifications_t nots = tll_init();
+    xassert(check_if_font_is_monospaced("monospace:size=10", &nots));
+    xassert(tll_length(nots) == 0);
+    tll_free(nots);
+    fcft_fini();
+}
+
 int
 main(int argc, const char *const *argv)
 {
@@ -1967,6 +2042,7 @@ main(int argc, const char *const *argv)
     test_default_url_regex();
     test_config_load();
     test_config_load_from_xdg();
+    test_font_helpers();
     log_deinit();
     FcFini();
     return 0;

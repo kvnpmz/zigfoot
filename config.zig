@@ -2233,8 +2233,6 @@ export fn config_bindings_finalize(conf: *types.Config) callconv(.c) bool {
 
 // ── [colors] and [csd] (C2c) ──────────────────────────────────────
 
-extern fn value_to_fonts(ctx: *Context) callconv(.c) types.ConfigFontList;
-extern fn config_font_list_destroy(list: *types.ConfigFontList) callconv(.c) void;
 extern fn log_and_notify_errno(
     conf: *types.Config,
     file: [*:0]const u8,
@@ -2499,6 +2497,16 @@ export fn parse_section_csd(ctx: *Context) callconv(.c) bool {
 
 fn logWarn(src: std.builtin.SourceLocation, msg: [*:0]const u8) void {
     log_msg(LOG_CLASS_WARNING, "config", src.file, @intCast(src.line), "%s", msg);
+}
+
+fn logWarnFmt(
+    src: std.builtin.SourceLocation,
+    comptime fmt: []const u8,
+    args: anytype,
+) void {
+    var buf: [1024]u8 = undefined;
+    const msg: [:0]const u8 = std.fmt.bufPrintZ(&buf, fmt, args) catch return;
+    logWarn(src, msg.ptr);
 }
 
 export fn parse_section_tweak(ctx: *Context) callconv(.c) bool {
@@ -3380,8 +3388,6 @@ extern fn access(path: [*:0]const u8, mode: c_int) callconv(.c) c_int;
 extern fn fdopen(fd: c_int, mode: [*:0]const u8) callconv(.c) ?*anyopaque;
 extern fn sysconf(name: c_int) callconv(.c) c_long;
 extern fn fcft_capabilities() callconv(.c) c_int;
-extern fn config_font_parse(pattern: [*:0]const u8, font: *types.ConfigFont) callconv(.c) bool;
-extern fn get_shell() callconv(.c) ?[*:0]u8;
 
 /// C: `struct config_file`
 const ConfigFile = extern struct {
@@ -4049,4 +4055,292 @@ fn openConfig() ConfigFile {
 
     if (path) |p| free(@ptrCast(p));
     return ret;
+}
+
+// ── fonts (C2o) ───────────────────────────────────────────────────
+//
+// Everything here is fontconfig, and fontconfig's types are opaque from the
+// outside, so no struct mirrors are needed -- only FcPattern/FcConfig
+// handles. The two fcft structures (fcft_font, fcft_glyph) are *not*
+// opaque, but check_if_font_is_monospaced() only needs two fields out of
+// them, so config.c exposes those through accessors rather than having the
+// port mirror two dozen fields of layout.
+
+extern fn FcNameParse(pattern: [*:0]const u8) callconv(.c) ?*anyopaque;
+extern fn FcPatternGetDouble(
+    pat: *anyopaque,
+    object: [*:0]const u8,
+    nvalue: c_int,
+    v: *f64,
+) callconv(.c) c_int;
+extern fn FcPatternGetInteger(
+    pat: *anyopaque,
+    object: [*:0]const u8,
+    nvalue: c_int,
+    v: *c_int,
+) callconv(.c) c_int;
+extern fn FcConfigCreate() callconv(.c) ?*anyopaque;
+extern fn FcPatternDuplicate(pat: *anyopaque) callconv(.c) ?*anyopaque;
+extern fn FcConfigSubstitute(conf: ?*anyopaque, pat: *anyopaque, kind: c_int) callconv(.c) bool;
+extern fn FcPatternDestroy(pat: *anyopaque) callconv(.c) void;
+extern fn FcConfigDestroy(conf: *anyopaque) callconv(.c) void;
+extern fn FcPatternRemove(pat: *anyopaque, object: [*:0]const u8, nvalue: c_int) callconv(.c) bool;
+extern fn FcPatternFormat(pat: *anyopaque, format: [*:0]const u8) callconv(.c) ?[*:0]u8;
+extern fn FcNameUnparse(pat: *anyopaque) callconv(.c) ?[*:0]u8;
+extern fn asprintf(strp: *?[*:0]u8, format: [*:0]const u8, ...) callconv(.c) c_int;
+extern fn fcft_from_name(
+    count: usize,
+    names: [*]const ?[*:0]const u8,
+    attributes: [*:0]const u8,
+) callconv(.c) ?*anyopaque;
+extern fn fcft_rasterize_char_utf32(
+    font: *anyopaque,
+    cp: u32,
+    subpixel: c_int,
+) callconv(.c) ?*const anyopaque;
+extern fn fcft_destroy(font: *anyopaque) callconv(.c) void;
+extern fn user_notification_add_fmt(
+    notifications: *types.UserNotifications,
+    kind: types.UserNotificationKind,
+    fmt: [*:0]const u8,
+    ...
+) callconv(.c) void;
+
+// config.c: fcft_font/fcft_glyph field accessors.
+extern fn config_fcft_glyph_advance_x(glyph: *const anyopaque) callconv(.c) c_int;
+extern fn config_fcft_font_name(font: *const anyopaque) callconv(.c) ?[*:0]const u8;
+
+const FcResultMatch: c_int = 0;
+const FcMatchPattern: c_int = 0;
+const FC_SIZE: [*:0]const u8 = "size";
+const FC_PIXEL_SIZE: [*:0]const u8 = "pixelsize";
+const FCFT_SUBPIXEL_NONE: c_int = 0;
+const USER_NOTIFICATION_WARNING: types.UserNotificationKind = .warning;
+
+extern fn log_errno(
+    class: c_int,
+    module: [*:0]const u8,
+    file: [*:0]const u8,
+    lineno: c_int,
+    fmt: [*:0]const u8,
+    ...
+) callconv(.c) void;
+
+export fn config_font_parse(
+    pattern: [*:0]const u8,
+    font: *types.ConfigFont,
+) callconv(.c) bool {
+    const pat = FcNameParse(pattern) orelse return false;
+
+    // First look for a user-specified {pixel}size option,
+    // e.g. "font-name:size=12"
+    var pt_size: f64 = -1.0;
+    var have_pt_size = FcPatternGetDouble(pat, FC_SIZE, 0, &pt_size);
+
+    var px_size: c_int = -1;
+    var have_px_size = FcPatternGetInteger(pat, FC_PIXEL_SIZE, 0, &px_size);
+
+    if (have_pt_size != FcResultMatch and have_px_size != FcResultMatch) {
+        // Apply fontconfig config. Can't do that until we've first checked
+        // for a user provided size, since we may end up with both "size" and
+        // "pixelsize" being set, and we don't know which one takes priority.
+        const fc_conf = FcConfigCreate();
+        const pat_copy = FcPatternDuplicate(pat);
+
+        if (pat_copy == null or !FcConfigSubstitute(fc_conf, pat_copy.?, FcMatchPattern)) {
+            logWarnFmt(@src(), "{s}: failed to do config substitution", .{std.mem.span(pattern)});
+        } else {
+            have_pt_size = FcPatternGetDouble(pat_copy.?, FC_SIZE, 0, &pt_size);
+            have_px_size = FcPatternGetInteger(pat_copy.?, FC_PIXEL_SIZE, 0, &px_size);
+        }
+
+        if (pat_copy) |p| FcPatternDestroy(p);
+        if (fc_conf) |c| FcConfigDestroy(c);
+
+        if (have_pt_size != FcResultMatch and have_px_size != FcResultMatch)
+            pt_size = 8.0;
+    }
+
+    _ = FcPatternRemove(pat, FC_SIZE, 0);
+    _ = FcPatternRemove(pat, FC_PIXEL_SIZE, 0);
+
+    // Only the family part, with '\', '-', ':' and ',' escaped
+    const escaped_family = FcPatternFormat(
+        pat,
+        "%{+family{%{family|escape(\\\\-:,)}}}",
+    );
+
+    // Everything but the family, size and pixelsize
+    const rest = FcPatternFormat(pat, "%{-family,size,pixelsize{%{=unparse}}}");
+
+    var stripped_pattern: ?[*:0]u8 = null;
+    if (escaped_family == null or rest == null) {
+        if (escaped_family) |p| free(@ptrCast(p));
+        if (rest) |p| free(@ptrCast(p));
+        stripped_pattern = FcNameUnparse(pat);
+    } else {
+        // C: xasprintf("%s%s", escaped_family, rest)
+        var buf: ?[*:0]u8 = null;
+        _ = asprintf(&buf, "%s%s", escaped_family.?, rest.?);
+        stripped_pattern = buf;
+        free(@ptrCast(escaped_family.?));
+        free(@ptrCast(rest.?));
+    }
+
+    FcPatternDestroy(pat);
+
+    logDbg(
+        @src(),
+        "{s}: pt-size={d:.2}, px-size={d}",
+        .{ stripped_pattern orelse "(null)", pt_size, px_size },
+    );
+
+    if (stripped_pattern == null) {
+        log_msg(
+            LOG_CLASS_ERROR,
+            "config",
+            @src().file,
+            @intCast(@src().line),
+            "%s",
+            "failed to convert font pattern to string",
+        );
+        return false;
+    }
+
+    font.* = .{
+        .pattern = stripped_pattern,
+        .pt_size = @floatCast(pt_size),
+        .px_size = px_size,
+    };
+    return true;
+}
+
+export fn config_font_list_destroy(font_list: *types.ConfigFontList) callconv(.c) void {
+    for (0..font_list.count) |i|
+        free(@ptrCast(font_list.arr.?[i].pattern));
+    free(@ptrCast(font_list.arr));
+    font_list.count = 0;
+    font_list.arr = null;
+}
+
+export fn value_to_fonts(ctx: *Context) callconv(.c) types.ConfigFontList {
+    var count: usize = 0;
+    var size: usize = 0;
+    var fonts: ?[*]types.ConfigFont = null;
+
+    const copy = xstrdup(ctx.value orelse "").?;
+    defer free(@ptrCast(copy));
+
+    var tok: ?[*:0]u8 = strtok(copy, ",");
+    while (tok) |font| : (tok = strtok(null, ",")) {
+        var spec: [*:0]u8 = font;
+
+        // Trim spaces, strictly speaking not necessary, but looks nice :)
+        while (spec[0] != 0 and std.ascii.isWhitespace(spec[0]))
+            spec += 1;
+        if (spec[0] == 0)
+            continue;
+
+        var font_data: types.ConfigFont = undefined;
+        if (!config_font_parse(spec, &font_data)) {
+            // C leaves the (trimmed) spec in ctx->value before logging it.
+            ctx.value = spec;
+            contextualErr(ctx, @src(), "invalid font specification", .{});
+            free(@ptrCast(fonts));
+            return .{ .arr = null, .count = 0 };
+        }
+
+        if (count + 1 > size) {
+            size += 4;
+            fonts = @ptrCast(@alignCast(
+                xrealloc(@ptrCast(fonts), size * @sizeOf(types.ConfigFont)).?,
+            ));
+        }
+
+        fonts.?[count] = font_data;
+        count += 1;
+    }
+
+    return .{ .arr = fonts, .count = count };
+}
+
+export fn check_if_font_is_monospaced(
+    pattern: [*:0]const u8,
+    notifications: *types.UserNotifications,
+) callconv(.c) bool {
+    const names = [_]?[*:0]const u8{pattern};
+    const f = fcft_from_name(1, &names, ":size=8") orelse return true;
+    defer fcft_destroy(f);
+
+    const chars = [_]u32{ 'a', 'i', 'l', 'M', 'W' };
+
+    var is_monospaced = true;
+    var last_width: c_int = -1;
+
+    for (chars) |cp| {
+        const g = fcft_rasterize_char_utf32(f, cp, FCFT_SUBPIXEL_NONE) orelse continue;
+        const advance_x = config_fcft_glyph_advance_x(g);
+
+        if (last_width >= 0 and advance_x != last_width) {
+            const font_name: [*:0]const u8 = config_fcft_font_name(f) orelse pattern;
+
+            logWarnFmt(
+                @src(),
+                "{s}: font does not appear to be monospace; check your config, or disable this warning by setting [tweak].font-monospace-warn=no",
+                .{std.mem.span(font_name)},
+            );
+
+            user_notification_add_fmt(
+                notifications,
+                USER_NOTIFICATION_WARNING,
+                "%s: font does not appear to be monospace; check your config, or disable this warning by setting \x1b[1m[tweak].font-monospace-warn=no\x1b[22m",
+                font_name,
+            );
+
+            is_monospaced = false;
+            break;
+        }
+
+        last_width = advance_x;
+    }
+
+    return is_monospaced;
+}
+
+// ── $SHELL lookup (C2o) ───────────────────────────────────────────
+
+/// Linux `struct passwd`; only pw_shell is read.
+const Passwd = extern struct {
+    pw_name: ?[*:0]u8,
+    pw_passwd: ?[*:0]u8,
+    pw_uid: c_uint,
+    pw_gid: c_uint,
+    pw_gecos: ?[*:0]u8,
+    pw_dir: ?[*:0]u8,
+    pw_shell: ?[*:0]u8,
+};
+extern fn getpwuid(uid: c_uint) callconv(.c) ?*Passwd;
+extern fn getuid() callconv(.c) c_uint;
+
+export fn get_shell() callconv(.c) ?[*:0]u8 {
+    var shell: [*:0]const u8 = undefined;
+
+    if (getenv("SHELL")) |env| {
+        shell = env;
+    } else if (getpwuid(getuid())) |passwd| {
+        shell = passwd.pw_shell orelse "sh";
+    } else {
+        log_errno(
+            LOG_CLASS_ERROR,
+            "config",
+            @src().file,
+            @intCast(@src().line),
+            "%s",
+            "failed to lookup user: falling back to 'sh'",
+        );
+        shell = "sh";
+    }
+
+    logDbg(@src(), "user's shell: {s}", .{std.mem.span(shell)});
+    return xstrdup(shell);
 }

@@ -223,69 +223,6 @@ log_contextual_errno(struct context *ctx, const char *file, int lineno,
 #define LOG_AND_NOTIFY_ERRNO(...) \
     log_and_notify_errno(conf, __FILE__, __LINE__, __VA_ARGS__)
 
-char *
-get_shell(void)
-{
-    const char *shell = getenv("SHELL");
-
-    if (shell == NULL) {
-        struct passwd *passwd = getpwuid(getuid());
-        if (passwd == NULL) {
-            LOG_ERRNO("failed to lookup user: falling back to 'sh'");
-            shell = "sh";
-        } else
-            shell = passwd->pw_shell;
-    }
-
-    LOG_DBG("user's shell: %s", shell);
-    return xstrdup(shell);
-}
-
-/* Non-static: config.zig's [csd] parser calls it. */
-struct config_font_list NOINLINE
-value_to_fonts(struct context *ctx)
-{
-    size_t count = 0;
-    size_t size = 0;
-    struct config_font *fonts = NULL;
-
-    char *copy = xstrdup(ctx->value);
-    for (const char *font = strtok(copy, ",");
-         font != NULL;
-         font = strtok(NULL, ","))
-    {
-        /* Trim spaces, strictly speaking not necessary, but looks nice :) */
-        while (isspace(font[0]))
-            font++;
-
-        if (font[0] == '\0')
-            continue;
-
-        struct config_font font_data;
-        if (!config_font_parse(font, &font_data)) {
-            ctx->value = font;
-            LOG_CONTEXTUAL_ERR("invalid font specification");
-            goto err;
-        }
-
-        if (count + 1 > size) {
-            size += 4;
-            fonts = xrealloc(fonts, size * sizeof(fonts[0]));
-        }
-
-        xassert(count + 1 <= size);
-        fonts[count++] = font_data;
-    }
-
-    free(copy);
-    return (struct config_font_list){.arr = fonts, .count = count};
-
-err:
-    free(copy);
-    free(fonts);
-    return (struct config_font_list){.arr = NULL, .count = 0};
-}
-
 /* Non-static: config.zig's [main] parser handles `include=`. */
 bool parse_config_file(
     FILE *f, struct config *conf, const char *path, bool errors_are_fatal);
@@ -362,150 +299,6 @@ extern void add_default_search_bindings(struct config *conf);
 extern void add_default_url_bindings(struct config *conf);
 extern void add_default_mouse_bindings(struct config *conf);
 
-bool
-config_font_parse(const char *pattern, struct config_font *font)
-{
-    FcPattern *pat = FcNameParse((const FcChar8 *)pattern);
-    if (pat == NULL)
-        return false;
-
-    /*
-     * First look for user specified {pixel}size option
-     * e.g. "font-name:size=12"
-     */
-
-    double pt_size = -1.0;
-    FcResult have_pt_size = FcPatternGetDouble(pat, FC_SIZE, 0, &pt_size);
-
-    int px_size = -1;
-    FcResult have_px_size = FcPatternGetInteger(pat, FC_PIXEL_SIZE, 0, &px_size);
-
-    if (have_pt_size != FcResultMatch && have_px_size != FcResultMatch) {
-        /*
-         * Apply fontconfig config. Can't do that until we've first
-         * checked for a user provided size, since we may end up with
-         * both "size" and "pixelsize" being set, and we don't know
-         * which one takes priority.
-         */
-        FcConfig *fc_conf = FcConfigCreate();
-        FcPattern *pat_copy = FcPatternDuplicate(pat);
-        if (pat_copy == NULL ||
-            !FcConfigSubstitute(fc_conf, pat_copy, FcMatchPattern))
-        {
-            LOG_WARN("%s: failed to do config substitution", pattern);
-        } else {
-            have_pt_size = FcPatternGetDouble(pat_copy, FC_SIZE, 0, &pt_size);
-            have_px_size = FcPatternGetInteger(pat_copy, FC_PIXEL_SIZE, 0, &px_size);
-        }
-
-        FcPatternDestroy(pat_copy);
-        FcConfigDestroy(fc_conf);
-
-        if (have_pt_size != FcResultMatch && have_px_size != FcResultMatch)
-            pt_size = 8.0;
-    }
-
-    FcPatternRemove(pat, FC_SIZE, 0);
-    FcPatternRemove(pat, FC_PIXEL_SIZE, 0);
-
-    /* Only the family part, with '\', '-', ':' and ',' \-escaped */
-    FcChar8 *escaped_family = FcPatternFormat(
-        pat, (const FcChar8 *)"%{+family{%{family|escape(\\\\-:,)}}}");
-
-    /* Everything but the family, size and pixelsize */
-    FcChar8 *rest = FcPatternFormat(
-        pat, (const FcChar8 *)"%{-family,size,pixelsize{%{=unparse}}}");
-
-    char *stripped_pattern = NULL;
-    if (escaped_family == NULL || rest == NULL) {
-        free(escaped_family);
-        free(rest);
-        stripped_pattern = (char *)FcNameUnparse(pat);
-    } else {
-        stripped_pattern = xasprintf("%s%s", escaped_family, rest);
-        free(escaped_family);
-        free(rest);
-    }
-
-    FcPatternDestroy(pat);
-
-    LOG_DBG("%s: pt-size=%.2f, px-size=%d", stripped_pattern, pt_size, px_size);
-
-    if (stripped_pattern == NULL) {
-        LOG_ERR("failed to convert font pattern to string");
-        return false;
-    }
-
-    *font = (struct config_font){
-        .pattern = stripped_pattern,
-        .pt_size = pt_size,
-        .px_size = px_size
-    };
-    return true;
-}
-
-void
-config_font_list_destroy(struct config_font_list *font_list)
-{
-    for (size_t i = 0; i < font_list->count; i++)
-        free(font_list->arr[i].pattern);
-    free(font_list->arr);
-    font_list->count = 0;
-    font_list->arr = NULL;
-}
-
-
-bool
-check_if_font_is_monospaced(const char *pattern,
-                            user_notifications_t *notifications)
-{
-    struct fcft_font *f = fcft_from_name(
-        1, (const char *[]){pattern}, ":size=8");
-
-    if (f == NULL)
-        return true;
-
-    static const char32_t chars[] = {U'a', U'i', U'l', U'M', U'W'};
-
-    bool is_monospaced = true;
-    int last_width = -1;
-
-    for (size_t i = 0; i < sizeof(chars) / sizeof(chars[0]); i++) {
-        const struct fcft_glyph *g = fcft_rasterize_char_utf32(
-            f, chars[i], FCFT_SUBPIXEL_NONE);
-
-        if (g == NULL)
-            continue;
-
-        if (last_width >= 0 && g->advance.x != last_width) {
-            const char *font_name = f->name != NULL
-                ? f->name
-                : pattern;
-
-            LOG_WARN("%s: font does not appear to be monospace; "
-                     "check your config, or disable this warning by "
-                     "setting [tweak].font-monospace-warn=no",
-                     font_name);
-
-            static const char fmt[] =
-                "%s: font does not appear to be monospace; "
-                "check your config, or disable this warning by "
-                "setting \033[1m[tweak].font-monospace-warn=no\033[22m";
-
-            user_notification_add_fmt(
-                notifications, USER_NOTIFICATION_WARNING, fmt, font_name);
-
-            is_monospaced = false;
-            break;
-        }
-
-        last_width = g->advance.x;
-    }
-
-    fcft_destroy(f);
-    return is_monospaced;
-}
-
 #if 0
 xkb_mod_mask_t
 conf_modifiers_to_mask(const struct seat *seat,
@@ -524,4 +317,19 @@ conf_modifiers_to_mask(const struct seat *seat,
 }
 #endif
 
+
+/* fcft_font and fcft_glyph are public structs, but the port only needs one
+ * field out of each; exposing them here avoids mirroring ~30 fields of
+ * layout (and the ABI probe that would come with it). */
+int
+config_fcft_glyph_advance_x(const struct fcft_glyph *glyph)
+{
+    return glyph->advance.x;
+}
+
+const char *
+config_fcft_font_name(const struct fcft_font *font)
+{
+    return font->name;
+}
 
