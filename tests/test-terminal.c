@@ -41,6 +41,7 @@ void begin_receive_clipboard(
     void (*done)(void *user), void *user);
 void erase_line(struct terminal *term, struct row *row);
 void print_linewrap(struct terminal *term);
+void csi_sgr(struct terminal *term);
 
 #define SCROLLBACK_ROWS 16
 #define TERM_ROWS 5
@@ -1112,6 +1113,79 @@ test_flash(void)
     term_free(term);
 }
 
+/* csi_sgr(): `term->vt.underline.style` is read by render.c as an
+ * `enum underline_style`, so the stored numbers must be the C ones
+ * (NONE=0, SINGLE=1, DOUBLE=2, CURLY=3, ...), not a private encoding. */
+static void
+test_sgr_underline(void)
+{
+    struct terminal *term = term_new();
+
+    term->vt.params.idx = 1;
+    term->vt.params.v[0].value = 4;
+    term->vt.params.v[0].sub.idx = 0;
+    csi_sgr(term);
+    check(term->vt.attrs.underline, "4: enables underline");
+    check(term->vt.underline.style == UNDERLINE_SINGLE,
+          "4: stores UNDERLINE_SINGLE");
+    check(!term->bits_affecting_ascii_printer.underline_style,
+          "4: plain underline does not set the fancy-style bit");
+
+    term->vt.params.v[0].sub.idx = 1;
+    term->vt.params.v[0].sub.value[0] = 3;
+    csi_sgr(term);
+    check(term->vt.underline.style == UNDERLINE_CURLY,
+          "4:3 stores UNDERLINE_CURLY");
+    check(term->bits_affecting_ascii_printer.underline_style,
+          "4:3 sets the fancy-style bit");
+
+    term->vt.params.v[0].sub.value[0] = 0;
+    csi_sgr(term);
+    check(!term->vt.attrs.underline, "4:0 disables underline");
+    check(term->vt.underline.style == UNDERLINE_NONE,
+          "4:0 stores UNDERLINE_NONE");
+    check(!term->bits_affecting_ascii_printer.underline_style,
+          "4:0 clears the fancy-style bit");
+
+    term->vt.params.v[0].sub.value[0] = 99;
+    csi_sgr(term);
+    check(term->vt.underline.style == UNDERLINE_NONE,
+          "an unknown 4:n style falls back to UNDERLINE_NONE");
+
+    term->vt.params.v[0].value = 21;
+    term->vt.params.v[0].sub.idx = 0;
+    csi_sgr(term);
+    check(term->vt.underline.style == UNDERLINE_DOUBLE,
+          "21 stores UNDERLINE_DOUBLE");
+
+    term->vt.params.v[0].value = 4;
+    term->vt.params.v[0].sub.idx = 1;
+    term->vt.params.v[0].sub.value[0] = 5;
+    csi_sgr(term);
+    check(term->vt.underline.style == UNDERLINE_DASHED,
+          "4:5 stores UNDERLINE_DASHED");
+
+    term->vt.params.v[0].value = 24;
+    term->vt.params.v[0].sub.idx = 0;
+    csi_sgr(term);
+    check(!term->vt.attrs.underline && term->vt.underline.style == UNDERLINE_NONE,
+          "24 clears the underline");
+
+    /* 0 (SGR reset) must clear everything, including the style. */
+    term->vt.params.v[0].value = 4;
+    term->vt.params.v[0].sub.idx = 1;
+    term->vt.params.v[0].sub.value[0] = 2;
+    csi_sgr(term);
+    check(term->vt.underline.style == UNDERLINE_DOUBLE, "4:2 stores UNDERLINE_DOUBLE");
+    term->vt.params.v[0].value = 0;
+    term->vt.params.v[0].sub.idx = 0;
+    csi_sgr(term);
+    check(term->vt.underline.style == UNDERLINE_NONE,
+          "SGR 0 resets the underline style to UNDERLINE_NONE");
+
+    term_free(term);
+}
+
 int
 main(void)
 {
@@ -1140,6 +1214,7 @@ main(void)
     test_theme_apply();
     test_theme_get();
     test_term_icon();
+    test_sgr_underline();
 
     if (failures > 0) {
         fprintf(stderr, "%d harness check(s) failed\n", failures);

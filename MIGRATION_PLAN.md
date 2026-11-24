@@ -271,7 +271,19 @@ Port in this order; each module is a small, reviewable series of chunks.
    the foundation for `render` and `wayland`. Port with tests around fd passing.
 3. **`config` (4,374) — do it here, not last.** It has nine dependents and is
    the source of most remaining accessor shims. Split it:
-   * C1: mirror the `config`/section structs (kills `conf_*` shims for T7/T9);
+   * C1 ✅: **done.** `struct config` plus its member types (`config_font`
+     (+list), `argv`, `binding_aux`, `config_key_binding` (+list), the spawn
+     templates, `custom_regex` (+list), `env_var`/`user_notification` tllists)
+     are mirrored in `terminal_types.zig` and pinned by the ABI probe
+     (`Config__size` = 3232, glibc/x86-64). `regex_t` is opaque — its size
+     comes from the generated C layout (`Config_url_preg__size`), so glibc and
+     musl both work. Anonymous C unions (`binding_aux`'s payload) are named
+     `_u` so the probe skips them; the enclosing struct size/offsets still pin
+     the layout. Porting this also exposed a live bug: `csi.zig` stored
+     `enum underline_style` with a private encoding (`SINGLE = 0`,
+     `NONE = -1`) while `render.c` reads C's (`NONE = 0`, `SINGLE = 1`, …), so
+     every non-plain underline rendered wrong. The enum is now shared and
+     `tests/test-terminal.c` pins the numbers;
    * C2: parser core (sections, key/value, include) with `tests/test-config.c`
      as the oracle — run the C test against the Zig implementation until the
      C parser is deleted;

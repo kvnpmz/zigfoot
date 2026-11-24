@@ -71,6 +71,15 @@ C_TYPES: dict[str, str] = {
     "NotificationIcon": "struct notification_icon",
     "Url": "struct url",
     "ColorTheme": "struct color_theme",
+    "Config": "struct config",
+    "ConfigFont": "struct config_font",
+    "ConfigFontList": "struct config_font_list",
+    "ConfigSpawnTemplate": "struct config_spawn_template",
+    "Argv": "struct argv",
+    "BindingAux": "struct binding_aux",
+    "ConfigKeyBinding": "struct config_key_binding",
+    "ConfigKeyBindingList": "struct config_key_binding_list",
+    "CustomRegex": "struct custom_regex",
 }
 
 NESTED_IN_TERMINAL: dict[str, str] = {
@@ -92,7 +101,8 @@ SKIP: set[str] = {
 PACKED: set[str] = {"Attributes"}
 
 # Inline structs whose members are C bit-fields: only the size is checkable.
-OPAQUE_FIELDS: set[str] = {"ColorTheme_use_custom"}
+# Keyed by field name, since only inline structs can hit this.
+OPAQUE_FIELDS: set[str] = {"use_custom"}
 
 FIELD_RE = re.compile(
     r'^(?:@"([^"]+)"|([A-Za-z_][A-Za-z0-9_]*))\s*:\s*(.*)$')
@@ -244,7 +254,7 @@ def emit_fields(out: list[str], prefix: str, root: str, path: list[str],
         if field["kind"] == "struct":
             out.append(
                 f'fprintf(out, "pub const {key}__abi_fields: usize = 1;\\n");')
-            if key in OPAQUE_FIELDS:
+            if field["name"] in OPAQUE_FIELDS:
                 continue
             emit_fields(out, key, root, path + [field["name"]],
                         field["nested"], types, False,
@@ -280,6 +290,7 @@ def generate() -> str:
         "#include <stdbool.h>",
         "",
         '#include "composed.h"',
+        '#include "config.h"',
         '#include "grid.h"',
         '#include "notify.h"',
         '#include "terminal.h"',

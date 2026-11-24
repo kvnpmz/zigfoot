@@ -756,9 +756,6 @@ extern fn terminal_shim_conf_url_osc8_underline(term: *types.Terminal) callconv(
 const OSC8_UNDERLINE_ALWAYS: c_int = 0;
 const OSC8_UNDERLINE_URL_MODE: c_int = 1;
 
-// UNDERLINE_SINGLE = 0, COLOR_DEFAULT = 0 (from terminal_types)
-const UNDERLINE_SINGLE: c_int = 0;
-
 
 export fn term_erase(
     term: *types.Terminal,
@@ -835,7 +832,7 @@ export fn term_fill(
         }
 
         if (use_sgr_attrs and
-            (term.vt.underline.style > UNDERLINE_SINGLE or
+            (term.vt.underline.style != .none and term.vt.underline.style != .single or
             term.vt.underline.color_src != .default))
         {
             grid_row_underline_range_put(current_row, c, term.vt.underline);
@@ -851,7 +848,7 @@ export fn term_fill(
             );
         }
 
-        if (term.vt.underline.style <= UNDERLINE_SINGLE and
+        if ((term.vt.underline.style == .none or term.vt.underline.style == .single) and
             term.vt.underline.color_src == .default)
         {
             grid_row_underline_range_erase(
@@ -929,7 +926,7 @@ export fn term_print(
         grid_row_uri_range_erase(current_row, col, col + width - 1);
     }
 
-    if (term.vt.underline.style > UNDERLINE_SINGLE or
+    if ((term.vt.underline.style != .none and term.vt.underline.style != .single) or
         term.vt.underline.color_src != .default)
     {
         grid_row_underline_range_put(current_row, col, term.vt.underline);

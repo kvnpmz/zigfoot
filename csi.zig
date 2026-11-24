@@ -19,13 +19,8 @@ const COLOR_BASE16: types.ColorSource = .base16;
 const COLOR_BASE256: types.ColorSource = .base256;
 const COLOR_RGB: types.ColorSource = .rgb;
 
-// UnderlineStyle constants (from config.h line 223)
-const UNDERLINE_NONE: c_int = -1;   // any negative value
-const UNDERLINE_SINGLE: c_int = 0;
-const UNDERLINE_DOUBLE: c_int = 1;
-const UNDERLINE_CURLY: c_int = 2;
-const UNDERLINE_DOTTED: c_int = 3;
-const UNDERLINE_DASHED: c_int = 4;
+// Underline styles, straight from `enum underline_style` in config.h.
+const UnderlineStyle = types.UnderlineStyle;
 
 // ── sgr_reset ─────────────────────────────────────────────────────
 export fn sgr_reset(term: *types.Terminal) callconv(.c) void {
@@ -60,31 +55,20 @@ export fn csi_sgr(term: *types.Terminal) callconv(.c) void {
 
             4 => {
                 term.vt.attrs.underline = true;
-                term.vt.underline.style = UNDERLINE_SINGLE;
+                term.vt.underline.style = .single;
 
                 if (params[i].sub.idx == 1) {
-                    const style: c_int = @intCast(params[i].sub.value[0]);
+                    const raw: c_int = @intCast(params[i].sub.value[0]);
 
-                    switch (style) {
-                        UNDERLINE_NONE => {
-                            term.vt.attrs.underline = false;
-                            term.vt.underline.style = UNDERLINE_NONE;
-                            term.bits_affecting_ascii_printer._.underline_style = false;
-                        },
-                        UNDERLINE_SINGLE,
-                        UNDERLINE_DOUBLE,
-                        UNDERLINE_CURLY,
-                        UNDERLINE_DOTTED,
-                        UNDERLINE_DASHED => {
-                            term.vt.underline.style = style;
-                            term.bits_affecting_ascii_printer._.underline_style = style > UNDERLINE_SINGLE;
-                        },
-                        else => {
-                            term.vt.attrs.underline = false;
-                            term.vt.underline.style = UNDERLINE_NONE;
-                            term.bits_affecting_ascii_printer._.underline_style = false;
-                        },
-                    }
+                    // Unknown styles are treated like `4:0` (underline off),
+                    // matching the `default:` case in the C original.
+                    const style = std.enums.fromInt(UnderlineStyle, raw) orelse
+                        UnderlineStyle.none;
+
+                    term.vt.underline.style = style;
+                    term.vt.attrs.underline = style != .none;
+                    term.bits_affecting_ascii_printer._.underline_style =
+                        @intFromEnum(style) > @intFromEnum(UnderlineStyle.single);
                 } else {
                     term.bits_affecting_ascii_printer._.underline_style = false;
                 }
@@ -99,7 +83,7 @@ export fn csi_sgr(term: *types.Terminal) callconv(.c) void {
 
             21 => {
                 term.vt.attrs.underline = true;
-                term.vt.underline.style = UNDERLINE_DOUBLE;
+                term.vt.underline.style = .double;
                 term.bits_affecting_ascii_printer._.underline_style = true;
                 term_update_ascii_printer(term);
             },
@@ -111,7 +95,7 @@ export fn csi_sgr(term: *types.Terminal) callconv(.c) void {
             23 => term.vt.attrs.italic = false,
             24 => {
                 term.vt.attrs.underline = false;
-                term.vt.underline.style = UNDERLINE_NONE;
+                term.vt.underline.style = .none;
                 term.bits_affecting_ascii_printer._.underline_style = false;
                 term_update_ascii_printer(term);
             },

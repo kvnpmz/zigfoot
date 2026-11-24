@@ -295,9 +295,13 @@ fn decrqssUnhook(term: *types.Terminal) void {
         if (a.dim)         appendSgrAttrN(&reply, &len, "2");
         if (a.italic)      appendSgrAttrN(&reply, &len, "3");
         if (a.underline) {
-            if (term.vt.underline.style > 0) { // UNDERLINE_SINGLE = 0
+            if (term.vt.underline.style != .none and
+                term.vt.underline.style != .single)
+            {
                 var value: [8]u8 = undefined;
-                const v = std.fmt.bufPrint(&value, "4:{d}", .{term.vt.underline.style}) catch return;
+                const v = std.fmt.bufPrint(&value, "4:{d}", .{
+                    @intFromEnum(term.vt.underline.style),
+                }) catch return;
                 appendSgrAttrN(&reply, &len, v);
             } else {
                 appendSgrAttrN(&reply, &len, "4");

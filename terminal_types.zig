@@ -401,8 +401,6 @@ test "terminal types layout" {
     try @import("std").testing.expectEqual(@as(usize, 8), @sizeOf(ScrollRegion));
 }
 
-pub const UnderlineStyle = c_int;
-
 pub const UnderlineRangeData = extern struct {
     style: UnderlineStyle,
     color_src: ColorSource,
@@ -1168,5 +1166,397 @@ comptime {
 }
 
 comptime {
+    expectAbi(ColorTheme, "ColorTheme");
+}
+
+//
+// Config mirror (config.h). Phase 2 step C1: the layout only — the parser is
+// still config.c. Having this lets terminal/selection code read `term->conf`
+// directly instead of going through terminal_shim_conf_*() accessors.
+//
+
+pub const PtOrPx = extern struct {
+    px: i16,
+    pt: f32,
+};
+
+pub const FontSizeAdjustment = extern struct {
+    pt_or_px: PtOrPx,
+    percent: f32,
+};
+
+pub const ConfigSizeType = enum(c_int) { px, cells };
+
+pub const ConfigFont = extern struct {
+    pattern: ?[*:0]u8,
+    pt_size: f32,
+    px_size: c_int,
+};
+
+pub const ConfigFontList = extern struct {
+    count: usize,
+    arr: ?[*]ConfigFont,
+};
+
+pub const Argv = extern struct {
+    args: ?[*:null]?[*:0]u8,
+};
+
+pub const BindingAuxType = enum(c_int) { none, pipe, text, regex };
+
+pub const BindingAux = extern struct {
+    type: BindingAuxType,
+    master_copy: bool,
+    _pad0: [3]u8 = undefined,
+    // C: anonymous union; named with a leading `_` so the ABI probe skips it
+    // (the containing struct's size/offsets still pin the layout down).
+    _u: extern union {
+        pipe: Argv,
+        text: extern struct {
+            data: ?[*]u8,
+            len: usize,
+        },
+        regex_name: ?[*:0]u8,
+    },
+};
+
+pub const KeyBindingType = enum(c_int) { key, mouse };
+
+pub const ConfigKeyBinding = extern struct {
+    action: c_int,
+    modifiers: TllStr,
+    // C: anonymous union (see BindingAux._u).
+    _u: extern union {
+        k: extern struct { sym: u32 },
+        m: extern struct { button: c_int, count: c_int },
+    },
+    aux: BindingAux,
+    path: ?[*:0]const u8,
+    lineno: c_int,
+};
+
+pub const ConfigKeyBindingList = extern struct {
+    count: usize,
+    arr: ?[*]ConfigKeyBinding,
+};
+
+pub const ConfigSpawnTemplate = extern struct {
+    argv: Argv,
+};
+
+pub const EnvVar = extern struct {
+    name: ?[*:0]u8,
+    value: ?[*:0]u8,
+};
+
+pub const EnvVarNode = extern struct {
+    item: EnvVar,
+    prev: ?*EnvVarNode,
+    next: ?*EnvVarNode,
+};
+
+pub const EnvVarList = extern struct {
+    head: ?*EnvVarNode,
+    tail: ?*EnvVarNode,
+    length: usize,
+};
+
+pub const CustomRegex = extern struct {
+    name: ?[*:0]u8,
+    regex: ?[*:0]u8,
+    // regex_t is libc-specific (glibc and musl disagree); take the size from
+    // the generated C layout instead of hardcoding it.
+    preg: [abi.Config_url_preg__size]u8,
+    launch: ConfigSpawnTemplate,
+};
+
+pub const CustomRegexNode = extern struct {
+    item: CustomRegex,
+    prev: ?*CustomRegexNode,
+    next: ?*CustomRegexNode,
+};
+
+pub const CustomRegexList = extern struct {
+    head: ?*CustomRegexNode,
+    tail: ?*CustomRegexNode,
+    length: usize,
+};
+
+pub const UserNotificationKind = enum(c_int) { deprecated, warning, err };
+
+pub const UserNotification = extern struct {
+    kind: UserNotificationKind,
+    _pad0: [4]u8 = undefined,
+    text: ?[*:0]u8,
+};
+
+pub const UserNotificationNode = extern struct {
+    item: UserNotification,
+    prev: ?*UserNotificationNode,
+    next: ?*UserNotificationNode,
+};
+
+pub const UserNotifications = extern struct {
+    head: ?*UserNotificationNode,
+    tail: ?*UserNotificationNode,
+    length: usize,
+};
+
+pub const CenterWhen = enum(c_int) {
+    invalid,
+    never,
+    fullscreen,
+    maximized_and_fullscreen,
+    always,
+};
+
+pub const StartupMode = enum(c_int) { windowed, maximized, fullscreen };
+
+pub const Osc52Policy = enum(c_int) {
+    disabled,
+    copy_enabled,
+    paste_enabled,
+    enabled,
+};
+
+pub const ScrollbackIndicatorPosition = enum(c_int) { none, fixed, relative };
+
+pub const ScrollbackIndicatorFormat = enum(c_int) {
+    percentage,
+    lineno,
+    text,
+};
+
+pub const Osc8Underline = enum(c_int) { url_mode, always };
+
+pub const UnderlineStyle = enum(c_int) {
+    none,
+    single,
+    double,
+    curly,
+    dotted,
+    dashed,
+};
+
+pub const CursorUnfocusedStyle = enum(c_int) { unchanged, hollow, none };
+
+pub const CsdPreferred = enum(c_int) { prefer_none, prefer_server, prefer_client };
+
+pub const SelectionTarget = enum(c_int) {
+    none,
+    primary,
+    clipboard,
+    both,
+};
+
+pub const GraphemeWidthMethod = enum(c_int) { wcswidth, double, max };
+
+pub const RenderTimer = enum(c_int) { none, osd, log, both };
+
+pub const ShmBitDepth = enum(c_int) {
+    auto,
+    depth8,
+    depth10,
+    depth16,
+};
+
+pub const Config = extern struct {
+    conf_path: ?[*:0]u8,
+    term: ?[*:0]u8,
+    shell: ?[*:0]u8,
+    title: ?[*:0]u8,
+    app_id: ?[*:0]u8,
+    toplevel_tag: ?[*:0]u8,
+    word_delimiters: ?[*]u32,
+    login_shell: bool,
+    locked_title: bool,
+
+    size: extern struct {
+        type: ConfigSizeType,
+        width: u32,
+        height: u32,
+    },
+
+    pad_left: c_uint,
+    pad_top: c_uint,
+    pad_right: c_uint,
+    pad_bottom: c_uint,
+    center_when: CenterWhen,
+
+    resize_by_cells: bool,
+    resize_keep_grid: bool,
+
+    resize_delay_ms: u16,
+
+    dim: extern struct {
+        amount: f32,
+    },
+
+    bold_in_bright: extern struct {
+        enabled: bool,
+        palette_based: bool,
+        amount: f32,
+    },
+
+    startup_mode: StartupMode,
+
+    dpi_aware: bool,
+    gamma_correct: bool,
+    uppercase_regex_insert: bool,
+    fonts: [4]ConfigFontList,
+    font_size_adjustment: FontSizeAdjustment,
+
+    // Custom font metrics (-1 = use real font metrics)
+    line_height: PtOrPx,
+    letter_spacing: PtOrPx,
+
+    // Adjusted letter x/y offsets
+    horizontal_letter_offset: PtOrPx,
+    vertical_letter_offset: PtOrPx,
+
+    use_custom_underline_offset: bool,
+    underline_offset: PtOrPx,
+    underline_thickness: PtOrPx,
+
+    strikeout_thickness: PtOrPx,
+
+    box_drawings_uses_font_glyphs: bool,
+    can_shape_grapheme: bool,
+
+    security: extern struct {
+        osc52: Osc52Policy,
+    },
+
+    bell: extern struct {
+        urgent: bool,
+        notify: bool,
+        flash: bool,
+        system_bell: bool,
+        command: ConfigSpawnTemplate,
+        command_focused: bool,
+    },
+
+    scrollback: extern struct {
+        lines: u32,
+
+        indicator: extern struct {
+            position: ScrollbackIndicatorPosition,
+            format: ScrollbackIndicatorFormat,
+            text: ?[*]u32,
+        },
+        multiplier: f32,
+    },
+
+    url: extern struct {
+        label_letters: ?[*]u32,
+        launch: ConfigSpawnTemplate,
+        osc8_underline: Osc8Underline,
+        style: UnderlineStyle,
+
+        regex: ?[*:0]u8,
+        preg: [abi.Config_url_preg__size]u8,
+    },
+
+    custom_regexes: CustomRegexList,
+
+    colors_dark: ColorTheme,
+    colors_light: ColorTheme,
+    initial_color_theme: WhichColorTheme,
+
+    cursor: extern struct {
+        style: CursorStyle,
+        unfocused_style: CursorUnfocusedStyle,
+        blink: extern struct {
+            enabled: bool,
+            rate_ms: u32,
+        },
+        beam_thickness: PtOrPx,
+        underline_thickness: PtOrPx,
+    },
+
+    mouse: extern struct {
+        hide_when_typing: bool,
+        alternate_scroll_mode: bool,
+        selection_override_modifiers: TllStr,
+    },
+
+    bindings: extern struct {
+        key: ConfigKeyBindingList,
+        mouse: ConfigKeyBindingList,
+        search: ConfigKeyBindingList,
+        url: ConfigKeyBindingList,
+    },
+
+    csd: extern struct {
+        preferred: CsdPreferred,
+
+        title_height: u16,
+        border_width: u16,
+        border_width_visible: u16,
+        button_width: u16,
+
+        hide_when_maximized: bool,
+        double_click_to_maximize: bool,
+
+        color: extern struct {
+            // C: struct { bool title_set:1, buttons_set:1, minimize_set:1,
+            //             maximize_set:1, close_set:1, border_set:1; ... }
+            _color_flags: u32,
+            title: u32,
+            buttons: u32,
+            minimize: u32,
+            maximize: u32,
+            quit: u32,
+            border: u32,
+        },
+
+        font: ConfigFontList,
+    },
+
+    render_worker_count: u16,
+    server_socket_path: ?[*:0]u8,
+    presentation_timings: bool,
+    hold_at_exit: bool,
+    selection_target: SelectionTarget,
+
+    desktop_notifications: extern struct {
+        command: ConfigSpawnTemplate,
+        command_action_arg: ConfigSpawnTemplate,
+        close: ConfigSpawnTemplate,
+        inhibit_when_focused: bool,
+    },
+
+    env_vars: EnvVarList,
+
+    utmp_helper_path: ?[*:0]u8,
+
+    tweak: extern struct {
+        fcft_filter: c_int, // enum fcft_scaling_filter
+        overflowing_glyphs: bool,
+        grapheme_shaping: bool,
+        grapheme_width_method: GraphemeWidthMethod,
+        render_timer: RenderTimer,
+        damage_whole_window: bool,
+        delayed_render_lower_ns: u32,
+        delayed_render_upper_ns: u32,
+        max_shm_pool_size: i64, // off_t
+        box_drawing_base_thickness: f32,
+        box_drawing_solid_shades: bool,
+        font_monospace_warn: bool,
+        sixel: bool,
+        surface_bit_depth: ShmBitDepth,
+        min_stride_alignment: u32,
+        preapply_damage: bool,
+    },
+
+    touch: extern struct {
+        long_press_delay: u32,
+    },
+
+    notifications: UserNotifications,
+};
+
+comptime {
+    expectAbi(Config, "Config");
     expectAbi(ColorTheme, "ColorTheme");
 }
