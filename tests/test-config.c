@@ -7,6 +7,20 @@
 
 #include "../config.c"
 
+/* Ported to config.zig (C2k): the action tables moved there. */
+extern bool parse_section_key_bindings(struct context *ctx);
+extern bool parse_section_search_bindings(struct context *ctx);
+extern bool parse_section_url_bindings(struct context *ctx);
+extern bool parse_section_mouse_bindings(struct context *ctx);
+extern bool parse_section_text_bindings(struct context *ctx);
+extern bool config_resolve_key_binding_collisions(
+    struct config *conf, const char *section_name, int kind,
+    struct config_key_binding_list *bindings, enum key_binding_type type);
+extern size_t config_action_map_count(int kind);
+extern const char *config_action_map_name(int kind, int action);
+
+enum { MAP_KIND_KEY, MAP_KIND_SEARCH, MAP_KIND_URL };
+
 #define ALEN(v) (sizeof(v) / sizeof((v)[0]))
 
 /*
@@ -925,14 +939,14 @@ have_modifier(const config_modifier_list_t *mods, const char *mod)
 
 static void
 test_key_binding(struct context *ctx, bool (*parse_fun)(struct context *ctx),
-                 int action, int max_action, const char *const *map,
+                 int action, int max_action, int map_kind,
                  struct config_key_binding_list *bindings,
                  enum key_binding_type type, bool need_argv, bool need_section_id)
 {
-    xassert(map[action] != NULL);
+    xassert(config_action_map_name(map_kind, action) != NULL);
     xassert(bindings->count == 0);
 
-    const char *key = map[action];
+    const char *key = config_action_map_name(map_kind, action);
 
     /* “Randomize” which modifiers to enable */
     const bool ctrl = action % 2;
@@ -1106,7 +1120,7 @@ enum collision_test_mode {
 
 static void
 _test_binding_collisions(struct context *ctx,
-                         int max_action, const char *const *map,
+                         int max_action, int map_kind,
                          enum key_binding_type type,
                          enum collision_test_mode test_mode)
 {
@@ -1183,11 +1197,13 @@ _test_binding_collisions(struct context *ctx,
     bool expected_result =
         test_mode == SUCCEED_SAME_ACTION_AND_ARGV ? true : false;
 
-    if (resolve_key_binding_collisions(
-            ctx->conf, ctx->section, map, &bindings, type) != expected_result)
+    if (config_resolve_key_binding_collisions(
+            ctx->conf, ctx->section, map_kind, &bindings, type) != expected_result)
     {
         BUG("[%s].%s vs. %s: %s",
-            ctx->section, map[max_action - 1], map[max_action],
+            ctx->section,
+            config_action_map_name(map_kind, max_action - 1),
+            config_action_map_name(map_kind, max_action),
             (expected_result == true
              ? "invalid key combo collision detected"
              : "key combo collision not detected"));
@@ -1209,16 +1225,16 @@ _test_binding_collisions(struct context *ctx,
 
 static void
 test_binding_collisions(struct context *ctx,
-                         int max_action, const char *const *map,
+                         int max_action, int map_kind,
                         enum key_binding_type type)
 {
-    _test_binding_collisions(ctx, max_action, map, type, FAIL_DIFFERENT_ACTION);
-    _test_binding_collisions(ctx, max_action, map, type, FAIL_DIFFERENT_ARGV);
-    _test_binding_collisions(ctx, max_action, map, type, SUCCEED_SAME_ACTION_AND_ARGV);
+    _test_binding_collisions(ctx, max_action, map_kind, type, FAIL_DIFFERENT_ACTION);
+    _test_binding_collisions(ctx, max_action, map_kind, type, FAIL_DIFFERENT_ARGV);
+    _test_binding_collisions(ctx, max_action, map_kind, type, SUCCEED_SAME_ACTION_AND_ARGV);
 
     if (type == MOUSE_BINDING) {
         _test_binding_collisions(
-            ctx, max_action, map, type, FAIL_MOUSE_OVERRIDE);
+            ctx, max_action, map_kind, type, FAIL_MOUSE_OVERRIDE);
     }
 }
 
@@ -1232,16 +1248,76 @@ test_section_key_bindings(void)
     test_invalid_key(&ctx, &parse_section_key_bindings, "invalid-key");
 
     for (int action = 0; action < BIND_ACTION_KEY_COUNT; action++) {
-        if (binding_action_map[action] == NULL)
+        if (config_action_map_name(MAP_KIND_KEY, action) == NULL)
             continue;
 
         test_key_binding(
             &ctx, &parse_section_key_bindings,
             action, BIND_ACTION_KEY_COUNT - 1,
-            binding_action_map, &conf.bindings.key, KEY_BINDING,
+            MAP_KIND_KEY, &conf.bindings.key, KEY_BINDING,
             action >= BIND_ACTION_PIPE_SCROLLBACK && action <= BIND_ACTION_PIPE_COMMAND_OUTPUT,
             action >= BIND_ACTION_REGEX_LAUNCH && action <= BIND_ACTION_REGEX_COPY);
     }
+
+    config_free(&conf);
+}
+
+/* Ported from the config.c UNITTEST that went away with the C
+ * parse_key_binding_section(): add, multi-combo, replace and unmap. */
+static void
+test_key_binding_sequences(void)
+{
+    struct config conf = {0};
+    struct config_key_binding_list *bindings = &conf.bindings.key;
+    struct context ctx = {
+        .conf = &conf, .section = "key-bindings", .path = "unittest"};
+
+    /* ADD noop=Escape */
+    ctx.key = "noop";
+    ctx.value = "Escape";
+    xassert(parse_section_key_bindings(&ctx));
+    xassert(bindings->count == 1);
+    xassert(bindings->arr[0].action == BIND_ACTION_NOOP);
+    xassert(bindings->arr[0].k.sym == XKB_KEY_Escape);
+
+    /* ADD quit=Control+g Control+Shift+x */
+    ctx.key = "quit";
+    ctx.value = "Control+g Control+Shift+x";
+    xassert(parse_section_key_bindings(&ctx));
+    xassert(bindings->count == 3);
+    xassert(bindings->arr[1].action == BIND_ACTION_QUIT);
+    xassert(bindings->arr[1].k.sym == XKB_KEY_g);
+    xassert(tll_length(bindings->arr[1].modifiers) == 1);
+    xassert(strcmp(tll_front(bindings->arr[1].modifiers), XKB_MOD_NAME_CTRL) == 0);
+    xassert(bindings->arr[2].action == BIND_ACTION_QUIT);
+    xassert(bindings->arr[2].k.sym == XKB_KEY_x);
+    xassert(tll_length(bindings->arr[2].modifiers) == 2);
+    xassert(strcmp(tll_front(bindings->arr[2].modifiers), XKB_MOD_NAME_CTRL) == 0);
+    xassert(strcmp(tll_back(bindings->arr[2].modifiers), XKB_MOD_NAME_SHIFT) == 0);
+
+    /* REPLACE noop with two combos */
+    ctx.key = "noop";
+    ctx.value = "Mod1+v Shift+q";
+    xassert(parse_section_key_bindings(&ctx));
+    xassert(bindings->count == 4);
+    xassert(bindings->arr[2].action == BIND_ACTION_NOOP);
+    xassert(bindings->arr[2].k.sym == XKB_KEY_v);
+    xassert(bindings->arr[3].action == BIND_ACTION_NOOP);
+    xassert(bindings->arr[3].k.sym == XKB_KEY_q);
+
+    /* REMOVE quit (only that action) */
+    ctx.key = "quit";
+    ctx.value = "none";
+    xassert(parse_section_key_bindings(&ctx));
+    xassert(bindings->count == 2);
+    xassert(bindings->arr[0].action == BIND_ACTION_NOOP);
+    xassert(bindings->arr[1].action == BIND_ACTION_NOOP);
+
+    /* REMOVE noop */
+    ctx.key = "noop";
+    ctx.value = "none";
+    xassert(parse_section_key_bindings(&ctx));
+    xassert(bindings->count == 0);
 
     config_free(&conf);
 }
@@ -1254,7 +1330,7 @@ test_section_key_bindings_collisions(void)
         .conf = &conf, .section = "key-bindings", .path = "unittest"};
 
     test_binding_collisions(
-        &ctx, BIND_ACTION_KEY_COUNT - 1, binding_action_map, KEY_BINDING);
+        &ctx, BIND_ACTION_KEY_COUNT - 1, MAP_KIND_KEY, KEY_BINDING);
 
     config_free(&conf);
 }
@@ -1269,13 +1345,13 @@ test_section_search_bindings(void)
     test_invalid_key(&ctx, &parse_section_search_bindings, "invalid-key");
 
     for (int action = 0; action < BIND_ACTION_SEARCH_COUNT; action++) {
-        if (search_binding_action_map[action] == NULL)
+        if (config_action_map_name(MAP_KIND_SEARCH, action) == NULL)
             continue;
 
         test_key_binding(
             &ctx, &parse_section_search_bindings,
             action, BIND_ACTION_SEARCH_COUNT - 1,
-            search_binding_action_map, &conf.bindings.search, KEY_BINDING,
+            MAP_KIND_SEARCH, &conf.bindings.search, KEY_BINDING,
             false, false);
     }
 
@@ -1291,7 +1367,7 @@ test_section_search_bindings_collisions(void)
 
     test_binding_collisions(
         &ctx,
-        BIND_ACTION_SEARCH_COUNT - 1, search_binding_action_map, KEY_BINDING);
+        BIND_ACTION_SEARCH_COUNT - 1, MAP_KIND_SEARCH, KEY_BINDING);
 
     config_free(&conf);
 }
@@ -1306,13 +1382,13 @@ test_section_url_bindings(void)
     test_invalid_key(&ctx, &parse_section_url_bindings, "invalid-key");
 
     for (int action = 0; action < BIND_ACTION_URL_COUNT; action++) {
-        if (url_binding_action_map[action] == NULL)
+        if (config_action_map_name(MAP_KIND_URL, action) == NULL)
             continue;
 
         test_key_binding(
             &ctx, &parse_section_url_bindings,
             action, BIND_ACTION_URL_COUNT - 1,
-            url_binding_action_map, &conf.bindings.url, KEY_BINDING,
+            MAP_KIND_URL, &conf.bindings.url, KEY_BINDING,
             false, false);
     }
 
@@ -1328,7 +1404,7 @@ test_section_url_bindings_collisions(void)
 
     test_binding_collisions(
         &ctx,
-        BIND_ACTION_URL_COUNT - 1, url_binding_action_map, KEY_BINDING);
+        BIND_ACTION_URL_COUNT - 1, MAP_KIND_URL, KEY_BINDING);
 
     config_free(&conf);
 }
@@ -1343,13 +1419,13 @@ test_section_mouse_bindings(void)
     test_invalid_key(&ctx, &parse_section_mouse_bindings, "invalid-key");
 
     for (int action = 0; action < BIND_ACTION_COUNT; action++) {
-        if (binding_action_map[action] == NULL)
+        if (config_action_map_name(MAP_KIND_KEY, action) == NULL)
             continue;
 
         test_key_binding(
             &ctx, &parse_section_mouse_bindings,
             action, BIND_ACTION_COUNT - 1,
-            binding_action_map, &conf.bindings.mouse, MOUSE_BINDING,
+            MAP_KIND_KEY, &conf.bindings.mouse, MOUSE_BINDING,
             false, false);
     }
 
@@ -1365,7 +1441,7 @@ test_section_mouse_bindings_collisions(void)
 
     test_binding_collisions(
         &ctx,
-        BIND_ACTION_COUNT - 1, binding_action_map, MOUSE_BINDING);
+        BIND_ACTION_COUNT - 1, MAP_KIND_KEY, MOUSE_BINDING);
 
     config_free(&conf);
 }
@@ -1543,6 +1619,7 @@ main(int argc, const char *const *argv)
     test_section_colors_light();
     test_section_csd();
     test_section_key_bindings();
+    test_key_binding_sequences();
     test_section_key_bindings_collisions();
     test_section_search_bindings();
     test_section_search_bindings_collisions();

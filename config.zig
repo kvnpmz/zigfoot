@@ -1120,6 +1120,222 @@ export fn modifiers_to_str(
     return @ptrCast(ret);
 }
 
+// ── key-binding action tables (C2k) ───────────────────────────────
+
+const BindAction = enum(c_int) {
+    none = 0,
+    noop = 1,
+    scrollback_up_page = 2,
+    scrollback_up_half_page = 3,
+    scrollback_up_line = 4,
+    scrollback_down_page = 5,
+    scrollback_down_half_page = 6,
+    scrollback_down_line = 7,
+    scrollback_home = 8,
+    scrollback_end = 9,
+    clipboard_copy = 10,
+    clipboard_paste = 11,
+    primary_paste = 12,
+    search_start = 13,
+    font_size_up = 14,
+    font_size_down = 15,
+    font_size_reset = 16,
+    spawn_terminal = 17,
+    minimize = 18,
+    maximize = 19,
+    fullscreen = 20,
+    pipe_scrollback = 21,
+    pipe_view = 22,
+    pipe_selected = 23,
+    pipe_command_output = 24,
+    show_urls_copy = 25,
+    show_urls_launch = 26,
+    show_urls_persistent = 27,
+    text_binding = 28,
+    prompt_prev = 29,
+    prompt_next = 30,
+    unicode_input = 31,
+    quit = 32,
+    regex_launch = 33,
+    regex_copy = 34,
+    theme_switch_dark = 35,
+    theme_switch_light = 36,
+    theme_toggle = 37,
+    scrollback_up_mouse = 38,
+    scrollback_down_mouse = 39,
+    select_begin = 40,
+    select_begin_block = 41,
+    select_extend = 42,
+    select_extend_char_wise = 43,
+    select_word = 44,
+    select_word_ws = 45,
+    select_quote = 46,
+    select_row = 47,
+};
+
+const binding_action_map = [_]?[*:0]const u8{
+    null, // BIND_ACTION_NONE
+    "noop", // BIND_ACTION_NOOP
+    "scrollback-up-page", // BIND_ACTION_SCROLLBACK_UP_PAGE
+    "scrollback-up-half-page", // BIND_ACTION_SCROLLBACK_UP_HALF_PAGE
+    "scrollback-up-line", // BIND_ACTION_SCROLLBACK_UP_LINE
+    "scrollback-down-page", // BIND_ACTION_SCROLLBACK_DOWN_PAGE
+    "scrollback-down-half-page", // BIND_ACTION_SCROLLBACK_DOWN_HALF_PAGE
+    "scrollback-down-line", // BIND_ACTION_SCROLLBACK_DOWN_LINE
+    "scrollback-home", // BIND_ACTION_SCROLLBACK_HOME
+    "scrollback-end", // BIND_ACTION_SCROLLBACK_END
+    "clipboard-copy", // BIND_ACTION_CLIPBOARD_COPY
+    "clipboard-paste", // BIND_ACTION_CLIPBOARD_PASTE
+    "primary-paste", // BIND_ACTION_PRIMARY_PASTE
+    "search-start", // BIND_ACTION_SEARCH_START
+    "font-increase", // BIND_ACTION_FONT_SIZE_UP
+    "font-decrease", // BIND_ACTION_FONT_SIZE_DOWN
+    "font-reset", // BIND_ACTION_FONT_SIZE_RESET
+    "spawn-terminal", // BIND_ACTION_SPAWN_TERMINAL
+    "minimize", // BIND_ACTION_MINIMIZE
+    "maximize", // BIND_ACTION_MAXIMIZE
+    "fullscreen", // BIND_ACTION_FULLSCREEN
+    "pipe-scrollback", // BIND_ACTION_PIPE_SCROLLBACK
+    "pipe-visible", // BIND_ACTION_PIPE_VIEW
+    "pipe-selected", // BIND_ACTION_PIPE_SELECTED
+    "pipe-command-output", // BIND_ACTION_PIPE_COMMAND_OUTPUT
+    "show-urls-copy", // BIND_ACTION_SHOW_URLS_COPY
+    "show-urls-launch", // BIND_ACTION_SHOW_URLS_LAUNCH
+    "show-urls-persistent", // BIND_ACTION_SHOW_URLS_PERSISTENT
+    "text-binding", // BIND_ACTION_TEXT_BINDING
+    "prompt-prev", // BIND_ACTION_PROMPT_PREV
+    "prompt-next", // BIND_ACTION_PROMPT_NEXT
+    "unicode-input", // BIND_ACTION_UNICODE_INPUT
+    "quit", // BIND_ACTION_QUIT
+    "regex-launch", // BIND_ACTION_REGEX_LAUNCH
+    "regex-copy", // BIND_ACTION_REGEX_COPY
+    "color-theme-switch-dark", // BIND_ACTION_THEME_SWITCH_DARK
+    "color-theme-switch-light", // BIND_ACTION_THEME_SWITCH_LIGHT
+    "color-theme-toggle", // BIND_ACTION_THEME_TOGGLE
+    "scrollback-up-mouse", // BIND_ACTION_SCROLLBACK_UP_MOUSE
+    "scrollback-down-mouse", // BIND_ACTION_SCROLLBACK_DOWN_MOUSE
+    "select-begin", // BIND_ACTION_SELECT_BEGIN
+    "select-begin-block", // BIND_ACTION_SELECT_BEGIN_BLOCK
+    "select-extend", // BIND_ACTION_SELECT_EXTEND
+    "select-extend-character-wise", // BIND_ACTION_SELECT_EXTEND_CHAR_WISE
+    "select-word", // BIND_ACTION_SELECT_WORD
+    "select-word-whitespace", // BIND_ACTION_SELECT_WORD_WS
+    "select-quote", // BIND_ACTION_SELECT_QUOTE
+    "select-row", // BIND_ACTION_SELECT_ROW
+};
+
+const SearchBindAction = enum(c_int) {
+    none = 0,
+    scrollback_up_page = 1,
+    scrollback_up_half_page = 2,
+    scrollback_up_line = 3,
+    scrollback_down_page = 4,
+    scrollback_down_half_page = 5,
+    scrollback_down_line = 6,
+    scrollback_home = 7,
+    scrollback_end = 8,
+    cancel = 9,
+    commit = 10,
+    find_prev = 11,
+    find_next = 12,
+    edit_left = 13,
+    edit_left_word = 14,
+    edit_right = 15,
+    edit_right_word = 16,
+    edit_home = 17,
+    edit_end = 18,
+    delete_prev = 19,
+    delete_prev_word = 20,
+    delete_next = 21,
+    delete_next_word = 22,
+    delete_to_start = 23,
+    delete_to_end = 24,
+    extend_char = 25,
+    extend_word = 26,
+    extend_word_ws = 27,
+    extend_line_down = 28,
+    extend_backward_char = 29,
+    extend_backward_word = 30,
+    extend_backward_word_ws = 31,
+    extend_line_up = 32,
+    clipboard_paste = 33,
+    primary_paste = 34,
+    unicode_input = 35,
+};
+
+const search_binding_action_map = [_]?[*:0]const u8{
+    null, // BIND_ACTION_SEARCH_NONE
+    "scrollback-up-page", // BIND_ACTION_SEARCH_SCROLLBACK_UP_PAGE
+    "scrollback-up-half-page", // BIND_ACTION_SEARCH_SCROLLBACK_UP_HALF_PAGE
+    "scrollback-up-line", // BIND_ACTION_SEARCH_SCROLLBACK_UP_LINE
+    "scrollback-down-page", // BIND_ACTION_SEARCH_SCROLLBACK_DOWN_PAGE
+    "scrollback-down-half-page", // BIND_ACTION_SEARCH_SCROLLBACK_DOWN_HALF_PAGE
+    "scrollback-down-line", // BIND_ACTION_SEARCH_SCROLLBACK_DOWN_LINE
+    "scrollback-home", // BIND_ACTION_SEARCH_SCROLLBACK_HOME
+    "scrollback-end", // BIND_ACTION_SEARCH_SCROLLBACK_END
+    "cancel", // BIND_ACTION_SEARCH_CANCEL
+    "commit", // BIND_ACTION_SEARCH_COMMIT
+    "find-prev", // BIND_ACTION_SEARCH_FIND_PREV
+    "find-next", // BIND_ACTION_SEARCH_FIND_NEXT
+    "cursor-left", // BIND_ACTION_SEARCH_EDIT_LEFT
+    "cursor-left-word", // BIND_ACTION_SEARCH_EDIT_LEFT_WORD
+    "cursor-right", // BIND_ACTION_SEARCH_EDIT_RIGHT
+    "cursor-right-word", // BIND_ACTION_SEARCH_EDIT_RIGHT_WORD
+    "cursor-home", // BIND_ACTION_SEARCH_EDIT_HOME
+    "cursor-end", // BIND_ACTION_SEARCH_EDIT_END
+    "delete-prev", // BIND_ACTION_SEARCH_DELETE_PREV
+    "delete-prev-word", // BIND_ACTION_SEARCH_DELETE_PREV_WORD
+    "delete-next", // BIND_ACTION_SEARCH_DELETE_NEXT
+    "delete-next-word", // BIND_ACTION_SEARCH_DELETE_NEXT_WORD
+    "delete-to-start", // BIND_ACTION_SEARCH_DELETE_TO_START
+    "delete-to-end", // BIND_ACTION_SEARCH_DELETE_TO_END
+    "extend-char", // BIND_ACTION_SEARCH_EXTEND_CHAR
+    "extend-to-word-boundary", // BIND_ACTION_SEARCH_EXTEND_WORD
+    "extend-to-next-whitespace", // BIND_ACTION_SEARCH_EXTEND_WORD_WS
+    "extend-line-down", // BIND_ACTION_SEARCH_EXTEND_LINE_DOWN
+    "extend-backward-char", // BIND_ACTION_SEARCH_EXTEND_BACKWARD_CHAR
+    "extend-backward-to-word-boundary", // BIND_ACTION_SEARCH_EXTEND_BACKWARD_WORD
+    "extend-backward-to-next-whitespace", // BIND_ACTION_SEARCH_EXTEND_BACKWARD_WORD_WS
+    "extend-line-up", // BIND_ACTION_SEARCH_EXTEND_LINE_UP
+    "clipboard-paste", // BIND_ACTION_SEARCH_CLIPBOARD_PASTE
+    "primary-paste", // BIND_ACTION_SEARCH_PRIMARY_PASTE
+    "unicode-input", // BIND_ACTION_SEARCH_UNICODE_INPUT
+};
+
+const UrlBindAction = enum(c_int) {
+    none = 0,
+    cancel = 1,
+    toggle_url_on_jump_label = 2,
+};
+
+const url_binding_action_map = [_]?[*:0]const u8{
+    null, // BIND_ACTION_URL_NONE
+    "cancel", // BIND_ACTION_URL_CANCEL
+    "toggle-url-visible", // BIND_ACTION_URL_TOGGLE_URL_ON_JUMP_LABEL
+};
+
+const MapKind = enum(c_int) { key = 0, search = 1, url = 2 };
+
+fn actionMap(kind: MapKind) []const ?[*:0]const u8 {
+    return switch (kind) {
+        .key => &binding_action_map,
+        .search => &search_binding_action_map,
+        .url => &url_binding_action_map,
+    };
+}
+
+export fn config_action_map_count(kind: c_int) callconv(.c) usize {
+    return actionMap(@enumFromInt(kind)).len;
+}
+
+export fn config_action_map_name(kind: c_int, action: c_int) callconv(.c) ?[*:0]const u8 {
+    const map = actionMap(@enumFromInt(kind));
+    if (action < 0 or action >= map.len)
+        return null;
+    return map[@intCast(action)];
+}
+
+
 // ── key-binding values (C2j) ──────────────────────────────────────
 
 extern fn xrealloc(ptr: ?*anyopaque, size: usize) callconv(.c) ?*anyopaque;
@@ -1362,6 +1578,406 @@ export fn value_to_key_combos(
     free(combos);
     free(copy);
     return true;
+}
+
+// ── key-binding sections and collisions (C2k) ─────────────────────
+
+extern fn log_and_notify(
+    conf: *types.Config,
+    class: c_int,
+    file: [*:0]const u8,
+    lineno: c_int,
+    fmt: [*:0]const u8,
+    ...
+) callconv(.c) void;
+extern fn xkb_keysym_get_name(sym: u32, buf: [*]u8, len: usize) callconv(.c) c_int;
+
+fn notifyErr(
+    conf: *types.Config,
+    src: std.builtin.SourceLocation,
+    comptime fmt: []const u8,
+    args: anytype,
+) void {
+    var buf: [1024]u8 = undefined;
+    const msg: [:0]const u8 = std.fmt.bufPrintZ(&buf, fmt, args) catch "invalid value";
+    log_and_notify(conf, LOG_CLASS_ERROR, src.file, @intCast(src.line), "%s", msg.ptr);
+}
+
+fn actionName(map: []const ?[*:0]const u8, action: c_int) []const u8 {
+    if (action < 0 or action >= map.len)
+        return "(null)";
+    const name = map[@intCast(action)] orelse return "(null)";
+    return std.mem.span(name);
+}
+
+/// C: parse_key_binding_section(). `kind` selects the action table; only the
+/// normal table has the pipe/regex aux prefixes.
+fn parseKeyBindingSection(
+    ctx: *Context,
+    comptime kind: MapKind,
+    bindings: *types.ConfigKeyBindingList,
+) bool {
+    const map = actionMap(kind);
+
+    for (map, 0..) |maybe_name, action| {
+        const name = maybe_name orelse continue;
+        if (!eq(ctx.key, std.mem.span(name)))
+            continue;
+
+        var aux = std.mem.zeroes(types.BindingAux);
+        aux.master_copy = true;
+
+        if (kind == .key) {
+            const action_i: c_int = @intCast(action);
+
+            if (action_i >= @intFromEnum(BindAction.pipe_scrollback) and
+                action_i <= @intFromEnum(BindAction.pipe_command_output))
+            {
+                if (pipe_argv_from_value(ctx, &aux._u.pipe) <= 0)
+                    return false;
+
+                aux.type = .pipe;
+                aux.master_copy = true;
+            } else if (action_i >= @intFromEnum(BindAction.regex_launch) and
+                action_i <= @intFromEnum(BindAction.regex_copy))
+            {
+                var regex_name: ?[*:0]u8 = null;
+                if (regex_name_from_value(ctx, &regex_name) <= 0)
+                    return false;
+
+                aux.type = .regex;
+                aux.master_copy = true;
+                aux._u.regex_name = regex_name;
+            }
+        }
+
+        if (!value_to_key_combos(ctx, @intCast(action), &aux, bindings, .key)) {
+            free_binding_aux(&aux);
+            return false;
+        }
+
+        return true;
+    }
+
+    contextualErr(ctx, @src(), "not a valid action: {s}", .{std.mem.span(ctx.key orelse "")});
+    return false;
+}
+
+export fn parse_section_key_bindings(ctx: *Context) callconv(.c) bool {
+    return parseKeyBindingSection(ctx, .key, &ctx.conf.?.bindings.key);
+}
+
+export fn parse_section_search_bindings(ctx: *Context) callconv(.c) bool {
+    return parseKeyBindingSection(ctx, .search, &ctx.conf.?.bindings.search);
+}
+
+export fn parse_section_url_bindings(ctx: *Context) callconv(.c) bool {
+    return parseKeyBindingSection(ctx, .url, &ctx.conf.?.bindings.url);
+}
+
+export fn parse_section_mouse_bindings(ctx: *Context) callconv(.c) bool {
+    const conf = ctx.conf.?;
+    const key = ctx.key orelse return true;
+    const value = ctx.value orelse return false;
+
+    if (eq(key, "selection-override-modifiers")) {
+        parse_modifiers(value, strlen(value), &conf.mouse.selection_override_modifiers);
+        return true;
+    }
+
+    var aux = std.mem.zeroes(types.BindingAux);
+    const pipe_remove_len = pipe_argv_from_value(ctx, &aux._u.pipe);
+    if (pipe_remove_len < 0)
+        return false;
+
+    aux.type = if (pipe_remove_len == 0) .none else .pipe;
+    aux.master_copy = true;
+
+    for (binding_action_map, 0..) |maybe_name, action| {
+        const name = maybe_name orelse continue;
+        if (!eq(key, std.mem.span(name)))
+            continue;
+
+        if (!value_to_key_combos(ctx, @intCast(action), &aux, &conf.bindings.mouse, .mouse)) {
+            free_binding_aux(&aux);
+            return false;
+        }
+
+        return true;
+    }
+
+    contextualErr(ctx, @src(), "not a valid option: {s}", .{std.mem.span(key)});
+    free_binding_aux(&aux);
+    return false;
+}
+
+const HEX_DIGIT_INVALID: u8 = 16;
+
+fn hex2nibble(c: u8) u8 {
+    return switch (c) {
+        '0'...'9' => c - '0',
+        'a'...'f' => c - 'a' + 10,
+        'A'...'F' => c - 'A' + 10,
+        else => HEX_DIGIT_INVALID,
+    };
+}
+
+export fn parse_section_text_bindings(ctx: *Context) callconv(.c) bool {
+    const conf = ctx.conf.?;
+    const key = ctx.key orelse return true;
+    const key_len = strlen(key);
+
+    const data: [*]u8 = @ptrCast(xmalloc(key_len + 1) orelse unreachable);
+    var data_len: usize = 0;
+    var esc = false;
+
+    var i: usize = 0;
+    while (i < key_len) : (i += 1) {
+        if (key[i] == '\\') {
+            if (i + 1 >= key_len) {
+                ctx.value = "";
+                contextualErr(ctx, @src(), "trailing backslash", .{});
+                free(data);
+                return false;
+            }
+
+            esc = true;
+        } else if (esc) {
+            if (key[i] != 'x') {
+                ctx.value = "";
+                contextualErr(ctx, @src(), "invalid escaped character: {c}", .{key[i]});
+                free(data);
+                return false;
+            }
+            if (i + 2 >= key_len) {
+                ctx.value = "";
+                contextualErr(ctx, @src(), "\\x sequence too short", .{});
+                free(data);
+                return false;
+            }
+
+            const nib1 = hex2nibble(key[i + 1]);
+            const nib2 = hex2nibble(key[i + 2]);
+
+            if (nib1 >= HEX_DIGIT_INVALID or nib2 >= HEX_DIGIT_INVALID) {
+                ctx.value = "";
+                contextualErr(
+                    ctx,
+                    @src(),
+                    "invalid \\x sequence: \\x{c}{c}",
+                    .{ key[i + 1], key[i + 2] },
+                );
+                free(data);
+                return false;
+            }
+
+            data[data_len] = (nib1 << 4) | nib2;
+            data_len += 1;
+            esc = false;
+            i += 2;
+        } else {
+            data[data_len] = key[i];
+            data_len += 1;
+        }
+    }
+
+    var aux = std.mem.zeroes(types.BindingAux);
+    aux.type = .text;
+    aux._u.text = .{ .data = data, .len = data_len };
+
+    if (!value_to_key_combos(
+        ctx,
+        @intFromEnum(BindAction.text_binding),
+        &aux,
+        &conf.bindings.key,
+        .key,
+    )) {
+        // Matches C: data is owned (and freed) by value_to_key_combos().
+        return false;
+    }
+
+    return true;
+}
+
+fn resolveKeyBindingCollisions(
+    conf: *types.Config,
+    section_name: [*:0]const u8,
+    comptime kind: MapKind,
+    bindings: *types.ConfigKeyBindingList,
+    btype: types.KeyBindingType,
+) bool {
+    const map = actionMap(kind);
+    var ret = true;
+
+    var i: usize = 1;
+    while (i < bindings.count) : (i += 1) {
+        const arr = bindings.arr.?;
+        var collision_override = false;
+        var collision_binding: ?*types.ConfigKeyBinding = null;
+
+        const binding1 = &arr[i];
+        const mods1 = &binding1.modifiers;
+
+        // Does our modifiers collide with the selection override mods?
+        if (btype == .mouse and
+            !modifiers_disjoint(mods1, &conf.mouse.selection_override_modifiers))
+        {
+            collision_override = true;
+        }
+
+        // Does our binding collide with another binding?
+        if (!collision_override) {
+            var j = i;
+            while (j > 0) {
+                j -= 1;
+                const binding2 = &arr[j];
+
+                if (binding2.action == binding1.action and
+                    binding_aux_equal(&binding1.aux, &binding2.aux))
+                {
+                    continue;
+                }
+
+                const mods_equal = modifiers_equal(mods1, &binding2.modifiers);
+                const sym_equal = switch (btype) {
+                    .key => binding1._u.k.sym == binding2._u.k.sym,
+                    .mouse => binding1._u.m.button == binding2._u.m.button and
+                        binding1._u.m.count == binding2._u.m.count,
+                };
+
+                if (!mods_equal or !sym_equal)
+                    continue;
+
+                collision_binding = binding2;
+                break;
+            }
+        }
+
+        if (!collision_override and collision_binding == null)
+            continue;
+
+        const modifier_names = modifiers_to_str(mods1, false);
+        defer free(@ptrCast(modifier_names));
+
+        var sym_buf: [64]u8 = undefined;
+        sym_buf[0] = 0;
+        switch (btype) {
+            .key => _ = xkb_keysym_get_name(binding1._u.k.sym, &sym_buf, sym_buf.len),
+            .mouse => {
+                const button_name = mouse_button_code_to_name(binding1._u.m.button) orelse "(null)";
+                if (binding1._u.m.count > 1) {
+                    _ = std.fmt.bufPrintZ(&sym_buf, "{s}-{d}", .{
+                        std.mem.span(button_name), binding1._u.m.count,
+                    }) catch {
+                        sym_buf[0] = 0;
+                    };
+                } else {
+                    const name = std.mem.span(button_name);
+                    const len = @min(name.len, sym_buf.len - 1);
+                    @memcpy(sym_buf[0..len], name[0..len]);
+                    sym_buf[len] = 0;
+                }
+            },
+        }
+
+        const mod_names: []const u8 = if (modifier_names) |m| std.mem.span(m) else "";
+        const sym_name = std.mem.sliceTo(&sym_buf, 0);
+
+        if (collision_binding) |other| {
+            const has_pipe = other.aux.type == .pipe;
+            var pipe_cmd: []const u8 = "";
+            if (has_pipe) {
+                if (other.aux._u.pipe.args) |args| {
+                    if (args[0]) |cmd| pipe_cmd = std.mem.span(cmd);
+                }
+            }
+
+            notifyErr(
+                conf,
+                @src(),
+                "{s}:{d}: [{s}].{s}: {s}{s} already mapped to '{s}{s}{s}{s}'",
+                .{
+                    if (binding1.path) |p| std.mem.span(p) else "(null)",
+                    binding1.lineno,
+                    std.mem.span(section_name),
+                    actionName(map, binding1.action),
+                    mod_names,
+                    sym_name,
+                    actionName(map, other.action),
+                    if (has_pipe) " [" else "",
+                    pipe_cmd,
+                    if (has_pipe) "]" else "",
+                },
+            );
+            ret = false;
+        } else {
+            const override_names = modifiers_to_str(&conf.mouse.selection_override_modifiers, true);
+            defer free(@ptrCast(override_names));
+
+            notifyErr(
+                conf,
+                @src(),
+                "{s}:{d}: [{s}].{s}: {s}{s}: modifiers conflict with 'selection-override-modifiers={s}'",
+                .{
+                    if (binding1.path) |p| std.mem.span(p) else "(default)",
+                    binding1.lineno,
+                    std.mem.span(section_name),
+                    actionName(map, binding1.action),
+                    mod_names,
+                    sym_name,
+                    if (override_names) |n| std.mem.span(n) else "",
+                },
+            );
+            ret = false;
+        }
+
+        // Transfer aux ownership to the next binding in the same group, so
+        // removing this one doesn't free data still referenced by it.
+        if (binding1.aux.master_copy and i + 1 < bindings.count) {
+            const next = &arr[i + 1];
+            if (next.action == binding1.action and
+                binding_aux_equal(&binding1.aux, &next.aux))
+            {
+                next.aux.master_copy = true;
+                binding1.aux.master_copy = false;
+            }
+        }
+
+        free_key_binding(binding1);
+
+        // Remove the most recent binding.
+        const move_count = bindings.count - (i + 1);
+        std.mem.copyForwards(
+            types.ConfigKeyBinding,
+            arr[i .. i + move_count],
+            arr[i + 1 .. i + 1 + move_count],
+        );
+        bindings.count -= 1;
+        i -= 1;
+    }
+
+    return ret;
+}
+
+export fn config_resolve_key_binding_collisions(
+    conf: *types.Config,
+    section_name: [*:0]const u8,
+    kind: c_int,
+    bindings: *types.ConfigKeyBindingList,
+    btype: types.KeyBindingType,
+) callconv(.c) bool {
+    return switch (@as(MapKind, @enumFromInt(kind))) {
+        .key => resolveKeyBindingCollisions(conf, section_name, .key, bindings, btype),
+        .search => resolveKeyBindingCollisions(conf, section_name, .search, bindings, btype),
+        .url => resolveKeyBindingCollisions(conf, section_name, .url, bindings, btype),
+    };
+}
+
+export fn config_bindings_finalize(conf: *types.Config) callconv(.c) bool {
+    return resolveKeyBindingCollisions(conf, "key-bindings", .key, &conf.bindings.key, .key) and
+        resolveKeyBindingCollisions(conf, "search-bindings", .search, &conf.bindings.search, .key) and
+        resolveKeyBindingCollisions(conf, "url-bindings", .url, &conf.bindings.url, .key) and
+        resolveKeyBindingCollisions(conf, "mouse-bindings", .key, &conf.bindings.mouse, .mouse);
 }
 
 // ── [colors] and [csd] (C2c) ──────────────────────────────────────
@@ -2073,10 +2689,8 @@ export fn parse_section_main(ctx: *Context) callconv(.c) bool {
 
 // ── the config file loop (C2f) ────────────────────────────────────
 //
-// This is the last non-binding piece of the parser: split lines into
-// key/value pairs, track the current section, dispatch to the section
-// parser. The key-binding sections and [url]/[regex] are still C, and are
-// reachable through the table below like any other parser.
+// The file/section/key-value loop: split lines into key/value pairs, track
+// the current section, dispatch to the section parser.
 
 const ParserFun = *const fn (*Context) callconv(.c) bool;
 
@@ -2086,11 +2700,6 @@ const SectionInfo = struct {
     allow_colon_suffix: bool = false,
 };
 
-extern fn parse_section_key_bindings(ctx: *Context) callconv(.c) bool;
-extern fn parse_section_search_bindings(ctx: *Context) callconv(.c) bool;
-extern fn parse_section_url_bindings(ctx: *Context) callconv(.c) bool;
-extern fn parse_section_mouse_bindings(ctx: *Context) callconv(.c) bool;
-extern fn parse_section_text_bindings(ctx: *Context) callconv(.c) bool;
 
 const SECTION_MAIN = 0;
 const SECTION_COUNT = 20;
@@ -2424,7 +3033,6 @@ export fn parse_config_file(
 const tll = @import("tll.zig");
 const Overrides = tll.Tll(?[*:0]u8);
 
-extern fn config_bindings_finalize(conf: *types.Config) callconv(.c) bool;
 
 const SECTION_KEY_BINDINGS = 12;
 const SECTION_SEARCH_BINDINGS = 13;
