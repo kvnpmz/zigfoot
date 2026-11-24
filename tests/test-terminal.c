@@ -1672,6 +1672,128 @@ test_shm_chain(void)
     shm_chain_free(chain);
 }
 
+
+/* shm_scroll(): offset rotation and keep-row moves. Requires punch-hole
+ * support on the backing file; skipped otherwise. */
+static void
+test_shm_scroll(void)
+{
+    const off_t default_max_pool_size = 512 * 1024 * 1024;
+    const int width = 8, height = 6;
+
+    struct buffer_chain *chain =
+        shm_chain_new(NULL, true, 1, SHM_BITS_8, NULL, NULL);
+    check(chain != NULL, "scrollable chain allocates");
+
+    struct buffer *buf = shm_get_buffer(chain, width, height);
+    check(buf != NULL, "scrollable chain allocates a buffer");
+    if (buf == NULL) {
+        shm_chain_free(chain);
+        return;
+    }
+
+    if (!shm_can_scroll(buf)) {
+        printf("skip: fallocate(FALLOC_FL_PUNCH_HOLE) not supported\n");
+        shm_did_not_use_buf(buf);
+        shm_unref(buf);
+        shm_chain_free(chain);
+        return;
+    }
+
+    struct buffer_private *priv = (struct buffer_private *)buf;
+    const int stride = buf->stride;
+
+    /* Fill each row with a distinct byte so the moves are observable. */
+    for (int r = 0; r < height; r++)
+        memset((uint8_t *)buf->data + r * stride, 0x10 + r, stride);
+
+    const off_t offset = priv->offset;
+
+    /* Forward one row, keeping the top two rows in place. */
+    check(shm_scroll(buf, 1, 0, 2, 0, 0), "scroll forward succeeds");
+    check(priv->offset == offset + stride,
+          "forward scroll advances the offset by one row");
+    check(buf->data == (uint8_t *)priv->pool->real_mmapped + priv->offset,
+          "buffer data follows the new offset");
+    /* The buffer was relocated one row forward, so new row 0 aliases old
+     * row 1. The keep-rows memmove must have written old row 0 into that
+     * spot; without it the byte would be 0x11. */
+    check(((uint8_t *)buf->data)[0] == 0x10,
+          "forward scroll moves the top region down one row");
+    check(buf->pix != NULL && buf->pix[0] != NULL && buf->wl_buf != NULL,
+          "forward scroll re-instantiates pixman+wl_buffer");
+
+    /* Reverse one row, keeping the bottom two rows in place. */
+    for (int r = 0; r < height; r++)
+        memset((uint8_t *)buf->data + r * stride, 0x20 + r, stride);
+
+    const off_t offset2 = priv->offset;
+    check(shm_scroll(buf, -1, 0, 0, 0, 2), "scroll reverse succeeds");
+    check(priv->offset == offset2 - stride,
+          "reverse scroll rewinds the offset by one row");
+    check(buf->data == (uint8_t *)priv->pool->real_mmapped + priv->offset,
+          "reverse scroll re-points the buffer data");
+    /* The bottom_keep_rows memmove copies rows h-3..h-2 down to h-2..h-1,
+     * so after the relocation new row h-2 holds old row h-3 (0x23 for six
+     * rows; without the memmove it would be 0x24). */
+    /* The keep-rows memmove copies rows h-2..h-1 down onto h-3..h-2; after
+     * the relocation new row h-2 aliases old row h-3, which must hold the
+     * original bottom-row byte 0x24 (0x20 + h - 2). */
+    check(((uint8_t *)buf->data)[(height - 2) * stride] == 0x20 + (height - 2),
+          "reverse scroll moves the bottom region up one row");
+    check(buf->pix != NULL && buf->wl_buf != NULL,
+          "reverse scroll re-instantiates pixman+wl_buffer");
+
+    shm_did_not_use_buf(buf);
+    shm_unref(buf);
+    shm_chain_free(chain);
+
+    /* A small pool forces the memfd offset to wrap around. */
+    shm_set_max_pool_size(4096);
+    chain = shm_chain_new(NULL, true, 1, SHM_BITS_8, NULL, NULL);
+    buf = shm_get_buffer(chain, width, height);
+    priv = (struct buffer_private *)buf;
+
+    if (buf != NULL && shm_can_scroll(buf)) {
+        int wrapped = 0;
+        int ok = 1;
+        off_t prev = priv->offset;
+
+        for (int i = 0; i < 200; i++) {
+            if (!shm_scroll(buf, 1, 0, 0, 0, 0)) {
+                ok = 0;
+                break;
+            }
+            if (priv->offset < prev)
+                wrapped = 1;
+            if (priv->offset + (off_t)priv->size > 4096) {
+                ok = 0;
+                break;
+            }
+            prev = priv->offset;
+        }
+
+        check(ok, "scrolling stays within the pool");
+        check(wrapped, "forward scroll wraps around the pool");
+    } else {
+        check(false, "small scrollable pool allocates");
+    }
+
+    shm_did_not_use_buf(buf);
+    shm_unref(buf);
+    shm_chain_free(chain);
+    shm_set_max_pool_size(default_max_pool_size);
+
+    /* A non-scrollable buffer never scrolls. */
+    chain = shm_chain_new(NULL, false, 1, SHM_BITS_8, NULL, NULL);
+    buf = shm_get_buffer(chain, width, height);
+    check(!shm_can_scroll(buf), "non-scrollable buffers report no scroll");
+    check(!shm_scroll(buf, 1, 0, 0, 0, 0), "non-scrollable buffers refuse to scroll");
+    shm_did_not_use_buf(buf);
+    shm_unref(buf);
+    shm_chain_free(chain);
+}
+
 int
 main(void)
 {
@@ -1714,6 +1836,7 @@ main(void)
     test_shm_lifetime();
     test_shm_cache();
     test_shm_chain();
+    test_shm_scroll();
 
     fcft_fini();
 

@@ -2,9 +2,11 @@ const std = @import("std");
 const types = @import("terminal_types.zig");
 
 //
-// Chunk S1 — shm buffer lifetime: destruction, pool refcounting, deferred
-// release and chain bookkeeping. Allocation (get_new_buffers), scrolling and
-// chain creation remain in shm.c for now.
+// Chunks S1-S5 — the whole of shm.c except the platform shims: buffer lifetime
+// (S1), allocation (S2), the buffer cache (S3), chain construction/bit depth
+// (S4) and scrolling (S5). What is left in shm.c is the wl_shm protocol glue,
+// the wl_buffer_listener, the static globals, and one-line #ifdef shims for
+// memfd_create/SHM_ANON/mkostemp, fallocate punch-hole, mmap flags and sealing.
 //
 // The private structs live in shm.h so the ABI probe can pin them; this file
 // mirrors them in terminal_types.zig and owns the tllist heads it has to
@@ -361,7 +363,10 @@ extern fn pixman_image_create_bits_no_clear(
 ) callconv(.c) ?*anyopaque;
 extern fn pixman_region32_init(region: ?*anyopaque) callconv(.c) void;
 extern fn pixman_region32_clear(region: ?*anyopaque) callconv(.c) void;
-extern fn shm_can_scroll(buf: ?*types.Buffer) callconv(.c) bool;
+extern fn shm_shim_can_punch_hole() callconv(.c) bool;
+extern fn shm_shim_punch_hole(fd: c_int, ofs: i64, len: i64) callconv(.c) bool;
+extern fn memcpy(dest: ?*anyopaque, src: ?*const anyopaque, n: usize) callconv(.c) ?*anyopaque;
+extern fn memmove(dest: ?*anyopaque, src: ?*const anyopaque, n: usize) callconv(.c) ?*anyopaque;
 
 fn logErr(msg: [*:0]const u8) void {
     log_msg(LOG_CLASS_ERROR, "shm", "shm.zig", @intCast(@src().line), "%s", msg);
@@ -616,7 +621,8 @@ fn getNewBuffers(
     }
 
     // Keep the pool FD open only if we are going to SHM-scroll it.
-    if (!(bufs[0] != null and shm_can_scroll(bufs[0]))) {
+    if (!(bufs[0] != null and
+        canScroll(@ptrCast(@alignCast(bufs[0].?))))) {
         _ = close(pool_fd);
         pool.fd = -1;
     }
@@ -775,4 +781,236 @@ export fn shm_chain_bit_depth(
         return SHM_BITS_16;
 
     return SHM_BITS_10;
+}
+
+//
+// Chunk S5 — SHM scrolling. The punch-hole capability probe and the
+// fallocate() call are guarded by __SIZEOF_POINTER__/FALLOC_FL_PUNCH_HOLE in
+// shm.c (shm_shim_*), so the 32-bit and no-punch-hole builds fall out of
+// shmShimPunchHole() returning false and shm_can_scroll() returning false.
+//
+
+fn canScroll(buf: *const types.ShmBufferPrivate) bool {
+    if (comptime @sizeOf(usize) != 8)
+        return false; // Not enough virtual address space in 32-bit
+
+    return shm_shim_can_punch_hole() and
+        shm_shim_max_pool_size() > 0 and
+        buf.scrollable;
+}
+
+export fn shm_can_scroll(buf_ptr: *const types.Buffer) callconv(.c) bool {
+    const buf: *const types.ShmBufferPrivate = @ptrCast(@alignCast(buf_ptr));
+    return canScroll(buf);
+}
+
+fn wrapBuffer(buf: *types.ShmBufferPrivate, new_offset: i64) bool {
+    const pool = buf.pool.?;
+    std.debug.assert(pool.ref_count == 1);
+
+    // We don't allow overlapping offsets
+    const diff: i64 = if (new_offset < buf.offset)
+        buf.offset - new_offset
+    else
+        new_offset - buf.offset;
+    std.debug.assert(diff > @as(i64, @intCast(buf.size)));
+
+    const base: [*]u8 = @ptrCast(pool.real_mmapped.?);
+    _ = memcpy(
+        base + @as(usize, @intCast(new_offset)),
+        buf.public.data.?,
+        buf.size,
+    );
+
+    var trim_ofs: i64 = undefined;
+    var trim_len: i64 = undefined;
+    if (new_offset > buf.offset) {
+        // Trim everything *before* the new offset
+        trim_ofs = 0;
+        trim_len = new_offset;
+    } else {
+        // Trim everything *after* the new buffer location
+        trim_ofs = new_offset + @as(i64, @intCast(buf.size));
+        trim_len = @as(i64, @intCast(pool.mmap_size)) - trim_ofs;
+    }
+
+    if (!shm_shim_punch_hole(pool.fd, trim_ofs, trim_len)) {
+        logErrno("failed to trim SHM backing memory file");
+        return false;
+    }
+
+    // Re-instantiate pixman+wl_buffer+raw pointers
+    bufferDestroyDontClose(&buf.public);
+    return instantiate_offset(buf, new_offset);
+}
+
+fn topRegionBase(buf: *types.ShmBufferPrivate) [*]u8 {
+    return @ptrCast(buf.public.data.?);
+}
+
+fn scrollForward(
+    buf: *types.ShmBufferPrivate,
+    rows: c_int,
+    top_margin: c_int,
+    top_keep_rows: c_int,
+    bottom_margin: c_int,
+    bottom_keep_rows: c_int,
+) bool {
+    const pool = buf.pool.?;
+
+    std.debug.assert(shm_shim_can_punch_hole());
+    std.debug.assert(buf.busy);
+    std.debug.assert(buf.public.pix != null);
+    std.debug.assert(buf.public.wl_buf != null);
+    std.debug.assert(pool.ref_count == 1);
+    std.debug.assert(pool.fd >= 0);
+
+    const diff: i64 = @as(i64, rows) * @as(i64, buf.public.stride);
+    std.debug.assert(rows > 0);
+    std.debug.assert(diff < @as(i64, @intCast(buf.size)));
+
+    const max_pool = shm_shim_max_pool_size();
+
+    if (buf.offset + diff + @as(i64, @intCast(buf.size)) > max_pool) {
+        if (!wrapBuffer(buf, 0))
+            std.c.abort();
+    }
+
+    const new_offset = buf.offset + diff;
+    std.debug.assert(new_offset > buf.offset);
+    std.debug.assert(new_offset + @as(i64, @intCast(buf.size)) <= max_pool);
+
+    if (top_keep_rows > 0) {
+        // Copy current 'top' region to its new location
+        const stride: i64 = buf.public.stride;
+        const base = topRegionBase(buf);
+
+        _ = memmove(
+            base + @as(usize, @intCast((@as(i64, top_margin) + rows) * stride)),
+            base + @as(usize, @intCast(@as(i64, top_margin) * stride)),
+            @as(usize, @intCast(@as(i64, top_keep_rows) * stride)),
+        );
+    }
+
+    // Destroy old objects (they point to the old offset)
+    bufferDestroyDontClose(&buf.public);
+
+    // Free unused memory - everything up until the new offset
+    if (!shm_shim_punch_hole(pool.fd, 0, new_offset)) {
+        logErrno("failed to trim SHM backing memory file");
+        std.c.abort();
+    }
+
+    // Re-instantiate pixman+wl_buffer+raw pointers
+    const ret = instantiate_offset(buf, new_offset);
+
+    if (ret and bottom_keep_rows > 0) {
+        // Copy 'bottom' region to its new location
+        const size: i64 = @intCast(buf.size);
+        const stride: i64 = buf.public.stride;
+        const base = topRegionBase(buf);
+
+        _ = memmove(
+            base + @as(usize, @intCast(
+                size - (@as(i64, bottom_margin) + bottom_keep_rows) * stride)),
+            base + @as(usize, @intCast(
+                size - (@as(i64, bottom_margin) + rows + bottom_keep_rows) * stride)),
+            @as(usize, @intCast(@as(i64, bottom_keep_rows) * stride)),
+        );
+    }
+
+    return ret;
+}
+
+fn scrollReverse(
+    buf: *types.ShmBufferPrivate,
+    rows: c_int,
+    top_margin: c_int,
+    top_keep_rows: c_int,
+    bottom_margin: c_int,
+    bottom_keep_rows: c_int,
+) bool {
+    std.debug.assert(rows > 0);
+
+    const pool = buf.pool.?;
+    std.debug.assert(pool.ref_count == 1);
+
+    const max_pool = shm_shim_max_pool_size();
+    const diff: i64 = @as(i64, rows) * @as(i64, buf.public.stride);
+
+    if (diff > buf.offset) {
+        const page: i64 = @intCast(shm_shim_page_size());
+        if (!wrapBuffer(
+            buf,
+            (max_pool - @as(i64, @intCast(buf.size))) & ~(page - 1),
+        )) std.c.abort();
+    }
+
+    const new_offset = buf.offset - diff;
+    std.debug.assert(new_offset < buf.offset);
+    std.debug.assert(new_offset <= max_pool);
+
+    if (bottom_keep_rows > 0) {
+        // Copy 'bottom' region to its new location
+        const size: i64 = @intCast(buf.size);
+        const stride: i64 = buf.public.stride;
+        const base = topRegionBase(buf);
+
+        _ = memmove(
+            base + @as(usize, @intCast(
+                size - (@as(i64, bottom_margin) + rows + bottom_keep_rows) * stride)),
+            base + @as(usize, @intCast(
+                size - (@as(i64, bottom_margin) + bottom_keep_rows) * stride)),
+            @as(usize, @intCast(@as(i64, bottom_keep_rows) * stride)),
+        );
+    }
+
+    // Destroy old objects (they point to the old offset)
+    bufferDestroyDontClose(&buf.public);
+
+    // Free unused memory - everything after the relocated buffer
+    const trim_ofs = new_offset + @as(i64, @intCast(buf.size));
+    const trim_len = @as(i64, @intCast(pool.mmap_size)) - trim_ofs;
+
+    if (!shm_shim_punch_hole(pool.fd, trim_ofs, trim_len)) {
+        logErrno("failed to trim SHM backing memory file");
+        std.c.abort();
+    }
+
+    // Re-instantiate pixman+wl_buffer+raw pointers
+    const ret = instantiate_offset(buf, new_offset);
+
+    if (ret and top_keep_rows > 0) {
+        // Copy current 'top' region to its new location
+        const stride: i64 = buf.public.stride;
+        const base = topRegionBase(buf);
+
+        _ = memmove(
+            base + @as(usize, @intCast(@as(i64, top_margin) * stride)),
+            base + @as(usize, @intCast((@as(i64, top_margin) + rows) * stride)),
+            @as(usize, @intCast(@as(i64, top_keep_rows) * stride)),
+        );
+    }
+
+    return ret;
+}
+
+export fn shm_scroll(
+    buf_ptr: *types.Buffer,
+    rows: c_int,
+    top_margin: c_int,
+    top_keep_rows: c_int,
+    bottom_margin: c_int,
+    bottom_keep_rows: c_int,
+) callconv(.c) bool {
+    if (!canScroll(@ptrCast(@alignCast(buf_ptr))))
+        return false;
+
+    const buf: *types.ShmBufferPrivate = @ptrCast(@alignCast(buf_ptr));
+
+    std.debug.assert(rows != 0);
+    return if (rows > 0)
+        scrollForward(buf, rows, top_margin, top_keep_rows, bottom_margin, bottom_keep_rows)
+    else
+        scrollReverse(buf, -rows, top_margin, top_keep_rows, bottom_margin, bottom_keep_rows);
 }

@@ -2,8 +2,9 @@
 
 Status snapshot and a concrete continuation plan.
 Prepared 2026-11-23 against `feature/zig-migration` @ `a1d9d288`.
-Refreshed 2026-11-24 against @ `f8501a70` (Phase 0, Phase 1a, upstream merge,
-and config C1-C2o landed — the config parser is finished).
+Refreshed 2026-11-24 against @ `0a037632` (Phase 0, Phase 1a, upstream merge,
+config C1-C2o, the terminal font/DPI/size stack T9/T10, and `shm` S1-S5 —
+the config parser and the SHM allocator/cache/scroller are Zig).
 
 ---
 
@@ -18,8 +19,8 @@ foot-owned C lines are gone (44.7%)**, replaced by ~22.7k lines of Zig
 | State | Modules |
 |---|---|
 | **Ported, C deleted** (25) | `async`, `base64`, `char32`, `commands`, `composed`, `csi`, `cursor-shape`, `dcs`, `extract`, `fdm`, `grid`, `hsl`, `misc`, `notify`, `osc`, `reaper`, `sixel`, `spawn`, `spawn_template`, `tokenize`, `uri`, `vt`, `xmalloc`, `xsnprintf`, and **`config`** (the parser is Zig; the 335 surviving C lines are the variadic loggers, `config_regex_compile()` and two fcft field accessors — see §6.3) |
-| **In progress** (Zig + remaining C + shims) | `terminal.c` (2,410 left), `selection.c` (844 left) |
-| **Untouched** (19 modules, ~23.3k lines) | `box-drawing` (3,450), `render` (5,479), `input` (3,690), `wayland` (2,881), `search` (1,512), `shm` (1,110), `url-mode` (833), `main` (751), `server` (688), `key-binding` (661), `client` (629), `slave` (573), `ime` (532), `log` (231), `unicode-mode` (110), `quirks` (86), `debug` (47), `foot-features` (42), `user-notification` (14) |
+| **In progress** (Zig + remaining C + shims) | `terminal.c` (1,780 left), `selection.c` (844 left), `shm.c` (329 left — globals, 32-bit/punch-hole `#ifdef` shims, the `wl_buffer_listener` and the `wl_shm` protocol stubs; `shm.zig` is 1,014 lines) |
+| **Untouched** (18 modules, ~22.2k lines) | `box-drawing` (3,450), `render` (5,479), `input` (3,690), `wayland` (2,881), `search` (1,512), `url-mode` (833), `main` (751), `server` (688), `key-binding` (661), `client` (629), `slave` (573), `ime` (532), `log` (231), `unicode-mode` (110), `quirks` (86), `debug` (47), `foot-features` (42), `user-notification` (14) |
 
 **Progress read two ways:** 45% by C volume, but roughly **35% by effort**,
 because what remains is the hard core (`render`, `input`, `wayland`, the
@@ -607,11 +608,15 @@ utmp backends where available.
    the variadic loggers, the `regex_t` helper and two fcft accessors; the
    parser, the bindings, `config_load`/`clone`/`free` and the font helpers are
    Zig, and the oracle covers them.
-2. **Now: terminal T9/T10** (font stack + size/scale, ~640 C lines). They
-   were blocked on config's font fields, not on wayland, and they are the
-   last thing separating `terminal.c` from `wayland`/`render`.
-3. **`slave` + `shm` (~1.7k)** in parallel; shm is the foundation for
-   `render`, and both are testable without a compositor.
+2. ~~**terminal T9/T10** (font stack + size/scale, ~640 C lines).~~ — **done**
+   (today). `term_set_fonts`, `reload_fonts`, `load_fonts_from_conf`, the DPI
+   and subpixel policy, `term_update_scale` and the font-size adjustments are
+   Zig; the pure parts (`term_pt_or_px_as_pixels`, `term_font_baseline`,
+   `term_line_height_update`) live in `terminal_types.zig` and are unit-tested.
+3. ~~**`slave` + `shm` (~1.7k)**~~ — **`shm` done** (S1-S5: lifetime, allocation,
+   cache, chain API, scrolling), with 40+ headless harness assertions using a
+   NULL-`wl_shm` sentinel so real memfd/mmap/fallocate paths run without a
+   compositor. **Next: `slave` (573)** — no Wayland coupling, fully testable.
 4. **Keep the safety net moving:** add a Zig test whenever a chunk ports
    logic with a pure core, and run `meson test` in all three build dirs plus
    `scripts/smoke.sh` before each commit.
