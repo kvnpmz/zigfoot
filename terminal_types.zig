@@ -1243,6 +1243,8 @@ pub const ConfigKeyBindingList = extern struct {
     arr: ?[*]ConfigKeyBinding,
 };
 
+pub const RegexT = [abi.Config_url_preg__size]u8;
+
 pub const ConfigSpawnTemplate = extern struct {
     argv: Argv,
 };

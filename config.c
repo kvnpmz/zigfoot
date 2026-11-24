@@ -559,139 +559,30 @@ bool parse_config_file(
 /* parse_section_bell: ported to config.zig */
 /* parse_section_desktop_notifications: ported to config.zig */
 /* parse_section_scrollback: ported to config.zig */
-bool
-parse_section_url(struct context *ctx)
+/* [url] and [regex]: ported to config.zig (C2h). regex_t stays here */
+/* because glibc and musl disagree on its layout; Zig keeps it opaque. */
+extern bool parse_section_url(struct context *ctx);
+extern bool parse_section_regex(struct context *ctx);
+
+/* Compile + validate a regex for config.zig. Returns 0 on success, -1 on
+ * regcomp() failure (err_buf holds regerror() text), -2 when the pattern
+ * has no marked subexpressions (the regex is already freed). */
+int
+config_regex_compile(const char *regex, regex_t *preg,
+                     char *err_buf, size_t err_buf_len)
 {
-    struct config *conf = ctx->conf;
-    const char *key = ctx->key;
-
-    if (streq(key, "launch"))
-        return value_to_spawn_template(ctx, &conf->url.launch);
-
-    else if (streq(key, "label-letters"))
-        return value_to_wchars(ctx, &conf->url.label_letters);
-
-    else if (streq(key, "style")) {
-        _Static_assert(sizeof(conf->url.style) == sizeof(int),
-                       "enum is not 32-bit");
-        return value_to_enum(
-            ctx, (const char *[]){"none", "single", "double", "curly", "dotted", "dashed", NULL},
-            (int *)&conf->url.style);
+    int r = regcomp(preg, regex, REG_EXTENDED);
+    if (r != 0) {
+        regerror(r, preg, err_buf, err_buf_len);
+        return -1;
     }
 
-    else if (streq(key, "osc8-underline")) {
-        _Static_assert(sizeof(conf->url.osc8_underline) == sizeof(int),
-                       "enum is not 32-bit");
-
-        return value_to_enum(
-            ctx,
-            (const char *[]){"url-mode", "always", NULL},
-            (int *)&conf->url.osc8_underline);
+    if (preg->re_nsub == 0) {
+        regfree(preg);
+        return -2;
     }
 
-    else if (streq(key, "regex")) {
-        const char *regex = ctx->value;
-        regex_t preg;
-
-        int r = regcomp(&preg, regex, REG_EXTENDED);
-
-        if (r != 0) {
-            char err_buf[128];
-            regerror(r, &preg, err_buf, sizeof(err_buf));
-            LOG_CONTEXTUAL_ERR("invalid regex: %s", err_buf);
-            return false;
-        }
-
-        if (preg.re_nsub == 0) {
-            LOG_CONTEXTUAL_ERR("invalid regex: no marked subexpression(s)");
-            regfree(&preg);
-            return false;
-        }
-
-        regfree(&conf->url.preg);
-        free(conf->url.regex);
-
-        conf->url.regex = xstrdup(regex);
-        conf->url.preg = preg;
-        return true;
-    }
-
-    else {
-        LOG_CONTEXTUAL_ERR("not a valid option: %s", key);
-        return false;
-    }
-}
-
-bool
-parse_section_regex(struct context *ctx)
-{
-    struct config *conf = ctx->conf;
-    const char *key = ctx->key;
-
-    const char *regex_name =
-        ctx->section_suffix != NULL ? ctx->section_suffix : "";
-
-    struct custom_regex *regex = NULL;
-    tll_foreach(conf->custom_regexes, it) {
-        if (streq(it->item.name, regex_name)) {
-            regex = &it->item;
-            break;
-        }
-    }
-
-    if (streq(key, "regex")) {
-        const char *regex_string = ctx->value;
-        regex_t preg;
-
-        int r = regcomp(&preg, regex_string, REG_EXTENDED);
-
-        if (r != 0) {
-            char err_buf[128];
-            regerror(r, &preg, err_buf, sizeof(err_buf));
-            LOG_CONTEXTUAL_ERR("invalid regex: %s", err_buf);
-            return false;
-        }
-
-        if (preg.re_nsub == 0) {
-            LOG_CONTEXTUAL_ERR("invalid regex: no marked subexpression(s)");
-            regfree(&preg);
-            return false;
-        }
-
-        if (regex == NULL) {
-            tll_push_back(conf->custom_regexes,
-                          ((struct custom_regex){.name = xstrdup(regex_name)}));
-            regex = &tll_back(conf->custom_regexes);
-        }
-
-        regfree(&regex->preg);
-        free(regex->regex);
-
-        regex->regex = xstrdup(regex_string);
-        regex->preg = preg;
-        return true;
-    }
-
-    else if (streq(key, "launch")) {
-        struct config_spawn_template launch = {NULL};
-        if (!value_to_spawn_template(ctx, &launch))
-            return false;
-
-        if (regex == NULL) {
-            tll_push_back(conf->custom_regexes,
-                          ((struct custom_regex){.name = xstrdup(regex_name)}));
-            regex = &tll_back(conf->custom_regexes);
-        }
-
-        spawn_template_free(&regex->launch);
-        regex->launch = launch;
-        return true;
-    }
-
-    else {
-        LOG_CONTEXTUAL_ERR("not a valid option: %s", key);
-        return false;
-    }
+    return 0;
 }
 
 /* parse_color_theme: ported to config.zig */

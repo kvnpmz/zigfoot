@@ -643,6 +643,152 @@ export fn parse_section_environment(ctx: *Context) callconv(.c) bool {
     return true;
 }
 
+// ── [url] and [regex] (C2h) ───────────────────────────────────────
+
+// regex_t is libc-private (glibc and musl disagree on its layout), so the
+// Zig side keeps it opaque and lets config.c compile/validate it.
+extern fn regfree(preg: *anyopaque) callconv(.c) void;
+extern fn config_regex_compile(
+    regex: [*:0]const u8,
+    preg: *anyopaque,
+    err_buf: [*]u8,
+    err_buf_len: usize,
+) callconv(.c) c_int;
+
+/// Mirrors regcomp() + the re_nsub check + regerror() in the C original.
+/// Returns false (and logs the same message) on failure.
+fn compileRegex(
+    ctx: *Context,
+    src: std.builtin.SourceLocation,
+    regex: [*:0]const u8,
+    preg: *anyopaque,
+) bool {
+    var err_buf: [128]u8 = undefined;
+
+    switch (config_regex_compile(regex, preg, &err_buf, err_buf.len)) {
+        0 => return true,
+        -2 => return errValue(ctx, src, "invalid regex: no marked subexpression(s)", .{}),
+        else => return errValue(
+            ctx,
+            src,
+            "invalid regex: {s}",
+            .{std.mem.sliceTo(&err_buf, 0)},
+        ),
+    }
+}
+
+fn findCustomRegex(conf: *types.Config, name: [*:0]const u8) ?*types.CustomRegex {
+    var it = conf.custom_regexes.head;
+    while (it) |node| : (it = node.next) {
+        if (eqPtr(node.item.name, name))
+            return &node.item;
+    }
+    return null;
+}
+
+/// tll_push_back(conf->custom_regexes, (struct custom_regex){.name = ...})
+fn pushCustomRegex(conf: *types.Config, name: [*:0]const u8) *types.CustomRegex {
+    const node: *types.CustomRegexNode = @ptrCast(@alignCast(
+        xmalloc(@sizeOf(types.CustomRegexNode)) orelse unreachable,
+    ));
+    node.item = .{
+        .name = xstrdup(name),
+        .regex = null,
+        .preg = std.mem.zeroes(types.RegexT),
+        .launch = .{ .argv = .{ .args = null } },
+    };
+    node.prev = conf.custom_regexes.tail;
+    node.next = null;
+
+    if (conf.custom_regexes.tail) |tail|
+        tail.next = node
+    else
+        conf.custom_regexes.head = node;
+    conf.custom_regexes.tail = node;
+    conf.custom_regexes.length += 1;
+
+    return &node.item;
+}
+
+export fn parse_section_url(ctx: *Context) callconv(.c) bool {
+    const conf = ctx.conf.?;
+    const key = ctx.key orelse return true;
+
+    if (eq(key, "launch"))
+        return value_to_spawn_template(ctx, &conf.url.launch)
+    else if (eq(key, "label-letters"))
+        return value_to_wchars(ctx, &conf.url.label_letters)
+    else if (eq(key, "style"))
+        return value_to_enum(
+            ctx,
+            valueMap(&.{ "none", "single", "double", "curly", "dotted", "dashed" }),
+            @ptrCast(&conf.url.style),
+        )
+    else if (eq(key, "osc8-underline"))
+        return value_to_enum(
+            ctx,
+            valueMap(&.{ "url-mode", "always" }),
+            @ptrCast(&conf.url.osc8_underline),
+        )
+    else if (eq(key, "regex")) {
+        const regex = ctx.value orelse return false;
+
+        // Compile into a local first: a failed regex must leave the
+        // currently active one untouched.
+        var new_preg: types.RegexT align(16) = undefined;
+        if (!compileRegex(ctx, @src(), regex, @ptrCast(&new_preg)))
+            return false;
+
+        regfree(@ptrCast(&conf.url.preg));
+        free(conf.url.regex);
+        conf.url.regex = xstrdup(regex);
+        conf.url.preg = new_preg;
+        return true;
+    }
+
+    return invalidOption(ctx, key);
+}
+
+export fn parse_section_regex(ctx: *Context) callconv(.c) bool {
+    const conf = ctx.conf.?;
+    const key = ctx.key orelse return true;
+    const regex_name: [*:0]const u8 = ctx.section_suffix orelse "";
+
+    var regex = findCustomRegex(conf, regex_name);
+
+    if (eq(key, "regex")) {
+        const regex_string = ctx.value orelse return false;
+
+        var new_preg: types.RegexT align(16) = undefined;
+        if (!compileRegex(ctx, @src(), regex_string, @ptrCast(&new_preg)))
+            return false;
+
+        if (regex == null)
+            regex = pushCustomRegex(conf, regex_name);
+
+        const r = regex.?;
+        regfree(@ptrCast(&r.preg));
+        free(r.regex);
+        r.regex = xstrdup(regex_string);
+        r.preg = new_preg;
+        return true;
+    } else if (eq(key, "launch")) {
+        var launch: types.ConfigSpawnTemplate = .{ .argv = .{ .args = null } };
+        if (!value_to_spawn_template(ctx, &launch))
+            return false;
+
+        if (regex == null)
+            regex = pushCustomRegex(conf, regex_name);
+
+        const r = regex.?;
+        spawn_template_free(&r.launch);
+        r.launch = launch;
+        return true;
+    }
+
+    return invalidOption(ctx, key);
+}
+
 // ── [colors] and [csd] (C2c) ──────────────────────────────────────
 
 extern fn value_to_fonts(ctx: *Context) callconv(.c) types.ConfigFontList;
@@ -1365,8 +1511,6 @@ const SectionInfo = struct {
     allow_colon_suffix: bool = false,
 };
 
-extern fn parse_section_url(ctx: *Context) callconv(.c) bool;
-extern fn parse_section_regex(ctx: *Context) callconv(.c) bool;
 extern fn parse_section_key_bindings(ctx: *Context) callconv(.c) bool;
 extern fn parse_section_search_bindings(ctx: *Context) callconv(.c) bool;
 extern fn parse_section_url_bindings(ctx: *Context) callconv(.c) bool;
