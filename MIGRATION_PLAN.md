@@ -650,7 +650,7 @@ order and in parallel with someone starting Track B.
 | **A5** done | `box-drawing` dispatch: the 251-case `draw_glyph()` switch, `box_drawing()` itself (glyph allocation, metrics, `fcft_glyph` fill-in), delete `box-drawing.c` | box-drawing.c/.zig | 1d |
 | **A6** done | `quirks` (86): weston detection + CSD subsurface desync, 4 shims for `wl_subsurface_set_{de,}sync` and the csd surface array | quirks.c/.zig, terminal-shim.c | 0.5d |
 | **A7** done | `foot-features` (42): pass `foot_version`, `pgo`, `ime`, `graphemes`, `toplevel-tag`, `blur`, `assertions` as `compile_zig.py` build options and build the string in Zig | foot-features.c/.zig, meson.build | 0.25d |
-| **A8** | shim audit: document the removal criterion in each `*-shim.c`, delete anything already dead (e.g. leftover monitor/window accessors that Track B replaces) | *-shim.c | 0.25d |
+| **A8** done | shim audit: document the removal criterion in each `*-shim.c`, delete anything already dead (e.g. leftover monitor/window accessors that Track B replaces) | *-shim.c | 0.25d |
 
 `box-drawing` verification (A1-A5, done): the differential oracle is a
 harness mode (`FOOT_BOX_DUMP=1`) that renders U+2500..U+259F,

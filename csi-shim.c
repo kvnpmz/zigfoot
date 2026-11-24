@@ -1,3 +1,19 @@
+/* Zig shim for the csi port.
+ *
+ * This file only holds what the Zig code cannot express yet:
+ *
+ *   1. C-only compile-time knowledge: object-like macros, sizeof/offsetof,
+ *      #ifdef'd feature tests, and static inline wrappers around libc or
+ *      wayland-client (wl_subsurface_set_sync(), c32width(), ...).
+ *   2. Struct mirrors that have not landed yet: field reads of a struct that
+ *      terminal_types.zig does not mirror. Delete these as soon as the struct
+ *      is mirrored and pinned by the ABI probe (Track B).
+ *   3. C-only types and varargs: regex_t, FILE, va_list forwarding.
+ *
+ * A function that no longer satisfies one of these must be deleted; the audit
+ * rule and the current exemptions are documented in MIGRATION_PLAN.md 12.9.
+ */
+
 #include <stdbool.h>
 #include <stdint.h>
 #include <stddef.h>
@@ -39,10 +55,6 @@ bool csi_size_notifications(struct terminal *t) {
     return t->size_notifications;
 }
 
-void csi_set_size_notifications(struct terminal *t, bool v) {
-    t->size_notifications = v;
-}
-
 bool csi_grapheme_shaping(struct terminal *t) {
     return t->grapheme_shaping;
 }
@@ -81,9 +93,6 @@ bool csi_conf_tweak_sixel(struct terminal *t) {
     return t->conf->tweak.sixel;
 }
 
-bool csi_get_url_ime_reenable_after_url_mode(struct terminal *t) {
-    return t->url.ime_reenable_after_url_mode;
-}
 
 void csi_set_url_ime_reenable_after_url_mode(struct terminal *t, bool v) {
     t->url.ime_reenable_after_url_mode = v;
