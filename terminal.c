@@ -51,6 +51,8 @@
 /* Ported to terminal.zig — extern for C callers */
 extern void term_free_custom_glyphs(struct terminal *term);
 extern void term_line_height_update(struct terminal *term);
+extern bool term_set_fonts(
+    struct terminal *term, struct fcft_font *fonts[static 4], bool resize_grid);
 extern void term_update_ascii_printer(struct terminal *term);
 extern void term_single_shift(struct terminal *term, enum charset_designator idx);
 
@@ -259,65 +261,7 @@ err_sem_destroy:
 
 /* term_line_height_update: ported to terminal.zig */
 
-static bool
-term_set_fonts(struct terminal *term, struct fcft_font *fonts[static 4],
-               bool resize_grid)
-{
-    for (size_t i = 0; i < 4; i++) {
-        xassert(fonts[i] != NULL);
-
-        fcft_destroy(term->fonts[i]);
-        term->fonts[i] = fonts[i];
-    }
-
-    term_free_custom_glyphs(term);
-
-    const struct config *conf = term->conf;
-
-    const struct fcft_glyph *M = fcft_rasterize_char_utf32(
-        fonts[0], U'M', term->font_subpixel);
-    int advance = M != NULL ? M->advance.x : term->fonts[0]->max_advance.x;
-
-    term_line_height_update(term);
-
-    term->cell_width = advance +
-        term_pt_or_px_as_pixels(term, &conf->letter_spacing);
-
-    term->cell_height = term->font_line_height.px >= 0
-        ? term_pt_or_px_as_pixels(term, &term->font_line_height)
-        : max(term->fonts[0]->height,
-              term->fonts[0]->ascent + term->fonts[0]->descent);
-
-    if (term->cell_width <= 0)
-        term->cell_width = 1;
-    if (term->cell_height <= 0)
-        term->cell_height = 1;
-
-    term->font_x_ofs = term_pt_or_px_as_pixels(term, &conf->horizontal_letter_offset);
-    term->font_y_ofs = term_pt_or_px_as_pixels(term, &conf->vertical_letter_offset);
-
-    term->font_baseline = term_font_baseline(term);
-
-    LOG_INFO("cell width=%d, height=%d", term->cell_width, term->cell_height);
-
-    sixel_cell_size_changed(term);
-
-    /* Optimization - some code paths (are forced to) call
-     * render_resize() after this function */
-    if (resize_grid) {
-        /* Use force, since cell-width/height may have changed */
-        enum resize_options resize_opts = RESIZE_FORCE;
-        if (conf->resize_keep_grid)
-            resize_opts |= RESIZE_KEEP_GRID;
-
-        render_resize(
-            term,
-            (int)roundf(term->width / term->scale),
-            (int)roundf(term->height / term->scale),
-            resize_opts);
-    }
-    return true;
-}
+/* term_set_fonts: ported to terminal.zig */
 
 static float
 get_font_dpi(const struct terminal *term)

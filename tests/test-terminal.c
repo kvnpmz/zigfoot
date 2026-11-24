@@ -42,6 +42,8 @@ void begin_receive_clipboard(
 void erase_line(struct terminal *term, struct row *row);
 void print_linewrap(struct terminal *term);
 void csi_sgr(struct terminal *term);
+bool term_set_fonts(
+    struct terminal *term, struct fcft_font *fonts[static 4], bool resize_grid);
 
 #define SCROLLBACK_ROWS 16
 #define TERM_ROWS 5
@@ -1186,6 +1188,64 @@ test_sgr_underline(void)
     term_free(term);
 }
 
+/* term_set_fonts(): needs four real fonts, a config and font_sizes, but no
+ * window as long as resize_grid is false. */
+static void
+test_set_fonts(void)
+{
+    struct config conf = {0};
+    struct config_font cfg_font = {.pt_size = 8.0f, .px_size = 0};
+    conf.fonts[0] = (struct config_font_list){.count = 1, .arr = &cfg_font};
+    conf.line_height = (struct pt_or_px){.px = -1, .pt = 0};
+
+    struct terminal *term = term_new();
+    term->conf = &conf;
+    term->scale = 1.0f;
+
+    struct config_font cur_font = {.pt_size = 8.0f, .px_size = 0};
+    term->font_sizes[0] = &cur_font;
+
+    /* fcft_from_name() requires fcft_init() first. */
+    if (!fcft_init(FCFT_LOG_COLORIZE_AUTO, false, FCFT_LOG_CLASS_ERROR)) {
+        printf("skip: fcft_init failed\n");
+        term_free(term);
+        return;
+    }
+
+    const char *name = "monospace";
+    struct fcft_font *fonts[4];
+    for (size_t i = 0; i < 4; i++)
+        fonts[i] = fcft_from_name(1, &name, ":size=8");
+
+    if (fonts[0] == NULL) {
+        printf("skip: no monospace font available\n");
+        fcft_fini();
+        term_free(term);
+        return;
+    }
+
+    check(term_set_fonts(term, fonts, false), "term_set_fonts loads fonts");
+    check(term->cell_width > 0, "cell width is positive");
+    check(term->cell_height > 0, "cell height is positive");
+    check(term->font_baseline > 0 && term->font_baseline <= term->cell_height,
+          "font baseline lies within the cell");
+
+    const int font_height = term->fonts[0]->ascent + term->fonts[0]->descent;
+    check(term->cell_height >= font_height, "auto cell height covers the font");
+
+    /* A custom line height replaces the font-derived height. */
+    conf.line_height = (struct pt_or_px){.px = 20, .pt = 0};
+    for (size_t i = 0; i < 4; i++)
+        fonts[i] = fcft_from_name(1, &name, ":size=8");
+    check(term_set_fonts(term, fonts, false), "term_set_fonts with custom line height");
+    check(term->cell_height == 20, "custom line height sets cell height");
+
+    for (size_t i = 0; i < 4; i++)
+        fcft_destroy(term->fonts[i]);
+    fcft_fini();
+    term_free(term);
+}
+
 int
 main(void)
 {
@@ -1215,6 +1275,7 @@ main(void)
     test_theme_get();
     test_term_icon();
     test_sgr_underline();
+    test_set_fonts();
 
     if (failures > 0) {
         fprintf(stderr, "%d harness check(s) failed\n", failures);

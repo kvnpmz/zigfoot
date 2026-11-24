@@ -158,3 +158,7 @@ terminal_shim_fcft_font_metrics(const struct fcft_font *font)
         .max_advance_x = font->max_advance.x,
     };
 }
+
+int terminal_shim_fcft_glyph_advance_x(const struct fcft_glyph *glyph) {
+    return glyph->advance.x;
+}

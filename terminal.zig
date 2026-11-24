@@ -101,6 +101,108 @@ export fn term_line_height_update(term: *types.Terminal) callconv(.c) void {
     types.lineHeightUpdate(term);
 }
 
+//
+// Chunk T9b-v — term_set_fonts(). This is the integration point: it swaps the
+// four fcft fonts, drops the custom-glyph caches, and recomputes the cell
+// metrics from font extents. Real resize work is left to render_resize(),
+// which needs a window; callers that fire before the window exists pass
+// resize_grid = false.
+//
+
+const RESIZE_FORCE: u8 = 1 << 0;
+const RESIZE_KEEP_GRID: u8 = 1 << 2;
+
+const LOG_CLASS_INFO: c_int = 3;
+
+extern fn fcft_destroy(font: ?*anyopaque) callconv(.c) void;
+extern fn fcft_rasterize_char_utf32(
+    font: *anyopaque,
+    cp: u32,
+    subpixel: c_int,
+) callconv(.c) ?*const anyopaque;
+extern fn terminal_shim_fcft_glyph_advance_x(glyph: *const anyopaque) callconv(.c) c_int;
+extern fn sixel_cell_size_changed(term: *types.Terminal) callconv(.c) void;
+extern fn render_resize(
+    term: *types.Terminal,
+    width: c_int,
+    height: c_int,
+    opts: u8,
+) callconv(.c) bool;
+
+export fn term_set_fonts(
+    term: *types.Terminal,
+    fonts: [*]?*anyopaque,
+    resize_grid: bool,
+) callconv(.c) bool {
+    var i: usize = 0;
+    while (i < 4) : (i += 1) {
+        std.debug.assert(fonts[i] != null);
+
+        fcft_destroy(term.fonts[i]);
+        term.fonts[i] = fonts[i];
+    }
+
+    term_free_custom_glyphs(term);
+
+    const conf = term.conf.?;
+    const primary = term.fonts[0].?;
+    const metrics = terminal_shim_fcft_font_metrics(primary);
+
+    // Measure 'M'; fall back to the font's widest glyph if it has no 'M'.
+    const glyph_m = fcft_rasterize_char_utf32(primary, 'M', term.font_subpixel);
+    const advance: c_int = if (glyph_m) |glyph|
+        terminal_shim_fcft_glyph_advance_x(glyph)
+    else
+        metrics.max_advance_x;
+
+    term_line_height_update(term);
+
+    term.cell_width = advance + types.ptOrPxAsPixels(term, &conf.letter_spacing);
+
+    term.cell_height = if (term.font_line_height.px >= 0)
+        types.ptOrPxAsPixels(term, &term.font_line_height)
+    else
+        @max(metrics.height, metrics.ascent + metrics.descent);
+
+    if (term.cell_width <= 0)
+        term.cell_width = 1;
+    if (term.cell_height <= 0)
+        term.cell_height = 1;
+
+    term.font_x_ofs = @intCast(types.ptOrPxAsPixels(term, &conf.horizontal_letter_offset));
+    term.font_y_ofs = @intCast(types.ptOrPxAsPixels(term, &conf.vertical_letter_offset));
+
+    term.font_baseline = @intCast(term_font_baseline(term));
+
+    log_msg(
+        LOG_CLASS_INFO,
+        "terminal",
+        "terminal.zig",
+        @intCast(@src().line),
+        "cell width=%d, height=%d",
+        term.cell_width,
+        term.cell_height,
+    );
+
+    sixel_cell_size_changed(term);
+
+    // Some code paths are forced to call render_resize() right after this.
+    if (resize_grid) {
+        var opts: u8 = RESIZE_FORCE;
+        if (conf.resize_keep_grid)
+            opts |= RESIZE_KEEP_GRID;
+
+        _ = render_resize(
+            term,
+            @intFromFloat(@round(@as(f32, @floatFromInt(term.width)) / term.scale)),
+            @intFromFloat(@round(@as(f32, @floatFromInt(term.height)) / term.scale)),
+            opts,
+        );
+    }
+
+    return true;
+}
+
 fn termResetGraphemeState(term: *types.Terminal) void {
     // Without utf8proc the fields don't exist in `struct vt` and C's
     // term_reset_grapheme_state() is a no-op; keep `term` "used" so the
