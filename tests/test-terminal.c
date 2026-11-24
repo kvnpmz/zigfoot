@@ -21,6 +21,7 @@
 #include "log.h"
 #include "box-drawing.h"
 #include "foot-features.h"
+#include "quirks.h"
 #include <pixman.h>
 #include "user-notification.h"
 #include "debug.h"
@@ -2027,6 +2028,53 @@ log_capture_end(struct log_capture *cap, char *buf, size_t cap_len)
     return len;
 }
 
+/* quirks.zig: the weston CSD-subsurface workaround. The subsurfaces are
+ * poison pointers, so any path that reaches wl_subsurface_set_{de,}sync()
+ * crashes instead of silently passing. */
+static void
+test_quirks(void)
+{
+    struct terminal *term = term_new();
+    struct wl_window *win = xcalloc(1, sizeof(*win));
+    term->window = win;
+
+    win->csd_mode = CSD_YES;
+    win->is_fullscreen = false;
+    for (int i = 0; i < CSD_SURF_COUNT; i++)
+        win->csd.surface[i].sub = (struct wl_subsurface *)0x1;
+
+    /* Not weston: both entry points must return before touching anything. */
+    unsetenv("WESTON_CONFIG_FILE");
+    quirk_weston_csd_on(term);
+    quirk_weston_csd_off(term);
+    check(true, "weston quirk is inert without WESTON_CONFIG_FILE");
+
+    /* is_weston() caches its answer on the first call, so prime it inside a
+     * child: on "weston", a non-CSD window and a fullscreen window must both
+     * stay inert too (the guards run before the first desync). */
+    for (int variant = 0; variant < 2; variant++) {
+        pid_t pid = fork();
+        if (pid == 0) {
+            setenv("WESTON_CONFIG_FILE", "/dev/null", 1);
+            win->csd_mode = variant == 0 ? CSD_NO : CSD_YES;
+            win->is_fullscreen = variant == 1;
+            quirk_weston_csd_on(term);
+            quirk_weston_csd_off(term);
+            _exit(0);
+        }
+
+        int status = 0;
+        waitpid(pid, &status, 0);
+        check(WIFEXITED(status) && WEXITSTATUS(status) == 0,
+              variant == 0
+              ? "non-CSD window is not desynced on weston"
+              : "fullscreen window is not desynced on weston");
+    }
+
+    free(win);
+    term_free(term);
+}
+
 /* foot-features.zig: the --version feature line, now assembled at comptime
  * from build options instead of #ifdefs. Check the shape it must keep: the
  * "version: " prefix, then the six feature tokens in their fixed order, each
@@ -2738,6 +2786,7 @@ main(void)
     test_shm_chain();
     test_shm_scroll();
     test_slave_spawn();
+    test_quirks();
     test_version_and_features();
     test_log();
     test_debug();

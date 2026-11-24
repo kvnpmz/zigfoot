@@ -576,6 +576,18 @@ foot_features_obj = custom_target(
   ]
 )
 
+quirks_obj = custom_target(
+  'quirks_obj',
+  input: 'quirks.zig',
+  depend_files: files('terminal_types.zig'),
+  output: 'quirks.o',
+  depends: c_layout,
+  command: [
+    python, files('compile_zig.py'), '@INPUT@', '@OUTPUT@',
+    grapheme_clustering_zig,
+  ]
+)
+
 box_drawing_obj = custom_target(
   'box_drawing_obj',
   input: 'box-drawing.zig',
@@ -763,7 +775,7 @@ footlib = static_library(
   'input.c', 'input.h',
   'key-binding.c', 'key-binding.h',
   notify_obj, 'notify.h', 'notify-shim.c',
-  'quirks.c', 'quirks.h',
+  quirks_obj, 'quirks.h',
   reaper_obj, 'reaper.h',
   'render.c', 'render.h',
   'search.c', 'search.h',

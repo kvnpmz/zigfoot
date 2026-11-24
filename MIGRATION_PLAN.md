@@ -623,9 +623,9 @@ utmp backends where available.
 
 ## 13. Sequenced backlog (refreshed 2026-11-24)
 
-State: **27,824 of 48,830 C lines gone (57.0%)**, ~40% by effort, 30 modules
-ported, 312 harness assertions, `meson test` 5/5 in three build dirs.
-Remaining C: 21,006 hand-written lines + 1,275 shim lines.
+State: **27,910 of 48,830 C lines gone (57.2%)**, ~41% by effort, 31 modules
+ported, 315 harness assertions, `meson test` 5/5 in three build dirs.
+Remaining C: 20,920 hand-written lines + 1,303 shim lines.
 
 `box-drawing` is finished (A1-A5c, commits 10cd275b..effdbe5d): the module is
 3,374 lines of Zig, `box-drawing.c` is deleted, and every shape family is
@@ -648,7 +648,7 @@ order and in parallel with someone starting Track B.
 | **A3** done | `box-drawing` mixed/diagonal/arc family: 0x254c–0x257f (mixed light/heavy, arcs, diagonals, half lines) | box-drawing.c/.zig | 1d |
 | **A4** done | `box-drawing` blocks: 0x2580–0x259f blocks/shades/quadrants, 0x25e2–0x25e5 triangles, 0x1fb00–0x1fb8b sextants/octants/wedges/eighth blocks, 0x1cc00+ legacy computing tables | box-drawing.c/.zig | 1.5d |
 | **A5** done | `box-drawing` dispatch: the 251-case `draw_glyph()` switch, `box_drawing()` itself (glyph allocation, metrics, `fcft_glyph` fill-in), delete `box-drawing.c` | box-drawing.c/.zig | 1d |
-| **A6** | `quirks` (86): weston detection + CSD subsurface desync, 4 shims for `wl_subsurface_set_{de,}sync` and the csd surface array | quirks.c/.zig, terminal-shim.c | 0.5d |
+| **A6** done | `quirks` (86): weston detection + CSD subsurface desync, 4 shims for `wl_subsurface_set_{de,}sync` and the csd surface array | quirks.c/.zig, terminal-shim.c | 0.5d |
 | **A7** done | `foot-features` (42): pass `foot_version`, `pgo`, `ime`, `graphemes`, `toplevel-tag`, `blur`, `assertions` as `compile_zig.py` build options and build the string in Zig | foot-features.c/.zig, meson.build | 0.25d |
 | **A8** | shim audit: document the removal criterion in each `*-shim.c`, delete anything already dead (e.g. leftover monitor/window accessors that Track B replaces) | *-shim.c | 0.25d |
 

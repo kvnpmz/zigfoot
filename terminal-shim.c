@@ -43,6 +43,33 @@ bool terminal_shim_window_is_configured(struct terminal *term) {
     return term->window != NULL && term->window->is_configured;
 }
 
+/* quirks.zig: the CSD subsurfaces the weston workaround walks. */
+int terminal_shim_window_csd_mode(struct terminal *term) {
+    return term->window != NULL ? term->window->csd_mode : 0;
+}
+
+bool terminal_shim_window_is_fullscreen(struct terminal *term) {
+    return term->window != NULL && term->window->is_fullscreen;
+}
+
+int terminal_shim_window_csd_surface_count(void) {
+    return CSD_SURF_COUNT;
+}
+
+struct wl_subsurface *terminal_shim_window_csd_sub(struct terminal *term, int idx) {
+    if (term->window == NULL || idx < 0 || idx >= CSD_SURF_COUNT)
+        return NULL;
+    return term->window->csd.surface[idx].sub;
+}
+
+void quirk_shim_subsurface_set_desync(struct wl_subsurface *sub) {
+    wl_subsurface_set_desync(sub);
+}
+
+void quirk_shim_subsurface_set_sync(struct wl_subsurface *sub) {
+    wl_subsurface_set_sync(sub);
+}
+
 struct row *terminal_shim_grid_row_in_view(struct grid *grid, int row) {
     return grid_row_in_view(grid, row);
 }
