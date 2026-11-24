@@ -2487,6 +2487,21 @@ box_dump(struct terminal *term)
                 continue;
             printf("BOX 0x%05x %d %d %016llx\n", (unsigned)cp, g->width,
                    g->height, (unsigned long long)glyph_hash(g));
+
+            const char *want = getenv("FOOT_BOX_PIXELS");
+            if (want != NULL && strtoul(want, NULL, 0) == cp) {
+                const uint8_t *data =
+                    (const uint8_t *)pixman_image_get_data(g->pix);
+                const int stride = pixman_image_get_stride(g->pix);
+                printf("PIX fmt=%#" PRIx32 " stride=%d\n",
+                       (uint32_t)pixman_image_get_format(g->pix), stride);
+                for (int y = 0; y < g->height; y++) {
+                    printf("ROW %2d:", y);
+                    for (int x = 0; x < stride; x++)
+                        printf(" %02x", data[y * stride + x]);
+                    printf("\n");
+                }
+            }
             free(g);
         }
     }
@@ -2590,6 +2605,36 @@ test_box_drawing(void)
           "shade blocks get darker in order");
     check(shade[0] > 0 && shade[2] < (size_t)width * height,
           "shades are strictly between empty and solid");
+
+    /* With box-drawing-solid-shades, the dithered a1 pattern is replaced by
+     * a flat fill at 25%/50%/75% coverage: the buffer must have been switched
+     * to a8 and every pixel must hold the same value. */
+    struct config solid_conf = {0};
+    solid_conf.tweak.box_drawing_solid_shades = true;
+    struct terminal *solid = term_with_fonts(&solid_conf);
+    if (solid != NULL) {
+        static const uint8_t want[3] = {0x40, 0x80, 0xc0};
+
+        for (int i = 0; i < 3; i++) {
+            struct fcft_glyph *sg = box_drawing(solid, shade_cp[i]);
+            const uint8_t *sd =
+                (const uint8_t *)pixman_image_get_data(sg->pix);
+            const int sstride = pixman_image_get_stride(sg->pix);
+
+            bool flat = pixman_image_get_format(sg->pix) == PIXMAN_a8;
+            for (int y = 0; y < sg->height && flat; y++) {
+                for (int x = 0; x < sg->width; x++) {
+                    if (sd[y * sstride + x] != want[i])
+                        flat = false;
+                }
+            }
+
+            check(flat, "solid shades fill the cell uniformly");
+            free(sg);
+        }
+
+        term_with_fonts_free(solid);
+    }
 
     /* Quadrants cover a quarter of the cell, in the right corner. */
     g = box_drawing(term, 0x2596); /* lower left */

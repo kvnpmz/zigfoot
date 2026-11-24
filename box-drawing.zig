@@ -23,8 +23,10 @@ const PixmanColor = extern struct {
 
 const PIXMAN_OP_SRC: c_int = 0x01;
 
-const PIXMAN_a8: u32 = 0x00000008;
-const PIXMAN_a1: u32 = 0x00000001;
+// PIXMAN_FORMAT(8, PIXMAN_TYPE_A, 8, 0, 0, 0) and
+// PIXMAN_FORMAT(1, PIXMAN_TYPE_A, 1, 0, 0, 0).
+const PIXMAN_a8: u32 = 0x08018000;
+const PIXMAN_a1: u32 = 0x01011000;
 
 const LIGHT: c_int = 0;
 const HEAVY: c_int = 1;
@@ -1366,4 +1368,790 @@ export fn draw_box_drawings_heavy_left_and_light_right(buf: *types.BoxBuf) callc
 export fn draw_box_drawings_heavy_up_and_light_down(buf: *types.BoxBuf) callconv(.c) void {
     vlineMiddleUp(buf, HEAVY);
     vlineMiddleDown(buf, LIGHT);
+}
+//
+// Chunk A5a -- shades, quadrants, braille, sextants and octants.
+//
+// The matrices keep the C bit names verbatim; each is a function-local
+// constant pair so the flag names cannot collide between draw_* bodies.
+//
+
+const builtin = @import("builtin");
+
+/// log.h: LOG_CLASS_DEBUG
+const LOG_CLASS_DEBUG: c_int = 4;
+
+/// pixman_rectangle16_t
+const PixmanRectangle16 = extern struct {
+    x: i16,
+    y: i16,
+    width: u16,
+    height: u16,
+};
+
+extern fn pixman_image_fill_rectangles(
+    op: c_int,
+    image: *anyopaque,
+    color: *const PixmanColor,
+    n_rects: c_int,
+    rects: [*]const PixmanRectangle16,
+) c_int;
+
+extern fn log_msg(
+    class: c_int,
+    module: [*:0]const u8,
+    file: [*:0]const u8,
+    lineno: c_int,
+    fmt: [*:0]const u8,
+    ...
+) void;
+
+fn setA1Bit(data: [*]u8, ofs: usize, bit_no: usize) void {
+    if (comptime builtin.cpu.arch.endian() == .little) {
+        data[ofs] |= @as(u8, 1) << @intCast(bit_no);
+    } else {
+        data[ofs] |= @as(u8, 1) << @intCast(7 - bit_no);
+    }
+}
+
+fn drawPixmanShade(buf: *types.BoxBuf, v: u16) void {
+    const shade = PixmanColor{ .red = 0, .green = 0, .blue = 0, .alpha = v };
+    var rects = [_]PixmanRectangle16{.{
+        .x = 0,
+        .y = 0,
+        .width = @intCast(buf.width),
+        .height = @intCast(buf.height),
+    }};
+
+    _ = pixman_image_fill_rectangles(PIXMAN_OP_SRC, buf.pix.?, &shade, 1, &rects);
+}
+
+/// Solid shades need an a8 buffer, the dithered ones an a1 buffer.
+fn shadeSelectFormat(buf: *types.BoxBuf) void {
+    const fmt = buf.format;
+
+    if (buf.solid_shades and fmt == PIXMAN_a1)
+        box_change_buffer_format(buf, PIXMAN_a8)
+    else if (!buf.solid_shades and fmt == PIXMAN_a8)
+        box_change_buffer_format(buf, PIXMAN_a1);
+}
+
+export fn draw_light_shade(buf: *types.BoxBuf) callconv(.c) void {
+    shadeSelectFormat(buf);
+
+    if (buf.solid_shades) {
+        drawPixmanShade(buf, 0x4000);
+    } else {
+        const width: usize = @intCast(buf.width);
+        const height: usize = @intCast(buf.height);
+        const stride: usize = @intCast(buf.stride);
+
+        var row: usize = 0;
+        while (row < height) : (row += 2) {
+            var col: usize = 0;
+            while (col < width) : (col += 2) {
+                const idx = col / 8;
+                const bit_no = col % 8;
+                setA1Bit(buf.data.?, row * stride + idx, bit_no);
+            }
+        }
+    }
+}
+
+export fn draw_medium_shade(buf: *types.BoxBuf) callconv(.c) void {
+    shadeSelectFormat(buf);
+
+    if (buf.solid_shades) {
+        drawPixmanShade(buf, 0x8000);
+    } else {
+        const width: usize = @intCast(buf.width);
+        const height: usize = @intCast(buf.height);
+        const stride: usize = @intCast(buf.stride);
+
+        var row: usize = 0;
+        while (row < height) : (row += 1) {
+            var col: usize = row % 2;
+            while (col < width) : (col += 2) {
+                const idx = col / 8;
+                const bit_no = col % 8;
+                setA1Bit(buf.data.?, row * stride + idx, bit_no);
+            }
+        }
+    }
+}
+
+export fn draw_dark_shade(buf: *types.BoxBuf) callconv(.c) void {
+    shadeSelectFormat(buf);
+
+    if (buf.solid_shades) {
+        drawPixmanShade(buf, 0xc000);
+    } else {
+        const width: usize = @intCast(buf.width);
+        const height: usize = @intCast(buf.height);
+        const stride: usize = @intCast(buf.stride);
+
+        var row: usize = 0;
+        while (row < height) : (row += 1) {
+            var col: usize = 0;
+            while (col < width) : (col += 1 + row % 2) {
+                const idx = col / 8;
+                const bit_no = col % 8;
+                setA1Bit(buf.data.?, row * stride + idx, bit_no);
+            }
+        }
+    }
+}
+
+fn quadUpperLeft(buf: *types.BoxBuf) void {
+    rect(buf, 0, 0, ceili(f(buf.width) / 2.0), ceili(f(buf.height) / 2.0));
+}
+
+fn quadUpperRight(buf: *types.BoxBuf) void {
+    rect(buf, floori(f(buf.width) / 2.0), 0, buf.width, ceili(f(buf.height) / 2.0));
+}
+
+fn quadLowerLeft(buf: *types.BoxBuf) void {
+    rect(buf, 0, floori(f(buf.height) / 2.0), ceili(f(buf.width) / 2.0), buf.height);
+}
+
+fn quadLowerRight(buf: *types.BoxBuf) void {
+    rect(buf, floori(f(buf.width) / 2.0), floori(f(buf.height) / 2.0), buf.width, buf.height);
+}
+
+export fn draw_quadrant(buf: *types.BoxBuf, wc: u32) callconv(.c) void {
+    const UPPER_LEFT: u8 = 1 << 0;
+    const UPPER_RIGHT: u8 = 1 << 1;
+    const LOWER_LEFT: u8 = 1 << 2;
+    const LOWER_RIGHT: u8 = 1 << 3;
+
+    const matrix = [_]u8{
+        LOWER_LEFT,
+        LOWER_RIGHT,
+        UPPER_LEFT,
+        UPPER_LEFT | LOWER_LEFT | LOWER_RIGHT,
+        UPPER_LEFT | LOWER_RIGHT,
+        UPPER_LEFT | UPPER_RIGHT | LOWER_LEFT,
+        UPPER_LEFT | UPPER_RIGHT | LOWER_RIGHT,
+        UPPER_RIGHT,
+        UPPER_RIGHT | LOWER_LEFT,
+        UPPER_RIGHT | LOWER_LEFT | LOWER_RIGHT,
+    };
+
+    std.debug.assert(wc >= 0x2596 and wc <= 0x259f);
+    const idx: usize = @intCast(wc - 0x2596);
+
+    std.debug.assert(idx < matrix.len);
+    const encoded = matrix[idx];
+
+    if (encoded & UPPER_LEFT != 0)
+        quadUpperLeft(buf);
+
+    if (encoded & UPPER_RIGHT != 0)
+        quadUpperRight(buf);
+
+    if (encoded & LOWER_LEFT != 0)
+        quadLowerLeft(buf);
+
+    if (encoded & LOWER_RIGHT != 0)
+        quadLowerRight(buf);
+}
+
+export fn draw_braille(buf: *types.BoxBuf, wc: u32) callconv(.c) void {
+    var w: c_int = @min(@divTrunc(buf.width, 4), @divTrunc(buf.height, 8));
+    var x_spacing: c_int = @divTrunc(buf.width, 4);
+    var y_spacing: c_int = @divTrunc(buf.height, 8);
+    var x_margin: c_int = @divTrunc(x_spacing, 2);
+    var y_margin: c_int = @divTrunc(y_spacing, 2);
+
+    var x_px_left: c_int = buf.width - 2 * x_margin - x_spacing - 2 * w;
+    var y_px_left: c_int = buf.height - 2 * y_margin - 3 * y_spacing - 4 * w;
+
+    log_msg(
+        LOG_CLASS_DEBUG,
+        "box-drawing",
+        "box-drawing.zig",
+        @intCast(@src().line),
+        "braille: before adjusting: " ++
+            "cell: %dx%d, margin=%dx%d, spacing=%dx%d, width=%d, left=%dx%d",
+        buf.width,
+        buf.height,
+        x_margin,
+        y_margin,
+        x_spacing,
+        y_spacing,
+        w,
+        x_px_left,
+        y_px_left,
+    );
+
+        // First, try hard to ensure the DOT width is non-zero
+    if (x_px_left >= 2 and y_px_left >= 4 and w == 0) {
+        w += 1;
+        x_px_left -= 2;
+        y_px_left -= 4;
+    }
+
+        // Second, prefer a non-zero margin
+    if (x_px_left >= 2 and x_margin == 0) {
+        x_margin = 1;
+        x_px_left -= 2;
+    }
+    if (y_px_left >= 2 and y_margin == 0) {
+        y_margin = 1;
+        y_px_left -= 2;
+    }
+
+        // Third, increase spacing
+    if (x_px_left >= 1) {
+        x_spacing += 1;
+        x_px_left -= 1;
+    }
+    if (y_px_left >= 3) {
+        y_spacing += 1;
+        y_px_left -= 3;
+    }
+
+        // Fourth, margins ("spacing", but on the sides)
+    if (x_px_left >= 2) {
+        x_margin += 1;
+        x_px_left -= 2;
+    }
+    if (y_px_left >= 2) {
+        y_margin += 1;
+        y_px_left -= 2;
+    }
+
+        // Last - increase dot width
+    if (x_px_left >= 2 and y_px_left >= 4) {
+        w += 1;
+        x_px_left -= 2;
+        y_px_left -= 4;
+    }
+
+    log_msg(
+        LOG_CLASS_DEBUG,
+        "box-drawing",
+        "box-drawing.zig",
+        @intCast(@src().line),
+        "braille: after adjusting: " ++
+            "cell: %dx%d, margin=%dx%d, spacing=%dx%d, width=%d, left=%dx%d",
+        buf.width,
+        buf.height,
+        x_margin,
+        y_margin,
+        x_spacing,
+        y_spacing,
+        w,
+        x_px_left,
+        y_px_left,
+    );
+
+    std.debug.assert(x_px_left <= 1 or y_px_left <= 1);
+    std.debug.assert(2 * x_margin + 2 * w + x_spacing <= buf.width);
+    std.debug.assert(2 * y_margin + 4 * w + 3 * y_spacing <= buf.height);
+
+    var x: [2]c_int = undefined;
+    var y: [4]c_int = undefined;
+    x[0] = x_margin;
+    x[1] = x_margin + w + x_spacing;
+    y[0] = y_margin;
+    y[1] = y[0] + w + y_spacing;
+    y[2] = y[1] + w + y_spacing;
+    y[3] = y[2] + w + y_spacing;
+
+    std.debug.assert(wc >= 0x2800);
+    std.debug.assert(wc <= 0x28ff);
+    const sym: u8 = @intCast(wc - 0x2800);
+
+        // Left side
+    if (sym & 1 != 0)
+        rect(buf, x[0], y[0], x[0] + w, y[0] + w);
+    if (sym & 2 != 0)
+        rect(buf, x[0], y[1], x[0] + w, y[1] + w);
+    if (sym & 4 != 0)
+        rect(buf, x[0], y[2], x[0] + w, y[2] + w);
+
+        // Right side
+    if (sym & 8 != 0)
+        rect(buf, x[1], y[0], x[1] + w, y[0] + w);
+    if (sym & 16 != 0)
+        rect(buf, x[1], y[1], x[1] + w, y[1] + w);
+    if (sym & 32 != 0)
+        rect(buf, x[1], y[2], x[1] + w, y[2] + w);
+
+        // 8-dot patterns
+    if (sym & 64 != 0)
+        rect(buf, x[0], y[3], x[0] + w, y[3] + w);
+    if (sym & 128 != 0)
+        rect(buf, x[1], y[3], x[1] + w, y[3] + w);
+}
+
+fn sextantUpperLeft(buf: *types.BoxBuf) void {
+    rect(buf, 0, 0, buf.x_halfs[0], buf.y_thirds[0]);
+}
+
+fn sextantMiddleLeft(buf: *types.BoxBuf) void {
+    rect(buf, 0, buf.y_thirds[0], buf.x_halfs[0], buf.y_thirds[1]);
+}
+
+fn sextantLowerLeft(buf: *types.BoxBuf) void {
+    rect(buf, 0, buf.y_thirds[1], buf.x_halfs[0], buf.height);
+}
+
+fn sextantUpperRight(buf: *types.BoxBuf) void {
+    rect(buf, buf.x_halfs[1], 0, buf.width, buf.y_thirds[0]);
+}
+
+fn sextantMiddleRight(buf: *types.BoxBuf) void {
+    rect(buf, buf.x_halfs[1], buf.y_thirds[0], buf.width, buf.y_thirds[1]);
+}
+
+fn sextantLowerRight(buf: *types.BoxBuf) void {
+    rect(buf, buf.x_halfs[1], buf.y_thirds[1], buf.width, buf.height);
+}
+
+export fn draw_sextant(buf: *types.BoxBuf, wc: u32) callconv(.c) void {
+    // Each byte encodes one sextant:
+    //
+    // Bit     sextant
+    //   0      upper left
+    //   1      middle left
+    //   2      lower left
+    //   3      upper right
+    //   4      middle right
+    //   5      lower right
+    const UPPER_LEFT: u8 = 1 << 0;
+    const MIDDLE_LEFT: u8 = 1 << 1;
+    const LOWER_LEFT: u8 = 1 << 2;
+    const UPPER_RIGHT: u8 = 1 << 3;
+    const MIDDLE_RIGHT: u8 = 1 << 4;
+    const LOWER_RIGHT: u8 = 1 << 5;
+
+    const matrix = [_]u8{
+        // U+1fb00 - U+1fb0f
+        UPPER_LEFT,
+        UPPER_RIGHT,
+        UPPER_LEFT | UPPER_RIGHT,
+        MIDDLE_LEFT,
+        UPPER_LEFT | MIDDLE_LEFT,
+        UPPER_RIGHT | MIDDLE_LEFT,
+        UPPER_LEFT | UPPER_RIGHT | MIDDLE_LEFT,
+        MIDDLE_RIGHT,
+        UPPER_LEFT | MIDDLE_RIGHT,
+        UPPER_RIGHT | MIDDLE_RIGHT,
+        UPPER_LEFT | UPPER_RIGHT | MIDDLE_RIGHT,
+        MIDDLE_LEFT | MIDDLE_RIGHT,
+        UPPER_LEFT | MIDDLE_LEFT | MIDDLE_RIGHT,
+        UPPER_RIGHT | MIDDLE_LEFT | MIDDLE_RIGHT,
+        UPPER_LEFT | UPPER_RIGHT | MIDDLE_LEFT | MIDDLE_RIGHT,
+        LOWER_LEFT,
+        // U+1fb10 - U+1fb1f
+        UPPER_LEFT | LOWER_LEFT,
+        UPPER_RIGHT | LOWER_LEFT,
+        UPPER_LEFT | UPPER_RIGHT | LOWER_LEFT,
+        MIDDLE_LEFT | LOWER_LEFT,
+        UPPER_RIGHT | MIDDLE_LEFT | LOWER_LEFT,
+        UPPER_LEFT | UPPER_RIGHT | MIDDLE_LEFT | LOWER_LEFT,
+        MIDDLE_RIGHT | LOWER_LEFT,
+        UPPER_LEFT | MIDDLE_RIGHT | LOWER_LEFT,
+        UPPER_RIGHT | MIDDLE_RIGHT | LOWER_LEFT,
+        UPPER_LEFT | UPPER_RIGHT | MIDDLE_RIGHT | LOWER_LEFT,
+        MIDDLE_LEFT | MIDDLE_RIGHT | LOWER_LEFT,
+        UPPER_LEFT | MIDDLE_LEFT | MIDDLE_RIGHT | LOWER_LEFT,
+        UPPER_RIGHT | MIDDLE_LEFT | MIDDLE_RIGHT | LOWER_LEFT,
+        UPPER_LEFT | UPPER_RIGHT | MIDDLE_LEFT | MIDDLE_RIGHT | LOWER_LEFT,
+        LOWER_RIGHT,
+        UPPER_LEFT | LOWER_RIGHT,
+        // U+1fb20 - U+1fb2f
+        UPPER_RIGHT | LOWER_RIGHT,
+        UPPER_LEFT | UPPER_RIGHT | LOWER_RIGHT,
+        MIDDLE_LEFT | LOWER_RIGHT,
+        UPPER_LEFT | MIDDLE_LEFT | LOWER_RIGHT,
+        UPPER_RIGHT | MIDDLE_LEFT | LOWER_RIGHT,
+        UPPER_LEFT | UPPER_RIGHT | MIDDLE_LEFT | LOWER_RIGHT,
+        MIDDLE_RIGHT | LOWER_RIGHT,
+        UPPER_LEFT | MIDDLE_RIGHT | LOWER_RIGHT,
+        UPPER_LEFT | UPPER_RIGHT | MIDDLE_RIGHT | LOWER_RIGHT,
+        MIDDLE_LEFT | MIDDLE_RIGHT | LOWER_RIGHT,
+        UPPER_LEFT | MIDDLE_LEFT | MIDDLE_RIGHT | LOWER_RIGHT,
+        UPPER_RIGHT | MIDDLE_LEFT | MIDDLE_RIGHT | LOWER_RIGHT,
+        UPPER_LEFT | UPPER_RIGHT | MIDDLE_LEFT | MIDDLE_RIGHT | LOWER_RIGHT,
+        LOWER_LEFT | LOWER_RIGHT,
+        UPPER_LEFT | LOWER_LEFT | LOWER_RIGHT,
+        UPPER_RIGHT | LOWER_LEFT | LOWER_RIGHT,
+        // U+1fb30 - U+1fb3b
+        UPPER_LEFT | UPPER_RIGHT | LOWER_LEFT | LOWER_RIGHT,
+        MIDDLE_LEFT | LOWER_LEFT | LOWER_RIGHT,
+        UPPER_LEFT | MIDDLE_LEFT | LOWER_LEFT | LOWER_RIGHT,
+        UPPER_RIGHT | MIDDLE_LEFT | LOWER_LEFT | LOWER_RIGHT,
+        UPPER_LEFT | UPPER_RIGHT | MIDDLE_LEFT | LOWER_LEFT | LOWER_RIGHT,
+        MIDDLE_RIGHT | LOWER_LEFT | LOWER_RIGHT,
+        UPPER_LEFT | MIDDLE_RIGHT | LOWER_LEFT | LOWER_RIGHT,
+        UPPER_RIGHT | MIDDLE_RIGHT | LOWER_LEFT | LOWER_RIGHT,
+        UPPER_LEFT | UPPER_RIGHT | MIDDLE_RIGHT | LOWER_LEFT | LOWER_RIGHT,
+        MIDDLE_LEFT | MIDDLE_RIGHT | LOWER_LEFT | LOWER_RIGHT,
+        UPPER_LEFT | MIDDLE_LEFT | MIDDLE_RIGHT | LOWER_LEFT | LOWER_RIGHT,
+        UPPER_RIGHT | MIDDLE_LEFT | MIDDLE_RIGHT | LOWER_LEFT | LOWER_RIGHT,
+    };
+
+    std.debug.assert(wc >= 0x1fb00 and wc <= 0x1fb3b);
+    const idx: usize = @intCast(wc - 0x1fb00);
+
+    std.debug.assert(idx < matrix.len);
+    const encoded = matrix[idx];
+
+    if (encoded & UPPER_LEFT != 0)
+        sextantUpperLeft(buf);
+
+    if (encoded & MIDDLE_LEFT != 0)
+        sextantMiddleLeft(buf);
+
+    if (encoded & LOWER_LEFT != 0)
+        sextantLowerLeft(buf);
+
+    if (encoded & UPPER_RIGHT != 0)
+        sextantUpperRight(buf);
+
+    if (encoded & MIDDLE_RIGHT != 0)
+        sextantMiddleRight(buf);
+
+    if (encoded & LOWER_RIGHT != 0)
+        sextantLowerRight(buf);
+}
+
+fn octantUpperLeft(buf: *types.BoxBuf) void {
+    rect(buf, 0, 0, buf.x_halfs[0], buf.y_quads[0]);
+}
+
+fn octantMiddleUpLeft(buf: *types.BoxBuf) void {
+    rect(buf, 0, buf.y_quads[0], buf.x_halfs[0], buf.y_quads[1]);
+}
+
+fn octantMiddleDownLeft(buf: *types.BoxBuf) void {
+    rect(buf, 0, buf.y_quads[1], buf.x_halfs[0], buf.y_quads[2]);
+}
+
+fn octantLowerLeft(buf: *types.BoxBuf) void {
+    rect(buf, 0, buf.y_quads[2], buf.x_halfs[0], buf.height);
+}
+
+fn octantUpperRight(buf: *types.BoxBuf) void {
+    rect(buf, buf.x_halfs[1], 0, buf.width, buf.y_quads[0]);
+}
+
+fn octantMiddleUpRight(buf: *types.BoxBuf) void {
+    rect(buf, buf.x_halfs[1], buf.y_quads[0], buf.width, buf.y_quads[1]);
+}
+
+fn octantMiddleDownRight(buf: *types.BoxBuf) void {
+    rect(buf, buf.x_halfs[1], buf.y_quads[1], buf.width, buf.y_quads[2]);
+}
+
+fn octantLowerRight(buf: *types.BoxBuf) void {
+    rect(buf, buf.x_halfs[1], buf.y_quads[2], buf.width, buf.height);
+}
+
+export fn draw_octant(buf: *types.BoxBuf, wc: u32) callconv(.c) void {
+    // Each byte encodes one octant:
+    //
+    // Bit      octant part
+    //   0      upper left
+    //   1      middle, upper left
+    //   2      middle, lower left
+    //   3      lower, left
+    //   4      upper right
+    //   5      middle, upper right
+    //   6      middle, lower right
+    //   7      lower right
+    const UPPER_LEFT: u8 = 1 << 0;
+    const MIDDLE_UP_LEFT: u8 = 1 << 1;
+    const MIDDLE_DOWN_LEFT: u8 = 1 << 2;
+    const LOWER_LEFT: u8 = 1 << 3;
+    const UPPER_RIGHT: u8 = 1 << 4;
+    const MIDDLE_UP_RIGHT: u8 = 1 << 5;
+    const MIDDLE_DOWN_RIGHT: u8 = 1 << 6;
+    const LOWER_RIGHT: u8 = 1 << 7;
+
+    const matrix = [_]u8{
+        // U+1CD00 - U+1CD0F
+        MIDDLE_UP_LEFT,
+        MIDDLE_UP_LEFT | UPPER_RIGHT,
+        UPPER_LEFT | MIDDLE_UP_LEFT | UPPER_RIGHT,
+        MIDDLE_UP_RIGHT,
+        UPPER_LEFT | MIDDLE_UP_RIGHT,
+        UPPER_LEFT | UPPER_RIGHT | MIDDLE_UP_RIGHT,
+        MIDDLE_UP_LEFT | MIDDLE_UP_RIGHT,
+        UPPER_LEFT | MIDDLE_UP_LEFT | MIDDLE_UP_RIGHT,
+        UPPER_RIGHT | MIDDLE_UP_LEFT | MIDDLE_UP_RIGHT,
+        MIDDLE_DOWN_LEFT,
+        UPPER_LEFT | MIDDLE_DOWN_LEFT,
+        UPPER_RIGHT | MIDDLE_DOWN_LEFT,
+        UPPER_LEFT | UPPER_RIGHT | MIDDLE_DOWN_LEFT,
+        UPPER_LEFT | MIDDLE_UP_LEFT | MIDDLE_DOWN_LEFT,
+        UPPER_RIGHT | MIDDLE_UP_LEFT | MIDDLE_DOWN_LEFT,
+        UPPER_LEFT | UPPER_RIGHT | MIDDLE_UP_LEFT | MIDDLE_DOWN_LEFT,
+        // U+1CD10 - U+1CD1F
+        MIDDLE_UP_RIGHT | MIDDLE_DOWN_LEFT,
+        UPPER_LEFT | MIDDLE_UP_RIGHT | MIDDLE_DOWN_LEFT,
+        UPPER_RIGHT | MIDDLE_UP_RIGHT | MIDDLE_DOWN_LEFT,
+        UPPER_LEFT | UPPER_RIGHT | MIDDLE_UP_RIGHT | MIDDLE_DOWN_LEFT,
+        MIDDLE_UP_LEFT | MIDDLE_UP_RIGHT | MIDDLE_DOWN_LEFT,
+        UPPER_LEFT | MIDDLE_UP_LEFT | MIDDLE_UP_RIGHT | MIDDLE_DOWN_LEFT,
+        UPPER_RIGHT | MIDDLE_UP_LEFT | MIDDLE_UP_RIGHT | MIDDLE_DOWN_LEFT,
+        UPPER_LEFT | UPPER_RIGHT | MIDDLE_UP_LEFT | MIDDLE_UP_RIGHT | MIDDLE_DOWN_LEFT,
+        MIDDLE_DOWN_RIGHT,
+        UPPER_LEFT | MIDDLE_DOWN_RIGHT,
+        UPPER_RIGHT | MIDDLE_DOWN_RIGHT,
+        UPPER_LEFT | UPPER_RIGHT | MIDDLE_DOWN_RIGHT,
+        MIDDLE_UP_LEFT | MIDDLE_DOWN_RIGHT,
+        UPPER_LEFT | MIDDLE_UP_LEFT | MIDDLE_DOWN_RIGHT,
+        UPPER_RIGHT | MIDDLE_UP_LEFT | MIDDLE_DOWN_RIGHT,
+        UPPER_LEFT | UPPER_RIGHT | MIDDLE_UP_LEFT | MIDDLE_DOWN_RIGHT,
+        // U+1CD20 - U+1CD2F
+        UPPER_LEFT | MIDDLE_UP_RIGHT | MIDDLE_DOWN_RIGHT,
+        UPPER_RIGHT | MIDDLE_UP_RIGHT | MIDDLE_DOWN_RIGHT,
+        UPPER_LEFT | UPPER_RIGHT | MIDDLE_UP_RIGHT | MIDDLE_DOWN_RIGHT,
+        MIDDLE_UP_LEFT | MIDDLE_UP_RIGHT | MIDDLE_DOWN_RIGHT,
+        UPPER_LEFT | MIDDLE_UP_LEFT | MIDDLE_UP_RIGHT | MIDDLE_DOWN_RIGHT,
+        UPPER_RIGHT | MIDDLE_UP_LEFT | MIDDLE_UP_RIGHT | MIDDLE_DOWN_RIGHT,
+        UPPER_LEFT | UPPER_RIGHT | MIDDLE_UP_LEFT | MIDDLE_UP_RIGHT | MIDDLE_DOWN_RIGHT,
+        MIDDLE_DOWN_LEFT | MIDDLE_DOWN_RIGHT,
+        UPPER_LEFT | MIDDLE_DOWN_LEFT | MIDDLE_DOWN_RIGHT,
+        UPPER_RIGHT | MIDDLE_DOWN_LEFT | MIDDLE_DOWN_RIGHT,
+        UPPER_LEFT | UPPER_RIGHT | MIDDLE_DOWN_LEFT | MIDDLE_DOWN_RIGHT,
+        MIDDLE_UP_LEFT | MIDDLE_DOWN_LEFT | MIDDLE_DOWN_RIGHT,
+        UPPER_LEFT | MIDDLE_UP_LEFT | MIDDLE_DOWN_LEFT | MIDDLE_DOWN_RIGHT,
+        UPPER_RIGHT | MIDDLE_UP_LEFT | MIDDLE_DOWN_LEFT | MIDDLE_DOWN_RIGHT,
+        UPPER_LEFT | UPPER_RIGHT | MIDDLE_UP_LEFT | MIDDLE_DOWN_LEFT | MIDDLE_DOWN_RIGHT,
+        MIDDLE_UP_RIGHT | MIDDLE_DOWN_LEFT | MIDDLE_DOWN_RIGHT,
+        // U+1CD30 - U+1CD3F
+        UPPER_LEFT | MIDDLE_UP_RIGHT | MIDDLE_DOWN_LEFT | MIDDLE_DOWN_RIGHT,
+        UPPER_RIGHT | MIDDLE_UP_RIGHT | MIDDLE_DOWN_LEFT | MIDDLE_DOWN_RIGHT,
+        UPPER_LEFT | UPPER_RIGHT | MIDDLE_UP_RIGHT | MIDDLE_DOWN_LEFT | MIDDLE_DOWN_RIGHT,
+        MIDDLE_UP_LEFT | MIDDLE_UP_RIGHT | MIDDLE_DOWN_LEFT | MIDDLE_DOWN_RIGHT,
+        UPPER_LEFT | MIDDLE_UP_LEFT | MIDDLE_UP_RIGHT | MIDDLE_DOWN_LEFT | MIDDLE_DOWN_RIGHT,
+        UPPER_RIGHT | MIDDLE_UP_LEFT | MIDDLE_UP_RIGHT | MIDDLE_DOWN_LEFT | MIDDLE_DOWN_RIGHT,
+        UPPER_LEFT | LOWER_LEFT,
+        UPPER_RIGHT | LOWER_LEFT,
+        UPPER_LEFT | UPPER_RIGHT | LOWER_LEFT,
+        MIDDLE_UP_LEFT | LOWER_LEFT,
+        UPPER_LEFT | MIDDLE_UP_LEFT | LOWER_LEFT,
+        UPPER_RIGHT | MIDDLE_UP_LEFT | LOWER_LEFT,
+        UPPER_LEFT | UPPER_RIGHT | MIDDLE_UP_LEFT | LOWER_LEFT,
+        MIDDLE_UP_RIGHT | LOWER_LEFT,
+        UPPER_LEFT | MIDDLE_UP_RIGHT | LOWER_LEFT,
+        UPPER_RIGHT | MIDDLE_UP_RIGHT | LOWER_LEFT,
+        // U+1CD40 - U+1CD4F
+        UPPER_LEFT | UPPER_RIGHT | MIDDLE_UP_RIGHT | LOWER_LEFT,
+        MIDDLE_UP_LEFT | MIDDLE_UP_RIGHT | LOWER_LEFT,
+        UPPER_LEFT | MIDDLE_UP_LEFT | MIDDLE_UP_RIGHT | LOWER_LEFT,
+        UPPER_RIGHT | MIDDLE_UP_LEFT | MIDDLE_UP_RIGHT | LOWER_LEFT,
+        UPPER_LEFT | UPPER_RIGHT | MIDDLE_UP_LEFT | MIDDLE_UP_RIGHT | LOWER_LEFT,
+        UPPER_LEFT | MIDDLE_DOWN_LEFT | LOWER_LEFT,
+        UPPER_RIGHT | MIDDLE_DOWN_LEFT | LOWER_LEFT,
+        UPPER_LEFT | UPPER_RIGHT | MIDDLE_DOWN_LEFT | LOWER_LEFT,
+        MIDDLE_UP_LEFT | MIDDLE_DOWN_LEFT | LOWER_LEFT,
+        UPPER_RIGHT | MIDDLE_UP_LEFT | MIDDLE_DOWN_LEFT | LOWER_LEFT,
+        UPPER_LEFT | UPPER_RIGHT | MIDDLE_UP_LEFT | MIDDLE_DOWN_LEFT | LOWER_LEFT,
+        MIDDLE_UP_RIGHT | MIDDLE_DOWN_LEFT | LOWER_LEFT,
+        UPPER_LEFT | MIDDLE_UP_RIGHT | MIDDLE_DOWN_LEFT | LOWER_LEFT,
+        UPPER_LEFT | UPPER_RIGHT | MIDDLE_UP_RIGHT | MIDDLE_DOWN_LEFT | LOWER_LEFT,
+        MIDDLE_UP_LEFT | MIDDLE_UP_RIGHT | MIDDLE_DOWN_LEFT | LOWER_LEFT,
+        UPPER_LEFT | MIDDLE_UP_LEFT | MIDDLE_UP_RIGHT | MIDDLE_DOWN_LEFT | LOWER_LEFT,
+        // U+1CD50 - U+1CD5F
+        UPPER_RIGHT | MIDDLE_UP_LEFT | MIDDLE_UP_RIGHT | MIDDLE_DOWN_LEFT | LOWER_LEFT,
+        MIDDLE_DOWN_RIGHT | LOWER_LEFT,
+        UPPER_LEFT | MIDDLE_DOWN_RIGHT | LOWER_LEFT,
+        UPPER_RIGHT | MIDDLE_DOWN_RIGHT | LOWER_LEFT,
+        UPPER_LEFT | UPPER_RIGHT | MIDDLE_DOWN_RIGHT | LOWER_LEFT,
+        MIDDLE_UP_LEFT | MIDDLE_DOWN_RIGHT | LOWER_LEFT,
+        UPPER_LEFT | MIDDLE_UP_LEFT | MIDDLE_DOWN_RIGHT | LOWER_LEFT,
+        UPPER_RIGHT | MIDDLE_UP_LEFT | MIDDLE_DOWN_RIGHT | LOWER_LEFT,
+        UPPER_LEFT | UPPER_RIGHT | MIDDLE_UP_LEFT | MIDDLE_DOWN_RIGHT | LOWER_LEFT,
+        MIDDLE_UP_RIGHT | MIDDLE_DOWN_RIGHT | LOWER_LEFT,
+        UPPER_LEFT | MIDDLE_UP_RIGHT | MIDDLE_DOWN_RIGHT | LOWER_LEFT,
+        UPPER_RIGHT | MIDDLE_UP_RIGHT | MIDDLE_DOWN_RIGHT | LOWER_LEFT,
+        UPPER_LEFT | UPPER_RIGHT | MIDDLE_UP_RIGHT | MIDDLE_DOWN_RIGHT | LOWER_LEFT,
+        MIDDLE_UP_LEFT | MIDDLE_UP_RIGHT | MIDDLE_DOWN_RIGHT | LOWER_LEFT,
+        UPPER_LEFT | MIDDLE_UP_LEFT | MIDDLE_UP_RIGHT | MIDDLE_DOWN_RIGHT | LOWER_LEFT,
+        UPPER_RIGHT | MIDDLE_UP_LEFT | MIDDLE_UP_RIGHT | MIDDLE_DOWN_RIGHT | LOWER_LEFT,
+        // U+1CD60 - U+1CD6F
+        UPPER_LEFT | UPPER_RIGHT | MIDDLE_UP_LEFT | MIDDLE_UP_RIGHT | MIDDLE_DOWN_RIGHT | LOWER_LEFT,
+        MIDDLE_DOWN_LEFT | MIDDLE_DOWN_RIGHT | LOWER_LEFT,
+        UPPER_LEFT | MIDDLE_DOWN_LEFT | MIDDLE_DOWN_RIGHT | LOWER_LEFT,
+        UPPER_RIGHT | MIDDLE_DOWN_LEFT | MIDDLE_DOWN_RIGHT | LOWER_LEFT,
+        UPPER_LEFT | UPPER_RIGHT | MIDDLE_DOWN_LEFT | MIDDLE_DOWN_RIGHT | LOWER_LEFT,
+        MIDDLE_UP_LEFT | MIDDLE_DOWN_LEFT | MIDDLE_DOWN_RIGHT | LOWER_LEFT,
+        UPPER_LEFT | MIDDLE_UP_LEFT | MIDDLE_DOWN_LEFT | MIDDLE_DOWN_RIGHT | LOWER_LEFT,
+        UPPER_RIGHT | MIDDLE_UP_LEFT | MIDDLE_DOWN_LEFT | MIDDLE_DOWN_RIGHT | LOWER_LEFT,
+        UPPER_LEFT | UPPER_RIGHT | MIDDLE_UP_LEFT | MIDDLE_DOWN_LEFT | MIDDLE_DOWN_RIGHT | LOWER_LEFT,
+        MIDDLE_UP_RIGHT | MIDDLE_DOWN_LEFT | MIDDLE_DOWN_RIGHT | LOWER_LEFT,
+        UPPER_LEFT | MIDDLE_UP_RIGHT | MIDDLE_DOWN_LEFT | MIDDLE_DOWN_RIGHT | LOWER_LEFT,
+        UPPER_RIGHT | MIDDLE_UP_RIGHT | MIDDLE_DOWN_LEFT | MIDDLE_DOWN_RIGHT | LOWER_LEFT,
+        UPPER_LEFT | UPPER_RIGHT | MIDDLE_UP_RIGHT | MIDDLE_DOWN_LEFT | MIDDLE_DOWN_RIGHT | LOWER_LEFT,
+        MIDDLE_UP_LEFT | MIDDLE_UP_RIGHT | MIDDLE_DOWN_LEFT | MIDDLE_DOWN_RIGHT | LOWER_LEFT,
+        UPPER_LEFT | MIDDLE_UP_LEFT | MIDDLE_UP_RIGHT | MIDDLE_DOWN_LEFT | MIDDLE_DOWN_RIGHT | LOWER_LEFT,
+        UPPER_RIGHT | MIDDLE_UP_LEFT | MIDDLE_UP_RIGHT | MIDDLE_DOWN_LEFT | MIDDLE_DOWN_RIGHT | LOWER_LEFT,
+        // U+1CD70 - U+1CD7F
+        UPPER_LEFT | UPPER_RIGHT | MIDDLE_UP_LEFT | MIDDLE_UP_RIGHT | MIDDLE_DOWN_LEFT | MIDDLE_DOWN_RIGHT | LOWER_LEFT,
+        UPPER_LEFT | LOWER_RIGHT,
+        UPPER_RIGHT | LOWER_RIGHT,
+        UPPER_LEFT | UPPER_RIGHT | LOWER_RIGHT,
+        MIDDLE_UP_LEFT | LOWER_RIGHT,
+        UPPER_LEFT | MIDDLE_UP_LEFT | LOWER_RIGHT,
+        UPPER_RIGHT | MIDDLE_UP_LEFT | LOWER_RIGHT,
+        UPPER_LEFT | UPPER_RIGHT | MIDDLE_UP_LEFT | LOWER_RIGHT,
+        MIDDLE_UP_RIGHT | LOWER_RIGHT,
+        UPPER_LEFT | MIDDLE_UP_RIGHT | LOWER_RIGHT,
+        UPPER_RIGHT | MIDDLE_UP_RIGHT | LOWER_RIGHT,
+        UPPER_LEFT | UPPER_RIGHT | MIDDLE_UP_RIGHT | LOWER_RIGHT,
+        MIDDLE_UP_LEFT | MIDDLE_UP_RIGHT | LOWER_RIGHT,
+        UPPER_LEFT | MIDDLE_UP_LEFT | MIDDLE_UP_RIGHT | LOWER_RIGHT,
+        UPPER_RIGHT | MIDDLE_UP_LEFT | MIDDLE_UP_RIGHT | LOWER_RIGHT,
+        UPPER_LEFT | UPPER_RIGHT | MIDDLE_UP_LEFT | MIDDLE_UP_RIGHT | LOWER_RIGHT,
+        // U+1CD80 - U+1CD8F
+        MIDDLE_DOWN_LEFT | LOWER_RIGHT,
+        UPPER_LEFT | MIDDLE_DOWN_LEFT | LOWER_RIGHT,
+        UPPER_RIGHT | MIDDLE_DOWN_LEFT | LOWER_RIGHT,
+        UPPER_LEFT | UPPER_RIGHT | MIDDLE_DOWN_LEFT | LOWER_RIGHT,
+        MIDDLE_UP_LEFT | MIDDLE_DOWN_LEFT | LOWER_RIGHT,
+        UPPER_LEFT | MIDDLE_UP_LEFT | MIDDLE_DOWN_LEFT | LOWER_RIGHT,
+        UPPER_RIGHT | MIDDLE_UP_LEFT | MIDDLE_DOWN_LEFT | LOWER_RIGHT,
+        UPPER_LEFT | UPPER_RIGHT | MIDDLE_UP_LEFT | MIDDLE_DOWN_LEFT | LOWER_RIGHT,
+        MIDDLE_UP_RIGHT | MIDDLE_DOWN_LEFT | LOWER_RIGHT,
+        UPPER_LEFT | MIDDLE_UP_RIGHT | MIDDLE_DOWN_LEFT | LOWER_RIGHT,
+        UPPER_RIGHT | MIDDLE_UP_RIGHT | MIDDLE_DOWN_LEFT | LOWER_RIGHT,
+        UPPER_LEFT | UPPER_RIGHT | MIDDLE_UP_RIGHT | MIDDLE_DOWN_LEFT | LOWER_RIGHT,
+        MIDDLE_UP_LEFT | MIDDLE_UP_RIGHT | MIDDLE_DOWN_LEFT | LOWER_RIGHT,
+        UPPER_LEFT | MIDDLE_UP_LEFT | MIDDLE_UP_RIGHT | MIDDLE_DOWN_LEFT | LOWER_RIGHT,
+        UPPER_RIGHT | MIDDLE_UP_LEFT | MIDDLE_UP_RIGHT | MIDDLE_DOWN_LEFT | LOWER_RIGHT,
+        UPPER_LEFT | UPPER_RIGHT | MIDDLE_UP_LEFT | MIDDLE_UP_RIGHT | MIDDLE_DOWN_LEFT | LOWER_RIGHT,
+        // U+1CD90 - U+1CD9F
+        UPPER_LEFT | MIDDLE_DOWN_RIGHT | LOWER_RIGHT,
+        UPPER_RIGHT | MIDDLE_DOWN_RIGHT | LOWER_RIGHT,
+        UPPER_LEFT | UPPER_RIGHT | MIDDLE_DOWN_RIGHT | LOWER_RIGHT,
+        MIDDLE_UP_LEFT | MIDDLE_DOWN_RIGHT | LOWER_RIGHT,
+        UPPER_RIGHT | MIDDLE_UP_LEFT | MIDDLE_DOWN_RIGHT | LOWER_RIGHT,
+        UPPER_LEFT | UPPER_RIGHT | MIDDLE_UP_LEFT | MIDDLE_DOWN_RIGHT | LOWER_RIGHT,
+        MIDDLE_UP_RIGHT | MIDDLE_DOWN_RIGHT | LOWER_RIGHT,
+        UPPER_LEFT | MIDDLE_UP_RIGHT | MIDDLE_DOWN_RIGHT | LOWER_RIGHT,
+        UPPER_LEFT | UPPER_RIGHT | MIDDLE_UP_RIGHT | MIDDLE_DOWN_RIGHT | LOWER_RIGHT,
+        MIDDLE_UP_LEFT | MIDDLE_UP_RIGHT | MIDDLE_DOWN_RIGHT | LOWER_RIGHT,
+        UPPER_LEFT | MIDDLE_UP_LEFT | MIDDLE_UP_RIGHT | MIDDLE_DOWN_RIGHT | LOWER_RIGHT,
+        UPPER_RIGHT | MIDDLE_UP_LEFT | MIDDLE_UP_RIGHT | MIDDLE_DOWN_RIGHT | LOWER_RIGHT,
+        MIDDLE_DOWN_LEFT | MIDDLE_DOWN_RIGHT | LOWER_RIGHT,
+        UPPER_LEFT | MIDDLE_DOWN_LEFT | MIDDLE_DOWN_RIGHT | LOWER_RIGHT,
+        UPPER_RIGHT | MIDDLE_DOWN_LEFT | MIDDLE_DOWN_RIGHT | LOWER_RIGHT,
+        UPPER_LEFT | UPPER_RIGHT | MIDDLE_DOWN_LEFT | MIDDLE_DOWN_RIGHT | LOWER_RIGHT,
+        // U+1CDA0 - U+1CDAF
+        MIDDLE_UP_LEFT | MIDDLE_DOWN_LEFT | MIDDLE_DOWN_RIGHT | LOWER_RIGHT,
+        UPPER_LEFT | MIDDLE_UP_LEFT | MIDDLE_DOWN_LEFT | MIDDLE_DOWN_RIGHT | LOWER_RIGHT,
+        UPPER_RIGHT | MIDDLE_UP_LEFT | MIDDLE_DOWN_LEFT | MIDDLE_DOWN_RIGHT | LOWER_RIGHT,
+        UPPER_LEFT | UPPER_RIGHT | MIDDLE_UP_LEFT | MIDDLE_DOWN_LEFT | MIDDLE_DOWN_RIGHT | LOWER_RIGHT,
+        MIDDLE_UP_RIGHT | MIDDLE_DOWN_LEFT | MIDDLE_DOWN_RIGHT | LOWER_RIGHT,
+        UPPER_LEFT | MIDDLE_UP_RIGHT | MIDDLE_DOWN_LEFT | MIDDLE_DOWN_RIGHT | LOWER_RIGHT,
+        UPPER_RIGHT | MIDDLE_UP_RIGHT | MIDDLE_DOWN_LEFT | MIDDLE_DOWN_RIGHT | LOWER_RIGHT,
+        UPPER_LEFT | UPPER_RIGHT | MIDDLE_UP_RIGHT | MIDDLE_DOWN_LEFT | MIDDLE_DOWN_RIGHT | LOWER_RIGHT,
+        MIDDLE_UP_LEFT | MIDDLE_UP_RIGHT | MIDDLE_DOWN_LEFT | MIDDLE_DOWN_RIGHT | LOWER_RIGHT,
+        UPPER_LEFT | MIDDLE_UP_LEFT | MIDDLE_UP_RIGHT | MIDDLE_DOWN_LEFT | MIDDLE_DOWN_RIGHT | LOWER_RIGHT,
+        UPPER_RIGHT | MIDDLE_UP_LEFT | MIDDLE_UP_RIGHT | MIDDLE_DOWN_LEFT | MIDDLE_DOWN_RIGHT | LOWER_RIGHT,
+        UPPER_LEFT | UPPER_RIGHT | MIDDLE_UP_LEFT | MIDDLE_UP_RIGHT | MIDDLE_DOWN_LEFT | MIDDLE_DOWN_RIGHT | LOWER_RIGHT,
+        UPPER_LEFT | LOWER_LEFT | LOWER_RIGHT,
+        UPPER_RIGHT | LOWER_LEFT | LOWER_RIGHT,
+        UPPER_LEFT | UPPER_RIGHT | LOWER_LEFT | LOWER_RIGHT,
+        MIDDLE_UP_LEFT | LOWER_LEFT | LOWER_RIGHT,
+        // U+1CDB0 - U+1CDBF
+        UPPER_LEFT | MIDDLE_UP_LEFT | LOWER_LEFT | LOWER_RIGHT,
+        UPPER_RIGHT | MIDDLE_UP_LEFT | LOWER_LEFT | LOWER_RIGHT,
+        UPPER_LEFT | UPPER_RIGHT | MIDDLE_UP_LEFT | LOWER_LEFT | LOWER_RIGHT,
+        MIDDLE_UP_RIGHT | LOWER_LEFT | LOWER_RIGHT,
+        UPPER_LEFT | MIDDLE_UP_RIGHT | LOWER_LEFT | LOWER_RIGHT,
+        UPPER_RIGHT | MIDDLE_UP_RIGHT | LOWER_LEFT | LOWER_RIGHT,
+        UPPER_LEFT | UPPER_RIGHT | MIDDLE_UP_RIGHT | LOWER_LEFT | LOWER_RIGHT,
+        MIDDLE_UP_LEFT | MIDDLE_UP_RIGHT | LOWER_LEFT | LOWER_RIGHT,
+        UPPER_LEFT | MIDDLE_UP_LEFT | MIDDLE_UP_RIGHT | LOWER_LEFT | LOWER_RIGHT,
+        UPPER_RIGHT | MIDDLE_UP_LEFT | MIDDLE_UP_RIGHT | LOWER_LEFT | LOWER_RIGHT,
+        UPPER_LEFT | UPPER_RIGHT | MIDDLE_UP_LEFT | MIDDLE_UP_RIGHT | LOWER_LEFT | LOWER_RIGHT,
+        MIDDLE_DOWN_LEFT | LOWER_LEFT | LOWER_RIGHT,
+        UPPER_LEFT | MIDDLE_DOWN_LEFT | LOWER_LEFT | LOWER_RIGHT,
+        UPPER_RIGHT | MIDDLE_DOWN_LEFT | LOWER_LEFT | LOWER_RIGHT,
+        UPPER_LEFT | UPPER_RIGHT | MIDDLE_DOWN_LEFT | LOWER_LEFT | LOWER_RIGHT,
+        MIDDLE_UP_LEFT | MIDDLE_DOWN_LEFT | LOWER_LEFT | LOWER_RIGHT,
+        // U+1CDC0 - U+1CDCF
+        UPPER_LEFT | MIDDLE_UP_LEFT | MIDDLE_DOWN_LEFT | LOWER_LEFT | LOWER_RIGHT,
+        UPPER_RIGHT | MIDDLE_UP_LEFT | MIDDLE_DOWN_LEFT | LOWER_LEFT | LOWER_RIGHT,
+        UPPER_LEFT | UPPER_RIGHT | MIDDLE_UP_LEFT | MIDDLE_DOWN_LEFT | LOWER_LEFT | LOWER_RIGHT,
+        MIDDLE_UP_RIGHT | MIDDLE_DOWN_LEFT | LOWER_LEFT | LOWER_RIGHT,
+        UPPER_LEFT | MIDDLE_UP_RIGHT | MIDDLE_DOWN_LEFT | LOWER_LEFT | LOWER_RIGHT,
+        UPPER_RIGHT | MIDDLE_UP_RIGHT | MIDDLE_DOWN_LEFT | LOWER_LEFT | LOWER_RIGHT,
+        UPPER_LEFT | UPPER_RIGHT | MIDDLE_UP_RIGHT | MIDDLE_DOWN_LEFT | LOWER_LEFT | LOWER_RIGHT,
+        MIDDLE_UP_LEFT | MIDDLE_UP_RIGHT | MIDDLE_DOWN_LEFT | LOWER_LEFT | LOWER_RIGHT,
+        UPPER_LEFT | MIDDLE_UP_LEFT | MIDDLE_UP_RIGHT | MIDDLE_DOWN_LEFT | LOWER_LEFT | LOWER_RIGHT,
+        UPPER_RIGHT | MIDDLE_UP_LEFT | MIDDLE_UP_RIGHT | MIDDLE_DOWN_LEFT | LOWER_LEFT | LOWER_RIGHT,
+        UPPER_LEFT | UPPER_RIGHT | MIDDLE_UP_LEFT | MIDDLE_UP_RIGHT | MIDDLE_DOWN_LEFT | LOWER_LEFT | LOWER_RIGHT,
+        MIDDLE_DOWN_RIGHT | LOWER_LEFT | LOWER_RIGHT,
+        UPPER_LEFT | MIDDLE_DOWN_RIGHT | LOWER_LEFT | LOWER_RIGHT,
+        UPPER_RIGHT | MIDDLE_DOWN_RIGHT | LOWER_LEFT | LOWER_RIGHT,
+        UPPER_LEFT | UPPER_RIGHT | MIDDLE_DOWN_RIGHT | LOWER_LEFT | LOWER_RIGHT,
+        MIDDLE_UP_LEFT | MIDDLE_DOWN_RIGHT | LOWER_LEFT | LOWER_RIGHT,
+        // U+1CDD0 - U+1CDDF
+        UPPER_LEFT | MIDDLE_UP_LEFT | MIDDLE_DOWN_RIGHT | LOWER_LEFT | LOWER_RIGHT,
+        UPPER_RIGHT | MIDDLE_UP_LEFT | MIDDLE_DOWN_RIGHT | LOWER_LEFT | LOWER_RIGHT,
+        UPPER_LEFT | UPPER_RIGHT | MIDDLE_UP_LEFT | MIDDLE_DOWN_RIGHT | LOWER_LEFT | LOWER_RIGHT,
+        MIDDLE_UP_RIGHT | MIDDLE_DOWN_RIGHT | LOWER_LEFT | LOWER_RIGHT,
+        UPPER_LEFT | MIDDLE_UP_RIGHT | MIDDLE_DOWN_RIGHT | LOWER_LEFT | LOWER_RIGHT,
+        UPPER_RIGHT | MIDDLE_UP_RIGHT | MIDDLE_DOWN_RIGHT | LOWER_LEFT | LOWER_RIGHT,
+        UPPER_LEFT | UPPER_RIGHT | MIDDLE_UP_RIGHT | MIDDLE_DOWN_RIGHT | LOWER_LEFT | LOWER_RIGHT,
+        MIDDLE_UP_LEFT | MIDDLE_UP_RIGHT | MIDDLE_DOWN_RIGHT | LOWER_LEFT | LOWER_RIGHT,
+        UPPER_LEFT | MIDDLE_UP_LEFT | MIDDLE_UP_RIGHT | MIDDLE_DOWN_RIGHT | LOWER_LEFT | LOWER_RIGHT,
+        UPPER_RIGHT | MIDDLE_UP_LEFT | MIDDLE_UP_RIGHT | MIDDLE_DOWN_RIGHT | LOWER_LEFT | LOWER_RIGHT,
+        UPPER_LEFT | UPPER_RIGHT | MIDDLE_UP_LEFT | MIDDLE_UP_RIGHT | MIDDLE_DOWN_RIGHT | LOWER_LEFT | LOWER_RIGHT,
+        UPPER_LEFT | MIDDLE_DOWN_LEFT | MIDDLE_DOWN_RIGHT | LOWER_LEFT | LOWER_RIGHT,
+        UPPER_RIGHT | MIDDLE_DOWN_LEFT | MIDDLE_DOWN_RIGHT | LOWER_LEFT | LOWER_RIGHT,
+        UPPER_LEFT | UPPER_RIGHT | MIDDLE_DOWN_LEFT | MIDDLE_DOWN_RIGHT | LOWER_LEFT | LOWER_RIGHT,
+        MIDDLE_UP_LEFT | MIDDLE_DOWN_LEFT | MIDDLE_DOWN_RIGHT | LOWER_LEFT | LOWER_RIGHT,
+        UPPER_RIGHT | MIDDLE_UP_LEFT | MIDDLE_DOWN_LEFT | MIDDLE_DOWN_RIGHT | LOWER_LEFT | LOWER_RIGHT,
+        // U+1CDE0 - U+1CDE5
+        UPPER_LEFT | UPPER_RIGHT | MIDDLE_UP_LEFT | MIDDLE_DOWN_LEFT | MIDDLE_DOWN_RIGHT | LOWER_LEFT | LOWER_RIGHT,
+        MIDDLE_UP_RIGHT | MIDDLE_DOWN_LEFT | MIDDLE_DOWN_RIGHT | LOWER_LEFT | LOWER_RIGHT,
+        UPPER_LEFT | MIDDLE_UP_RIGHT | MIDDLE_DOWN_LEFT | MIDDLE_DOWN_RIGHT | LOWER_LEFT | LOWER_RIGHT,
+        UPPER_LEFT | UPPER_RIGHT | MIDDLE_UP_RIGHT | MIDDLE_DOWN_LEFT | MIDDLE_DOWN_RIGHT | LOWER_LEFT | LOWER_RIGHT,
+        UPPER_LEFT | MIDDLE_UP_LEFT | MIDDLE_UP_RIGHT | MIDDLE_DOWN_LEFT | MIDDLE_DOWN_RIGHT | LOWER_LEFT | LOWER_RIGHT,
+        UPPER_RIGHT | MIDDLE_UP_LEFT | MIDDLE_UP_RIGHT | MIDDLE_DOWN_LEFT | MIDDLE_DOWN_RIGHT | LOWER_LEFT | LOWER_RIGHT,
+    };
+
+    // The C original has a _DEBUG-only assertion sweep over the matrix
+    // checking that no two codepoints encode the same octant; the table is
+    // carried over verbatim, so it is checked in review rather than at
+    // runtime.
+
+    std.debug.assert(wc >= 0x1cd00 and wc <= 0x1cde5);
+    const idx: usize = @intCast(wc - 0x1cd00);
+
+    std.debug.assert(idx < matrix.len);
+    const encoded = matrix[idx];
+
+    if (encoded & UPPER_LEFT != 0)
+        octantUpperLeft(buf);
+
+    if (encoded & MIDDLE_UP_LEFT != 0)
+        octantMiddleUpLeft(buf);
+
+    if (encoded & MIDDLE_DOWN_LEFT != 0)
+        octantMiddleDownLeft(buf);
+
+    if (encoded & LOWER_LEFT != 0)
+        octantLowerLeft(buf);
+
+    if (encoded & UPPER_RIGHT != 0)
+        octantUpperRight(buf);
+
+    if (encoded & MIDDLE_UP_RIGHT != 0)
+        octantMiddleUpRight(buf);
+
+    if (encoded & MIDDLE_DOWN_RIGHT != 0)
+        octantMiddleDownRight(buf);
+
+    if (encoded & LOWER_RIGHT != 0)
+        octantLowerRight(buf);
 }
