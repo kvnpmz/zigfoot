@@ -79,6 +79,8 @@ C_TYPES: dict[str, str] = {
     "Argv": "struct argv",
     "BindingAux": "struct binding_aux",
     "ConfigKeyBinding": "struct config_key_binding",
+    "KeyBinding": "struct key_binding",
+    "KeyBindingSet": "struct key_binding_set",
     "ConfigKeyBindingList": "struct config_key_binding_list",
     "CustomRegex": "struct custom_regex",
     "PixmanBox32": "pixman_box32_t",

@@ -1951,6 +1951,45 @@ pub const BindingAux = extern struct {
 
 pub const KeyBindingType = enum(c_int) { key, mouse };
 
+/// key-binding.h's `struct key_binding`: one entry in a binding list. `u` is
+/// the anonymous union C has - `k` for keyboard bindings, `m` for mouse ones.
+pub const KeyBinding = extern struct {
+    type: KeyBindingType,
+    action: c_int, // enum bind_action_*, kept as an int like C
+    mods: u32, // xkb_mod_mask_t
+
+    // C's union is anonymous, so the probe cannot name it; the field is
+    // `_`-prefixed to keep expectAbi() out of it. Its size is still pinned by
+    // `aux`'s offset and by the struct size.
+    _u: extern union {
+        k: extern struct {
+            sym: u32, // xkb_keysym_t
+            key_codes: TllInt, // tll(xkb_keycode_t)
+        },
+        m: extern struct {
+            button: u32,
+            count: c_int,
+        },
+    },
+
+    aux: ?*anyopaque, // const struct binding_aux *
+};
+
+/// key-binding.h's `struct key_binding_set`: the bindings for one seat, split
+/// by context. Four tll headers and the selection-override mask.
+pub const KeyBindingSet = extern struct {
+    key: Tll(?*anyopaque),
+    search: Tll(?*anyopaque),
+    url: Tll(?*anyopaque),
+    mouse: Tll(?*anyopaque),
+    selection_overrides: u32, // xkb_mod_mask_t
+};
+
+comptime {
+    expectAbi(KeyBinding, "KeyBinding");
+    expectAbi(KeyBindingSet, "KeyBindingSet");
+}
+
 pub const ConfigKeyBinding = extern struct {
     action: c_int,
     modifiers: TllStr,

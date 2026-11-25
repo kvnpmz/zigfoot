@@ -3663,23 +3663,8 @@ extern fn get_current_modifiers(
     filter_locked: bool,
 ) callconv(.c) void;
 
-/// Mirrors key-binding.h's `struct key_binding_set`, of which only
-/// selection_overrides is read here. The whole struct gets mirrored when
-/// key-binding.c is ported (track D5); the check below keeps this one honest
-/// until then (offsetof/sizeof verified against C).
-const KeyBindingSet = extern struct {
-    key: types.Tll(?*anyopaque),
-    search: types.Tll(?*anyopaque),
-    url: types.Tll(?*anyopaque),
-    mouse: types.Tll(?*anyopaque),
-    selection_overrides: u32, // xkb_mod_mask_t
-};
-
-comptime {
-    if (@offsetOf(KeyBindingSet, "selection_overrides") != 96 or
-        @sizeOf(KeyBindingSet) != 104)
-        @compileError("struct key_binding_set layout doesn't match the Zig mirror");
-}
+/// key-binding.h's `struct key_binding_set` now lives in terminal_types.zig.
+const KeyBindingSet = types.KeyBindingSet;
 
 extern fn key_binding_for(
     mgr: ?*anyopaque,

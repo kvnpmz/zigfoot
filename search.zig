@@ -1130,21 +1130,8 @@ const KeyBinding = extern struct {
 };
 pub const KeyBindingList = tll.Tll(KeyBinding);
 
-// key-binding.h's `struct key_binding_set`.
-pub const KeyBindingSet = extern struct {
-    key: KeyBindingList,
-    search: KeyBindingList,
-    url: KeyBindingList,
-    mouse: KeyBindingList,
-    selection_overrides: u32,
-};
-
-comptime {
-    if (@offsetOf(KeyBindingSet, "selection_overrides") != 96 or @sizeOf(KeyBindingSet) != 104)
-        @compileError("struct key_binding_set layout mismatch");
-    if (@sizeOf(KeyBinding) != 56 or @offsetOf(KeyBinding, "aux") != 48)
-        @compileError("struct key_binding layout mismatch");
-}
+// key-binding.h's `struct key_binding_set` now lives in terminal_types.zig.
+pub const KeyBindingSet = @import("terminal_types.zig").KeyBindingSet;
 
 // bind_action_search
 const SEARCH_NONE: c_int = 0;
@@ -1612,7 +1599,8 @@ export fn search_input(
     // Key bindings
 
     // Match untranslated symbols
-    var it = (@constCast(&bindings.search)).foreach();
+    const search_list: *tll.Tll(KeyBinding) = @ptrCast(@constCast(&bindings.search));
+    var it = search_list.foreach();
     while (it.next()) |node| {
         const bind = &node.item;
 
@@ -1632,7 +1620,7 @@ export fn search_input(
     }
 
     // Match translated symbol
-    it = (@constCast(&bindings.search)).foreach();
+    it = search_list.foreach();
     while (it.next()) |node| {
         const bind = &node.item;
 
@@ -1646,7 +1634,7 @@ export fn search_input(
     }
 
     // Match raw key code
-    it = (@constCast(&bindings.search)).foreach();
+    it = search_list.foreach();
     while (it.next()) |node| {
         const bind = &node.item;
 
