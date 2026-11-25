@@ -4482,18 +4482,10 @@ export fn check_if_font_is_monospaced(
 
 // ── $SHELL lookup (C2o) ───────────────────────────────────────────
 
-/// Linux `struct passwd`; only pw_shell is read.
-const Passwd = extern struct {
-    pw_name: ?[*:0]u8,
-    pw_passwd: ?[*:0]u8,
-    pw_uid: c_uint,
-    pw_gid: c_uint,
-    pw_gecos: ?[*:0]u8,
-    pw_dir: ?[*:0]u8,
-    pw_shell: ?[*:0]u8,
-};
-extern fn getpwuid(uid: c_uint) callconv(.c) ?*Passwd;
-extern fn getuid() callconv(.c) c_uint;
+/// libc struct passwd. std.c selects the target layout; only shell is read.
+const Passwd = std.c.passwd;
+extern fn getpwuid(uid: std.c.uid_t) callconv(.c) ?*Passwd;
+extern fn getuid() callconv(.c) std.c.uid_t;
 
 export fn get_shell() callconv(.c) ?[*:0]u8 {
     var shell: [*:0]const u8 = undefined;
@@ -4501,7 +4493,7 @@ export fn get_shell() callconv(.c) ?[*:0]u8 {
     if (getenv("SHELL")) |env| {
         shell = env;
     } else if (getpwuid(getuid())) |passwd| {
-        shell = passwd.pw_shell orelse "sh";
+        shell = passwd.shell orelse "sh";
     } else {
         log_errno(
             LOG_CLASS_ERROR,

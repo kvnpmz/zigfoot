@@ -4545,15 +4545,15 @@ extern fn terminal_shim_wexitstatus(status: c_int) callconv(.c) c_int;
 extern fn terminal_shim_wifsignaled(status: c_int) callconv(.c) c_int;
 extern fn terminal_shim_wtermsig(status: c_int) callconv(.c) c_int;
 
-// struct sigaction, exactly as fdm.zig declares it (glibc/musl, 64-bit).
-const SigSet = extern struct { bits: [16]u64 };
-const KSigaction = extern struct { handler: usize, mask: SigSet, flags: c_int, restorer: ?*anyopaque };
+// libc sigaction layout, selected by the target.
+const SigSet = std.c.sigset_t;
+const KSigaction = std.c.Sigaction;
 extern fn sigemptyset(set: *SigSet) callconv(.c) c_int;
 extern fn sigaction(sig: c_int, act: ?*const KSigaction, old: ?*KSigaction) callconv(.c) c_int;
 
-const SIGALRM: c_int = 14;
-const SIG_DFL_HANDLER: usize = 0;
-const EINTR: c_int = 4;
+const SIGALRM: c_int = @intFromEnum(std.posix.SIG.ALRM);
+const SIG_DFL_HANDLER: ?KSigaction.handler_fn = std.posix.SIG.DFL;
+const EINTR: c_int = @intFromEnum(std.c.E.INTR);
 
 var alarm_raised: c_int = 0;
 
@@ -4564,17 +4564,14 @@ fn sigAlarm(signo: c_int) callconv(.c) void {
 }
 
 fn zeroSigSet() SigSet {
-    var set: SigSet = undefined;
-    @memset(std.mem.asBytes(&set), 0);
-    return set;
+    return std.mem.zeroes(SigSet);
 }
 
-fn installAlarmHandler(handler: usize) void {
+fn installAlarmHandler(handler: ?KSigaction.handler_fn) void {
     var action = KSigaction{
-        .handler = handler,
+        .handler = .{ .handler = handler },
         .mask = zeroSigSet(),
         .flags = 0,
-        .restorer = null,
     };
     _ = sigemptyset(&action.mask);
     _ = sigaction(SIGALRM, &action, null);
@@ -4801,7 +4798,7 @@ export fn term_destroy(term_arg: ?*types.Terminal) callconv(.c) c_int {
             // This is *not* asynchronous; other events are ignored during this
             // time. That only applies to a 'foot --server' instance, where
             // there may be other terminals running.
-            installAlarmHandler(@intFromPtr(&sigAlarm));
+            installAlarmHandler(@ptrCast(&sigAlarm));
 
             var next_signal: c_int = SIGTERM;
 
