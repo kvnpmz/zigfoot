@@ -3277,7 +3277,7 @@ fn roundfDiv(v: c_int, scale: f32) c_int {
 
 /// `(int)roundf(3. * scale)`: the indicator/timer padding.
 fn osdMargin(scale: f32) c_int {
-    return @intFromFloat(@round(3.0 * @as(f64, scale)));
+    return @intFromFloat(@round(@as(f64, 3.0 * scale)));
 }
 
 export fn render_scrollback_position(term: *Terminal) callconv(.c) void {
@@ -3586,7 +3586,7 @@ export fn render_search_box(term: *Terminal) callconv(.c) void {
 
     const scale = term.scale;
     std.debug.assert(scale >= 1.0);
-    const margin: usize = @intFromFloat(@round(3.0 * @as(f64, scale)));
+    const margin: usize = @intCast(osdMargin(scale));
 
     const term_width: usize = @intCast(@max(term.width, 0));
     const term_height: usize = @intCast(@max(term.height, 0));
@@ -4374,21 +4374,22 @@ export fn set_size_from_grid(
     rows: c_int,
 ) callconv(.c) void {
     const conf = term.conf.?;
-    const scale: f64 = term.scale;
+    const scale: f32 = term.scale;
 
     // Nominal grid dimensions
     var new_width: c_int = cols * term.cell_width;
     var new_height: c_int = rows * term.cell_height;
 
-    // Include any configured padding
-    const pad_w: f64 = @as(f64, @floatFromInt(conf.pad_left + conf.pad_right)) * scale;
-    const pad_h: f64 = @as(f64, @floatFromInt(conf.pad_top + conf.pad_bottom)) * scale;
-    new_width = @intFromFloat(@as(f64, @floatFromInt(new_width)) + pad_w);
-    new_height = @intFromFloat(@as(f64, @floatFromInt(new_height)) + pad_h);
+    // C multiplies padding in float, truncates it, then adds it to the
+    // integer grid size. Keep both steps in that order.
+    const pad_w: c_int = @intFromFloat(@as(f32, @floatFromInt(conf.pad_left + conf.pad_right)) * scale);
+    const pad_h: c_int = @intFromFloat(@as(f32, @floatFromInt(conf.pad_top + conf.pad_bottom)) * scale);
+    new_width += pad_w;
+    new_height += pad_h;
 
-    // Round to multiples of scale
-    new_width = @intFromFloat(@round(scale * @round(@as(f64, @floatFromInt(new_width)) / scale)));
-    new_height = @intFromFloat(@round(scale * @round(@as(f64, @floatFromInt(new_height)) / scale)));
+    // The inner division is float; only round() widens to double.
+    new_width = @intFromFloat(@round(@as(f64, scale) * @round(@as(f64, @as(f32, @floatFromInt(new_width)) / scale))));
+    new_height = @intFromFloat(@round(@as(f64, scale) * @round(@as(f64, @as(f32, @floatFromInt(new_height)) / scale))));
 
     if (width) |w| w.* = new_width;
     if (height) |h| h.* = new_height;
@@ -4420,6 +4421,11 @@ extern fn wayland_shim_xdg_surface_set_window_geometry(surface: ?*anyopaque, x: 
 
 fn roundF(v: f64) c_int {
     return @intFromFloat(@round(v));
+}
+
+/// `roundf(v)`: multiply or divide in f32, then widen for round().
+fn roundfF(v: f32) c_int {
+    return @intFromFloat(@round(@as(f64, v)));
 }
 
 /// next power of two >= n, as C's `1 << (32 - __builtin_clz(n))`.
@@ -4846,37 +4852,36 @@ export fn render_resize(
         const border_shown = wayl_win_csd_borders_visible(window);
 
         const title: c_int = if (title_shown)
-            roundF(@as(f64, @floatFromInt(conf.csd.title_height)) * scale)
+            roundfF(@as(f32, @floatFromInt(conf.csd.title_height)) * scale)
         else
             0;
         const border: c_int = if (border_shown)
-            roundF(@as(f64, @floatFromInt(conf.csd.border_width_visible)) * scale)
+            roundfF(@as(f32, @floatFromInt(conf.csd.border_width_visible)) * scale)
         else
             0;
 
         // Must use surface logical coordinates (same calculations as
         // get_csd_data(), but with different inputs)
-        const toplevel_min_width = roundF(@as(f64, @floatFromInt(border)) / scale) +
-            roundF(@as(f64, @floatFromInt(min_width)) / scale) +
-            roundF(@as(f64, @floatFromInt(border)) / scale);
+        const toplevel_min_width = roundfDiv(border, scale) +
+            roundfDiv(min_width, scale) +
+            roundfDiv(border, scale);
 
-        const toplevel_min_height = roundF(@as(f64, @floatFromInt(border)) / scale) +
-            roundF(@as(f64, @floatFromInt(title)) / scale) +
-            roundF(@as(f64, @floatFromInt(min_height)) / scale) +
-            roundF(@as(f64, @floatFromInt(border)) / scale);
+        const toplevel_min_height = roundfDiv(border, scale) +
+            roundfDiv(title, scale) +
+            roundfDiv(min_height, scale) +
+            roundfDiv(border, scale);
 
-        const toplevel_width = roundF(@as(f64, @floatFromInt(border)) / scale) +
-            roundF(@as(f64, @floatFromInt(term.width)) / scale) +
-            roundF(@as(f64, @floatFromInt(border)) / scale);
+        const toplevel_width = roundfDiv(border, scale) +
+            roundfDiv(term.width, scale) +
+            roundfDiv(border, scale);
 
-        const toplevel_height = roundF(@as(f64, @floatFromInt(border)) / scale) +
-            roundF(@as(f64, @floatFromInt(title)) / scale) +
-            roundF(@as(f64, @floatFromInt(term.height)) / scale) +
-            roundF(@as(f64, @floatFromInt(border)) / scale);
+        const toplevel_height = roundfDiv(border, scale) +
+            roundfDiv(title, scale) +
+            roundfDiv(term.height, scale) +
+            roundfDiv(border, scale);
 
-        const x = roundF(@as(f64, @floatFromInt(-border)) / scale);
-        const y = roundF(@as(f64, @floatFromInt(-title)) / scale) -
-            roundF(@as(f64, @floatFromInt(border)) / scale);
+        const x = roundfDiv(-border, scale);
+        const y = roundfDiv(-title, scale) - roundfDiv(border, scale);
 
         wayland_shim_xdg_toplevel_set_min_size(window.xdg_toplevel, toplevel_min_width, toplevel_min_height);
         wayland_shim_xdg_surface_set_window_geometry(window.xdg_surface, x, y, toplevel_width, toplevel_height);
@@ -5663,8 +5668,8 @@ fn renderXcursorUpdate(seat: *types.Seat) void {
         seat.wl_pointer,
         pointer.serial,
         surf,
-        @intFromFloat(@as(f64, @floatFromInt(hotspot_x)) / @as(f64, scale)),
-        @intFromFloat(@as(f64, @floatFromInt(hotspot_y)) / @as(f64, scale)),
+        @intFromFloat(@as(f32, @floatFromInt(hotspot_x)) / scale),
+        @intFromFloat(@as(f32, @floatFromInt(hotspot_y)) / scale),
     );
 
     wayland_shim_surface_damage_buffer(surf, 0, 0, 0x7fffffff, 0x7fffffff);
