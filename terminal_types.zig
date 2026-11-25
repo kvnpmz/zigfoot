@@ -1135,6 +1135,17 @@ pub const Timespec = extern struct {
     tv_nsec: i64,
 };
 
+pub const Timeval = extern struct {
+    tv_sec: i64,
+    tv_usec: i64,
+};
+
+pub const PresentationContext = extern struct {
+    term: ?*Terminal,
+    input: Timeval,
+    commit: Timeval,
+};
+
 pub const Itimerspec = extern struct {
     it_interval: Timespec,
     it_value: Timespec,
@@ -2693,6 +2704,11 @@ test "box-drawing buffer layout matches C probe" {
 test "fcft glyph layout matches C probe" {
     expectAbi(FcftGlyph, "FcftGlyph");
     expectAbi(FcftFontOptions, "FcftFontOptions");
+}
+
+test "presentation context layout matches C probe" {
+    expectAbi(Timeval, "Timeval");
+    expectAbi(PresentationContext, "PresentationContext");
 }
 
 test "shm layout matches C probe" {

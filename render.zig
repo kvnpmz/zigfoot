@@ -2887,11 +2887,41 @@ comptime {
     std.debug.assert(@sizeOf(Renderer) == 2 * @sizeOf(usize));
 }
 
-extern fn render_presentation_ctx_term(ctx: ?*anyopaque) callconv(.c) ?*Terminal;
-extern fn render_presentation_ctx_input(ctx: ?*anyopaque, sec: *i64, usec: *i64) callconv(.c) void;
-extern fn render_presentation_ctx_commit(ctx: ?*anyopaque, sec: *i64, usec: *i64) callconv(.c) void;
 extern fn render_shim_presentation_feedback_destroy(fb: ?*anyopaque) callconv(.c) void;
-extern fn render_shim_presentation_stat_add(frames: c_uint) callconv(.c) void;
+
+const PresentationStatistics = struct {
+    total: usize = 0,
+    zero: usize = 0,
+    one: usize = 0,
+    two: usize = 0,
+};
+
+var presentation_statistics = PresentationStatistics{};
+
+export fn render_shim_presentation_stat_add(frames: c_uint) callconv(.c) void {
+    presentation_statistics.total += 1;
+
+    if (frames >= 2)
+        presentation_statistics.two += 1
+    else if (frames >= 1)
+        presentation_statistics.one += 1
+    else
+        presentation_statistics.zero += 1;
+}
+
+/// The C DESTRUCTOR keeps the exit-time logging attribute; this supplies the
+/// counters without exposing Zig global storage to C.
+export fn render_shim_presentation_stat_get(
+    total: *usize,
+    zero: *usize,
+    one: *usize,
+    two: *usize,
+) callconv(.c) void {
+    total.* = presentation_statistics.total;
+    zero.* = presentation_statistics.zero;
+    one.* = presentation_statistics.one;
+    two.* = presentation_statistics.two;
+}
 
 export fn render_init(fdm: *Fdm, wayl: *types.Wayland) callconv(.c) ?*Renderer {
     const raw = std.c.malloc(@sizeOf(Renderer)) orelse {
@@ -2942,6 +2972,23 @@ export fn render_presentation_frame_count(total_us: i64, refresh: f32) callconv(
     return presentationFrameCount(total_us, refresh);
 }
 
+fn presentationCtxNew(
+    term: *Terminal,
+    input_sec: i64,
+    input_usec: i64,
+    commit_sec: i64,
+    commit_usec: i64,
+) *types.PresentationContext {
+    const raw = xmalloc(@sizeOf(types.PresentationContext)) orelse unreachable;
+    const ctx: *types.PresentationContext = @ptrCast(@alignCast(raw));
+    ctx.* = .{
+        .term = term,
+        .input = .{ .tv_sec = input_sec, .tv_usec = input_usec },
+        .commit = .{ .tv_sec = commit_sec, .tv_usec = commit_usec },
+    };
+    return ctx;
+}
+
 export fn sync_output(
     data: ?*anyopaque,
     wp_presentation_feedback: ?*anyopaque,
@@ -2968,16 +3015,13 @@ export fn presented(
     _ = seq_lo;
     _ = flags;
 
-    const ctx = data orelse return;
-    const term = render_presentation_ctx_term(ctx) orelse return;
+    const ctx: *types.PresentationContext = @ptrCast(@alignCast(data.?));
+    const term = ctx.term orelse return;
 
-    var in_sec: i64 = 0;
-    var in_usec: i64 = 0;
-    render_presentation_ctx_input(ctx, &in_sec, &in_usec);
-
-    var commit_sec: i64 = 0;
-    var commit_usec: i64 = 0;
-    render_presentation_ctx_commit(ctx, &commit_sec, &commit_usec);
+    const in_sec = ctx.input.tv_sec;
+    const in_usec = ctx.input.tv_usec;
+    const commit_sec = ctx.commit.tv_sec;
+    const commit_usec = ctx.commit.tv_usec;
 
     const presented_sec: i64 = @as(i64, tv_sec_hi) << 32 | @as(i64, tv_sec_lo);
     const presented_usec: i64 = @as(i64, tv_nsec / 1000);
@@ -4831,13 +4875,6 @@ extern fn render_shim_add_frame_callback(surf: ?*anyopaque, data: *anyopaque) ca
 extern fn render_shim_presentation_commit_time(wl: *types.Wayland, sec: *i64, nsec: *i64) callconv(.c) void;
 extern fn render_shim_presentation_feedback_new(wl: *types.Wayland, surf: ?*anyopaque) callconv(.c) ?*anyopaque;
 extern fn render_shim_presentation_feedback_add(fb: *anyopaque, ctx: *anyopaque) callconv(.c) void;
-extern fn render_shim_presentation_ctx_new(
-    term: *Terminal,
-    input_sec: i64,
-    input_usec: i64,
-    commit_sec: i64,
-    commit_usec: i64,
-) callconv(.c) *anyopaque;
 
 /// Only set once the compositor has refused a buffer release 10 frames in a
 /// row; the warning is emitted at most once per process (C used a `static`).
@@ -5168,7 +5205,7 @@ export fn grid_render(term: *Terminal) callconv(.c) void {
             log_msg(LOG_CLASS_WARNING, "render", "render.zig", @intCast(@src().line), "failed to create presentation feedback");
         } else {
             const input_time = workersTimespec(&term.render.input_time);
-            const ctx = render_shim_presentation_ctx_new(
+            const ctx = presentationCtxNew(
                 term,
                 input_time.tv_sec,
                 @divTrunc(input_time.tv_nsec, 1000),

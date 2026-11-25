@@ -1,5 +1,6 @@
 #pragma once
 #include <stdbool.h>
+#include <sys/time.h>
 #include <pixman.h>
 
 #include "terminal.h"
@@ -97,6 +98,15 @@ struct render_worker_context {
     struct terminal *term;
 };
 int render_worker_thread(void *_ctx);
+
+struct presentation_context {
+    struct terminal *term;
+    struct timeval input;
+    struct timeval commit;
+};
+
+void render_shim_presentation_stat_get(
+    size_t *total, size_t *zero, size_t *one, size_t *two);
 
 struct csd_data {
     int x;

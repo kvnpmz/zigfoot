@@ -1559,19 +1559,10 @@ int terminal_shim_grid_row_absolute_in_view(const struct grid *grid, int row_no)
 }
 
 /* ======================================================================
- * The last of render.c (D3l4). What is left here must stay C: the exit-time
- * presentation statistics (a DESTRUCTOR attribute), struct presentation_context
- * with its two struct timevals, and the protocol listener tables, which are
- * generated-struct layout. Everything that was a *function* in render.c now
- * lives in render.zig.
+ * The last of render.c (D3l4). The exit-time presentation logger keeps C's
+ * DESTRUCTOR attribute; its counters and the context allocation are in
+ * render.zig. Protocol listener tables remain generated-struct knowledge.
  * ====================================================================== */
-
-static struct {
-    size_t total;
-    size_t zero;  /* commits presented in less than one frame interval */
-    size_t one;   /* commits presented in one frame interval */
-    size_t two;   /* commits presented in two or more frame intervals */
-} presentation_statistics = {0};
 
 void fdm_hook_refresh_pending_terminals(struct fdm *fdm, void *data);
 
@@ -1580,14 +1571,16 @@ void fdm_hook_refresh_pending_terminals(struct fdm *fdm, void *data);
 static void DESTRUCTOR
 log_presentation_statistics(void)
 {
-    if (presentation_statistics.total == 0)
+    size_t total, zero, one, two;
+    render_shim_presentation_stat_get(&total, &zero, &one, &two);
+
+    if (total == 0)
         return;
 
-    const size_t total = presentation_statistics.total;
     LOG_INFO("presentation statistics: zero=%f%%, one=%f%%, two=%f%%",
-             100. * presentation_statistics.zero / total,
-             100. * presentation_statistics.one / total,
-             100. * presentation_statistics.two / total);
+             100. * zero / total,
+             100. * one / total,
+             100. * two / total);
 }
 
 /* Ported to render.zig: the callbacks, not the tables. */
@@ -1600,49 +1593,6 @@ void presented(
     uint32_t refresh, uint32_t seq_hi, uint32_t seq_lo, uint32_t flags);
 void discarded(
     void *data, struct wp_presentation_feedback *wp_presentation_feedback);
-
-struct presentation_context {
-    struct terminal *term;
-    struct timeval input;
-    struct timeval commit;
-};
-
-struct terminal *
-render_presentation_ctx_term(void *data)
-{
-    return ((struct presentation_context *)data)->term;
-}
-
-void
-render_presentation_ctx_input(void *data, int64_t *sec, int64_t *usec)
-{
-    const struct presentation_context *ctx = data;
-    *sec = ctx->input.tv_sec;
-    *usec = ctx->input.tv_usec;
-}
-
-void
-render_presentation_ctx_commit(void *data, int64_t *sec, int64_t *usec)
-{
-    const struct presentation_context *ctx = data;
-    *sec = ctx->commit.tv_sec;
-    *usec = ctx->commit.tv_usec;
-}
-
-/* The counters and their DESTRUCTOR stay in C: the exit-time log is a C
- * attribute (macros.h), not something Zig can portably express. */
-void
-render_shim_presentation_stat_add(unsigned frame_count)
-{
-    presentation_statistics.total++;
-
-    if (frame_count >= 2)
-        presentation_statistics.two++;
-    else if (frame_count >= 1)
-        presentation_statistics.one++;
-    else
-        presentation_statistics.zero++;
-}
 
 static const struct wp_presentation_feedback_listener presentation_feedback_listener = {
     .sync_output = &sync_output,
@@ -1673,20 +1623,6 @@ render_shim_presentation_feedback_add(
 {
     wp_presentation_feedback_add_listener(
         feedback, &presentation_feedback_listener, ctx);
-}
-
-void *
-render_shim_presentation_ctx_new(
-    struct terminal *term, int64_t input_sec, int64_t input_usec,
-    int64_t commit_sec, int64_t commit_usec)
-{
-    struct presentation_context *ctx = xmalloc(sizeof(*ctx));
-    *ctx = (struct presentation_context){
-        .term = term,
-        .input = {.tv_sec = input_sec, .tv_usec = input_usec},
-        .commit = {.tv_sec = commit_sec, .tv_usec = commit_usec},
-    };
-    return ctx;
 }
 
 void frame_callback(

@@ -19,6 +19,7 @@
 #include "server.h"
 #include "shm.h"
 #include "terminal.h"
+#include "render.h"
 #include "wayland.h"
 #include "client-protocol.h"
 
@@ -1287,6 +1288,28 @@ fprintf(out, "pub const Terminal_argc__size: usize = %zu;\n", sizeof(((struct te
 fprintf(out, "pub const Terminal_argc: usize = %zu;\n", offsetof(struct terminal, argc));
 fprintf(out, "pub const Terminal_argv__size: usize = %zu;\n", sizeof(((struct terminal *)0)->argv));
 fprintf(out, "pub const Terminal_argv: usize = %zu;\n", offsetof(struct terminal, argv));
+fprintf(out, "pub const Timeval__size: usize = %zu;\n", sizeof(struct timeval));
+fprintf(out, "pub const Timeval_tv_sec__size: usize = %zu;\n", sizeof(((struct timeval *)0)->tv_sec));
+fprintf(out, "pub const Timeval_tv_sec: usize = %zu;\n", offsetof(struct timeval, tv_sec));
+fprintf(out, "pub const Timeval_tv_usec__size: usize = %zu;\n", sizeof(((struct timeval *)0)->tv_usec));
+fprintf(out, "pub const Timeval_tv_usec: usize = %zu;\n", offsetof(struct timeval, tv_usec));
+fprintf(out, "pub const PresentationContext__size: usize = %zu;\n", sizeof(struct presentation_context));
+fprintf(out, "pub const PresentationContext_term__size: usize = %zu;\n", sizeof(((struct presentation_context *)0)->term));
+fprintf(out, "pub const PresentationContext_term: usize = %zu;\n", offsetof(struct presentation_context, term));
+fprintf(out, "pub const PresentationContext_input__size: usize = %zu;\n", sizeof(((struct presentation_context *)0)->input));
+fprintf(out, "pub const PresentationContext_input: usize = %zu;\n", offsetof(struct presentation_context, input));
+fprintf(out, "pub const PresentationContext_input__abi_fields: usize = 1;\n");
+fprintf(out, "pub const PresentationContext_input_tv_sec__size: usize = %zu;\n", sizeof(((struct presentation_context *)0)->input.tv_sec));
+fprintf(out, "pub const PresentationContext_input_tv_sec: usize = %zu;\n", offsetof(struct presentation_context, input.tv_sec) - offsetof(struct presentation_context, input));
+fprintf(out, "pub const PresentationContext_input_tv_usec__size: usize = %zu;\n", sizeof(((struct presentation_context *)0)->input.tv_usec));
+fprintf(out, "pub const PresentationContext_input_tv_usec: usize = %zu;\n", offsetof(struct presentation_context, input.tv_usec) - offsetof(struct presentation_context, input));
+fprintf(out, "pub const PresentationContext_commit__size: usize = %zu;\n", sizeof(((struct presentation_context *)0)->commit));
+fprintf(out, "pub const PresentationContext_commit: usize = %zu;\n", offsetof(struct presentation_context, commit));
+fprintf(out, "pub const PresentationContext_commit__abi_fields: usize = 1;\n");
+fprintf(out, "pub const PresentationContext_commit_tv_sec__size: usize = %zu;\n", sizeof(((struct presentation_context *)0)->commit.tv_sec));
+fprintf(out, "pub const PresentationContext_commit_tv_sec: usize = %zu;\n", offsetof(struct presentation_context, commit.tv_sec) - offsetof(struct presentation_context, commit));
+fprintf(out, "pub const PresentationContext_commit_tv_usec__size: usize = %zu;\n", sizeof(((struct presentation_context *)0)->commit.tv_usec));
+fprintf(out, "pub const PresentationContext_commit_tv_usec: usize = %zu;\n", offsetof(struct presentation_context, commit.tv_usec) - offsetof(struct presentation_context, commit));
 fprintf(out, "pub const Notification__size: usize = %zu;\n", sizeof(struct notification));
 fprintf(out, "pub const Notification_id__size: usize = %zu;\n", sizeof(((struct notification *)0)->id));
 fprintf(out, "pub const Notification_id: usize = %zu;\n", offsetof(struct notification, id));
