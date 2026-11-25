@@ -2352,3 +2352,493 @@ export fn render_osd(
     wayland_shim_surface_commit(sub_surf.surface.surf);
     quirk_weston_subsurface_desync_off(sub_surf.sub);
 }
+
+
+// ─────────────────────────────────────────────────────────────────────────
+// IME preedit and the overlay surface (D3j)
+// ─────────────────────────────────────────────────────────────────────────
+
+const OVERLAY_NONE: c_int = 0;
+const OVERLAY_SEARCH: c_int = 1;
+const OVERLAY_FLASH: c_int = 2;
+const OVERLAY_UNICODE_MODE: c_int = 3;
+
+pub const PixmanBox32 = extern struct {
+    x1: i32,
+    y1: i32,
+    x2: i32,
+    y2: i32,
+};
+
+/// Opaque storage for `pixman_region32_t` (a 16-byte extents box plus a data
+/// pointer = 24 bytes on LP64, the same size as `Render.last_overlay_clip`).
+/// The operations stay in terminal-shim.c so the pixman type is never
+/// mirrored; Zig only owns the bytes.
+const Region32 = extern struct {
+    extents: [4]i32,
+    data: ?*anyopaque,
+};
+
+comptime {
+    std.debug.assert(@sizeOf(Region32) == 24);
+    std.debug.assert(@sizeOf(PixmanBox32) == 16);
+}
+
+fn regionPtr(r: *Region32) *anyopaque {
+    return @ptrCast(r);
+}
+
+extern fn render_shim_region_init(r: *anyopaque) callconv(.c) void;
+extern fn render_shim_region_init_rect(r: *anyopaque, x: c_int, y: c_int, width: c_int, height: c_int) callconv(.c) void;
+extern fn render_shim_region_fini(r: *anyopaque) callconv(.c) void;
+extern fn render_shim_region_copy(dst: *anyopaque, src: *const anyopaque) callconv(.c) void;
+extern fn render_shim_region_clear(r: *anyopaque) callconv(.c) void;
+extern fn render_shim_region_subtract(dst: *anyopaque, a: *const anyopaque, b: *const anyopaque) callconv(.c) void;
+extern fn render_shim_region_union(dst: *anyopaque, a: *const anyopaque, b: *const anyopaque) callconv(.c) void;
+extern fn render_shim_region_extents(r: *const anyopaque, out: *PixmanBox32) callconv(.c) void;
+extern fn render_shim_set_clip_region(pix: *PixmanImage, r: ?*const anyopaque) callconv(.c) void;
+extern fn render_shim_single_pixel_buffer(
+    manager: ?*anyopaque, r: u32, g: u32, b: u32, a: u32,
+) callconv(.c) ?*anyopaque;
+extern fn shm_shim_wl_buffer_destroy(wl_buffer: ?*anyopaque) callconv(.c) void;
+extern fn wayland_shim_surface_set_buffer_scale(surf: ?*anyopaque, scale: i32) callconv(.c) void;
+extern fn wayland_shim_viewport_set_destination(viewport: ?*anyopaque, width: i32, height: i32) callconv(.c) void;
+extern fn terminal_shim_grid_row_in_view(grid: *types.Grid, row: c_int) callconv(.c) ?*types.Row;
+extern fn shm_get_buffer(chain: *types.ShmBufferChain, width: c_int, height: c_int) callconv(.c) ?*Buffer;
+extern fn shm_did_not_use_buf(buf: *Buffer) callconv(.c) void;
+extern fn xmalloc(size: usize) callconv(.c) ?*anyopaque;
+extern fn c32width(c: u32) callconv(.c) c_int;
+extern fn term_ime_set_cursor_rect(term: *Terminal, x: c_int, y: c_int, width: c_int, height: c_int) callconv(.c) void;
+
+/// search.h's `struct search_match_iterator` / `search_matches_*()`.
+const SearchMatchIterator = extern struct {
+    term: *Terminal,
+    start: types.Coord,
+};
+
+extern fn search_matches_new_iter(term: *Terminal) callconv(.c) SearchMatchIterator;
+extern fn search_matches_next(iter: *SearchMatchIterator) callconv(.c) types.Range;
+
+fn renderImePreeditForSeat(term: *Terminal, seat: *types.Seat, buf: *Buffer) void {
+    const preedit = &seat.ime.preedit;
+
+    if (preedit.cells == null)
+        return;
+
+    if (term.is_searching)
+        return;
+
+    const gamma_correct = wayl_do_linear_blending(term.wl, term.conf.?);
+    const grid = term.grid.?;
+
+    // Adjust cursor position to viewport
+    var cursor = grid.cursor.point;
+    cursor.row += grid.offset;
+    cursor.row -= grid.view;
+    cursor.row &= grid.num_rows - 1;
+
+    if (cursor.row < 0 or cursor.row >= term.rows)
+        return;
+
+    var cells_needed: c_int = preedit.count;
+
+    if (preedit.cursor.start == cells_needed and
+        preedit.cursor.end == cells_needed)
+    {
+        // Cursor will be drawn *after* the pre-edit string, i.e. in the cell
+        // *after*. This means we need to copy, and dirty, one extra cell from
+        // the original grid, or we'll leave trailing "cursors" after us if
+        // the user deletes text while pre-editing.
+        cells_needed += 1;
+    }
+
+    const row_idx: c_int = cursor.row;
+    var col_idx: c_int = cursor.col;
+    var ime_ofs: c_int = 0; // Offset into the pre-edit string to render from
+
+    const cells_left: c_int = term.cols - cursor.col;
+    var cells_used: c_int = @min(cells_needed, term.cols);
+
+    // Adjust start of pre-edit text to the left if the string doesn't fit
+    if (cells_left < cells_used)
+        col_idx -= cells_used - cells_left;
+
+    const preedit_cells: [*]const Cell = @ptrCast(@alignCast(preedit.cells.?));
+
+    if (cells_needed > cells_used) {
+        const start = preedit.cursor.start;
+        const end = preedit.cursor.end;
+
+        if (start == end) {
+            // Ensure *end* of the pre-edit string is visible
+            ime_ofs = cells_needed - cells_used;
+        } else {
+            // Ensure the *beginning* of the cursor-area is visible
+            ime_ofs = start;
+
+            // Display as much as possible of the pre-edit string
+            if (cells_needed - ime_ofs < cells_used)
+                ime_ofs = cells_needed - cells_used;
+        }
+
+        // Make sure we don't start in the middle of a character
+        while (ime_ofs < cells_needed and
+            preedit_cells[@intCast(ime_ofs)].wc >= CELL_SPACER)
+        {
+            ime_ofs += 1;
+        }
+    }
+
+    std.debug.assert(col_idx >= 0);
+    std.debug.assert(col_idx < term.cols);
+
+    const row = terminal_shim_grid_row_in_view(grid, row_idx) orelse return;
+
+    // Don't start the pre-edit text in the middle of a double-width character
+    while (col_idx > 0 and row.cells.?[@intCast(col_idx)].wc >= CELL_SPACER) {
+        cells_used += 1;
+        col_idx -= 1;
+    }
+
+    // Copy original content (render_cell() reads cell data directly from the
+    // grid), and mark all cells dirty, so they are re-rendered when the
+    // pre-edit text is modified or removed.
+    const real_cells: [*]Cell = @ptrCast(@alignCast(
+        xmalloc(@as(usize, @intCast(cells_used)) * @sizeOf(Cell)) orelse unreachable,
+    ));
+    for (0..@intCast(cells_used)) |i| {
+        const idx = @as(usize, @intCast(col_idx)) + i;
+        std.debug.assert(idx < term.cols);
+        real_cells[i] = row.cells.?[idx];
+        real_cells[i].attrs.clean = false;
+    }
+    row.dirty = true;
+
+    // Render pre-edit text
+    std.debug.assert(preedit_cells[@intCast(ime_ofs)].wc < CELL_SPACER);
+    var i: c_int = 0;
+    var idx: c_int = ime_ofs;
+    while (idx < preedit.count) : ({
+        i += 1;
+        idx += 1;
+    }) {
+        const cell = &preedit_cells[@intCast(idx)];
+
+        if (cell.wc >= CELL_SPACER)
+            continue;
+
+        const width = @max(1, c32width(cell.wc));
+        if (col_idx + i + width > term.cols)
+            break;
+
+        row.cells.?[@intCast(col_idx + i)] = cell.*;
+        _ = render_cell(term, bufferPix(buf), null, row, row_idx, col_idx + i, false);
+    }
+
+    const start = preedit.cursor.start - ime_ofs;
+    const end = preedit.cursor.end - ime_ofs;
+
+    if (!preedit.cursor.hidden) {
+        const start_cell = &preedit_cells[0];
+
+        const fg = color_hex_to_pixman(term.colors.fg, gamma_correct);
+        const bg = color_hex_to_pixman(term.colors.bg, gamma_correct);
+
+        var cursor_color: PixmanColor = undefined;
+        var text_color: PixmanColor = undefined;
+        cursor_colors_for_cell(
+            term, start_cell, &fg, &bg, &cursor_color, &text_color, gamma_correct);
+
+        const x: c_int = term.margins.left + (col_idx + start) * term.cell_width;
+        const y: c_int = term.margins.top + row_idx * term.cell_height;
+
+        if (end == start) {
+            // Bar
+            if (start >= 0) {
+                if (attrs_to_font(term, &start_cell.attrs)) |font| {
+                    draw_beam_cursor(term, bufferPix(buf), font, &cursor_color, x, y);
+                }
+            }
+            term_ime_set_cursor_rect(term, x, y, 1, term.cell_height);
+        } else if (end > start) {
+            // Hollow cursor
+            if (start >= 0 and end <= term.cols) {
+                const cols = end - start;
+                draw_hollow_block(term, bufferPix(buf), &cursor_color, x, y, cols);
+            }
+
+            term_ime_set_cursor_rect(
+                term, x, y, (end - start) * term.cell_width, term.cell_height);
+        }
+    }
+
+    // Restore original content (but do not render)
+    for (0..@intCast(cells_used)) |n| {
+        row.cells.?[@as(usize, @intCast(col_idx)) + n] = real_cells[n];
+    }
+    free(real_cells);
+
+    const damage_x = term.margins.left + col_idx * term.cell_width;
+    const damage_y = term.margins.top + row_idx * term.cell_height;
+    const damage_w = cells_used * term.cell_width;
+    const damage_h = term.cell_height;
+
+    wayland_shim_surface_damage_buffer(
+        term.window.?.surface.surf, damage_x, damage_y, damage_w, damage_h);
+}
+
+export fn render_ime_preedit(term: *Terminal, buf: *Buffer) callconv(.c) void {
+    // meson.build refuses -Dime=false for this branch (the Zig mirrors assume
+    // IME support), so the C's FOOT_IME_ENABLED arm is always taken.
+    const seats: *SeatList = @ptrCast(&term.wl.?.seats);
+    var it = seats.foreach();
+    while (it.next()) |node| {
+        const seat = &node.item;
+        if (seat.kbd_focus == term)
+            renderImePreeditForSeat(term, seat, buf);
+    }
+}
+
+fn renderOverlaySinglePixel(term: *Terminal, style: c_int, color: PixmanColor) void {
+    const wayl = term.wl.?;
+    const overlay = &term.window.?.overlay;
+    var buf: ?*anyopaque = null;
+
+    std.debug.assert(style == OVERLAY_UNICODE_MODE or style == OVERLAY_FLASH);
+    std.debug.assert(wayl.single_pixel_manager != null);
+    std.debug.assert(overlay.surface.viewport != null);
+
+    quirk_weston_subsurface_desync_on(overlay.sub);
+
+    if (style != term.render.last_overlay_style) {
+        buf = render_shim_single_pixel_buffer(
+            wayl.single_pixel_manager,
+            @intFromFloat(@as(f64, @floatFromInt(color.red)) / 0xffff * 0xffffffff),
+            @intFromFloat(@as(f64, @floatFromInt(color.green)) / 0xffff * 0xffffffff),
+            @intFromFloat(@as(f64, @floatFromInt(color.blue)) / 0xffff * 0xffffffff),
+            @intFromFloat(@as(f64, @floatFromInt(color.alpha)) / 0xffff * 0xffffffff),
+        );
+
+        wayland_shim_surface_set_buffer_scale(overlay.surface.surf, 1);
+        wayland_shim_surface_attach(overlay.surface.surf, buf, 0, 0);
+    }
+
+    wayland_shim_viewport_set_destination(
+        overlay.surface.viewport,
+        @intFromFloat(@round(@as(f32, @floatFromInt(term.width)) / term.scale)),
+        @intFromFloat(@round(@as(f32, @floatFromInt(term.height)) / term.scale)),
+    );
+
+    wayland_shim_subsurface_set_position(overlay.sub, 0, 0);
+
+    wayland_shim_surface_damage_buffer(
+        overlay.surface.surf, 0, 0, term.width, term.height);
+
+    wayland_shim_surface_commit(overlay.surface.surf);
+    quirk_weston_subsurface_desync_off(overlay.sub);
+
+    term.render.last_overlay_style = style;
+
+    if (buf) |b| {
+        shm_shim_wl_buffer_destroy(b);
+    }
+}
+
+export fn render_overlay(term: *Terminal) callconv(.c) void {
+    const overlay = &term.window.?.overlay;
+    const unicode_mode_active = term.unicode_mode.active;
+
+    const style: c_int = if (term.is_searching)
+        OVERLAY_SEARCH
+    else if (term.flash.active)
+        OVERLAY_FLASH
+    else if (unicode_mode_active)
+        OVERLAY_UNICODE_MODE
+    else
+        OVERLAY_NONE;
+
+    if (style == OVERLAY_NONE) {
+        if (term.render.last_overlay_style != OVERLAY_NONE) {
+            // Unmap overlay sub-surface
+            wayland_shim_surface_attach(overlay.surface.surf, null, 0, 0);
+            wayland_shim_surface_commit(overlay.surface.surf);
+            term.render.last_overlay_style = OVERLAY_NONE;
+            term.render.last_overlay_buf = null;
+        }
+        return;
+    }
+
+    var color: PixmanColor = undefined;
+
+    switch (style) {
+        OVERLAY_SEARCH, OVERLAY_UNICODE_MODE => color = .{
+            .red = 0,
+            .green = 0,
+            .blue = 0,
+            .alpha = 0x7fff,
+        },
+
+        OVERLAY_FLASH => color = color_hex_to_pixman_with_alpha(
+            term.conf.?.colors_dark.flash,
+            @truncate(term.conf.?.colors_dark.flash_alpha),
+            wayl_do_linear_blending(term.wl, term.conf.?),
+        ),
+
+        else => unreachable,
+    }
+
+    const single_pixel =
+        (style == OVERLAY_UNICODE_MODE or style == OVERLAY_FLASH) and
+        term.wl.?.single_pixel_manager != null and
+        overlay.surface.viewport != null;
+
+    if (single_pixel) {
+        renderOverlaySinglePixel(term, style, color);
+        return;
+    }
+
+    const chain: *types.ShmBufferChain = @ptrCast(@alignCast(term.render.chains.overlay.?));
+    const buf = shm_get_buffer(chain, term.width, term.height) orelse return;
+    const pix = bufferPix(buf);
+
+    render_shim_set_clip_region(pix, null);
+
+    // Bounding rectangle of damaged areas - for wl_surface_damage_buffer()
+    var damage_bounds: PixmanBox32 = undefined;
+
+    if (style == OVERLAY_SEARCH) {
+        // Only update the areas that changed since the last frame:
+        // clear the cells that are now selected but weren't, and dim the
+        // cells that were selected but aren't anymore.
+        const see_through: *Region32 = @ptrCast(&term.render.last_overlay_clip);
+        var old_see_through: Region32 = undefined;
+
+        const buffer_reuse =
+            term.render.last_overlay_buf == @as(?*anyopaque, @ptrCast(buf)) and
+            style == term.render.last_overlay_style and
+            buf.age == 0;
+
+        if (!buffer_reuse) {
+            // Can't reuse last frame's damage - set to full window, to
+            // ensure *everything* is updated
+            render_shim_region_init_rect(
+                regionPtr(&old_see_through), 0, 0, buf.width, buf.height);
+        } else {
+            // Use last frame's saved region
+            render_shim_region_init(regionPtr(&old_see_through));
+            render_shim_region_copy(regionPtr(&old_see_through), regionPtr(see_through));
+        }
+
+        render_shim_region_clear(regionPtr(see_through));
+
+        // Build region consisting of all current search matches
+        var iter = search_matches_new_iter(term);
+        var match = search_matches_next(&iter);
+        while (match.start.row >= 0) : (match = search_matches_next(&iter)) {
+            var r = match.start.row;
+            var start_col = match.start.col;
+            const end_row = match.end.row;
+
+            while (true) {
+                const end_col = if (r == end_row) match.end.col else term.cols - 1;
+
+                const x = term.margins.left + start_col * term.cell_width;
+                const y = term.margins.top + r * term.cell_height;
+                const width = (end_col + 1 - start_col) * term.cell_width;
+                const height = term.cell_height;
+
+                render_shim_region_union_rect(
+                    regionPtr(see_through), x, y, width, height);
+
+                r += 1;
+                if (r > end_row)
+                    break;
+
+                start_col = 0;
+            }
+        }
+
+        // Areas that need to be cleared: cells that were dimmed in the last
+        // frame but are now see-through
+        var new_see_through: Region32 = undefined;
+        render_shim_region_init(regionPtr(&new_see_through));
+
+        if (buffer_reuse) {
+            render_shim_region_subtract(
+                regionPtr(&new_see_through), regionPtr(see_through), regionPtr(&old_see_through));
+        } else {
+            // Buffer content is unknown - explicitly clear *all* current
+            // see-through areas
+            render_shim_region_copy(regionPtr(&new_see_through), regionPtr(see_through));
+        }
+        render_shim_set_clip_region(pix, regionPtr(&new_see_through));
+
+        // Areas that need to be dimmed: cells that were cleared in the last
+        // frame but are not anymore
+        var new_dimmed: Region32 = undefined;
+        render_shim_region_init(regionPtr(&new_dimmed));
+        render_shim_region_subtract(
+            regionPtr(&new_dimmed), regionPtr(&old_see_through), regionPtr(see_through));
+        render_shim_region_fini(regionPtr(&old_see_through));
+
+        // Total affected area
+        var damage: Region32 = undefined;
+        render_shim_region_init(regionPtr(&damage));
+        render_shim_region_union(
+            regionPtr(&damage), regionPtr(&new_see_through), regionPtr(&new_dimmed));
+        render_shim_region_extents(regionPtr(&damage), &damage_bounds);
+
+        // Clear cells that became selected in this frame.
+        fillRect(pix, &.{ .red = 0, .green = 0, .blue = 0, .alpha = 0 }, &.{.{
+            .x = 0,
+            .y = 0,
+            .width = @intCast(term.width),
+            .height = @intCast(term.height),
+        }});
+
+        // Set clip region for the newly dimmed cells. The actual paint call
+        // is done below.
+        render_shim_set_clip_region(pix, regionPtr(&new_dimmed));
+
+        render_shim_region_fini(regionPtr(&new_see_through));
+        render_shim_region_fini(regionPtr(&new_dimmed));
+        render_shim_region_fini(regionPtr(&damage));
+    } else if (term.render.last_overlay_buf == @as(?*anyopaque, @ptrCast(buf)) and
+        style == term.render.last_overlay_style)
+    {
+        std.debug.assert(style == OVERLAY_FLASH or style == OVERLAY_UNICODE_MODE);
+        shm_did_not_use_buf(buf);
+        return;
+    } else {
+        render_shim_set_clip_region(pix, null);
+        damage_bounds = .{ .x1 = 0, .y1 = 0, .x2 = buf.width, .y2 = buf.height };
+    }
+
+    fillRect(pix, &color, &.{.{
+        .x = 0,
+        .y = 0,
+        .width = @intCast(term.width),
+        .height = @intCast(term.height),
+    }});
+
+    quirk_weston_subsurface_desync_on(overlay.sub);
+    wayl_surface_scale(term.window.?, &overlay.surface, buf, term.scale);
+    wayland_shim_subsurface_set_position(overlay.sub, 0, 0);
+    wayland_shim_surface_attach(overlay.surface.surf, buf.wl_buf, 0, 0);
+
+    wayland_shim_surface_damage_buffer(
+        overlay.surface.surf,
+        damage_bounds.x1,
+        damage_bounds.y1,
+        damage_bounds.x2 - damage_bounds.x1,
+        damage_bounds.y2 - damage_bounds.y1,
+    );
+
+    wayland_shim_surface_commit(overlay.surface.surf);
+    quirk_weston_subsurface_desync_off(overlay.sub);
+
+    buf.age = 0;
+    term.render.last_overlay_buf = buf;
+    term.render.last_overlay_style = style;
+}
+

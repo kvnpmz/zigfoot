@@ -77,6 +77,7 @@ bool render_xcursor_set(
 bool render_xcursor_is_valid(const struct seat *seat, const char *cursor);
 
 void render_overlay(struct terminal *term);
+void render_ime_preedit(struct terminal *term, struct buffer *buf);
 
 struct render_worker_context {
     int my_id;

@@ -344,6 +344,77 @@ pixman_image_t *render_shim_solid_fill(const pixman_color_t *color)
     return pixman_image_create_solid_fill(color);
 }
 
+/* ── render.zig (D3j: overlay / IME preedit) ────────────────────────── */
+
+/* The overlay's search path does set arithmetic on pixman regions. Keep the
+ * type in C; Zig owns a 24-byte blob (same as Render.last_overlay_clip) and
+ * calls these. */
+void render_shim_region_init(pixman_region32_t *r)
+{
+    pixman_region32_init(r);
+}
+
+void render_shim_region_init_rect(
+    pixman_region32_t *r, int x, int y, int width, int height)
+{
+    pixman_region32_init_rect(r, x, y, width, height);
+}
+
+void render_shim_region_fini(pixman_region32_t *r)
+{
+    pixman_region32_fini(r);
+}
+
+void render_shim_region_copy(
+    pixman_region32_t *dst, const pixman_region32_t *src)
+{
+    pixman_region32_copy(dst, src);
+}
+
+void render_shim_region_clear(pixman_region32_t *r)
+{
+    pixman_region32_clear(r);
+}
+
+void render_shim_region_subtract(
+    pixman_region32_t *dst, const pixman_region32_t *a,
+    const pixman_region32_t *b)
+{
+    pixman_region32_subtract(dst, a, b);
+}
+
+void render_shim_region_union(
+    pixman_region32_t *dst, const pixman_region32_t *a,
+    const pixman_region32_t *b)
+{
+    pixman_region32_union(dst, a, b);
+}
+
+void render_shim_region_extents(
+    const pixman_region32_t *r, pixman_box32_t *out)
+{
+    *out = *pixman_region32_extents(r);
+}
+
+void render_shim_set_clip_region(
+    pixman_image_t *pix, const pixman_region32_t *r)
+{
+    pixman_image_set_clip_region32(pix, r);
+}
+
+/* wp_single_pixel_buffer_manager_v1_create_u32_rgba_buffer() is a generated
+ * static inline. */
+struct wl_buffer *render_shim_single_pixel_buffer(
+    struct wp_single_pixel_buffer_manager_v1 *manager,
+    uint32_t r, uint32_t g, uint32_t b, uint32_t a)
+{
+    if (manager == NULL)
+        return NULL;
+    return wp_single_pixel_buffer_manager_v1_create_u32_rgba_buffer(
+        manager, r, g, b, a);
+}
+
+
 void render_shim_image_unref(pixman_image_t *pix)
 {
     pixman_image_unref(pix);

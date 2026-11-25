@@ -4944,6 +4944,185 @@ test_csd_paint(void)
     pixman_image_unref(pix);
 }
 
+/* D3j: render_ime_preedit() - the pre-edit window, its clipping and the
+ * restoration of the cells underneath it. No wayland surface is needed: the
+ * damage shim ignores a NULL wl_surface. */
+static void
+test_render_ime_preedit(void)
+{
+    struct config testconf = {0};
+    struct terminal *term = term_with_fonts(&testconf);
+    if (term == NULL) {
+        printf("skip: no monospace font available\n");
+        return;
+    }
+
+    enum { W = 80, H = 40 };
+    uint32_t pixels[W * H] = {0};
+    pixman_image_t *pix = pixman_image_create_bits(
+        PIXMAN_a8r8g8b8, W, H, pixels, W * 4);
+    if (pix == NULL) {
+        printf("skip: pixman_image_create_bits() failed\n");
+        term_with_fonts_free(term);
+        return;
+    }
+
+    term->cols = COLS;
+    term->cell_width = 10;
+    term->cell_height = 20;
+    term->margins.top = term->margins.bottom = 0;
+    term->margins.left = term->margins.right = 0;
+    term->width = COLS * term->cell_width;
+    term->height = H;
+    term->colors.bg = 0x000000ff;
+    term->colors.fg = 0x00ffffff;
+    term->colors.alpha = 0xffff;
+    term->blink.fd = 5;
+    term->normal.cursor.point = (struct coord){.col = 1, .row = 0};
+
+    pixman_image_t *pixarr[1] = {pix};
+    struct buffer buf = {
+        .width = W,
+        .height = H,
+        .pix = pixarr,
+        .pix_instances = 1,
+    };
+
+    struct seat seat = {0};
+    seat.wayl = term->wl;
+    seat.kbd_focus = term;
+    tll_push_back(term->wl->seats, seat);
+    struct seat *s = &tll_front(term->wl->seats);
+
+    struct row *row = grid_row_in_view(term->grid, 0);
+    struct cell before[COLS];
+    memcpy(before, row->cells, sizeof(before));
+
+    /* ── no pre-edit: a no-op ──────────────────────────────────────── */
+    render_ime_preedit(term, &buf);
+    check(memcmp(before, row->cells, sizeof(before)) == 0,
+          "no pre-edit leaves the row untouched");
+    check(s->ime.cursor_rect.pending.width == 0,
+          "no pre-edit leaves the IME cursor rect alone");
+
+    /* ── the seat doesn't have keyboard focus: still a no-op ──────── */
+    struct cell two[2] = {{0}};
+    two[0].wc = 'X';
+    two[1].wc = 'Y';
+    s->ime.preedit.cells = two;
+    s->ime.preedit.count = 2;
+    s->ime.preedit.cursor.start = 2;
+    s->ime.preedit.cursor.end = 2;
+    s->ime.preedit.cursor.hidden = false;
+
+    s->kbd_focus = NULL;
+    render_ime_preedit(term, &buf);
+    check(memcmp(before, row->cells, sizeof(before)) == 0,
+          "an unfocused seat draws nothing");
+    s->kbd_focus = term;
+
+    /* ── a two-cell pre-edit, cursor at the end ───────────────────── */
+    render_ime_preedit(term, &buf);
+
+    bool same = true;
+    for (int i = 0; i < COLS; i++)
+        same = same && before[i].wc == row->cells[i].wc;
+    check(same, "the grid row is restored after the pre-edit is drawn");
+    check(row->cells[1].attrs.clean == 0 &&
+          row->cells[2].attrs.clean == 0 &&
+          row->cells[3].attrs.clean == 0,
+          "the pre-edit span (plus the extra cell) is left dirty");
+    check(row->dirty, "drawing a pre-edit dirties the row");
+
+    check(s->ime.cursor_rect.pending.width == 1,
+          "a collapsed pre-edit cursor is one column wide");
+    check(s->ime.cursor_rect.pending.height == term->cell_height,
+          "the IME cursor rect is one cell tall");
+    check(s->ime.cursor_rect.pending.x ==
+              term->margins.left + (1 + 2) * term->cell_width,
+          "the IME cursor rect follows the end of the pre-edit string");
+
+    /* ── a pre-edit longer than the row: window it, don't overflow ── */
+    struct cell ten[10] = {{0}};
+    for (int i = 0; i < 10; i++)
+        ten[i].wc = 'Z';
+    s->ime.preedit.cells = ten;
+    s->ime.preedit.count = 10;
+    s->ime.preedit.cursor.start = 10;
+    s->ime.preedit.cursor.end = 10;
+
+    render_ime_preedit(term, &buf);
+    check(s->ime.cursor_rect.pending.x + s->ime.cursor_rect.pending.width <=
+              term->width,
+          "an overlong pre-edit keeps the IME cursor inside the window");
+    check(s->ime.cursor_rect.pending.x ==
+              term->margins.left + 4 * term->cell_width,
+          "the overlong pre-edit window ends at the last column");
+
+    /* The window must not start in the middle of a spacer. */
+    ten[6].wc = CELL_SPACER;
+    render_ime_preedit(term, &buf);
+    check(s->ime.cursor_rect.pending.x ==
+              term->margins.left + 3 * term->cell_width,
+          "the pre-edit window skips a leading spacer");
+
+    /* ── cursor hidden: the rect is left alone ────────────────────── */
+    s->ime.preedit.cursor.hidden = true;
+    s->ime.cursor_rect.pending.width = 1234;
+    render_ime_preedit(term, &buf);
+    check(s->ime.cursor_rect.pending.width == 1234,
+          "a hidden pre-edit cursor does not move the IME rect");
+
+    /* ── the cell under the cursor is a spacer: start one cell left ─ */
+    s->ime.preedit.cursor.hidden = false;
+    s->ime.preedit.cells = two;
+    s->ime.preedit.count = 2;
+    s->ime.preedit.cursor.start = 2;
+    s->ime.preedit.cursor.end = 2;
+
+    row->cells[1].wc = CELL_SPACER;
+    render_ime_preedit(term, &buf);
+    check(s->ime.cursor_rect.pending.x ==
+              term->margins.left + 2 * term->cell_width,
+          "a double-width character at the cursor shifts the pre-edit left");
+    check(row->cells[1].wc == CELL_SPACER,
+          "the spacer cell is restored, not overwritten");
+    row->cells[1].wc = before[1].wc;
+
+    tll_free(term->wl->seats);
+    pixman_image_unref(pix);
+    term_with_fonts_free(term);
+}
+
+/* D3j: render_overlay()'s style selection and the unmap path. The overlay
+ * sub-surface has no wl_surface here, which the shims tolerate. */
+static void
+test_render_overlay(void)
+{
+    struct terminal *term = term_new();
+    struct wl_window win = {0};
+    term->window = &win;
+
+    term->render.last_overlay_style = OVERLAY_NONE;
+    term->render.last_overlay_buf = NULL;
+    render_overlay(term);
+    check(term->render.last_overlay_style == OVERLAY_NONE,
+          "no overlay style is a no-op");
+
+    term->render.last_overlay_style = OVERLAY_FLASH;
+    term->render.last_overlay_buf = (void *)0x1;
+    render_overlay(term);
+    check(term->render.last_overlay_style == OVERLAY_NONE,
+          "the overlay style is reset when the overlay goes away");
+    check(term->render.last_overlay_buf == NULL,
+          "the stale overlay buffer is dropped when the overlay goes away");
+
+    term->window = NULL;
+    term_free(term);
+}
+
+
+
 int
 main(void)
 {
@@ -4971,6 +5150,8 @@ main(void)
     test_render_refresh();
     test_render_margin();
     test_render_cell();
+    test_render_ime_preedit();
+    test_render_overlay();
     test_grid_render_scroll();
     test_render_sixel();
     test_csd_buttons();

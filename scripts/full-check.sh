@@ -54,4 +54,12 @@ if [ "$status" -ne 0 ]; then
 fi
 
 echo "--- smoke ---"
-env -u WAYLAND_DISPLAY scripts/smoke.sh
+# Use the session compositor when there is one: the five window launches are
+# the only end-to-end coverage the wayland/render ports have. Fall back to
+# the weston/Xvfb path (or the version/config-only checks) otherwise.
+rt=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}
+if [ -n "${WAYLAND_DISPLAY:-}" ] && [ -S "$rt/$WAYLAND_DISPLAY" ]; then
+    XDG_RUNTIME_DIR="$rt" scripts/smoke.sh
+else
+    env -u WAYLAND_DISPLAY scripts/smoke.sh
+fi

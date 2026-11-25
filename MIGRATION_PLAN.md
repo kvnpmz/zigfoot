@@ -2,6 +2,9 @@
 
 Status snapshot and a concrete continuation plan.
 Prepared 2026-11-23 against `feature/zig-migration` @ `a1d9d288`.
+**Refreshed again 2026-11-25 @ `f67b6f48` (D3i) — current numbers, the revised
+chunk order and the new verification gap are in §14. §1's scoreboard below is
+the 11-24 snapshot; use §14 for anything measured.**
 Refreshed 2026-11-24 against @ `3e023fd6` (Phase 0, Phase 1a, upstream merge,
 config C1-C2o, the terminal font/DPI/size stack T9/T10, `shm` S1-S5, `slave`,
 `log`, `debug`, `user-notification` and `unicode-mode` — the config parser,
@@ -800,7 +803,7 @@ Order matters: `search` and `wayland` first (they unblock the rest), then
 | **D3g** done | `render`: the sixel path — `render_sixel_images()` (viewport-relative start/end with wrap-around, sorted-list early exits, `sixel_sync_cache()`), `render_sixel()` (chunking consecutive visible *dirty* rows to avoid recompositing, the opaque path that only marks cells clean unless the last row/column is partially covered, the transparent path that renders the cells underneath via `render_row()`), and the chunk compositor with its margin clamping. One new shim for a composite with an explicit operator and source offset. 8 new harness checks composite a real sixel image and check the clean/dirty bookkeeping | D3f | 1d |
 | **D3h** done | `render`: the CSD button painters — `get_csd_button_fg_color()`, the shared button geometry (a square of a third of the buffer, `min(width/2, scale)` thick), `render_csd_button_minimize()`, `_maximize_window()`, `_maximize_maximized()`, `_maximize()` and `_close()` (four pixman triangles, kept in C as `render_shim_close_button()`), plus `any_pointer_is_on_button()`. 11 new harness checks paint the buttons on a real 36×36 buffer and verify each glyph's shape | D3g | 0.5d |
 | **D3i** done | `render`: the CSD painting layer — `render_csd_title()` (configured title colour, dimming when unfocused, `M`-advance margin, `ambstoc32()` title), `render_csd_border()` (transparent fill + the visible strip at `border_width - border_width_visible`), `render_csd_button()` (per-button theme colour, dim-until-hovered, background + glyph), and `render_csd()` (the eight-surface loop, position/skip decisions, `shm_get_many()` and the three painters). Also **`render_osd()`**, the text painter: clip, background, fcft text run with a per-character fallback, baseline from the font metrics, colour-emoji vs mask compositing, the attach/damage/opaque-region/commit tail. `struct fcft_text_run` stays in C behind three shims; `wl_region`/`wl_surface_set_opaque_region` behind a fourth. 12 new harness checks | D3h | 1.5d |
-| **D3j** | `render`: overlay and IME-preedit painting | D3i | 1–2d |
+| **D3j** done | `render`: **`render_overlay()`** — the style ladder (search > flash > unicode mode), the unmap path, the single-pixel fast path (`wp_single_pixel_buffer_manager_v1` + viewport destination, one buffer reused until the style changes), the SHM path's two branch shapes (search diffing vs a full flash/unicode fill) and the search-damage region algebra (last frame's see-through minus this frame's = dim, the inverse = clear, the union = damage bounds). **`render_ime_preedit()`** — the per-seat pre-edit overlay: the viewport-relative cursor row, the extra-cell rule for a trailing cursor, the clipping window when the string does not fit (`start`/`end`/`ime_ofs`, spacer-aware), copying+dirtying the span, the per-cell `render_cell()` calls, the bar/hollow cursors and their pending rect, and the restore. `pixman_region32_t` stays in C behind nine `render_shim_region_*` helpers (Zig owns a 24-byte blob, the same size as `Render.last_overlay_clip`); `wp_single_pixel_buffer_manager_v1_create_u32_rgba_buffer()` is a generated static inline, so one more shim. 16 new harness checks: pre-edit restoration/dirtying, cursor-rect placement, the overlong/spacer/double-width windows, a hidden cursor, and the overlay unmap path | D3i | 1.5d |
 | **D3k2** | `render`: `render_scrollback_position()` and `render_render_timer()` | D3j | 1d |
 | **D3k** | `render`: search-box and url painting | D3j | 2d |
 | **D3l** | `render`: the worker thread, damage tracking, `grid_render()`, `render_resize()` and the remaining xcursor/tiocswinsz glue | D3k | 3–4d |
@@ -858,3 +861,165 @@ structs + real pty/memfd/fonts), `foot --pty`, `foot -C -c <file>`, and the
 config oracle. Once a compositor (weston/cage/sway) is available, add
 `scripts/smoke.sh` window launches and a screenshot-diff job to CI before
 declaring Phase 3 done.
+
+
+---
+
+## 14. Refresh 2026-11-25 @ `f67b6f48` — continuation from D3i
+
+Measured on this checkout, not carried over from §1.
+
+### 14.1 Scoreboard
+
+| Metric | 2026-11-24 | 2026-11-25 | Δ |
+|---|---|---|---|
+| Branch | +167 commits | **+176 commits** vs `origin/master` | +9 |
+| Foot-owned module C | 12,960 | **12,709** of 48,924 | −251 |
+| C eliminated | 73.5% | **74.0%** (36,215 lines) | +0.5pt |
+| `*-shim.c` accessors | 2,545 | **2,524** (11 files) | −21 |
+| Zig source | ~37.8k | **39,248** lines / 41 files | +1.4k |
+| Harness assertions | 603 | **600** call sites (548 `check`, 52 `check_text`) + 30 Zig `test` blocks | flat |
+| `meson test` | 5/5 × 3 dirs | **5/5 × 3 dirs** (`build`, `build-disabled`, `build-release`) | ✅ |
+| Real window launches | not verified | **5/5 pass** against the live `wayland-1` socket | **new** |
+
+Per-module burn-down (share of that module's original C that is gone):
+
+| Module | C left / original | % | Note |
+|---|---|---|---|
+| 31 modules | 0 / — | **100%** | `async`…`box-drawing`, `search`, `terminal`, `log`, `grid`, `csi`, `sixel`, `osc`, `vt`… |
+| `config` | 35 / 4,374 | 99% | only `config_regex_compile()` (§6.3) |
+| `wayland` | 359 / 2,884 | 88% | 27 listener tables + forwarders + 3 FDM callbacks |
+| `selection` | 844 / 2,967 | 72% | data-device / primary-selection listeners, DND |
+| `slave` | 158 / 573 | 72% | O_*/TIOCSCTTY constants, termios, execvpe shim |
+| `shm` | 329 / 1,110 | 70% | globals, `wl_shm`/`wl_buffer` stubs, punch-hole `#ifdef`s |
+| `debug` | 22 / 47 | 53% | ASAN stack-trace hook |
+| `render` | 3,154 / 5,479 | **42%** | D3a–D3i done; 9 chunks left |
+| `input` | 3,618 / 3,687 | **0%** | the single largest untouched module |
+| `url-mode` | 833 / 833 | 0% | |
+| `main` | 770 / 770 | 0% | |
+| `server` / `client` | 707 / 679 | 0% | |
+| `key-binding` | 661 / 661 | 0% | |
+| `ime` | 540 / 540 | 0% | |
+
+**Percent complete: 74% by C volume, ~60% by effort (band 58–63%), 31/45
+top-level modules (46 counting `spawn_template`) with zero C left.**
+**Post-D3j:** `render.c` is 3,154 → **2,701** lines, module C 12,709 → **12,256**
+(75.0% of the original C gone), harness 605 → **621** checks, and
+`full-check.sh` now actually launches the five windows (§14.5.1).
+
+The effort figure is §13's 59% at 12,960 lines, advanced by the 251 lines D3e–D3i
+removed — all of them render code, the most expensive per line (1.4× weight),
+hence only ~+1.5pt for 9 commits. Do not read the 74% as three-quarters of the
+*work*: the 12.7k lines left contain seven of the eight largest functions in
+the tree (`render_resize` 478, `grid_render` 391, `render_search_box` 343,
+`render_urls` 226, `render_overlay` 208, `render_ime_preedit_for_seat` 159,
+`render_scrollback_position` 148) plus the whole of `input`.
+
+### 14.2 What changed since §13 was written
+
+* D3a–D3i landed (9 commits): render primitives, frame bookkeeping, rows/margins,
+  CSD geometry/commit/buttons/painting, `render_cell()`, scroll paths, sixel,
+  `render_osd()`. `render.zig` is 2,354 lines; the harness grew ~120 checks,
+  many reading real pixman pixels back.
+* D2k7/k8 closed `wayland`: `handle_global()`, `handle_global_remove()`, colour
+  management, `xdg_wm_base_ping()`. `wayland.c` is glue only.
+* **A compositor is present in this container** (`WAYLAND_DISPLAY=wayland-1`,
+  `XDG_RUNTIME_DIR=/run/user/1000`). `smoke.sh` ran all five window launches
+  (80×24, 132×43, 20×5, maximized, fullscreen) clean against it today. The
+  "Standing caveat" above is therefore out of date *for this machine*.
+* **But the commit gate does not use it.** `full-check.sh` follows standing rule
+  5 and runs `env -u WAYLAND_DISPLAY scripts/smoke.sh`, so every commit since
+  the rule was written has been verified **without opening a window** — exactly
+  the class of regression F1 was. Fix this before the next render chunk (§14.5).
+
+### 14.3 Next chunks, in order (one commit each, §9 recipe)
+
+**Track D3 tail — `render` (≈9–10 dev-days).** Ordered so the pixel-heavy,
+high-blast-radius functions land last, after their helpers are already Zig.
+
+| Chunk | Work | Est. |
+|---|---|---|
+| **D3j** | `render_overlay()` + `render_overlay_single_pixel()` and `render_ime_preedit_for_seat()` / `render_ime_preedit()` (367 lines) | 1–2d |
+| **D3k1** | presentation feedback: `sync_output`, `presented`, `discarded`, `log_presentation_statistics` + `render_init`/`render_destroy` (~120) | 1d |
+| **D3k2** | `render_scrollback_position()`, `render_render_timer()`, `force_full_repaint()`, `reapply_old_damage()` (~250) | 1d |
+| **D3k3** | `render_search_box()` (343) — reuses D3i's OSD painter | 1–1.5d |
+| **D3k4** | `render_urls()` (226) | 1d |
+| **D3l1** | `render_worker_thread()`, `render_wait_for_preapply_damage()` (~150) — the thread/lock path, keep the C11 trap from C5 in mind | 1d |
+| **D3l2** | **`grid_render()`** (391) — damage apply, worker dispatch, frame callback, margins, sixel, cursor, commit | 2d |
+| **D3l3** | `render_resize()` (478) + `set_size_from_grid`, `send_dimensions_to_client`, `tiocswinsz`, `delayed_reflow_of_normal_grid`, `fdm_tiocswinsz` (~200) | 2–3d |
+| **D3l4** | `render_xcursor_is_valid/update/set`, `xcursor_callback`, `fdm_hook_refresh_pending_terminals`, `render_buffer_release_callback` (~270) | 1d |
+
+Exit criterion: `render.c` deleted, `render.zig` ~3.5k lines, harness ≥ 700
+checks, 5/5 window launches **with** `WAYLAND_DISPLAY` set, and a pixel-parity
+dump (§14.5.2) for the cell/URL/CSD paths.
+
+**Track D4 — `input` (≈6–8 dev-days).** Split by protocol, mechanical tables first:
+
+| Chunk | Work | Est. |
+|---|---|---|
+| **D4a** | keymap tables + `keymap_data_for_sym`, `keyboard_keymap`, `keyboard_modifiers`, `keyboard_enter/leave` (mechanical, mostly data) | 1d |
+| **D4b** | `key_press_release` (262) + `legacy_kbd_protocol` (158) + `kitty_kbd_protocol` (327) — port the C `UNITTEST` blocks into the harness as you go | 2–3d |
+| **D4c** | `execute_binding` (469) and the binding matchers | 1–1.5d |
+| **D4d** | pointer: `wl_pointer_enter/motion/leave/button/axis/frame` (~450) + scroll/mouse-binding tables | 1.5–2d |
+| **D4e** | touch + IME plumbing + the remaining seat glue | 1d |
+
+**Track D5 — mid-tier (≈5–6 dev-days).** `key-binding` (661) → `ime` (540) →
+`url-mode` (833) → `selection`'s 844-line tail. Doing `key-binding` first
+removes `search.zig`'s and `terminal.zig`'s local 104-byte `key_binding_set`
+mirror; the `selection` tail deletes `selection-shim.c` (243) wholesale.
+
+**Track D6 — entry points (≈4–5 dev-days).** `main` (770), then `server` (707)
+and `client` (679), which share `main`'s setup. After D6 the process entry
+point is Zig.
+
+**Track E — endgame (≈3–4 dev-days).** `wayland`'s 359 glue lines, `shm`'s 329
+(pull the `wl_shm` stubs behind a mirrored `struct shm_wayland_caps`), `slave`'s
+158 constants/execvpe, `config`'s 35-line regex shim, `debug`'s 22-line ASAN
+hook; then delete every struct-mirror shim. Note the shim count has *grown*
+during D2/D3 (2,465 → 2,524) because generated protocol inlines need
+forwarders — E1 must keep those and delete only the mirrors (§12.9).
+
+**Total: ≈27–33 dev-days ≈ 5.5–6.5 weeks solo**, or ≈3 weeks with three
+workers (D3 tail ∥ D4a–b ∥ D5). The old "6–7 weeks total" headline in §13 is
+still roughly right for the whole project but should not be used to infer the
+remaining time; use the chunk sums.
+
+### 14.4 Critical path from here
+
+```
+D3j -> D3k1/k2 -> D3k3/k4 -> D3l1 -> D3l2 (grid_render) -> D3l3 (resize) -> D3l4
+                                                     `-> render.c deleted
+D4a -> D4b -> D4c -> D4d -> D4e            (input; can start in parallel now)
+D5 (key-binding -> ime -> url-mode -> selection tail)   (parallel with D4)
+D6 (main -> server/client)  — gated on D3l2 and D5's key-binding
+E  (wayland/shm/slave/config/debug tails, shim sweep)
+```
+
+Nothing left is blocked on a missing mirror: `struct seat`, `struct wayland`,
+`struct key_binding*` are all ABI-pinned (M1), which is why D4 and D5 can run
+concurrently with D3 by different workers.
+
+### 14.5 Verification changes to make before the next chunk
+
+1. **Stop skipping the window launches. — DONE in D3j.** `scripts/full-check.sh`
+   now passes `WAYLAND_DISPLAY`/`XDG_RUNTIME_DIR` through when the socket exists
+   (`[ -S "$XDG_RUNTIME_DIR/$WAYLAND_DISPLAY" ]`) and only unsets it when there
+   is none; the weston/Xvfb fallback stays for CI. The gate ran all five window
+   launches for the first time since D3a.
+2. **Add a render parity oracle** like `FOOT_BOX_DUMP`: a harness mode that
+   paints a fixed cell/URL/CSD corpus into a pixman image and prints an FNV-1a
+   hash per cell, diffed against a build of `origin/master`. `grim` is not
+   installed, so screenshot diffing is not available yet; the pixmap dump is.
+3. **Keep the probe honest**: `scripts/gen_abi_probe.py` + the
+   `abi-probe-up-to-date` test on every `terminal_types.zig` touch (unchanged,
+   but D3l3/D4 will add many fields).
+4. **Fuzz the VT core before E2's `ReleaseSafe` vs `ReleaseFast` call** (R3) —
+   still open, and `input` is the module most exposed to hostile input.
+
+### 14.6 Untracked cruft
+
+`git status` carries `capture/`, `inbox/`, `investigation.cany/`,
+`squashfs-root/`, `craft.json`, `feed.json`, `usage.json`, `build-activity.log`.
+None belong in the repo; gitignore or delete them before the next commit so
+the scoreboard diffs stay readable. (`reference/` is tracked — leave it.)
+
