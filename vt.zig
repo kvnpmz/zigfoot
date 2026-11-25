@@ -1,4 +1,5 @@
 const std = @import("std");
+const tll = @import("tll.zig");
 const types = @import("terminal_types.zig");
 
 extern fn free(ptr: ?*anyopaque) callconv(.c) void;
@@ -28,12 +29,52 @@ extern fn dcs_unhook(term: *types.Terminal) callconv(.c) void;
 
 extern fn sixel_overwrite_by_rectangle(term: *types.Terminal, row: c_int, col: c_int, height: c_int, width: c_int) callconv(.c) void;
 
-extern fn vt_call_ascii_printer(term: *types.Terminal, c: u8) callconv(.c) void;
-extern fn vt_tab_stops_insert_before(term: *types.Terminal, value: c_int) callconv(.c) void;
-extern fn vt_tab_stops_push_back(term: *types.Terminal, value: c_int) callconv(.c) void;
-extern fn vt_tab_stops_len(term: *types.Terminal) callconv(.c) c_int;
-extern fn vt_tab_stops_back(term: *types.Terminal) callconv(.c) c_int;
-extern fn vt_tab_stops_next_after(term: *types.Terminal, col: c_int) callconv(.c) c_int;
+// ── vt-shim.c: tab stops and the ascii printer dispatch ───────────
+// C: void (*ascii_printer)(struct terminal *, char32_t); term_init()
+// always installs one, but the mirror is optional, so degrade instead of
+// unwrapping a pointer C merely assumes is set.
+const AsciiPrinter = *const fn (*types.Terminal, u32) callconv(.c) void;
+
+fn tabStops(term: *types.Terminal) *tll.Tll(c_int) {
+    return @ptrCast(&term.tab_stops);
+}
+
+export fn vt_call_ascii_printer(term: *types.Terminal, c: u8) callconv(.c) void {
+    const printer: AsciiPrinter = @ptrCast(@alignCast(term.ascii_printer orelse return));
+    printer(term, @as(u32, c));
+}
+
+export fn vt_tab_stops_insert_before(term: *types.Terminal, value: c_int) callconv(.c) void {
+    const list = tabStops(term);
+    var it = list.foreach();
+    while (it.next()) |node| {
+        if (node.item < value)
+            continue;
+        if (node.item > value)
+            list.insertBefore(node, value);
+        return;
+    }
+}
+
+export fn vt_tab_stops_push_back(term: *types.Terminal, value: c_int) callconv(.c) void {
+    tabStops(term).pushBack(value);
+}
+
+export fn vt_tab_stops_len(term: *types.Terminal) callconv(.c) c_int {
+    return @intCast(tabStops(term).len());
+}
+
+export fn vt_tab_stops_back(term: *types.Terminal) callconv(.c) c_int {
+    return tabStops(term).back().*;
+}
+
+export fn vt_tab_stops_next_after(term: *types.Terminal, col: c_int) callconv(.c) c_int {
+    var it = tabStops(term).foreach();
+    while (it.next()) |node| {
+        if (node.item > col) return node.item;
+    }
+    return -1;
+}
 
 const CHARSET_ASCII: types.Charset = .ascii;
 const CHARSET_GRAPHIC: types.Charset = .graphic;
@@ -241,7 +282,10 @@ export fn action_esc_dispatch(term: *types.Terminal, final: u8) callconv(.c) voi
     switch (term.vt.private) {
         0 => switch (final) {
             '7' => term_save_cursor(term),
-            '8' => { const grid = term.grid orelse return; term_restore_cursor(term, &grid.saved_cursor); },
+            '8' => {
+                const grid = term.grid orelse return;
+                term_restore_cursor(term, &grid.saved_cursor);
+            },
             'c' => term_reset(term, true),
             'n' => {
                 term.charsets.selected = G2;
@@ -256,7 +300,10 @@ export fn action_esc_dispatch(term: *types.Terminal, final: u8) callconv(.c) voi
                 term_update_ascii_printer(term);
             },
             'D' => term_linefeed(term),
-            'E' => { term_carriage_return(term); term_linefeed(term); },
+            'E' => {
+                term_carriage_return(term);
+                term_linefeed(term);
+            },
             'H' => tab_set(term),
             'M' => term_reverse_index(term),
             'N' => term_single_shift(term, G2),
@@ -390,8 +437,14 @@ export fn action_utf8_44(term: *types.Terminal, c: u8) callconv(.c) void {
 
 fn anywhere(term: *types.Terminal, data: u8) c_int {
     switch (data) {
-        0x18, 0x1a => { action_execute(term, data); return STATE_GROUND; },
-        0x1b => { action_clear(term); return STATE_ESCAPE; },
+        0x18, 0x1a => {
+            action_execute(term, data);
+            return STATE_GROUND;
+        },
+        0x1b => {
+            action_clear(term);
+            return STATE_ESCAPE;
+        },
         0x80...0x9f => return STATE_GROUND,
         else => {},
     }
@@ -400,11 +453,26 @@ fn anywhere(term: *types.Terminal, data: u8) c_int {
 
 fn state_ground_switch(term: *types.Terminal, data: u8) c_int {
     switch (data) {
-        0x00...0x17, 0x19, 0x1c...0x1f => { action_execute(term, data); return STATE_GROUND; },
-        0x20...0x7e => { action_print(term, data); return STATE_GROUND; },
-        0xc2...0xdf => { action_utf8_21(term, data); return STATE_UTF8_21; },
-        0xe0...0xef => { action_utf8_31(term, data); return STATE_UTF8_31; },
-        0xf0...0xf4 => { action_utf8_41(term, data); return STATE_UTF8_41; },
+        0x00...0x17, 0x19, 0x1c...0x1f => {
+            action_execute(term, data);
+            return STATE_GROUND;
+        },
+        0x20...0x7e => {
+            action_print(term, data);
+            return STATE_GROUND;
+        },
+        0xc2...0xdf => {
+            action_utf8_21(term, data);
+            return STATE_UTF8_21;
+        },
+        0xe0...0xef => {
+            action_utf8_31(term, data);
+            return STATE_UTF8_31;
+        },
+        0xf0...0xf4 => {
+            action_utf8_41(term, data);
+            return STATE_UTF8_41;
+        },
         else => {},
     }
     return anywhere(term, data);
@@ -412,20 +480,56 @@ fn state_ground_switch(term: *types.Terminal, data: u8) c_int {
 
 fn state_escape_switch(term: *types.Terminal, data: u8) c_int {
     switch (data) {
-        0x00...0x17, 0x19, 0x1c...0x1f => { action_execute(term, data); return STATE_ESCAPE; },
-        0x20...0x2f => { action_collect(term, data); return STATE_ESCAPE_INTERMEDIATE; },
-        0x30...0x4f => { action_esc_dispatch(term, data); return STATE_GROUND; },
-        0x50 => { action_clear(term); return STATE_DCS_ENTRY; },
-        0x51...0x57 => { action_esc_dispatch(term, data); return STATE_GROUND; },
+        0x00...0x17, 0x19, 0x1c...0x1f => {
+            action_execute(term, data);
+            return STATE_ESCAPE;
+        },
+        0x20...0x2f => {
+            action_collect(term, data);
+            return STATE_ESCAPE_INTERMEDIATE;
+        },
+        0x30...0x4f => {
+            action_esc_dispatch(term, data);
+            return STATE_GROUND;
+        },
+        0x50 => {
+            action_clear(term);
+            return STATE_DCS_ENTRY;
+        },
+        0x51...0x57 => {
+            action_esc_dispatch(term, data);
+            return STATE_GROUND;
+        },
         0x58 => return STATE_SOS_PM_APC_STRING,
-        0x59 => { action_esc_dispatch(term, data); return STATE_GROUND; },
-        0x5a => { action_esc_dispatch(term, data); return STATE_GROUND; },
-        0x5b => { action_clear(term); return STATE_CSI_ENTRY; },
-        0x5c => { action_esc_dispatch(term, data); return STATE_GROUND; },
-        0x5d => { action_osc_start(term, data); return STATE_OSC_STRING; },
+        0x59 => {
+            action_esc_dispatch(term, data);
+            return STATE_GROUND;
+        },
+        0x5a => {
+            action_esc_dispatch(term, data);
+            return STATE_GROUND;
+        },
+        0x5b => {
+            action_clear(term);
+            return STATE_CSI_ENTRY;
+        },
+        0x5c => {
+            action_esc_dispatch(term, data);
+            return STATE_GROUND;
+        },
+        0x5d => {
+            action_osc_start(term, data);
+            return STATE_OSC_STRING;
+        },
         0x5e...0x5f => return STATE_SOS_PM_APC_STRING,
-        0x60...0x7e => { action_esc_dispatch(term, data); return STATE_GROUND; },
-        0x7f => { action_ignore(term); return STATE_ESCAPE; },
+        0x60...0x7e => {
+            action_esc_dispatch(term, data);
+            return STATE_GROUND;
+        },
+        0x7f => {
+            action_ignore(term);
+            return STATE_ESCAPE;
+        },
         else => {},
     }
     return anywhere(term, data);
@@ -433,10 +537,22 @@ fn state_escape_switch(term: *types.Terminal, data: u8) c_int {
 
 fn state_escape_intermediate_switch(term: *types.Terminal, data: u8) c_int {
     switch (data) {
-        0x00...0x17, 0x19, 0x1c...0x1f => { action_execute(term, data); return STATE_ESCAPE_INTERMEDIATE; },
-        0x20...0x2f => { action_collect(term, data); return STATE_ESCAPE_INTERMEDIATE; },
-        0x30...0x7e => { action_esc_dispatch(term, data); return STATE_GROUND; },
-        0x7f => { action_ignore(term); return STATE_ESCAPE_INTERMEDIATE; },
+        0x00...0x17, 0x19, 0x1c...0x1f => {
+            action_execute(term, data);
+            return STATE_ESCAPE_INTERMEDIATE;
+        },
+        0x20...0x2f => {
+            action_collect(term, data);
+            return STATE_ESCAPE_INTERMEDIATE;
+        },
+        0x30...0x7e => {
+            action_esc_dispatch(term, data);
+            return STATE_GROUND;
+        },
+        0x7f => {
+            action_ignore(term);
+            return STATE_ESCAPE_INTERMEDIATE;
+        },
         else => {},
     }
     return anywhere(term, data);
@@ -444,14 +560,38 @@ fn state_escape_intermediate_switch(term: *types.Terminal, data: u8) c_int {
 
 fn state_csi_entry_switch(term: *types.Terminal, data: u8) c_int {
     switch (data) {
-        0x00...0x17, 0x19, 0x1c...0x1f => { action_execute(term, data); return STATE_CSI_ENTRY; },
-        0x20...0x2f => { action_collect(term, data); return STATE_CSI_INTERMEDIATE; },
-        0x30...0x39 => { action_param(term, data); return STATE_CSI_PARAM; },
-        0x3a => { action_param_new_subparam(term, data); return STATE_CSI_PARAM; },
-        0x3b => { action_param_new(term, data); return STATE_CSI_PARAM; },
-        0x3c...0x3f => { action_collect(term, data); return STATE_CSI_PARAM; },
-        0x40...0x7e => { action_csi_dispatch(term, data); return STATE_GROUND; },
-        0x7f => { action_ignore(term); return STATE_CSI_ENTRY; },
+        0x00...0x17, 0x19, 0x1c...0x1f => {
+            action_execute(term, data);
+            return STATE_CSI_ENTRY;
+        },
+        0x20...0x2f => {
+            action_collect(term, data);
+            return STATE_CSI_INTERMEDIATE;
+        },
+        0x30...0x39 => {
+            action_param(term, data);
+            return STATE_CSI_PARAM;
+        },
+        0x3a => {
+            action_param_new_subparam(term, data);
+            return STATE_CSI_PARAM;
+        },
+        0x3b => {
+            action_param_new(term, data);
+            return STATE_CSI_PARAM;
+        },
+        0x3c...0x3f => {
+            action_collect(term, data);
+            return STATE_CSI_PARAM;
+        },
+        0x40...0x7e => {
+            action_csi_dispatch(term, data);
+            return STATE_GROUND;
+        },
+        0x7f => {
+            action_ignore(term);
+            return STATE_CSI_ENTRY;
+        },
         else => {},
     }
     return anywhere(term, data);
@@ -459,14 +599,35 @@ fn state_csi_entry_switch(term: *types.Terminal, data: u8) c_int {
 
 fn state_csi_param_switch(term: *types.Terminal, data: u8) c_int {
     switch (data) {
-        0x00...0x17, 0x19, 0x1c...0x1f => { action_execute(term, data); return STATE_CSI_PARAM; },
-        0x20...0x2f => { action_collect(term, data); return STATE_CSI_INTERMEDIATE; },
-        0x30...0x39 => { action_param(term, data); return STATE_CSI_PARAM; },
-        0x3a => { action_param_new_subparam(term, data); return STATE_CSI_PARAM; },
-        0x3b => { action_param_new(term, data); return STATE_CSI_PARAM; },
+        0x00...0x17, 0x19, 0x1c...0x1f => {
+            action_execute(term, data);
+            return STATE_CSI_PARAM;
+        },
+        0x20...0x2f => {
+            action_collect(term, data);
+            return STATE_CSI_INTERMEDIATE;
+        },
+        0x30...0x39 => {
+            action_param(term, data);
+            return STATE_CSI_PARAM;
+        },
+        0x3a => {
+            action_param_new_subparam(term, data);
+            return STATE_CSI_PARAM;
+        },
+        0x3b => {
+            action_param_new(term, data);
+            return STATE_CSI_PARAM;
+        },
         0x3c...0x3f => return STATE_CSI_IGNORE,
-        0x40...0x7e => { action_csi_dispatch(term, data); return STATE_GROUND; },
-        0x7f => { action_ignore(term); return STATE_CSI_PARAM; },
+        0x40...0x7e => {
+            action_csi_dispatch(term, data);
+            return STATE_GROUND;
+        },
+        0x7f => {
+            action_ignore(term);
+            return STATE_CSI_PARAM;
+        },
         else => {},
     }
     return anywhere(term, data);
@@ -474,11 +635,23 @@ fn state_csi_param_switch(term: *types.Terminal, data: u8) c_int {
 
 fn state_csi_intermediate_switch(term: *types.Terminal, data: u8) c_int {
     switch (data) {
-        0x00...0x17, 0x19, 0x1c...0x1f => { action_execute(term, data); return STATE_CSI_INTERMEDIATE; },
-        0x20...0x2f => { action_collect(term, data); return STATE_CSI_INTERMEDIATE; },
+        0x00...0x17, 0x19, 0x1c...0x1f => {
+            action_execute(term, data);
+            return STATE_CSI_INTERMEDIATE;
+        },
+        0x20...0x2f => {
+            action_collect(term, data);
+            return STATE_CSI_INTERMEDIATE;
+        },
         0x30...0x3f => return STATE_CSI_IGNORE,
-        0x40...0x7e => { action_csi_dispatch(term, data); return STATE_GROUND; },
-        0x7f => { action_ignore(term); return STATE_CSI_INTERMEDIATE; },
+        0x40...0x7e => {
+            action_csi_dispatch(term, data);
+            return STATE_GROUND;
+        },
+        0x7f => {
+            action_ignore(term);
+            return STATE_CSI_INTERMEDIATE;
+        },
         else => {},
     }
     return anywhere(term, data);
@@ -486,10 +659,19 @@ fn state_csi_intermediate_switch(term: *types.Terminal, data: u8) c_int {
 
 fn state_csi_ignore_switch(term: *types.Terminal, data: u8) c_int {
     switch (data) {
-        0x00...0x17, 0x19, 0x1c...0x1f => { action_execute(term, data); return STATE_CSI_IGNORE; },
-        0x20...0x3f => { action_ignore(term); return STATE_CSI_IGNORE; },
+        0x00...0x17, 0x19, 0x1c...0x1f => {
+            action_execute(term, data);
+            return STATE_CSI_IGNORE;
+        },
+        0x20...0x3f => {
+            action_ignore(term);
+            return STATE_CSI_IGNORE;
+        },
         0x40...0x7e => return STATE_GROUND,
-        0x7f => { action_ignore(term); return STATE_CSI_IGNORE; },
+        0x7f => {
+            action_ignore(term);
+            return STATE_CSI_IGNORE;
+        },
         else => {},
     }
     return anywhere(term, data);
@@ -497,24 +679,62 @@ fn state_csi_ignore_switch(term: *types.Terminal, data: u8) c_int {
 
 fn state_osc_string_switch(term: *types.Terminal, data: u8) c_int {
     switch (data) {
-        0x07 => { action_osc_end(term, data); return STATE_GROUND; },
-        0x00...0x06, 0x08...0x17, 0x19, 0x1c...0x1f => { action_ignore(term); return STATE_OSC_STRING; },
-        0x18, 0x1a => { action_osc_end(term, data); action_execute(term, data); return STATE_GROUND; },
-        0x1b => { action_osc_end(term, data); action_clear(term); return STATE_ESCAPE; },
-        else => { action_osc_put(term, data); return STATE_OSC_STRING; },
+        0x07 => {
+            action_osc_end(term, data);
+            return STATE_GROUND;
+        },
+        0x00...0x06, 0x08...0x17, 0x19, 0x1c...0x1f => {
+            action_ignore(term);
+            return STATE_OSC_STRING;
+        },
+        0x18, 0x1a => {
+            action_osc_end(term, data);
+            action_execute(term, data);
+            return STATE_GROUND;
+        },
+        0x1b => {
+            action_osc_end(term, data);
+            action_clear(term);
+            return STATE_ESCAPE;
+        },
+        else => {
+            action_osc_put(term, data);
+            return STATE_OSC_STRING;
+        },
     }
 }
 
 fn state_dcs_entry_switch(term: *types.Terminal, data: u8) c_int {
     switch (data) {
-        0x00...0x17, 0x19, 0x1c...0x1f => { action_ignore(term); return STATE_DCS_ENTRY; },
-        0x20...0x2f => { action_collect(term, data); return STATE_DCS_INTERMEDIATE; },
-        0x30...0x39 => { action_param(term, data); return STATE_DCS_PARAM; },
+        0x00...0x17, 0x19, 0x1c...0x1f => {
+            action_ignore(term);
+            return STATE_DCS_ENTRY;
+        },
+        0x20...0x2f => {
+            action_collect(term, data);
+            return STATE_DCS_INTERMEDIATE;
+        },
+        0x30...0x39 => {
+            action_param(term, data);
+            return STATE_DCS_PARAM;
+        },
         0x3a => return STATE_DCS_IGNORE,
-        0x3b => { action_param_new(term, data); return STATE_DCS_PARAM; },
-        0x3c...0x3f => { action_collect(term, data); return STATE_DCS_PARAM; },
-        0x40...0x7e => { action_hook(term, data); return STATE_DCS_PASSTHROUGH; },
-        0x7f => { action_ignore(term); return STATE_DCS_ENTRY; },
+        0x3b => {
+            action_param_new(term, data);
+            return STATE_DCS_PARAM;
+        },
+        0x3c...0x3f => {
+            action_collect(term, data);
+            return STATE_DCS_PARAM;
+        },
+        0x40...0x7e => {
+            action_hook(term, data);
+            return STATE_DCS_PASSTHROUGH;
+        },
+        0x7f => {
+            action_ignore(term);
+            return STATE_DCS_ENTRY;
+        },
         else => {},
     }
     return anywhere(term, data);
@@ -522,14 +742,32 @@ fn state_dcs_entry_switch(term: *types.Terminal, data: u8) c_int {
 
 fn state_dcs_param_switch(term: *types.Terminal, data: u8) c_int {
     switch (data) {
-        0x00...0x17, 0x19, 0x1c...0x1f => { action_ignore(term); return STATE_DCS_PARAM; },
-        0x20...0x2f => { action_collect(term, data); return STATE_DCS_INTERMEDIATE; },
-        0x30...0x39 => { action_param(term, data); return STATE_DCS_PARAM; },
+        0x00...0x17, 0x19, 0x1c...0x1f => {
+            action_ignore(term);
+            return STATE_DCS_PARAM;
+        },
+        0x20...0x2f => {
+            action_collect(term, data);
+            return STATE_DCS_INTERMEDIATE;
+        },
+        0x30...0x39 => {
+            action_param(term, data);
+            return STATE_DCS_PARAM;
+        },
         0x3a => return STATE_DCS_IGNORE,
-        0x3b => { action_param_new(term, data); return STATE_DCS_PARAM; },
+        0x3b => {
+            action_param_new(term, data);
+            return STATE_DCS_PARAM;
+        },
         0x3c...0x3f => return STATE_DCS_IGNORE,
-        0x40...0x7e => { action_hook(term, data); return STATE_DCS_PASSTHROUGH; },
-        0x7f => { action_ignore(term); return STATE_DCS_PARAM; },
+        0x40...0x7e => {
+            action_hook(term, data);
+            return STATE_DCS_PASSTHROUGH;
+        },
+        0x7f => {
+            action_ignore(term);
+            return STATE_DCS_PARAM;
+        },
         else => {},
     }
     return anywhere(term, data);
@@ -537,11 +775,23 @@ fn state_dcs_param_switch(term: *types.Terminal, data: u8) c_int {
 
 fn state_dcs_intermediate_switch(term: *types.Terminal, data: u8) c_int {
     switch (data) {
-        0x00...0x17, 0x19, 0x1c...0x1f => { action_ignore(term); return STATE_DCS_INTERMEDIATE; },
-        0x20...0x2f => { action_collect(term, data); return STATE_DCS_INTERMEDIATE; },
+        0x00...0x17, 0x19, 0x1c...0x1f => {
+            action_ignore(term);
+            return STATE_DCS_INTERMEDIATE;
+        },
+        0x20...0x2f => {
+            action_collect(term, data);
+            return STATE_DCS_INTERMEDIATE;
+        },
         0x30...0x3f => return STATE_DCS_IGNORE,
-        0x40...0x7e => { action_hook(term, data); return STATE_DCS_PASSTHROUGH; },
-        0x7f => { action_ignore(term); return STATE_DCS_INTERMEDIATE; },
+        0x40...0x7e => {
+            action_hook(term, data);
+            return STATE_DCS_PASSTHROUGH;
+        },
+        0x7f => {
+            action_ignore(term);
+            return STATE_DCS_INTERMEDIATE;
+        },
         else => {},
     }
     return anywhere(term, data);
@@ -549,7 +799,10 @@ fn state_dcs_intermediate_switch(term: *types.Terminal, data: u8) c_int {
 
 fn state_dcs_ignore_switch(term: *types.Terminal, data: u8) c_int {
     switch (data) {
-        0x00...0x17, 0x19, 0x1c...0x1f, 0x20...0x7f => { action_ignore(term); return STATE_DCS_IGNORE; },
+        0x00...0x17, 0x19, 0x1c...0x1f, 0x20...0x7f => {
+            action_ignore(term);
+            return STATE_DCS_IGNORE;
+        },
         else => {},
     }
     return anywhere(term, data);
@@ -557,18 +810,38 @@ fn state_dcs_ignore_switch(term: *types.Terminal, data: u8) c_int {
 
 fn state_dcs_passthrough_switch(term: *types.Terminal, data: u8) c_int {
     switch (data) {
-        0x00...0x17, 0x19, 0x1c...0x7e => { action_put(term, data); return STATE_DCS_PASSTHROUGH; },
-        0x7f => { action_ignore(term); return STATE_DCS_PASSTHROUGH; },
-        0x18, 0x1a => { action_unhook(term, data); action_execute(term, data); return STATE_GROUND; },
-        0x1b => { action_unhook(term, data); action_clear(term); return STATE_ESCAPE; },
-        0x80...0x9f => { action_unhook(term, data); return STATE_GROUND; },
+        0x00...0x17, 0x19, 0x1c...0x7e => {
+            action_put(term, data);
+            return STATE_DCS_PASSTHROUGH;
+        },
+        0x7f => {
+            action_ignore(term);
+            return STATE_DCS_PASSTHROUGH;
+        },
+        0x18, 0x1a => {
+            action_unhook(term, data);
+            action_execute(term, data);
+            return STATE_GROUND;
+        },
+        0x1b => {
+            action_unhook(term, data);
+            action_clear(term);
+            return STATE_ESCAPE;
+        },
+        0x80...0x9f => {
+            action_unhook(term, data);
+            return STATE_GROUND;
+        },
         else => return STATE_DCS_PASSTHROUGH,
     }
 }
 
 fn state_sos_pm_apc_string_switch(term: *types.Terminal, data: u8) c_int {
     switch (data) {
-        0x00...0x17, 0x19, 0x1c...0x7f => { action_ignore(term); return STATE_SOS_PM_APC_STRING; },
+        0x00...0x17, 0x19, 0x1c...0x7f => {
+            action_ignore(term);
+            return STATE_SOS_PM_APC_STRING;
+        },
         else => {},
     }
     return anywhere(term, data);
@@ -576,43 +849,79 @@ fn state_sos_pm_apc_string_switch(term: *types.Terminal, data: u8) c_int {
 
 fn state_utf8_21_switch(term: *types.Terminal, data: u8) c_int {
     switch (data) {
-        0x80...0xbf => { action_utf8_22(term, data); return STATE_GROUND; },
-        else => { action_utf8_print(term, 0xfffd); return state_ground_switch(term, data); },
+        0x80...0xbf => {
+            action_utf8_22(term, data);
+            return STATE_GROUND;
+        },
+        else => {
+            action_utf8_print(term, 0xfffd);
+            return state_ground_switch(term, data);
+        },
     }
 }
 
 fn state_utf8_31_switch(term: *types.Terminal, data: u8) c_int {
     switch (data) {
-        0x80...0xbf => { action_utf8_32(term, data); return STATE_UTF8_32; },
-        else => { action_utf8_print(term, 0xfffd); return state_ground_switch(term, data); },
+        0x80...0xbf => {
+            action_utf8_32(term, data);
+            return STATE_UTF8_32;
+        },
+        else => {
+            action_utf8_print(term, 0xfffd);
+            return state_ground_switch(term, data);
+        },
     }
 }
 
 fn state_utf8_32_switch(term: *types.Terminal, data: u8) c_int {
     switch (data) {
-        0x80...0xbf => { action_utf8_33(term, data); return STATE_GROUND; },
-        else => { action_utf8_print(term, 0xfffd); return state_ground_switch(term, data); },
+        0x80...0xbf => {
+            action_utf8_33(term, data);
+            return STATE_GROUND;
+        },
+        else => {
+            action_utf8_print(term, 0xfffd);
+            return state_ground_switch(term, data);
+        },
     }
 }
 
 fn state_utf8_41_switch(term: *types.Terminal, data: u8) c_int {
     switch (data) {
-        0x80...0xbf => { action_utf8_42(term, data); return STATE_UTF8_42; },
-        else => { action_utf8_print(term, 0xfffd); return state_ground_switch(term, data); },
+        0x80...0xbf => {
+            action_utf8_42(term, data);
+            return STATE_UTF8_42;
+        },
+        else => {
+            action_utf8_print(term, 0xfffd);
+            return state_ground_switch(term, data);
+        },
     }
 }
 
 fn state_utf8_42_switch(term: *types.Terminal, data: u8) c_int {
     switch (data) {
-        0x80...0xbf => { action_utf8_43(term, data); return STATE_UTF8_43; },
-        else => { action_utf8_print(term, 0xfffd); return state_ground_switch(term, data); },
+        0x80...0xbf => {
+            action_utf8_43(term, data);
+            return STATE_UTF8_43;
+        },
+        else => {
+            action_utf8_print(term, 0xfffd);
+            return state_ground_switch(term, data);
+        },
     }
 }
 
 fn state_utf8_43_switch(term: *types.Terminal, data: u8) c_int {
     switch (data) {
-        0x80...0xbf => { action_utf8_44(term, data); return STATE_GROUND; },
-        else => { action_utf8_print(term, 0xfffd); return state_ground_switch(term, data); },
+        0x80...0xbf => {
+            action_utf8_44(term, data);
+            return STATE_GROUND;
+        },
+        else => {
+            action_utf8_print(term, 0xfffd);
+            return state_ground_switch(term, data);
+        },
     }
 }
 

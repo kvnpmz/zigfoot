@@ -56,28 +56,16 @@
 #include "wayland.h"
 #include "shm.h"
 
-bool sixel_wayl_do_linear_blending(struct terminal *t) {
-    return wayl_do_linear_blending(t->wl, t->conf);
-}
+/* ── wayl_do_linear_blending / shm_chain_bit_depth: ported to sixel.zig ─ */
 
-/* Return the raw enum value; Zig compares to hardcoded SHM_BITS_10 (=1)
- * and SHM_BITS_8 (=0) constants. */
-int sixel_shm_chain_bit_depth(struct terminal *t) {
-    return (int)shm_chain_bit_depth(t->render.chains.grid);
-}
 
 
 
 /* Number of entries in the default sixel palette config
  * (ALEN(term->conf->colors_dark.sixel)). */
 
-/* Copy up to `max` entries of the configured sixel palette to dst. */
-void sixel_conf_sixel_palette_copy(struct terminal *t, uint32_t *dst, size_t max) {
-    const size_t n = sizeof(t->conf->colors_dark.sixel) / sizeof(t->conf->colors_dark.sixel[0]);
-    const size_t cnt = n < max ? n : max;
-    for (size_t i = 0; i < cnt; i++)
-        dst[i] = t->conf->colors_dark.sixel[i];
-}
+/* ── conf_sixel_palette_copy: ported to sixel.zig ────────────────── */
+
 
 /* pixman format constants (enum values from pixman.h). */
 unsigned sixel_pixman_fmt_a8r8g8b8(void) {

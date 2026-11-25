@@ -35,14 +35,7 @@ export fn shm_set_min_stride_alignment(alignment: usize) callconv(.c) void {
     min_stride_alignment = alignment;
 }
 
-extern fn log_msg(
-    class: c_int,
-    module: [*:0]const u8,
-    file: [*:0]const u8,
-    lineno: c_int,
-    fmt: [*:0]const u8,
-    ...
-) void;
+extern fn log_msg(class: c_int, module: [*:0]const u8, file: [*:0]const u8, lineno: c_int, fmt: [*:0]const u8, ...) void;
 extern fn pixman_image_unref(image: ?*anyopaque) callconv(.c) void;
 extern fn pixman_region32_fini(region: ?*anyopaque) callconv(.c) void;
 extern fn shm_shim_wl_buffer_destroy(wl_buffer: ?*anyopaque) callconv(.c) void;
@@ -68,8 +61,7 @@ fn listHead(list: *const types.TllBufferPrivate) ?*BufferNode {
 }
 
 fn listPushBack(list: *types.TllBufferPrivate, item: *types.ShmBufferPrivate) void {
-    const node: *BufferNode = @ptrCast(@alignCast(
-        std.c.malloc(@sizeOf(BufferNode)) orelse @panic("out of memory")));
+    const node: *BufferNode = @ptrCast(@alignCast(std.c.malloc(@sizeOf(BufferNode)) orelse @panic("out of memory")));
     const tail: ?*BufferNode = if (list.tail) |t| @ptrCast(@alignCast(t)) else null;
 
     node.* = .{ .prev = tail, .next = null, .item = item };
@@ -80,8 +72,7 @@ fn listPushBack(list: *types.TllBufferPrivate, item: *types.ShmBufferPrivate) vo
 }
 
 fn listPushFront(list: *types.TllBufferPrivate, item: *types.ShmBufferPrivate) void {
-    const node: *BufferNode = @ptrCast(@alignCast(
-        std.c.malloc(@sizeOf(BufferNode)) orelse @panic("out of memory")));
+    const node: *BufferNode = @ptrCast(@alignCast(std.c.malloc(@sizeOf(BufferNode)) orelse @panic("out of memory")));
     const head = listHead(list);
 
     node.* = .{ .prev = null, .next = head, .item = item };
@@ -340,16 +331,8 @@ export fn shm_get_buffer(
 
 const LOG_CLASS_ERROR: c_int = 1;
 
-extern fn log_errno(
-    class: c_int,
-    module: [*:0]const u8,
-    file: [*:0]const u8,
-    lineno: c_int,
-    fmt: [*:0]const u8,
-    ...
-) void;
+extern fn log_errno(class: c_int, module: [*:0]const u8, file: [*:0]const u8, lineno: c_int, fmt: [*:0]const u8, ...) void;
 
-extern fn shm_shim_page_size() callconv(.c) usize;
 extern fn shm_shim_stride_for_format(fmt: c_int, width: c_int) callconv(.c) c_int;
 extern fn shm_shim_create_backing_file() callconv(.c) c_int;
 extern fn shm_shim_probe_punch_hole(fd: c_int) callconv(.c) bool;
@@ -403,6 +386,33 @@ fn logErrno(msg: [*:0]const u8) void {
     log_errno(LOG_CLASS_ERROR, "shm", "shm.zig", @intCast(@src().line), "%s", msg);
 }
 
+// ── page_size() from shm-shim.c ───────────────────────────────────
+// Zig's std.heap.pageSize() is not exactly equivalent: on a failed query
+// it falls back to a compile-time bound instead of C's 4096 + LOG_ERRNO.
+// Keep the shim's body (including its one-time cache) here; the C ABI
+// name stays an export for any remaining C caller.
+const page_size_cache = struct {
+    var size: usize = 0;
+};
+
+fn page_size() usize {
+    if (page_size_cache.size == 0) {
+        const n = std.c.sysconf(@intFromEnum(std.c._SC.PAGESIZE));
+        if (n <= 0) {
+            logErrno("failed to get page size");
+            page_size_cache.size = 4096;
+        } else {
+            page_size_cache.size = @intCast(n);
+        }
+    }
+    std.debug.assert(page_size_cache.size > 0);
+    return page_size_cache.size;
+}
+
+export fn shm_shim_page_size() callconv(.c) usize {
+    return page_size();
+}
+
 fn mallocOrAbort(size: usize) *anyopaque {
     return std.c.malloc(size) orelse @panic("out of memory");
 }
@@ -431,8 +441,7 @@ export fn instantiate_offset(
     const pool = buf.pool.?;
     const chain = buf.chain.?;
 
-    const pix: [*]?*anyopaque = @ptrCast(@alignCast(
-        callocOrAbort(buf.public.pix_instances, @sizeOf(?*anyopaque))));
+    const pix: [*]?*anyopaque = @ptrCast(@alignCast(callocOrAbort(buf.public.pix_instances, @sizeOf(?*anyopaque))));
 
     const base: [*]u8 = @ptrCast(pool.real_mmapped.?);
     const mmapped: *anyopaque = @ptrCast(base + @as(usize, @intCast(new_offset)));
@@ -512,8 +521,7 @@ fn getNewBuffers(
     var total_size: usize = 0;
 
     for (0..count) |i| {
-        var stride: c_int = shm_shim_stride_for_format(
-            @intCast(chain.pixman_fmt), widths[i]);
+        var stride: c_int = shm_shim_stride_for_format(@intCast(chain.pixman_fmt), widths[i]);
 
         if (alignment > 0) {
             const m: c_int = @intCast(alignment);
@@ -530,7 +538,7 @@ fn getNewBuffers(
 
     if (total_size == 0) return;
 
-    const page_sz = shm_shim_page_size();
+    const page_sz = page_size();
     const page: i64 = @intCast(page_sz);
     const max_pool = max_pool_size;
 
@@ -584,8 +592,7 @@ fn getNewBuffers(
         abortAllocation(pool_fd, null, real_mmapped, memfd_size);
     }
 
-    const pool: *types.ShmBufferPool = @ptrCast(@alignCast(
-        mallocOrAbort(@sizeOf(types.ShmBufferPool))));
+    const pool: *types.ShmBufferPool = @ptrCast(@alignCast(mallocOrAbort(@sizeOf(types.ShmBufferPool))));
     pool.* = .{
         .fd = pool_fd,
         .wl_pool = wl_pool,
@@ -600,8 +607,7 @@ fn getNewBuffers(
             continue;
         }
 
-        const buf: *types.ShmBufferPrivate = @ptrCast(@alignCast(
-            mallocOrAbort(@sizeOf(types.ShmBufferPrivate))));
+        const buf: *types.ShmBufferPrivate = @ptrCast(@alignCast(mallocOrAbort(@sizeOf(types.ShmBufferPrivate))));
         buf.* = .{
             .public = .{
                 .width = widths[i],
@@ -649,7 +655,8 @@ fn getNewBuffers(
 
     // Keep the pool FD open only if we are going to SHM-scroll it.
     if (!(bufs[0] != null and
-        canScroll(@ptrCast(@alignCast(bufs[0].?))))) {
+        canScroll(@ptrCast(@alignCast(bufs[0].?)))))
+    {
         _ = close(pool_fd);
         pool.fd = -1;
     }
@@ -752,8 +759,7 @@ export fn shm_chain_new(
         logInfo("using 8-bit RGB surfaces");
     }
 
-    const chain: *types.ShmBufferChain = @ptrCast(@alignCast(
-        mallocOrAbort(@sizeOf(types.ShmBufferChain))));
+    const chain: *types.ShmBufferChain = @ptrCast(@alignCast(mallocOrAbort(@sizeOf(types.ShmBufferChain))));
     chain.* = .{
         .bufs = .{ .head = null, .tail = null, .length = 0 },
         .shm = shm,
@@ -923,10 +929,8 @@ fn scrollForward(
         const base = topRegionBase(buf);
 
         _ = memmove(
-            base + @as(usize, @intCast(
-                size - (@as(i64, bottom_margin) + bottom_keep_rows) * stride)),
-            base + @as(usize, @intCast(
-                size - (@as(i64, bottom_margin) + rows + bottom_keep_rows) * stride)),
+            base + @as(usize, @intCast(size - (@as(i64, bottom_margin) + bottom_keep_rows) * stride)),
+            base + @as(usize, @intCast(size - (@as(i64, bottom_margin) + rows + bottom_keep_rows) * stride)),
             @as(usize, @intCast(@as(i64, bottom_keep_rows) * stride)),
         );
     }
@@ -951,7 +955,7 @@ fn scrollReverse(
     const diff: i64 = @as(i64, rows) * @as(i64, buf.public.stride);
 
     if (diff > buf.offset) {
-        const page: i64 = @intCast(shm_shim_page_size());
+        const page: i64 = @intCast(page_size());
         if (!wrapBuffer(
             buf,
             (max_pool - @as(i64, @intCast(buf.size))) & ~(page - 1),
@@ -969,10 +973,8 @@ fn scrollReverse(
         const base = topRegionBase(buf);
 
         _ = memmove(
-            base + @as(usize, @intCast(
-                size - (@as(i64, bottom_margin) + rows + bottom_keep_rows) * stride)),
-            base + @as(usize, @intCast(
-                size - (@as(i64, bottom_margin) + bottom_keep_rows) * stride)),
+            base + @as(usize, @intCast(size - (@as(i64, bottom_margin) + rows + bottom_keep_rows) * stride)),
+            base + @as(usize, @intCast(size - (@as(i64, bottom_margin) + bottom_keep_rows) * stride)),
             @as(usize, @intCast(@as(i64, bottom_keep_rows) * stride)),
         );
     }

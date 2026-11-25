@@ -1,7 +1,6 @@
 const std = @import("std");
+const tll = @import("tll.zig");
 const types = @import("terminal_types.zig");
-
-
 
 // ─── Chunk A: sgr_reset + csi_sgr ──────────────────────────────────
 // SGR = Select Graphic Rendition (text attributes: bold, dim, colors, ...)
@@ -214,8 +213,21 @@ export fn csi_sgr(term: *types.Terminal) callconv(.c) void {
 extern fn term_save_cursor(term: *types.Terminal) callconv(.c) void;
 extern fn term_ime_is_enabled(term: *types.Terminal) callconv(.c) bool;
 
-extern fn csi_xtsave_get(term: *types.Terminal, bit: c_uint) callconv(.c) bool;
-extern fn csi_xtsave_set(term: *types.Terminal, bit: c_uint, v: bool) callconv(.c) void;
+// ── csi-shim.c: xtsave bit access ─────────────────────────────────
+// C did `memcpy(&v, &t->xtsave, sizeof(v))` on the four-byte bool:1
+// bitfield block. @bitCast on the mirror's [4]u8 is the same native
+// byte-order read; all callers pass bit < 32.
+export fn csi_xtsave_get(term: *types.Terminal, bit: c_uint) callconv(.c) bool {
+    const bits: u32 = @bitCast(term.xtsave);
+    return (bits >> @as(u5, @intCast(bit))) & 1 != 0;
+}
+
+export fn csi_xtsave_set(term: *types.Terminal, bit: c_uint, v: bool) callconv(.c) void {
+    var bits: u32 = @bitCast(term.xtsave);
+    const mask: u32 = @as(u32, 1) << @as(u5, @intCast(bit));
+    if (v) bits |= mask else bits &= ~mask;
+    term.xtsave = @bitCast(bits);
+}
 
 // sixel-shim.c accessors (already exist)
 extern fn sixel_get_scrolling(term: *types.Terminal) callconv(.c) bool;
@@ -391,8 +403,6 @@ extern fn selection_cancel(term: *types.Terminal) callconv(.c) void;
 // sixel.c
 extern fn sixel_destroy(sixel: *types.Sixel) callconv(.c) void;
 
-
-
 // ── Helpers for tll-style lists in terminal_types.zig ─────────────
 // DamageList/SixelList are 'extern struct { head, tail, length }' in
 // terminal_types.zig. They're byte-compatible with Tll(T) but not the
@@ -471,21 +481,18 @@ export fn decset_decrst(term: *types.Terminal, param: c_uint, enable: bool) call
             sixel_set_scrolling(term, !enable);
         },
         1000 => {
-            if (enable) term.mouse_tracking = .click
-            else if (term.mouse_tracking == .click) term.mouse_tracking = .none;
+            if (enable) term.mouse_tracking = .click else if (term.mouse_tracking == .click) term.mouse_tracking = .none;
             term_xcursor_update(term);
         },
         1001 => {
             // highlight mouse tracking: unimplemented
         },
         1002 => {
-            if (enable) term.mouse_tracking = .drag
-            else if (term.mouse_tracking == .drag) term.mouse_tracking = .none;
+            if (enable) term.mouse_tracking = .drag else if (term.mouse_tracking == .drag) term.mouse_tracking = .none;
             term_xcursor_update(term);
         },
         1003 => {
-            if (enable) term.mouse_tracking = .motion
-            else if (term.mouse_tracking == .motion) term.mouse_tracking = .none;
+            if (enable) term.mouse_tracking = .motion else if (term.mouse_tracking == .motion) term.mouse_tracking = .none;
             term_xcursor_update(term);
         },
         1004 => {
@@ -499,19 +506,16 @@ export fn decset_decrst(term: *types.Terminal, param: c_uint, enable: bool) call
             // mouse UTF-8 mode: unimplemented
         },
         1006 => {
-            if (enable) term.mouse_reporting = .sgr
-            else if (term.mouse_reporting == .sgr) term.mouse_reporting = .normal;
+            if (enable) term.mouse_reporting = .sgr else if (term.mouse_reporting == .sgr) term.mouse_reporting = .normal;
         },
         1007 => {
             term.alt_scrolling = enable;
         },
         1015 => {
-            if (enable) term.mouse_reporting = .urxvt
-            else if (term.mouse_reporting == .urxvt) term.mouse_reporting = .normal;
+            if (enable) term.mouse_reporting = .urxvt else if (term.mouse_reporting == .urxvt) term.mouse_reporting = .normal;
         },
         1016 => {
-            if (enable) term.mouse_reporting = .sgr_pixels
-            else if (term.mouse_reporting == .sgr_pixels) term.mouse_reporting = .normal;
+            if (enable) term.mouse_reporting = .sgr_pixels else if (term.mouse_reporting == .sgr_pixels) term.mouse_reporting = .normal;
         },
         1034 => { // smm
             term.meta.eight_bit = enable;
@@ -526,8 +530,7 @@ export fn decset_decrst(term: *types.Terminal, param: c_uint, enable: bool) call
             term.bell_action_enabled = enable;
         },
         1048 => {
-            if (enable) term_save_cursor(term)
-            else {
+            if (enable) term_save_cursor(term) else {
                 const grid = term.grid orelse return;
                 term_restore_cursor(term, &grid.saved_cursor);
             }
@@ -584,8 +587,7 @@ export fn decset_decrst(term: *types.Terminal, param: c_uint, enable: bool) call
             term.bracketed_paste = enable;
         },
         2026 => {
-            if (enable) term_enable_app_sync_updates(term)
-            else term_disable_app_sync_updates(term);
+            if (enable) term_enable_app_sync_updates(term) else term_disable_app_sync_updates(term);
         },
         2027 => {
             // FOOT_GRAPHEME_CLUSTERING guard — assume always on
@@ -599,15 +601,13 @@ export fn decset_decrst(term: *types.Terminal, param: c_uint, enable: bool) call
             if (enable) term_send_visibility_report(term);
         },
         2048 => {
-            if (enable) term_enable_size_notifications(term)
-            else term_disable_size_notifications(term);
+            if (enable) term_enable_size_notifications(term) else term_disable_size_notifications(term);
         },
         8452 => {
             sixel_set_cursor_right_of_graphics(term, enable);
         },
         737769 => {
-            if (enable) term_ime_enable(term)
-            else {
+            if (enable) term_ime_enable(term) else {
                 term_ime_disable(term);
                 term.url.ime_reenable_after_url_mode = false;
             }
@@ -685,7 +685,6 @@ fn decrpm(enabled: bool) DecrpmStatus {
 
 // GRAPHEME_WIDTH_* enum values (from config.h)
 const GRAPHEME_WIDTH_DOUBLE: c_int = 2;
-
 
 export fn decrqm(term: *const types.Terminal, param: c_uint) callconv(.c) DecrpmStatus {
     const t: *types.Terminal = @constCast(term);
@@ -1067,7 +1066,6 @@ const IntNode = extern struct {
 };
 const IntList = types.TllInt;
 
-
 fn freeIntNode_remove(list: *IntList, node: *IntNode) void {
     const prev = node.prev;
     const next = node.next;
@@ -1096,13 +1094,52 @@ extern fn xstrdup(s: [*:0]const u8) callconv(.c) ?[*:0]u8;
 extern fn xsnprintf(buf: [*]u8, n: usize, fmt: [*:0]const u8, ...) callconv(.c) usize;
 extern fn strlen(s: [*:0]const u8) callconv(.c) usize;
 
-// csi-shim.c window helpers
-extern fn csi_window_first_output_px_width(term: *types.Terminal) callconv(.c) c_int;
-extern fn csi_window_first_output_px_height(term: *types.Terminal) callconv(.c) c_int;
-extern fn csi_window_on_outputs_count(term: *types.Terminal) callconv(.c) c_int;
-extern fn csi_window_title_stack_len(term: *types.Terminal) callconv(.c) usize;
-extern fn csi_window_title_stack_push(term: *types.Terminal, title: ?[*:0]u8) callconv(.c) void;
-extern fn csi_window_title_stack_pop(term: *types.Terminal) callconv(.c) ?[*:0]u8;
+// ── csi-shim.c: XTWINOPS outputs + title stack ────────────────────
+fn onOutputs(term: *types.Terminal) ?*tll.Tll(?*const types.Monitor) {
+    const win = term.window orelse return null;
+    return @ptrCast(&win.on_outputs);
+}
+
+fn firstOutput(term: *types.Terminal) ?*const types.Monitor {
+    const outputs = onOutputs(term) orelse return null;
+    // C: tll_foreach (... it) { return it->item->...; } — first node only.
+    var it = outputs.foreach();
+    const node = it.next() orelse return null;
+    return node.item;
+}
+
+export fn csi_window_first_output_px_width(term: *types.Terminal) callconv(.c) c_int {
+    const monitor = firstOutput(term) orelse return -1;
+    return monitor.dim.px_real.width;
+}
+
+export fn csi_window_first_output_px_height(term: *types.Terminal) callconv(.c) c_int {
+    const monitor = firstOutput(term) orelse return -1;
+    return monitor.dim.px_real.height;
+}
+
+export fn csi_window_on_outputs_count(term: *types.Terminal) callconv(.c) c_int {
+    const outputs = onOutputs(term) orelse return 0;
+    return @intCast(outputs.len());
+}
+
+fn titleStack(term: *types.Terminal) *tll.Tll(?[*:0]u8) {
+    return @ptrCast(&term.window_title_stack);
+}
+
+export fn csi_window_title_stack_len(term: *types.Terminal) callconv(.c) usize {
+    return titleStack(term).len();
+}
+
+export fn csi_window_title_stack_push(term: *types.Terminal, title: ?[*:0]u8) callconv(.c) void {
+    titleStack(term).pushBack(title);
+}
+
+export fn csi_window_title_stack_pop(term: *types.Terminal) callconv(.c) ?[*:0]u8 {
+    const list = titleStack(term);
+    if (list.len() == 0) return null;
+    return list.popBack();
+}
 
 // ── Additional final cases ────────────────────────────────────────
 fn case0Extra(term: *types.Terminal, final: u8) void {
@@ -1266,7 +1303,6 @@ fn case0UnhandledDispatch(term: *types.Terminal, final: u8) void {
 // ─── Chunk E3a: case '?' private branch ───────────────────────────
 // DECSET/DECRST/DECRQM/XTSAVE/XTRESTORE/XTSMGRAPHICS/XTMODKEYS/kitty
 
-
 // csi-shim.c config/term accessors
 
 // sixel_colors_* / sixel_geometry_* — Zig exports from sixel.zig
@@ -1352,8 +1388,7 @@ fn caseQuestion(term: *types.Terminal, final: u8) void {
             switch (param) {
                 996 => { // query theme mode
                     var reply: [16]u8 = .{0} ** 16;
-                    const chars = snprintf(&reply, reply.len, "\x1b[?997;%dn",
-                        if (term.colors.active_theme == .dark) @as(c_int, 1) else @as(c_int, 2));
+                    const chars = snprintf(&reply, reply.len, "\x1b[?997;%dn", if (term.colors.active_theme == .dark) @as(c_int, 1) else @as(c_int, 2));
                     if (chars > 0) term_to_slave(term, &reply, @intCast(chars));
                 },
                 998 => term_send_visibility_report(term),
@@ -1400,10 +1435,7 @@ fn caseGreater(term: *types.Terminal, final: u8) void {
         'c' => blk: { // secondary DA
             if (vtParamGet(term, 0, 0) != 0) break :blk;
             var reply: [64]u8 = undefined;
-            const n = xsnprintf(&reply, reply.len, "\x1b[>1;%02u%02u%02u;0c",
-                csi_foot_version_major(),
-                csi_foot_version_minor(),
-                csi_foot_version_patch());
+            const n = xsnprintf(&reply, reply.len, "\x1b[>1;%02u%02u%02u;0c", csi_foot_version_major(), csi_foot_version_minor(), csi_foot_version_patch());
             term_to_slave(term, &reply, n);
         },
         'm' => { // XTMODKEYS set
@@ -1442,11 +1474,7 @@ fn caseGreater(term: *types.Terminal, final: u8) void {
             const extra = csi_foot_version_extra();
             const sep: [*:0]const u8 = if (extra[0] != 0) "-" else "";
             var reply: [64]u8 = undefined;
-            const n = xsnprintf(&reply, reply.len, "\x1bP>|foot(%u.%u.%u%s%s)\x1b\\",
-                csi_foot_version_major(),
-                csi_foot_version_minor(),
-                csi_foot_version_patch(),
-                sep, extra);
+            const n = xsnprintf(&reply, reply.len, "\x1bP>|foot(%u.%u.%u%s%s)\x1b\\", csi_foot_version_major(), csi_foot_version_minor(), csi_foot_version_patch(), sep, extra);
             term_to_slave(term, &reply, n);
         },
         else => {},
@@ -1484,8 +1512,12 @@ fn caseSpace(term: *types.Terminal, final: u8) void {
         1, 2 => {
             term.cursor_style = if (@intFromEnum(term.conf.?.cursor.style) == 3) .hollow else .block;
         },
-        3, 4 => { term.cursor_style = .underline; },
-        5, 6 => { term.cursor_style = .beam; },
+        3, 4 => {
+            term.cursor_style = .underline;
+        },
+        5, 6 => {
+            term.cursor_style = .beam;
+        },
         else => {},
     }
     if (param > 0 and param <= 6) {
@@ -1572,7 +1604,12 @@ fn caseDollar(term: *types.Terminal, final: u8) void {
                     var i: usize = 4;
                     while (i < term.vt.params.idx) : (i += 1) {
                         switch (@as(c_int, @bitCast(term.vt.params.v[i].value))) {
-                            0 => { a.bold = false; a.underline = false; a.blink = false; a.reverse = false; },
+                            0 => {
+                                a.bold = false;
+                                a.underline = false;
+                                a.blink = false;
+                                a.reverse = false;
+                            },
                             1 => a.bold = true,
                             4 => a.underline = true,
                             5 => a.blink = true,
@@ -1606,7 +1643,12 @@ fn caseDollar(term: *types.Terminal, final: u8) void {
                     var i: usize = 4;
                     while (i < term.vt.params.idx) : (i += 1) {
                         switch (@as(c_int, @bitCast(term.vt.params.v[i].value))) {
-                            0 => { a.bold = !a.bold; a.underline = !a.underline; a.blink = !a.blink; a.reverse = !a.reverse; },
+                            0 => {
+                                a.bold = !a.bold;
+                                a.underline = !a.underline;
+                                a.blink = !a.blink;
+                                a.reverse = !a.reverse;
+                            },
                             1 => a.bold = !a.bold,
                             4 => a.underline = !a.underline,
                             5 => a.blink = !a.blink,
@@ -1760,11 +1802,9 @@ fn caseHash(term: *types.Terminal, final: u8) void {
         },
         'R' => { // XTREPORTCOLORS
             var reply: [64]u8 = undefined;
-            const n = xsnprintf(&reply, reply.len, "\x1b[?%zu;%zu#Q",
-                term.color_stack.idx, term.color_stack.size);
+            const n = xsnprintf(&reply, reply.len, "\x1b[?%zu;%zu#Q", term.color_stack.idx, term.color_stack.size);
             term_to_slave(term, &reply, n);
         },
         else => {},
     }
 }
-

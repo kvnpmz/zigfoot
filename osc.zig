@@ -1,4 +1,5 @@
 const std = @import("std");
+const tll = @import("tll.zig");
 const types = @import("terminal_types.zig");
 
 extern fn realloc(ptr: ?*anyopaque, size: usize) callconv(.c) ?*anyopaque;
@@ -68,7 +69,6 @@ extern fn uri_parse(
     fragment: ?*[*c]u8,
 ) callconv(.c) bool;
 
-
 fn sdbmHash(s: [*:0]const u8) u64 {
     var hash: u64 = 0;
     var i: usize = 0;
@@ -105,11 +105,13 @@ export fn osc_set_pwd(term: *types.Terminal, string: [*:0]u8) callconv(.c) void 
         string,
         len,
         &scheme,
-        null, null,
+        null,
+        null,
         &host,
         null,
         &path,
-        null, null,
+        null,
+        null,
     )) {
         std.debug.print("osc: ERROR: OSC7: invalid URI: {s}\n", .{std.mem.span(string)});
         return;
@@ -164,8 +166,8 @@ extern fn strtoul(s: [*:0]const u8, endptr: ?*[*:0]u8, base: c_int) callconv(.c)
 
 fn isxdigit(c: u8) bool {
     return (c >= '0' and c <= '9') or
-           (c >= 'a' and c <= 'f') or
-           (c >= 'A' and c <= 'F');
+        (c >= 'a' and c <= 'f') or
+        (c >= 'A' and c <= 'F');
 }
 
 fn hexNibble(c: u8) u8 {
@@ -337,9 +339,29 @@ extern fn term_to_slave(term: *types.Terminal, buf: [*]const u8, len: usize) cal
 extern fn xstrdup(s: [*:0]const u8) callconv(.c) ?[*:0]u8;
 extern fn xmalloc(size: usize) callconv(.c) ?*anyopaque;
 
-extern fn osc_seat_with_focus(term: *types.Terminal) callconv(.c) ?*anyopaque;
-extern fn osc_ptmx_buffers_len(term: *types.Terminal) callconv(.c) usize;
-extern fn osc_fdm_epollout_ptmx(term: *types.Terminal) callconv(.c) void;
+// ── osc-shim.c: seat/ptmx helpers ─────────────────────────────────
+extern fn fdm_event_add(fdm: *anyopaque, fd: c_int, events: c_int) callconv(.c) bool;
+const EPOLLOUT: c_int = 0x004;
+
+export fn osc_seat_with_focus(term: *types.Terminal) callconv(.c) ?*anyopaque {
+    const wl = term.wl orelse return null;
+    const seats: *tll.Tll(types.Seat) = @ptrCast(&wl.seats);
+    var it = seats.foreach();
+    while (it.next()) |node| {
+        if (node.item.kbd_focus == term)
+            return @ptrCast(@alignCast(&node.item));
+    }
+    return null;
+}
+
+export fn osc_ptmx_buffers_len(term: *types.Terminal) callconv(.c) usize {
+    const buffers: *tll.Tll(c_int) = @ptrCast(&term.ptmx_buffers);
+    return buffers.len();
+}
+
+export fn osc_fdm_epollout_ptmx(term: *types.Terminal) callconv(.c) void {
+    _ = fdm_event_add(term.fdm orelse return, term.ptmx, EPOLLOUT);
+}
 
 // ── Helpers ───────────────────────────────────────────────────────
 extern fn term_theme_get(term: *const types.Terminal) callconv(.c) *const types.ColorTheme;
@@ -603,9 +625,6 @@ extern fn wayl_win_alpha_changed(win: ?*anyopaque) callconv(.c) void;
 
 extern fn osc_notify(term: *types.Terminal, string: [*:0]u8) callconv(.c) void;
 
-
-
-
 fn unhandled(term: *types.Terminal) void {
     std.debug.print("osc: unhandled: OSC: {s}\n", .{term.vt.osc.data.?[0..term.vt.osc.idx]});
 }
@@ -853,7 +872,6 @@ export fn osc_dispatch(term: *types.Terminal) callconv(.c) void {
     }
 }
 
-
 // ── chunk E-1: osc_notify ─────────────────────────────────────────
 extern fn osc_notify_utf8_valid(s: [*]const u8, len: usize) callconv(.c) bool;
 
@@ -884,7 +902,10 @@ extern fn notify_notify(term: *types.Terminal, notif: *types.Notification) callc
 // ── chunk E-2: kitty_notification ─────────────────────────────────
 extern fn osc_xstrjoin(a: [*:0]const u8, b: [*:0]const u8) callconv(.c) ?[*:0]u8;
 extern fn osc_xstrjoin3(a: [*:0]const u8, b: [*:0]const u8, c: [*:0]const u8) callconv(.c) ?[*:0]u8;
-extern fn osc_kitty_actions_push_back(notif: *types.Notification, s: [*:0]u8) callconv(.c) void;
+export fn osc_kitty_actions_push_back(notif: *types.Notification, s: [*:0]u8) callconv(.c) void {
+    const actions: *tll.Tll([*:0]u8) = @ptrCast(&notif.actions);
+    actions.pushBack(s);
+}
 extern fn notify_free(term: *types.Terminal, notif: *types.Notification) callconv(.c) void;
 extern fn notify_close(term: *types.Terminal, id: [*:0]const u8) callconv(.c) void;
 extern fn notify_icon_add(term: *types.Terminal, id: [*:0]const u8, symbolic_name: ?[*:0]const u8, data: ?[*]const u8, data_sz: usize) callconv(.c) void;
@@ -909,7 +930,7 @@ fn verify_kitty_id_is_valid(id: [*:0]const u8) bool {
     while (id[i] != 0) : (i += 1) {
         const c = id[i];
         const ok = (c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z') or
-                   (c >= '0' and c <= '9') or c == '_' or c == '-' or c == '+' or c == '.';
+            (c >= '0' and c <= '9') or c == '_' or c == '-' or c == '+' or c == '.';
         if (!ok) return false;
     }
     return true;
@@ -986,22 +1007,34 @@ export fn kitty_notification_impl(term: *types.Terminal, string: [*:0]u8) callco
                     var s = vv;
                     const reverse = s[0] == '-';
                     if (reverse) s += 1;
-                    if (streqz(s, "focus")) { focus = !reverse; }
-                    else if (streqz(s, "report")) { report_activated = !reverse; }
+                    if (streqz(s, "focus")) {
+                        focus = !reverse;
+                    } else if (streqz(s, "report")) {
+                        report_activated = !reverse;
+                    }
                 }
             },
             'c' => {
-                if (value[0] == '1' and value[1] == 0) { report_closed = true; }
-                else if (value[0] == '0' and value[1] == 0) { report_closed = false; }
+                if (value[0] == '1' and value[1] == 0) {
+                    report_closed = true;
+                } else if (value[0] == '0' and value[1] == 0) {
+                    report_closed = false;
+                }
                 have_c = true;
             },
             'd' => {
-                if (value[0] == '0' and value[1] == 0) { done = false; }
-                else if (value[0] == '1' and value[1] == 0) { done = true; }
+                if (value[0] == '0' and value[1] == 0) {
+                    done = false;
+                } else if (value[0] == '1' and value[1] == 0) {
+                    done = true;
+                }
             },
             'e' => {
-                if (value[0] == '0' and value[1] == 0) { use_b64 = false; }
-                else if (value[0] == '1' and value[1] == 0) { use_b64 = true; }
+                if (value[0] == '0' and value[1] == 0) {
+                    use_b64 = false;
+                } else if (value[0] == '1' and value[1] == 0) {
+                    use_b64 = true;
+                }
             },
             'i' => {
                 if (verify_kitty_id_is_valid(value)) {
@@ -1010,13 +1043,19 @@ export fn kitty_notification_impl(term: *types.Terminal, string: [*:0]u8) callco
                 }
             },
             'p' => {
-                if (streqz(value, "title")) { payload_type = PAYLOAD_TITLE; }
-                else if (streqz(value, "body")) { payload_type = PAYLOAD_BODY; }
-                else if (streqz(value, "close")) { payload_type = PAYLOAD_CLOSE; }
-                else if (streqz(value, "alive")) { payload_type = PAYLOAD_ALIVE; }
-                else if (streqz(value, "icon")) { payload_type = PAYLOAD_ICON; }
-                else if (streqz(value, "buttons")) { payload_type = PAYLOAD_BUTTON; }
-                else if (streqz(value, "?")) {
+                if (streqz(value, "title")) {
+                    payload_type = PAYLOAD_TITLE;
+                } else if (streqz(value, "body")) {
+                    payload_type = PAYLOAD_BODY;
+                } else if (streqz(value, "close")) {
+                    payload_type = PAYLOAD_CLOSE;
+                } else if (streqz(value, "alive")) {
+                    payload_type = PAYLOAD_ALIVE;
+                } else if (streqz(value, "icon")) {
+                    payload_type = PAYLOAD_ICON;
+                } else if (streqz(value, "buttons")) {
+                    payload_type = PAYLOAD_BUTTON;
+                } else if (streqz(value, "?")) {
                     const reply_id: [*:0]const u8 = if (id) |i| i else "0";
                     const term_caps: [*:0]const u8 = if (term.vt.osc.bel) "\x07" else "\x1b\\";
                     var when_caps: [64]u8 = undefined;
@@ -1025,19 +1064,12 @@ export fn kitty_notification_impl(term: *types.Terminal, string: [*:0]u8) callco
                     var wlen: usize = base.len;
                     if (!term.conf.?.desktop_notifications.inhibit_when_focused) {
                         const extra = ",always";
-                        @memcpy(when_caps[wlen..wlen + extra.len], extra);
+                        @memcpy(when_caps[wlen .. wlen + extra.len], extra);
                         wlen += extra.len;
                     }
                     when_caps[wlen] = 0;
                     var reply: [512]u8 = undefined;
-                    const n = xsnprintf(&reply, reply.len,
-                        "\x1b]99;i=%s:p=?;p=%s:a=%s:o=%s:u=%s:c=1:w=1:s=system,silent,error,warn,warning,info,question%s",
-                        reply_id,
-                        @as([*:0]const u8, "title,body,?,close,alive,icon,buttons"),
-                        @as([*:0]const u8, "focus,report"),
-                        @as([*:0]const u8, @ptrCast(&when_caps)),
-                        @as([*:0]const u8, "0,1,2"),
-                        term_caps);
+                    const n = xsnprintf(&reply, reply.len, "\x1b]99;i=%s:p=?;p=%s:a=%s:o=%s:u=%s:c=1:w=1:s=system,silent,error,warn,warning,info,question%s", reply_id, @as([*:0]const u8, "title,body,?,close,alive,icon,buttons"), @as([*:0]const u8, "focus,report"), @as([*:0]const u8, @ptrCast(&when_caps)), @as([*:0]const u8, "0,1,2"), term_caps);
                     _ = term_to_slave(term, &reply, @intCast(n));
                     if (id) |o| free(@ptrCast(o));
                     if (app_id) |o| free(@ptrCast(o));
@@ -1051,15 +1083,23 @@ export fn kitty_notification_impl(term: *types.Terminal, string: [*:0]u8) callco
             },
             'o' => {
                 have_o = true;
-                if (streqz(value, "always")) { when = .always; }
-                else if (streqz(value, "unfocused")) { when = .unfocused; }
-                else if (streqz(value, "invisible")) { when = .invisible; }
+                if (streqz(value, "always")) {
+                    when = .always;
+                } else if (streqz(value, "unfocused")) {
+                    when = .unfocused;
+                } else if (streqz(value, "invisible")) {
+                    when = .invisible;
+                }
             },
             'u' => {
                 have_u = true;
-                if (value[0] == '0' and value[1] == 0) { urgency = .low; }
-                else if (value[0] == '1' and value[1] == 0) { urgency = .normal; }
-                else if (value[0] == '2' and value[1] == 0) { urgency = .critical; }
+                if (value[0] == '0' and value[1] == 0) {
+                    urgency = .low;
+                } else if (value[0] == '1' and value[1] == 0) {
+                    urgency = .normal;
+                } else if (value[0] == '2' and value[1] == 0) {
+                    urgency = .critical;
+                }
             },
             'w' => {
                 __errno_location().* = 0;
@@ -1145,7 +1185,7 @@ export fn kitty_notification_impl(term: *types.Terminal, string: [*:0]u8) callco
     const notif = &term.kitty_notification;
 
     const same = (id == null and notif.id == null) or
-                 (id != null and notif.id != null and streqz(id.?, notif.id.?));
+        (id != null and notif.id != null and streqz(id.?, notif.id.?));
     if (!same or !notif.may_be_programatically_closed) {
         notify_free(term, notif);
         notif.id = id;
@@ -1159,11 +1199,22 @@ export fn kitty_notification_impl(term: *types.Terminal, string: [*:0]u8) callco
         id = null;
     }
 
-    if (have_a) { notif.focus = focus; notif.report_activated = report_activated; }
-    if (have_c) { notif.report_closed = report_closed; }
-    if (have_o) { notif.when = when; }
-    if (have_u) { notif.urgency = urgency; }
-    if (have_w) { notif.expire_time = expire_time; }
+    if (have_a) {
+        notif.focus = focus;
+        notif.report_activated = report_activated;
+    }
+    if (have_c) {
+        notif.report_closed = report_closed;
+    }
+    if (have_o) {
+        notif.when = when;
+    }
+    if (have_u) {
+        notif.urgency = urgency;
+    }
+    if (have_w) {
+        notif.expire_time = expire_time;
+    }
 
     if (icon_cache_id) |ici| {
         if (notif.icon_cache_id) |o| free(@ptrCast(o));
@@ -1222,7 +1273,7 @@ export fn kitty_notification_impl(term: *types.Terminal, string: [*:0]u8) callco
                 payload = null;
             } else {
                 const new_ptr: [*]u8 = @ptrCast(xrealloc(@ptrCast(notif.icon_data), notif.icon_data_sz + payload_size) orelse return);
-                @memcpy(new_ptr[notif.icon_data_sz..notif.icon_data_sz + payload_size], @as([*]const u8, @ptrCast(payload.?))[0..payload_size]);
+                @memcpy(new_ptr[notif.icon_data_sz .. notif.icon_data_sz + payload_size], @as([*]const u8, @ptrCast(payload.?))[0..payload_size]);
                 notif.icon_data = new_ptr;
                 notif.icon_data_sz += payload_size;
             }
@@ -1265,9 +1316,7 @@ export fn kitty_notification_impl(term: *types.Terminal, string: [*:0]u8) callco
                     alive_ids = nw;
                 }
             }
-            const reply = xasprintf("\x1b]99;i=%s:p=alive;%s\x1b\\",
-                if (notif.id) |x| x else "0",
-                if (alive_ids) |x| x else "");
+            const reply = xasprintf("\x1b]99;i=%s:p=alive;%s\x1b\\", if (notif.id) |x| x else "0", if (alive_ids) |x| x else "");
             if (reply) |r| {
                 _ = term_to_slave(term, r, strlen(r));
                 free(@ptrCast(r));
@@ -1358,15 +1407,12 @@ export fn kitty_text_size_impl(term: *types.Terminal, string: [*:0]u8) callconv(
 
     var calculated_width: usize = 0;
     const method = @intFromEnum(term.conf.?.tweak.grapheme_width_method);
-    if (method == GRAPHEME_WIDTH_WCSWIDTH) calculated_width = all_cp_width
-    else if (method == GRAPHEME_WIDTH_MAX) calculated_width = max_cp_width
-    else if (method == GRAPHEME_WIDTH_DOUBLE) calculated_width = @min(max_cp_width, 2);
+    if (method == GRAPHEME_WIDTH_WCSWIDTH) calculated_width = all_cp_width else if (method == GRAPHEME_WIDTH_MAX) calculated_width = max_cp_width else if (method == GRAPHEME_WIDTH_DOUBLE) calculated_width = @min(max_cp_width, 2);
 
     const width: usize = if (forced_width == 0) calculated_width else @intCast(forced_width);
 
     var key = composed_key_from_chars(wchars, len);
-    const composed = composed_lookup_without_collision(
-        term.composed, &key, wchars, len - 1, wchars[len - 1], forced_width);
+    const composed = composed_lookup_without_collision(term.composed, &key, wchars, len - 1, wchars[len - 1], forced_width);
 
     if (composed == null) {
         const new_cc: *types.Composed = @ptrCast(@alignCast(xmalloc(@sizeOf(types.Composed)) orelse {
@@ -1392,8 +1438,7 @@ export fn kitty_text_size_impl(term: *types.Terminal, string: [*:0]u8) callconv(
     _ = final_composed;
 
     // Re-lookup since composed_insert may have rebalanced the tree
-    const found = composed_lookup_without_collision(
-        term.composed, &key, wchars, len - 1, wchars[len - 1], forced_width) orelse return;
+    const found = composed_lookup_without_collision(term.composed, &key, wchars, len - 1, wchars[len - 1], forced_width) orelse return;
 
     const print_width: c_int = if (found.forced_width > 0) @intCast(found.forced_width) else @intCast(found.width);
     term_print(term, CELL_COMB_CHARS_LO + found.key, print_width, false);
