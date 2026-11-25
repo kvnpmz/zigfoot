@@ -73,7 +73,6 @@ export fn cmd_scrollback_up(term: *types.Terminal, rows_in: c_int) void {
 
     render_refresh_urls(term);
     render_refresh(term);
-
 }
 
 export fn cmd_scrollback_down(term: *types.Terminal, rows_in: c_int) void {
@@ -130,5 +129,4 @@ export fn cmd_scrollback_down(term: *types.Terminal, rows_in: c_int) void {
 
     render_refresh_urls(term);
     render_refresh(term);
-
 }

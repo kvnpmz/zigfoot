@@ -22,7 +22,7 @@ fn isc32space(c: u32) bool {
     // the standard whitespace set; if foot relies on locale-specific
     // behavior we can shim this later.
     return c == 0x20 or c == 0x09 or c == 0x0a or c == 0x0b or
-           c == 0x0c or c == 0x0d;
+        c == 0x0c or c == 0x0d;
 }
 
 // composed_lookup: exported from composed.zig
@@ -614,7 +614,6 @@ export fn selection_find_line_boundary_right(term: *types.Terminal, pos: *types.
 // ── Chunk C1: selection_start ────────────────────────────────────
 // Ports selection.c lines 89-212.
 
-
 export fn selection_start(
     term: *types.Terminal,
     col: c_int,
@@ -1193,7 +1192,6 @@ export fn selection_update(
 
 extern fn search_selection_cancelled(term: *types.Terminal) callconv(.c) void;
 
-
 // SelectionTarget enum values (from config.h: SELECTION_TARGET_NONE=0, PRIMARY=1, CLIPBOARD=2, BOTH=3)
 
 export fn selection_dirty_cells(term: *types.Terminal) callconv(.c) void {
@@ -1519,7 +1517,10 @@ fn textToClipboard(
     clipboard.data_source = wayland_shim_data_source_create(manager);
     if (clipboard.data_source == null) {
         log_msg(
-            LOG_CLASS_ERROR, "selection", "selection.zig", @intCast(@src().line),
+            LOG_CLASS_ERROR,
+            "selection",
+            "selection.zig",
+            @intCast(@src().line),
             "failed to create clipboard data source",
         );
         return false;
@@ -1552,8 +1553,7 @@ fn textToPrimary(
     const primary = &seat.primary;
 
     if (primary.data_source != null) {
-        wayland_shim_primary_device_set_selection(
-            seat.primary_selection_device, null, primary.serial);
+        wayland_shim_primary_device_set_selection(seat.primary_selection_device, null, primary.serial);
         wayland_shim_primary_selection_source_destroy(primary.data_source);
         freeSlice(primary.text);
         primary.data_source = null;
@@ -1564,7 +1564,10 @@ fn textToPrimary(
     primary.data_source = wayland_shim_primary_source_create(manager);
     if (primary.data_source == null) {
         log_msg(
-            LOG_CLASS_ERROR, "selection", "selection.zig", @intCast(@src().line),
+            LOG_CLASS_ERROR,
+            "selection",
+            "selection.zig",
+            @intCast(@src().line),
             "failed to create clipboard data source",
         );
         return false;
@@ -1575,8 +1578,7 @@ fn textToPrimary(
         wayland_shim_primary_source_offer(primary.data_source, mime);
 
     wayland_shim_add_primary_source_listener(primary.data_source, seat);
-    wayland_shim_primary_device_set_selection(
-        seat.primary_selection_device, primary.data_source, serial);
+    wayland_shim_primary_device_set_selection(seat.primary_selection_device, primary.data_source, serial);
     primary.serial = serial;
     return true;
 }
@@ -1661,9 +1663,7 @@ fn textFromClipboard(
     // Prepare a pipe the other client can write its selection to us
     var fds: [2]c_int = undefined;
     if (pipe2(&fds, O_CLOEXEC) == -1) {
-        log_errno(
-            LOG_CLASS_ERROR, "selection", "selection.zig", @intCast(@src().line),
-            "failed to create pipe");
+        log_errno(LOG_CLASS_ERROR, "selection", "selection.zig", @intCast(@src().line), "failed to create pipe");
         done(user);
         return;
     }
@@ -1672,14 +1672,12 @@ fn textFromClipboard(
     const write_fd = fds[1];
 
     // Give the write-end of the pipe to the other client
-    wayland_shim_data_offer_receive(
-        clipboard.data_offer, mimeTypeName(clipboard.mime_type).?, write_fd);
+    wayland_shim_data_offer_receive(clipboard.data_offer, mimeTypeName(clipboard.mime_type).?, write_fd);
 
     // Don't keep our copy of the write-end open (or we'll never get EOF)
     _ = close(write_fd);
 
-    begin_receive_clipboard(
-        term, no_strip, read_fd, @intFromEnum(clipboard.mime_type), cb, done, user);
+    begin_receive_clipboard(term, no_strip, read_fd, @intFromEnum(clipboard.mime_type), cb, done, user);
 }
 
 fn textFromPrimary(
@@ -1707,9 +1705,7 @@ fn textFromPrimary(
 
     var fds: [2]c_int = undefined;
     if (pipe2(&fds, O_CLOEXEC) == -1) {
-        log_errno(
-            LOG_CLASS_ERROR, "selection", "selection.zig", @intCast(@src().line),
-            "failed to create pipe");
+        log_errno(LOG_CLASS_ERROR, "selection", "selection.zig", @intCast(@src().line), "failed to create pipe");
         done(user);
         return;
     }
@@ -1717,13 +1713,11 @@ fn textFromPrimary(
     const read_fd = fds[0];
     const write_fd = fds[1];
 
-    wayland_shim_primary_offer_receive(
-        primary.data_offer, mimeTypeName(primary.mime_type).?, write_fd);
+    wayland_shim_primary_offer_receive(primary.data_offer, mimeTypeName(primary.mime_type).?, write_fd);
 
     _ = close(write_fd);
 
-    begin_receive_clipboard(
-        term, no_strip, read_fd, @intFromEnum(primary.mime_type), cb, done, user);
+    begin_receive_clipboard(term, no_strip, read_fd, @intFromEnum(primary.mime_type), cb, done, user);
 }
 
 fn receiveOffer(data: [*]u8, size: usize, user: ?*anyopaque) callconv(.c) void {
@@ -1854,8 +1848,7 @@ export fn selection_primary_unset(seat: ?*anyopaque) callconv(.c) void {
     if (primary.data_source == null)
         return;
 
-    wayland_shim_primary_device_set_selection(
-        s.primary_selection_device, null, primary.serial);
+    wayland_shim_primary_device_set_selection(s.primary_selection_device, null, primary.serial);
     wayland_shim_primary_selection_source_destroy(primary.data_source);
 
     primary.data_source = null;
@@ -2061,7 +2054,10 @@ fn fdmReceiveTimeout(fdm_opaque: *Fdm, fd: c_int, events: c_int, data: ?*anyopaq
     }
 
     log_msg(
-        LOG_CLASS_WARNING, "selection", "selection.zig", @intCast(@src().line),
+        LOG_CLASS_WARNING,
+        "selection",
+        "selection.zig",
+        @intCast(@src().line),
         "no data received from clipboard in %llu seconds, aborting",
         @as(c_ulonglong, @intCast(ctx.timeout.it_value.tv_sec)),
     );
@@ -2088,9 +2084,13 @@ fn decodeOneUri(ctx: *ClipboardReceive, uri: [*]u8, len: usize) bool {
 
     if (!uri_parse(uri, len, &scheme, null, null, &host, null, &path, null, null)) {
         log_msg(
-            LOG_CLASS_ERROR, "selection", "selection.zig", @intCast(@src().line),
+            LOG_CLASS_ERROR,
+            "selection",
+            "selection.zig",
+            @intCast(@src().line),
             "drag-and-drop: invalid URI: %.*s",
-            @as(c_int, @intCast(len)), uri,
+            @as(c_int, @intCast(len)),
+            uri,
         );
         return false;
     }
@@ -2210,8 +2210,31 @@ fn receiveChunk(ctx: *ClipboardReceive, p_in: [*]u8, left_in: usize) [*]u8 {
                 },
 
                 // C0 non-formatting control characters (\b \t \n \r excluded)
-                0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x0e, 0x0f, 0x10, 0x11, 0x12, 0x13,
-                0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f,
+                0x01,
+                0x02,
+                0x03,
+                0x04,
+                0x05,
+                0x06,
+                0x07,
+                0x0e,
+                0x0f,
+                0x10,
+                0x11,
+                0x12,
+                0x13,
+                0x14,
+                0x15,
+                0x16,
+                0x17,
+                0x18,
+                0x19,
+                0x1a,
+                0x1b,
+                0x1c,
+                0x1d,
+                0x1e,
+                0x1f,
                 => {
                     if (!ctx.no_strip) {
                         ctx.decoder(ctx, p, i);
@@ -2388,48 +2411,41 @@ const EPOLLOUT: c_int = 0x004;
 
 const AsyncWriteStatus = enum(c_int) { done = 0, remain = 1, err = 2 };
 
-extern fn async_write(
-    fd: c_int, data: ?*const anyopaque, len: usize, idx: *usize) callconv(.c) AsyncWriteStatus;
+extern fn async_write(fd: c_int, data: ?*const anyopaque, len: usize, idx: *usize) callconv(.c) AsyncWriteStatus;
 extern fn xmalloc(size: usize) callconv(.c) ?*anyopaque;
 extern fn xstrdup(s: [*:0]const u8) callconv(.c) ?[*:0]u8;
 extern fn wayland_shim_data_source_destroy(source: ?*anyopaque) callconv(.c) void;
 extern fn wayland_shim_primary_selection_source_destroy(source: ?*anyopaque) callconv(.c) void;
 extern fn wayland_shim_data_device_set_selection(
-    dev: ?*anyopaque, source: ?*anyopaque, serial: u32,
+    dev: ?*anyopaque,
+    source: ?*anyopaque,
+    serial: u32,
 ) callconv(.c) void;
 extern fn wayland_shim_data_source_create(manager: ?*anyopaque) callconv(.c) ?*anyopaque;
 extern fn wayland_shim_data_source_offer(
-    source: ?*anyopaque, mime_type: [*:0]const u8,
+    source: ?*anyopaque,
+    mime_type: [*:0]const u8,
 ) callconv(.c) void;
 extern fn wayland_shim_primary_source_create(manager: ?*anyopaque) callconv(.c) ?*anyopaque;
 extern fn wayland_shim_primary_source_offer(
-    source: ?*anyopaque, mime_type: [*:0]const u8,
+    source: ?*anyopaque,
+    mime_type: [*:0]const u8,
 ) callconv(.c) void;
 extern fn wayland_shim_primary_device_set_selection(
-    dev: ?*anyopaque, source: ?*anyopaque, serial: u32,
+    dev: ?*anyopaque,
+    source: ?*anyopaque,
+    serial: u32,
 ) callconv(.c) void;
 extern fn wayland_shim_add_data_source_listener(
-    source: ?*anyopaque, seat: ?*anyopaque,
+    source: ?*anyopaque,
+    seat: ?*anyopaque,
 ) callconv(.c) void;
 extern fn wayland_shim_add_primary_source_listener(
-    source: ?*anyopaque, seat: ?*anyopaque,
+    source: ?*anyopaque,
+    seat: ?*anyopaque,
 ) callconv(.c) void;
-extern fn log_errno(
-    class: c_int,
-    module: [*:0]const u8,
-    file: [*:0]const u8,
-    lineno: c_int,
-    fmt: [*:0]const u8,
-    ...
-) callconv(.c) void;
-extern fn log_msg(
-    class: c_int,
-    module: [*:0]const u8,
-    file: [*:0]const u8,
-    lineno: c_int,
-    fmt: [*:0]const u8,
-    ...
-) callconv(.c) void;
+extern fn log_errno(class: c_int, module: [*:0]const u8, file: [*:0]const u8, lineno: c_int, fmt: [*:0]const u8, ...) callconv(.c) void;
+extern fn log_msg(class: c_int, module: [*:0]const u8, file: [*:0]const u8, lineno: c_int, fmt: [*:0]const u8, ...) callconv(.c) void;
 
 const LOG_CLASS_ERROR: c_int = 1;
 const LOG_CLASS_WARNING: c_int = 2;
@@ -2452,10 +2468,7 @@ fn fdmSend(fdm_opaque: *Fdm, fd: c_int, events: c_int, data: ?*anyopaque) callco
         switch (async_write(fd, buf, ctx.len, &ctx.idx)) {
             .remain => return true,
             .done => {},
-            .err => log_errno(
-                LOG_CLASS_ERROR, "selection", "selection.zig", @intCast(@src().line),
-                "failed to asynchronously write %zu of selection data to FD=%d",
-                ctx.len - ctx.idx, fd),
+            .err => log_errno(LOG_CLASS_ERROR, "selection", "selection.zig", @intCast(@src().line), "failed to asynchronously write %zu of selection data to FD=%d", ctx.len - ctx.idx, fd),
         }
     }
 
@@ -2475,9 +2488,7 @@ fn sendClipboardOrPrimary(
     // attempt to send the data synchronously fails
     const flags = fcntl(fd, F_GETFL);
     if (flags < 0 or fcntl(fd, F_SETFL, flags | O_NONBLOCK) < 0) {
-        log_errno(
-            LOG_CLASS_ERROR, "selection", "selection.zig", @intCast(@src().line),
-            "failed to set O_NONBLOCK");
+        log_errno(LOG_CLASS_ERROR, "selection", "selection.zig", @intCast(@src().line), "failed to set O_NONBLOCK");
         return;
     }
 
@@ -2506,10 +2517,7 @@ fn sendClipboardOrPrimary(
 
         .done => {},
 
-        .err => log_errno(
-            LOG_CLASS_ERROR, "selection", "selection.zig", @intCast(@src().line),
-            "failed write %zu bytes of %s selection data to FD=%d",
-            len, source_name, fd),
+        .err => log_errno(LOG_CLASS_ERROR, "selection", "selection.zig", @intCast(@src().line), "failed write %zu bytes of %s selection data to FD=%d", len, source_name, fd),
     }
 
     _ = close(fd);
@@ -2643,10 +2651,12 @@ const mime_type_map = [_]?[*:0]const u8{
 extern fn wayland_shim_data_offer_destroy(offer: ?*anyopaque) callconv(.c) void;
 extern fn wayland_shim_primary_selection_offer_destroy(offer: ?*anyopaque) callconv(.c) void;
 extern fn wayland_shim_add_data_offer_listener(
-    offer: ?*anyopaque, seat: ?*anyopaque,
+    offer: ?*anyopaque,
+    seat: ?*anyopaque,
 ) callconv(.c) void;
 extern fn wayland_shim_add_primary_offer_listener(
-    offer: ?*anyopaque, seat: ?*anyopaque,
+    offer: ?*anyopaque,
+    seat: ?*anyopaque,
 ) callconv(.c) void;
 
 export fn selection_select_mime_type_for_offer(
@@ -2776,23 +2786,34 @@ const DND_ACTION_COPY: u32 = 1;
 extern fn pipe2(fds: *[2]c_int, flags: c_int) callconv(.c) c_int;
 extern fn fdm_event_add(fdm: *anyopaque, fd: c_int, events: c_int) callconv(.c) bool;
 extern fn term_paste_data_to_slave(
-    term: *types.Terminal, buf: [*]const u8, len: usize,
+    term: *types.Terminal,
+    buf: [*]const u8,
+    len: usize,
 ) callconv(.c) void;
 extern fn term_surface_kind(
-    term: *const types.Terminal, surface: ?*const anyopaque,
+    term: *const types.Terminal,
+    surface: ?*const anyopaque,
 ) callconv(.c) types.TermSurface;
 extern fn wayland_shim_data_offer_accept(
-    offer: ?*anyopaque, serial: u32, mime_type: ?[*:0]const u8,
+    offer: ?*anyopaque,
+    serial: u32,
+    mime_type: ?[*:0]const u8,
 ) callconv(.c) void;
 extern fn wayland_shim_data_offer_set_actions(
-    offer: ?*anyopaque, actions: u32, preferred_action: u32,
+    offer: ?*anyopaque,
+    actions: u32,
+    preferred_action: u32,
 ) callconv(.c) void;
 extern fn wayland_shim_data_offer_finish(offer: ?*anyopaque) callconv(.c) void;
 extern fn wayland_shim_data_offer_receive(
-    offer: ?*anyopaque, mime_type: [*:0]const u8, fd: c_int,
+    offer: ?*anyopaque,
+    mime_type: [*:0]const u8,
+    fd: c_int,
 ) callconv(.c) void;
 extern fn wayland_shim_primary_offer_receive(
-    offer: ?*anyopaque, mime_type: [*:0]const u8, fd: c_int,
+    offer: ?*anyopaque,
+    mime_type: [*:0]const u8,
+    fd: c_int,
 ) callconv(.c) void;
 
 /// tll_foreach(seat->wayl->terms, it)
@@ -2852,10 +2873,8 @@ export fn selection_data_device_enter(
             if (term_surface_kind(term, surface) == .grid and
                 !term.is_sending_paste_data)
             {
-                wayland_shim_data_offer_accept(
-                    offer, serial, mimeTypeName(seat.clipboard.mime_type).?);
-                wayland_shim_data_offer_set_actions(
-                    offer, DND_ACTION_COPY, DND_ACTION_COPY);
+                wayland_shim_data_offer_accept(offer, serial, mimeTypeName(seat.clipboard.mime_type).?);
+                wayland_shim_data_offer_set_actions(offer, DND_ACTION_COPY, DND_ACTION_COPY);
 
                 std.debug.assert(seat.clipboard.window == null);
                 seat.clipboard.window = @ptrCast(term.window);
@@ -2923,7 +2942,10 @@ export fn selection_data_device_drop(
 
     if (clipboard.mime_type == .unset) {
         log_msg(
-            LOG_CLASS_WARNING, "selection", "selection.zig", @intCast(@src().line),
+            LOG_CLASS_WARNING,
+            "selection",
+            "selection.zig",
+            @intCast(@src().line),
             "compositor called data_device::drop() even though we rejected the drag-and-drop",
         );
         return;
@@ -2943,9 +2965,7 @@ export fn selection_data_device_drop(
     // Prepare a pipe the other client can write its selection to us
     var fds: [2]c_int = undefined;
     if (pipe2(&fds, O_CLOEXEC) == -1) {
-        log_errno(
-            LOG_CLASS_ERROR, "selection", "selection.zig", @intCast(@src().line),
-            "failed to create pipe");
+        log_errno(LOG_CLASS_ERROR, "selection", "selection.zig", @intCast(@src().line), "failed to create pipe");
         free(ctx);
         return;
     }
@@ -2954,8 +2974,7 @@ export fn selection_data_device_drop(
     const write_fd = fds[1];
 
     // Give the write-end of the pipe to the other client
-    wayland_shim_data_offer_receive(
-        clipboard.data_offer, mimeTypeName(clipboard.mime_type).?, write_fd);
+    wayland_shim_data_offer_receive(clipboard.data_offer, mimeTypeName(clipboard.mime_type).?, write_fd);
 
     // Don't keep our copy of the write-end open (or we'll never get EOF)
     _ = close(write_fd);
@@ -2965,9 +2984,7 @@ export fn selection_data_device_drop(
     if (term.bracketed_paste)
         term_paste_data_to_slave(term, "\x1b[200~", 6);
 
-    begin_receive_clipboard(
-        term, false, read_fd, @intFromEnum(clipboard.mime_type),
-        &receiveDnd, &receiveDndDone, ctx);
+    begin_receive_clipboard(term, false, read_fd, @intFromEnum(clipboard.mime_type), &receiveDnd, &receiveDndDone, ctx);
 
     // data offer is now "owned" by the receive context
     clipboard.data_offer = null;

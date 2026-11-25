@@ -59,15 +59,13 @@ extern fn xkb_state_update_mask(
 ) callconv(.c) c_int;
 extern fn xkb_compose_state_reset(state: ?*anyopaque) callconv(.c) void;
 
-extern fn mmap(
-    addr: ?*anyopaque, length: usize, prot: c_int, flags: c_int, fd: c_int, offset: isize) callconv(.c) ?*anyopaque;
+extern fn mmap(addr: ?*anyopaque, length: usize, prot: c_int, flags: c_int, fd: c_int, offset: isize) callconv(.c) ?*anyopaque;
 extern fn munmap(addr: ?*anyopaque, length: usize) callconv(.c) c_int;
 extern fn close(fd: c_int) callconv(.c) c_int;
 extern fn write(fd: c_int, buf: ?*const anyopaque, count: usize) callconv(.c) isize;
 extern fn strerror(errnum: c_int) callconv(.c) [*:0]const u8;
 extern fn __errno_location() callconv(.c) *c_int;
-extern fn timerfd_settime(
-    fd: c_int, flags: c_int, new_value: *const Itimerspec, old_value: ?*Itimerspec) callconv(.c) c_int;
+extern fn timerfd_settime(fd: c_int, flags: c_int, new_value: *const Itimerspec, old_value: ?*Itimerspec) callconv(.c) c_int;
 
 extern fn key_binding_load_keymap(mgr: ?*anyopaque, seat: *Seat) callconv(.c) void;
 extern fn key_binding_unload_keymap(mgr: ?*anyopaque, seat: *Seat) callconv(.c) void;
@@ -79,22 +77,8 @@ extern fn wayland_shim_surface_get_user_data(surf: ?*anyopaque) callconv(.c) ?*a
 extern fn fdm_del(fdm: *anyopaque, fd: c_int) callconv(.c) bool;
 extern fn free(ptr: ?*anyopaque) callconv(.c) void;
 
-extern fn log_msg(
-    class: c_int,
-    module: [*:0]const u8,
-    file: [*:0]const u8,
-    lineno: c_int,
-    fmt: [*:0]const u8,
-    ...
-) callconv(.c) void;
-extern fn log_errno(
-    class: c_int,
-    module: [*:0]const u8,
-    file: [*:0]const u8,
-    lineno: c_int,
-    fmt: [*:0]const u8,
-    ...
-) callconv(.c) void;
+extern fn log_msg(class: c_int, module: [*:0]const u8, file: [*:0]const u8, lineno: c_int, fmt: [*:0]const u8, ...) callconv(.c) void;
+extern fn log_errno(class: c_int, module: [*:0]const u8, file: [*:0]const u8, lineno: c_int, fmt: [*:0]const u8, ...) callconv(.c) void;
 
 const LOG_CLASS_ERROR: c_int = 1;
 const LOG_CLASS_WARNING: c_int = 2;
@@ -150,9 +134,7 @@ export fn fdm_write_pipe(
     const written = write(fd, ctx.text.? + ctx.idx, ctx.left);
 
     if (written < 0) {
-        log_msg(
-            LOG_CLASS_WARNING, "input", "input.zig", @intCast(@src().line),
-            "failed to write to pipe: %s", strerror(__errno_location().*));
+        log_msg(LOG_CLASS_WARNING, "input", "input.zig", @intCast(@src().line), "failed to write to pipe: %s", strerror(__errno_location().*));
         return pipeClosed(fdm, fd, ctx);
     }
 
@@ -207,9 +189,7 @@ export fn start_repeater(seat: *Seat, key: u32) callconv(.c) bool {
     }
 
     if (timerfd_settime(repeat.fd, 0, &t, null) < 0) {
-        log_errno(
-            LOG_CLASS_ERROR, "input", "input.zig", @intCast(@src().line),
-            "%s: failed to arm keyboard repeat timer", seat.name.?);
+        log_errno(LOG_CLASS_ERROR, "input", "input.zig", @intCast(@src().line), "%s: failed to arm keyboard repeat timer", seat.name.?);
         return false;
     }
 
@@ -229,9 +209,7 @@ export fn stop_repeater(seat: *Seat, key: u32) callconv(.c) bool {
     };
 
     if (timerfd_settime(repeat.fd, 0, &off, null) < 0) {
-        log_errno(
-            LOG_CLASS_ERROR, "input", "input.zig", @intCast(@src().line),
-            "%s: failed to disarm keyboard repeat timer", seat.name.?);
+        log_errno(LOG_CLASS_ERROR, "input", "input.zig", @intCast(@src().line), "%s: failed to disarm keyboard repeat timer", seat.name.?);
         return false;
     }
 
@@ -255,9 +233,7 @@ export fn keyboard_keymap(
     const seat: *Seat = @ptrCast(@alignCast(data orelse return));
     const wayl = seat.wayl.?;
 
-    log_msg(
-        LOG_CLASS_DEBUG, "input", "input.zig", @intCast(@src().line),
-        "keyboard_keymap: keyboard=%p (format=%u, size=%u)", wl_keyboard, format, size);
+    log_msg(LOG_CLASS_DEBUG, "input", "input.zig", @intCast(@src().line), "keyboard_keymap: keyboard=%p (format=%u, size=%u)", wl_keyboard, format, size);
 
     // Free old keymap state
     if (seat.kbd.xkb_keymap) |keymap| {
@@ -276,26 +252,21 @@ export fn keyboard_keymap(
         WL_KEYBOARD_KEYMAP_FORMAT_XKB_V1 => {},
         WL_KEYBOARD_KEYMAP_FORMAT_NO_KEYMAP => return closeFd(fd),
         else => {
-            log_msg(
-                LOG_CLASS_WARNING, "input", "input.zig", @intCast(@src().line),
-                "unrecognized keymap format: %u", format);
+            log_msg(LOG_CLASS_WARNING, "input", "input.zig", @intCast(@src().line), "unrecognized keymap format: %u", format);
             return closeFd(fd);
         },
     }
 
     const mapped = mmap(null, size, PROT_READ, MAP_PRIVATE, fd, 0);
     if (@intFromPtr(mapped) == MAP_FAILED) {
-        log_errno(
-            LOG_CLASS_ERROR, "input", "input.zig", @intCast(@src().line),
-            "failed to mmap keyboard keymap");
+        log_errno(LOG_CLASS_ERROR, "input", "input.zig", @intCast(@src().line), "failed to mmap keyboard keymap");
         return closeFd(fd);
     }
 
     const map_str: [*]const u8 = @ptrCast(mapped.?);
 
     if (seat.kbd.xkb) |xkb| {
-        seat.kbd.xkb_keymap = xkb_keymap_new_from_buffer(
-            xkb, map_str, size, XKB_KEYMAP_FORMAT_TEXT_V1, XKB_KEYMAP_COMPILE_NO_FLAGS);
+        seat.kbd.xkb_keymap = xkb_keymap_new_from_buffer(xkb, map_str, size, XKB_KEYMAP_FORMAT_TEXT_V1, XKB_KEYMAP_COMPILE_NO_FLAGS);
     }
 
     _ = munmap(mapped, size);
@@ -382,21 +353,15 @@ export fn keyboard_enter(
 
     if (surface == null) {
         // Seen on Hyprland
-        log_msg(
-            LOG_CLASS_WARNING, "input", "input.zig", @intCast(@src().line),
-            "compositor sent keyboard_enter event with a NULL surface");
+        log_msg(LOG_CLASS_WARNING, "input", "input.zig", @intCast(@src().line), "compositor sent keyboard_enter event with a NULL surface");
         return;
     }
 
     const seat: *Seat = @ptrCast(@alignCast(data orelse return));
-    const win: *types.WlWindow = @ptrCast(@alignCast(
-        wayland_shim_surface_get_user_data(surface) orelse return));
+    const win: *types.WlWindow = @ptrCast(@alignCast(wayland_shim_surface_get_user_data(surface) orelse return));
     const term: *Terminal = @ptrCast(@alignCast(win.term.?));
 
-    log_msg(
-        LOG_CLASS_DEBUG, "input", "input.zig", @intCast(@src().line),
-        "%s: keyboard_enter: keyboard=%p, serial=%u, surface=%p",
-        seat.name.?, wl_keyboard, serial, surface);
+    log_msg(LOG_CLASS_DEBUG, "input", "input.zig", @intCast(@src().line), "%s: keyboard_enter: keyboard=%p, serial=%u, surface=%p", seat.name.?, wl_keyboard, serial, surface);
 
     term_kbd_focus_in(term);
     seat.kbd_focus = term;
@@ -411,15 +376,11 @@ export fn keyboard_leave(
 ) callconv(.c) void {
     const seat: *Seat = @ptrCast(@alignCast(data orelse return));
 
-    log_msg(
-        LOG_CLASS_DEBUG, "input", "input.zig", @intCast(@src().line),
-        "keyboard_leave: keyboard=%p, serial=%u, surface=%p",
-        wl_keyboard, serial, surface);
+    log_msg(LOG_CLASS_DEBUG, "input", "input.zig", @intCast(@src().line), "keyboard_leave: keyboard=%p, serial=%u, surface=%p", wl_keyboard, serial, surface);
 
     if (seat.kbd_focus != null and surface != null) {
         // Seen on Sway 1.2: a leave without a surface
-        const win: *types.WlWindow = @ptrCast(@alignCast(
-            wayland_shim_surface_get_user_data(surface).?));
+        const win: *types.WlWindow = @ptrCast(@alignCast(wayland_shim_surface_get_user_data(surface).?));
         std.debug.assert(@as(*Terminal, @ptrCast(@alignCast(win.term.?))) == seat.kbd_focus.?);
     }
 
@@ -451,10 +412,8 @@ export fn keyboard_leave(
     } else {
         // Sway bug: a keyboard_leave() (and keyboard_key()) without a prior
         // keyboard_enter().
-        log_msg(
-            LOG_CLASS_WARNING, "input", "input.zig", @intCast(@src().line),
-            "compositor sent keyboard_leave event without a keyboard_enter " ++
-                "event: surface=%p", surface);
+        log_msg(LOG_CLASS_WARNING, "input", "input.zig", @intCast(@src().line), "compositor sent keyboard_leave event without a keyboard_enter " ++
+            "event: surface=%p", surface);
     }
 }
 
@@ -476,8 +435,7 @@ const XKB_KEY_Mode_switch: u32 = 0xff7e;
 const XKB_KEY_Num_Lock: u32 = 0xff7f;
 
 extern fn xkb_state_serialize_mods(state: ?*anyopaque, components: u32) callconv(.c) u32;
-extern fn xkb_state_key_get_consumed_mods2(
-    state: ?*anyopaque, key: u32, mode: c_int) callconv(.c) u32;
+extern fn xkb_state_key_get_consumed_mods2(state: ?*anyopaque, key: u32, mode: c_int) callconv(.c) u32;
 extern fn xkb_keymap_mod_get_name(keymap: ?*anyopaque, idx: u32) callconv(.c) ?[*:0]const u8;
 
 /// The currently effective modifiers, and (optionally) the ones the key
@@ -515,8 +473,7 @@ export fn get_current_modifiers(
 /// Modifier keys proper: Shift_L..Hyper_R, the ISO_* group/lock keys,
 /// Mode_switch and Num_Lock.
 export fn keysym_is_modifier(keysym: u32) callconv(.c) bool {
-    return
-        (keysym >= XKB_KEY_Shift_L and keysym <= XKB_KEY_Hyper_R) or
+    return (keysym >= XKB_KEY_Shift_L and keysym <= XKB_KEY_Hyper_R) or
         (keysym >= XKB_KEY_ISO_Lock and keysym <= XKB_KEY_ISO_Last_Group_Lock) or
         keysym == XKB_KEY_Mode_switch or
         keysym == XKB_KEY_Num_Lock;
@@ -584,9 +541,7 @@ export fn keyboard_repeat_info(
     _ = wl_keyboard;
     const seat: *Seat = @ptrCast(@alignCast(data orelse return));
 
-    log_msg(
-        LOG_CLASS_DEBUG, "input", "input.zig", @intCast(@src().line),
-        "keyboard repeat: rate=%d, delay=%d", rate, delay);
+    log_msg(LOG_CLASS_DEBUG, "input", "input.zig", @intCast(@src().line), "keyboard repeat: rate=%d, delay=%d", rate, delay);
 
     seat.kbd.repeat.rate = rate;
     seat.kbd.repeat.delay = delay;
@@ -2165,7 +2120,6 @@ pub const KittyKeyData = packed struct {
     is_modifier: bool,
 };
 
-
 const kitty_keymap = [_]KittyKeyData{
     .{ .sym = 0xfe03, .key = 57453, .final = 'u', .is_modifier = true },
     .{ .sym = 0xfe11, .key = 57454, .final = 'u', .is_modifier = true },
@@ -2346,7 +2300,6 @@ extern fn terminal_shim_isc32print(c32: u32) callconv(.c) bool;
 extern fn term_to_slave(term: *Terminal, data: ?*const anyopaque, len: usize) callconv(.c) bool;
 extern fn c32rtomb(s: [*]u8, wc: u32, ps: *anyopaque) callconv(.c) usize;
 
-
 /// C's `is_control_key()`: 0x40..0x7f.
 fn isControlKey(x: u32) bool {
     return x >= 0x40 and x <= 0x7f;
@@ -2360,7 +2313,6 @@ fn isCtrlByte(x: u8) bool {
 fn emit(term: *Terminal, data: []const u8) void {
     _ = term_to_slave(term, data.ptr, data.len);
 }
-
 
 /// The xterm modifier parameter used in CSI 27 ; <mod> ; <sym> ~.
 fn modParam(mods: c_int) u8 {
@@ -2406,7 +2358,6 @@ export fn legacy_kbd_protocol(
     const count = ctx.utf8.count;
     const utf8 = ctx.utf8.buf;
 
-
     if (keymap_lookup(term, sym, keymap_mods)) |keymap| {
         emit(term, std.mem.span(keymap.seq));
         return true;
@@ -2432,8 +2383,7 @@ export fn legacy_kbd_protocol(
 
             // The pressed key's base symbol: for 'A' (shift-a) that's 'a'.
             var base_syms: ?[*]const u32 = null;
-            const base_count = xkb_keymap_key_get_syms_by_level(
-                seat.kbd.xkb_keymap, ctx.key, layout_idx, 0, &base_syms);
+            const base_count = xkb_keymap_key_get_syms_by_level(seat.kbd.xkb_keymap, ctx.key, layout_idx, 0, &base_syms);
 
             const lower_cased_sym = xkb_keysym_to_lower(sym);
             var i: usize = 0;
@@ -2446,7 +2396,6 @@ export fn legacy_kbd_protocol(
             }
         }
     }
-
 
     if (keymap_mods != MOD_NONE and
         (modify_other_keys2_in_effect or (ctrl_is_in_effect and !ctrl_seq)))
@@ -2547,14 +2496,12 @@ export fn kitty_kbd_protocol(
         // modifier key does not report itself. The kitty protocol requires
         // it to, so update the state, read it back, and (deliberately) do
         // not revert - see the comment in the C original.
-        _ = xkb_state_update_key(
-            seat.kbd.xkb_state, ctx.key, if (pressed) XKB_KEY_DOWN_DIR else XKB_KEY_UP_DIR);
+        _ = xkb_state_update_key(seat.kbd.xkb_state, ctx.key, if (pressed) XKB_KEY_DOWN_DIR else XKB_KEY_UP_DIR);
 
         get_current_modifiers(seat, &mods, null, 0, false);
 
         locked = xkb_state_serialize_mods(seat.kbd.xkb_state, XKB_STATE_MODS_LOCKED);
-        consumed = xkb_state_key_get_consumed_mods2(
-            seat.kbd.xkb_state, ctx.key, XKB_CONSUMED_MODE_XKB);
+        consumed = xkb_state_key_get_consumed_mods2(seat.kbd.xkb_state, ctx.key, XKB_CONSUMED_MODE_XKB);
     } else {
         // Same as ctx.mods, but *without* filtering locked modifiers
         get_current_modifiers(seat, &mods, null, 0, false);
@@ -2659,8 +2606,7 @@ export fn kitty_kbd_protocol(
 
     // The symbol the pressed key produces in the base layout (layout 0).
     var base_syms: ?[*]const u32 = null;
-    const base_sym_count = xkb_keymap_key_get_syms_by_level(
-        seat.kbd.xkb_keymap, ctx.key, 0, 0, &base_syms);
+    const base_sym_count = xkb_keymap_key_get_syms_by_level(seat.kbd.xkb_keymap, ctx.key, 0, 0, &base_syms);
     if (base_sym_count > 0) {
         const utf32_base = xkb_keysym_to_utf32(base_syms.?[0]);
         if (utf32_base != 0)
@@ -2708,8 +2654,7 @@ export fn kitty_kbd_protocol(
                 len += (std.fmt.bufPrint(buf[len..], ":{d}", .{alternate}) catch return false).len;
 
             if (emit_base)
-                len += (std.fmt.bufPrint(
-                    buf[len..], "{s}:{d}", .{ if (!emit_alternate) ":" else "", base }) catch return false).len;
+                len += (std.fmt.bufPrint(buf[len..], "{s}:{d}", .{ if (!emit_alternate) ":" else "", base }) catch return false).len;
         }
 
         const emit_mods = encoded_mods > 1 or event.len > 0;
@@ -2717,8 +2662,7 @@ export fn kitty_kbd_protocol(
             len += (std.fmt.bufPrint(buf[len..], ";{d}{s}", .{ encoded_mods, event }) catch return false).len;
 
         if (report_associated_text) {
-            len += (std.fmt.bufPrint(
-                buf[len..], "{s};{d}", .{ if (!emit_mods) ";" else "", utf32.?[0] }) catch return false).len;
+            len += (std.fmt.bufPrint(buf[len..], "{s};{d}", .{ if (!emit_mods) ";" else "", utf32.?[0] }) catch return false).len;
 
             // Additional text codepoints
             if (utf32.?[0] != 0) {
@@ -2732,8 +2676,7 @@ export fn kitty_kbd_protocol(
         len += (std.fmt.bufPrint(buf[len..], "{c}", .{final}) catch return false).len;
     } else {
         if (encoded_mods > 1 or event.len > 0)
-            len += (std.fmt.bufPrint(
-                buf[len..], "\x1b[1;{d}{s}{c}", .{ encoded_mods, event, final }) catch return false).len
+            len += (std.fmt.bufPrint(buf[len..], "\x1b[1;{d}{s}{c}", .{ encoded_mods, event, final }) catch return false).len
         else
             len += (std.fmt.bufPrint(buf[len..], "\x1b[{c}", .{final}) catch return false).len;
     }
@@ -2819,8 +2762,7 @@ export fn mouse_scroll_multiplier(term: *const Terminal, seat: *const Seat) call
 // keyboard_modifiers (D4b3)
 // ─────────────────────────────────────────────────────────────────────────
 
-extern fn xkb_state_mod_index_is_active(
-    state: ?*anyopaque, idx: u32, components: u32) callconv(.c) c_int;
+extern fn xkb_state_mod_index_is_active(state: ?*anyopaque, idx: u32, components: u32) callconv(.c) c_int;
 
 /// The compositor's modifier state changed: feed it to xkb, cache the four
 /// modifiers foot cares about (for mouse events and shortcut matching), and
@@ -2849,23 +2791,18 @@ export fn keyboard_modifiers(
     // harness builds with -D_DEBUG but Zig has no such switch, and the
     // strings are only useful when debugging interactively.)
     if (seat.kbd.xkb_state) |state| {
-        _ = xkb_state_update_mask(
-            state, mods_depressed, mods_latched, mods_locked, 0, 0, group);
+        _ = xkb_state_update_mask(state, mods_depressed, mods_latched, mods_locked, 0, 0, group);
 
         // Update the state of the modifiers we're interested in, for e.g.
         // mouse events.
         seat.kbd.shift = seat.kbd.mod_shift != XKB_MOD_INVALID and
-            xkb_state_mod_index_is_active(
-                state, seat.kbd.mod_shift, XKB_STATE_MODS_EFFECTIVE) == 1;
+            xkb_state_mod_index_is_active(state, seat.kbd.mod_shift, XKB_STATE_MODS_EFFECTIVE) == 1;
         seat.kbd.alt = seat.kbd.mod_alt != XKB_MOD_INVALID and
-            xkb_state_mod_index_is_active(
-                state, seat.kbd.mod_alt, XKB_STATE_MODS_EFFECTIVE) == 1;
+            xkb_state_mod_index_is_active(state, seat.kbd.mod_alt, XKB_STATE_MODS_EFFECTIVE) == 1;
         seat.kbd.ctrl = seat.kbd.mod_ctrl != XKB_MOD_INVALID and
-            xkb_state_mod_index_is_active(
-                state, seat.kbd.mod_ctrl, XKB_STATE_MODS_EFFECTIVE) == 1;
+            xkb_state_mod_index_is_active(state, seat.kbd.mod_ctrl, XKB_STATE_MODS_EFFECTIVE) == 1;
         seat.kbd.super = seat.kbd.mod_super != XKB_MOD_INVALID and
-            xkb_state_mod_index_is_active(
-                state, seat.kbd.mod_super, XKB_STATE_MODS_EFFECTIVE) == 1;
+            xkb_state_mod_index_is_active(state, seat.kbd.mod_super, XKB_STATE_MODS_EFFECTIVE) == 1;
     }
 
     if (seat.kbd_focus) |focused| {
@@ -2889,13 +2826,10 @@ extern fn xkb_keymap_key_repeats(keymap: ?*anyopaque, key: u32) callconv(.c) c_i
 extern fn xkb_state_key_get_one_sym(state: ?*anyopaque, key: u32) callconv(.c) u32;
 extern fn xkb_compose_state_feed(state: ?*anyopaque, sym: u32) callconv(.c) c_int;
 extern fn xkb_compose_state_get_status(state: ?*anyopaque) callconv(.c) c_int;
-extern fn xkb_compose_state_get_utf8(
-    state: ?*anyopaque, buffer: ?[*]u8, size: usize) callconv(.c) c_int;
-extern fn xkb_state_key_get_utf8(
-    state: ?*anyopaque, key: u32, buffer: ?[*]u8, size: usize) callconv(.c) c_int;
+extern fn xkb_compose_state_get_utf8(state: ?*anyopaque, buffer: ?[*]u8, size: usize) callconv(.c) c_int;
+extern fn xkb_state_key_get_utf8(state: ?*anyopaque, key: u32, buffer: ?[*]u8, size: usize) callconv(.c) c_int;
 extern fn xkb_state_key_get_utf32(state: ?*anyopaque, key: u32) callconv(.c) u32;
-extern fn key_binding_for(
-    mgr: ?*anyopaque, conf: *const types.Config, seat: *Seat) callconv(.c) ?*types.KeyBindingSet;
+extern fn key_binding_for(mgr: ?*anyopaque, conf: *const types.Config, seat: *Seat) callconv(.c) ?*types.KeyBindingSet;
 extern fn unicode_mode_input(seat: *Seat, term: *Terminal, sym: u32) callconv(.c) void;
 extern fn search_input(
     seat: *Seat,
@@ -2985,12 +2919,10 @@ export fn key_press_release(
     const layout_idx = xkb_state_key_get_layout(xkb_state, key);
 
     var raw_syms: ?[*]const u32 = null;
-    const raw_count_signed = xkb_keymap_key_get_syms_by_level(
-        keymap, key, layout_idx, 0, &raw_syms);
+    const raw_count_signed = xkb_keymap_key_get_syms_by_level(keymap, key, layout_idx, 0, &raw_syms);
     const raw_count: usize = @intCast(@max(raw_count_signed, 0));
 
-    const bindings = key_binding_for(
-        seat.wayl.?.key_binding_manager, conf, seat) orelse return;
+    const bindings = key_binding_for(seat.wayl.?.key_binding_manager, conf, seat) orelse return;
 
     if (term.unicode_mode.active) {
         if (pressed)
@@ -3001,9 +2933,7 @@ export fn key_press_release(
             if (should_repeat)
                 _ = start_repeater(seat, key);
 
-            search_input(
-                seat, term, bindings, key, sym, mods, consumed,
-                raw_syms, raw_count, serial);
+            search_input(seat, term, bindings, key, sym, mods, consumed, raw_syms, raw_count, serial);
         }
         return;
     } else if (terminal_shim_urls_mode_active(term)) {
@@ -3011,9 +2941,7 @@ export fn key_press_release(
             if (should_repeat)
                 _ = start_repeater(seat, key);
 
-            urls_input(
-                seat, term, bindings, key, sym, mods, consumed,
-                raw_syms, raw_count, serial);
+            urls_input(seat, term, bindings, key, sym, mods, consumed, raw_syms, raw_count, serial);
         }
         return;
     }
@@ -3066,8 +2994,7 @@ export fn key_press_release(
                 if (bind.mods != mods or bind.mods == 0)
                     continue;
 
-                const codes: *tll.Tll(c_int) = @ptrCast(
-                    @constCast(&bind._u.k.key_codes));
+                const codes: *tll.Tll(c_int) = @ptrCast(@constCast(&bind._u.k.key_codes));
                 var cit = codes.foreach();
                 while (cit.next()) |cnode| {
                     if (cnode.item == @as(c_int, @intCast(key)) and
@@ -3112,8 +3039,7 @@ export fn key_press_release(
         var utf32: ?[*]u32 = null;
 
         if (composed) {
-            _ = xkb_compose_state_get_utf8(
-                seat.kbd.xkb_compose_state, utf8, count + 1);
+            _ = xkb_compose_state_get_utf8(seat.kbd.xkb_compose_state, utf8, count + 1);
 
             if (count > 0)
                 utf32 = ambstoc32(utf8);
@@ -3139,8 +3065,7 @@ export fn key_press_release(
             .key_state = @intCast(state),
         };
 
-        const flags: u32 = @bitCast(
-            term.grid.?.kitty_kbd.flags[term.grid.?.kitty_kbd.idx]);
+        const flags: u32 = @bitCast(term.grid.?.kitty_kbd.flags[term.grid.?.kitty_kbd.idx]);
         handled = if (flags != 0)
             kitty_kbd_protocol(seat, term, &ctx)
         else
@@ -3279,8 +3204,7 @@ export fn match_mouse_binding(
 ) callconv(.c) ?*const types.KeyBinding {
     if (seat.wl_keyboard != null and seat.kbd.xkb_state != null) {
         // Seat has a keyboard: use mouse bindings *with* modifiers
-        const bindings = key_binding_for(
-            term.wl.?.key_binding_manager, term.conf.?, @constCast(seat)) orelse return null;
+        const bindings = key_binding_for(term.wl.?.key_binding_manager, term.conf.?, @constCast(seat)) orelse return null;
 
         var mods: u32 = 0;
         get_current_modifiers(seat, &mods, null, 0, true);
@@ -3290,8 +3214,7 @@ export fn match_mouse_binding(
 
         var result: ?*const types.KeyBinding = null;
 
-        const mouse_list: *tll.Tll(types.KeyBinding) = @ptrCast(
-            @constCast(&bindings.mouse));
+        const mouse_list: *tll.Tll(types.KeyBinding) = @ptrCast(@constCast(&bindings.mouse));
         var it = mouse_list.foreach();
         while (it.next()) |node| {
             const binding = &node.item;
@@ -3373,18 +3296,10 @@ export fn mouse_scroll(seat: *Seat, amount: c_int, axis: u32) callconv(.c) void 
 
         var i: c_int = 0;
         while (i < count) : (i += 1) {
-            term_mouse_down(
-                term, button, seat.mouse.row, seat.mouse.col,
-                seat.mouse.y - term.margins.top,
-                seat.mouse.x - term.margins.left,
-                seat.kbd.shift, seat.kbd.alt, seat.kbd.ctrl);
+            term_mouse_down(term, button, seat.mouse.row, seat.mouse.col, seat.mouse.y - term.margins.top, seat.mouse.x - term.margins.left, seat.kbd.shift, seat.kbd.alt, seat.kbd.ctrl);
         }
 
-        term_mouse_up(
-            term, button, seat.mouse.row, seat.mouse.col,
-            seat.mouse.y - term.margins.top,
-            seat.mouse.x - term.margins.left,
-            seat.kbd.shift, seat.kbd.alt, seat.kbd.ctrl);
+        term_mouse_up(term, button, seat.mouse.row, seat.mouse.col, seat.mouse.y - term.margins.top, seat.mouse.x - term.margins.left, seat.kbd.shift, seat.kbd.alt, seat.kbd.ctrl);
     }
 }
 
@@ -3418,12 +3333,9 @@ extern fn term_scrollback_to_text(term: *const Terminal, text: *?[*:0]u8, len: *
 extern fn term_view_to_text(term: *const Terminal, text: *?[*:0]u8, len: *usize) callconv(.c) bool;
 extern fn term_command_output_to_text(term: *const Terminal, text: *?[*:0]u8, len: *usize) callconv(.c) bool;
 extern fn selection_to_text(term: *const Terminal) callconv(.c) ?[*:0]u8;
-extern fn selection_start(
-    term: *Terminal, col: c_int, row: c_int, kind: types.SelectionKind, spaces_only: bool) callconv(.c) void;
-extern fn selection_extend(
-    seat: ?*anyopaque, term: *Terminal, col: c_int, row: c_int, new_kind: types.SelectionKind) callconv(.c) void;
-extern fn urls_collect(
-    term: *const Terminal, action: c_int, preg: *const anyopaque, osc8: bool, urls: *anyopaque) callconv(.c) void;
+extern fn selection_start(term: *Terminal, col: c_int, row: c_int, kind: types.SelectionKind, spaces_only: bool) callconv(.c) void;
+extern fn selection_extend(seat: ?*anyopaque, term: *Terminal, col: c_int, row: c_int, new_kind: types.SelectionKind) callconv(.c) void;
+extern fn urls_collect(term: *const Terminal, action: c_int, preg: *const anyopaque, osc8: bool, urls: *anyopaque) callconv(.c) void;
 extern fn urls_assign_key_combos(conf: *const types.Config, urls: *anyopaque) callconv(.c) void;
 extern fn urls_render(term: *Terminal, launch: *const types.ConfigSpawnTemplate) callconv(.c) void;
 extern fn terminal_shim_xdg_toplevel_set_minimized(toplevel: ?*anyopaque) callconv(.c) void;
@@ -3450,10 +3362,8 @@ extern fn fdm_add(
     data: ?*anyopaque,
 ) callconv(.c) bool;
 extern fn grid_sb_start_ignore_uninitialized(grid: *const types.Grid, screen_rows: c_int) callconv(.c) c_int;
-extern fn grid_row_abs_to_sb_precalc_sb_start(
-    grid: *const types.Grid, sb_start: c_int, abs_row: c_int) callconv(.c) c_int;
-extern fn grid_row_sb_to_abs_precalc_sb_start(
-    grid: *const types.Grid, sb_start: c_int, sb_rel_row: c_int) callconv(.c) c_int;
+extern fn grid_row_abs_to_sb_precalc_sb_start(grid: *const types.Grid, sb_start: c_int, abs_row: c_int) callconv(.c) c_int;
+extern fn grid_row_sb_to_abs_precalc_sb_start(grid: *const types.Grid, sb_start: c_int, sb_rel_row: c_int) callconv(.c) c_int;
 extern fn pipe(fds: *[2]c_int) callconv(.c) c_int;
 extern fn open(path: [*:0]const u8, flags: c_int, ...) callconv(.c) c_int;
 extern fn fcntl(fd: c_int, cmd: c_int, ...) callconv(.c) c_int;
@@ -3646,9 +3556,7 @@ export fn execute_binding(
 
             blk: {
                 if (pipe(&pipe_fd) < 0) {
-                    log_errno(
-                        LOG_CLASS_ERROR, "input", "input.zig", @intCast(@src().line),
-                        "failed to create pipe");
+                    log_errno(LOG_CLASS_ERROR, "input", "input.zig", @intCast(@src().line), "failed to create pipe");
                     break :blk;
                 }
 
@@ -3656,9 +3564,7 @@ export fn execute_binding(
                 stderr_fd = open("/dev/null", O_WRONLY);
 
                 if (stdout_fd < 0 or stderr_fd < 0) {
-                    log_errno(
-                        LOG_CLASS_ERROR, "input", "input.zig", @intCast(@src().line),
-                        "failed to open /dev/null");
+                    log_errno(LOG_CLASS_ERROR, "input", "input.zig", @intCast(@src().line), "failed to open /dev/null");
                     break :blk;
                 }
 
@@ -3682,9 +3588,7 @@ export fn execute_binding(
                     if (flags < 0 or
                         fcntl(pipe_fd[1], F_SETFL, flags | O_NONBLOCK) < 0)
                     {
-                        log_errno(
-                            LOG_CLASS_ERROR, "input", "input.zig", @intCast(@src().line),
-                            "failed to make write-end of pipe non-blocking");
+                        log_errno(LOG_CLASS_ERROR, "input", "input.zig", @intCast(@src().line), "failed to make write-end of pipe non-blocking");
                         break :blk;
                     }
                 }
@@ -3696,9 +3600,7 @@ export fn execute_binding(
                     if (flags < 0 or
                         fcntl(pipe_fd[1], F_SETFD, flags | FD_CLOEXEC) < 0)
                     {
-                        log_errno(
-                            LOG_CLASS_ERROR, "input", "input.zig", @intCast(@src().line),
-                            "failed to set FD_CLOEXEC on writeend of pipe");
+                        log_errno(LOG_CLASS_ERROR, "input", "input.zig", @intCast(@src().line), "failed to set FD_CLOEXEC on writeend of pipe");
                         break :blk;
                     }
                 }
@@ -3707,9 +3609,7 @@ export fn execute_binding(
                     if (aux._u.pipe.args) |a| @ptrCast(a) else null;
                 const cwd: [*c]const u8 = if (term.cwd) |c| c else null;
 
-                if (spawn(
-                        term.reaper, cwd, argv, pipe_fd[0], stdout_fd, stderr_fd,
-                        null, null, null) < 0)
+                if (spawn(term.reaper, cwd, argv, pipe_fd[0], stdout_fd, stderr_fd, null, null, null) < 0)
                     break :blk;
 
                 // Close read end
@@ -3833,8 +3733,7 @@ export fn execute_binding(
                     grid_row_abs_to_sb_precalc_sb_start(grid, sb_start, r_abs);
 
                 new_view_sb_rel = @min(ofs_sb_rel, new_view_sb_rel);
-                grid.view = grid_row_sb_to_abs_precalc_sb_start(
-                    grid, sb_start, new_view_sb_rel);
+                grid.view = grid_row_sb_to_abs_precalc_sb_start(grid, sb_start, new_view_sb_rel);
 
                 term_damage_view(term);
                 render_refresh(term);
@@ -3875,15 +3774,11 @@ export fn execute_binding(
                         URL_ACTION_COPY;
 
                     if (regex.regex == null) {
-                        log_msg(
-                            LOG_CLASS_ERROR, "input", "input.zig", @intCast(@src().line),
-                            "regex:%s has no regex defined", name);
+                        log_msg(LOG_CLASS_ERROR, "input", "input.zig", @intCast(@src().line), "regex:%s has no regex defined", name);
                         return true;
                     }
                     if (url_action == URL_ACTION_LAUNCH and regex.launch.argv.args == null) {
-                        log_msg(
-                            LOG_CLASS_ERROR, "input", "input.zig", @intCast(@src().line),
-                            "regex:%s has no launch command defined", name);
+                        log_msg(LOG_CLASS_ERROR, "input", "input.zig", @intCast(@src().line), "regex:%s has no launch command defined", name);
                         return true;
                     }
 
@@ -3894,9 +3789,7 @@ export fn execute_binding(
                 }
             }
 
-            log_msg(
-                LOG_CLASS_ERROR, "input", "input.zig", @intCast(@src().line),
-                "no regex section named '%s' defined in the configuration", name);
+            log_msg(LOG_CLASS_ERROR, "input", "input.zig", @intCast(@src().line), "no regex section named '%s' defined in the configuration", name);
 
             return true;
         },
@@ -3915,46 +3808,38 @@ export fn execute_binding(
         },
 
         BIND_ACTION_SELECT_BEGIN => {
-            selection_start(
-                term, seat.mouse.col, seat.mouse.row, .char_wise, false);
+            selection_start(term, seat.mouse.col, seat.mouse.row, .char_wise, false);
             return true;
         },
         BIND_ACTION_SELECT_BEGIN_BLOCK => {
-            selection_start(
-                term, seat.mouse.col, seat.mouse.row, .block, false);
+            selection_start(term, seat.mouse.col, seat.mouse.row, .block, false);
             return true;
         },
         BIND_ACTION_SELECT_EXTEND => {
-            selection_extend(
-                seat, term, seat.mouse.col, seat.mouse.row, term.selection.kind);
+            selection_extend(seat, term, seat.mouse.col, seat.mouse.row, term.selection.kind);
             return true;
         },
         BIND_ACTION_SELECT_EXTEND_CHAR_WISE => {
             if (term.selection.kind != .block) {
-                selection_extend(
-                    seat, term, seat.mouse.col, seat.mouse.row, .char_wise);
+                selection_extend(seat, term, seat.mouse.col, seat.mouse.row, .char_wise);
                 return true;
             }
             return false;
         },
         BIND_ACTION_SELECT_WORD => {
-            selection_start(
-                term, seat.mouse.col, seat.mouse.row, .word_wise, false);
+            selection_start(term, seat.mouse.col, seat.mouse.row, .word_wise, false);
             return true;
         },
         BIND_ACTION_SELECT_WORD_WS => {
-            selection_start(
-                term, seat.mouse.col, seat.mouse.row, .word_wise, true);
+            selection_start(term, seat.mouse.col, seat.mouse.row, .word_wise, true);
             return true;
         },
         BIND_ACTION_SELECT_QUOTE => {
-            selection_start(
-                term, seat.mouse.col, seat.mouse.row, .quote_wise, false);
+            selection_start(term, seat.mouse.col, seat.mouse.row, .quote_wise, false);
             return true;
         },
         BIND_ACTION_SELECT_ROW => {
-            selection_start(
-                term, seat.mouse.col, seat.mouse.row, .line_wise, false);
+            selection_start(term, seat.mouse.col, seat.mouse.row, .line_wise, false);
             return true;
         },
 
@@ -4009,8 +3894,7 @@ extern fn wayl_reload_xcursor_theme(seat: *Seat, new_scale: f32) callconv(.c) bo
 extern fn wayland_shim_wl_callback_destroy(cb: ?*anyopaque) callconv(.c) void;
 extern fn selection_finalize(seat: ?*anyopaque, term: *Terminal, serial: u32) callconv(.c) void;
 extern fn selection_update(term: *Terminal, col: c_int, row: c_int) callconv(.c) void;
-extern fn selection_start_scroll_timer(
-    term: *Terminal, interval_ns: c_int, direction: c_int, col: c_int) callconv(.c) void;
+extern fn selection_start_scroll_timer(term: *Terminal, interval_ns: c_int, direction: c_int, col: c_int) callconv(.c) void;
 extern fn selection_stop_scroll_timer(term: *Terminal) callconv(.c) void;
 extern fn term_mouse_motion(
     term: *Terminal,
@@ -4031,19 +3915,10 @@ extern fn is_top_right(term: *const Terminal, x: c_int, y: c_int) callconv(.c) b
 extern fn is_bottom_left(term: *const Terminal, x: c_int, y: c_int) callconv(.c) bool;
 extern fn is_bottom_right(term: *const Terminal, x: c_int, y: c_int) callconv(.c) bool;
 extern fn timerfd_create(clockid: c_int, flags: c_int) callconv(.c) c_int;
-extern fn terminal_shim_xdg_toplevel_move(
-    toplevel: ?*anyopaque, seat: ?*anyopaque, serial: u32) callconv(.c) void;
-extern fn terminal_shim_xdg_toplevel_resize(
-    toplevel: ?*anyopaque, seat: ?*anyopaque, serial: u32, edges: u32) callconv(.c) void;
-extern fn terminal_shim_xdg_toplevel_show_window_menu(
-    toplevel: ?*anyopaque, seat: ?*anyopaque, serial: u32, x: c_int, y: c_int) callconv(.c) void;
-extern fn bug(
-    file: [*:0]const u8,
-    line: c_int,
-    func: [*:0]const u8,
-    fmt: [*:0]const u8,
-    ...
-) callconv(.c) noreturn;
+extern fn terminal_shim_xdg_toplevel_move(toplevel: ?*anyopaque, seat: ?*anyopaque, serial: u32) callconv(.c) void;
+extern fn terminal_shim_xdg_toplevel_resize(toplevel: ?*anyopaque, seat: ?*anyopaque, serial: u32, edges: u32) callconv(.c) void;
+extern fn terminal_shim_xdg_toplevel_show_window_menu(toplevel: ?*anyopaque, seat: ?*anyopaque, serial: u32, x: c_int, y: c_int) callconv(.c) void;
+extern fn bug(file: [*:0]const u8, line: c_int, func: [*:0]const u8, fmt: [*:0]const u8, ...) callconv(.c) noreturn;
 
 // wayland-util.h's wl_fixed_t helpers: 24.8 fixed point.
 fn wlFixedToInt(v: i32) c_int {
@@ -4103,16 +3978,13 @@ export fn wl_pointer_enter(
 ) callconv(.c) void {
     if (surface == null) {
         // Seen on mutter-3.38
-        log_msg(
-            LOG_CLASS_WARNING, "input", "input.zig", @intCast(@src().line),
-            "compositor sent pointer_enter event with a NULL surface");
+        log_msg(LOG_CLASS_WARNING, "input", "input.zig", @intCast(@src().line), "compositor sent pointer_enter event with a NULL surface");
         return;
     }
 
     const seat: *Seat = @ptrCast(@alignCast(data orelse return));
 
-    const win: *types.WlWindow = @ptrCast(@alignCast(
-        wayland_shim_surface_get_user_data(surface) orelse return));
+    const win: *types.WlWindow = @ptrCast(@alignCast(wayland_shim_surface_get_user_data(surface) orelse return));
     const term: *Terminal = @ptrCast(@alignCast(win.term.?));
 
     seat.mouse_focus = term;
@@ -4129,11 +4001,8 @@ export fn wl_pointer_enter(
     seat.mouse.x = x;
     seat.mouse.y = y;
 
-    log_msg(
-        LOG_CLASS_DEBUG, "input", "input.zig", @intCast(@src().line),
-        "pointer-enter: pointer=%p, serial=%u, surface = %p, new-moused = %p, " ++
-            "x=%d, y=%d",
-        wl_pointer, serial, surface, term, x, y);
+    log_msg(LOG_CLASS_DEBUG, "input", "input.zig", @intCast(@src().line), "pointer-enter: pointer=%p, serial=%u, surface = %p, new-moused = %p, " ++
+        "x=%d, y=%d", wl_pointer, serial, surface, term, x, y);
 
     std.debug.assert(mouseButtonsConst(seat).len() == 0);
 
@@ -4181,10 +4050,7 @@ export fn wl_pointer_leave(
 
     const old_moused = seat.mouse_focus;
 
-    log_msg(
-        LOG_CLASS_DEBUG, "input", "input.zig", @intCast(@src().line),
-        "%s: pointer-leave: pointer=%p, serial=%u, surface = %p, old-moused = %p",
-        seat.name.?, wl_pointer, serial, surface, old_moused);
+    log_msg(LOG_CLASS_DEBUG, "input", "input.zig", @intCast(@src().line), "%s: pointer-leave: pointer=%p, serial=%u, surface = %p, old-moused = %p", seat.name.?, wl_pointer, serial, surface, old_moused);
 
     seat.pointer.hidden = false;
 
@@ -4214,8 +4080,7 @@ export fn wl_pointer_leave(
         if (surface != null) {
             // Sway 1.4 sends this event with a NULL surface when we destroy
             // the window
-            const win: *types.WlWindow = @ptrCast(@alignCast(
-                wayland_shim_surface_get_user_data(surface) orelse return));
+            const win: *types.WlWindow = @ptrCast(@alignCast(wayland_shim_surface_get_user_data(surface) orelse return));
             std.debug.assert(old == @as(*Terminal, @ptrCast(@alignCast(win.term.?))));
         }
 
@@ -4245,10 +4110,8 @@ export fn wl_pointer_leave(
             => {},
         }
     } else {
-        log_msg(
-            LOG_CLASS_WARNING, "input", "input.zig", @intCast(@src().line),
-            "compositor sent pointer_leave event without a pointer_enter " ++
-                "event: surface=%p", surface);
+        log_msg(LOG_CLASS_WARNING, "input", "input.zig", @intCast(@src().line), "compositor sent pointer_leave event without a pointer_enter " ++
+            "event: surface=%p", surface);
     }
 }
 
@@ -4270,10 +4133,7 @@ export fn wl_pointer_motion(
 
     const win = term.window.?;
 
-    log_msg(
-        LOG_CLASS_DEBUG, "input", "input.zig", @intCast(@src().line),
-        "pointer_motion: pointer=%p, x=%d, y=%d",
-        wl_pointer, wlFixedToInt(surface_x), wlFixedToInt(surface_y));
+    log_msg(LOG_CLASS_DEBUG, "input", "input.zig", @intCast(@src().line), "pointer_motion: pointer=%p, x=%d, y=%d", wl_pointer, wlFixedToInt(surface_x), wlFixedToInt(surface_y));
 
     const x = scaledFixedToInt(surface_x, term.scale);
     const y = scaledFixedToInt(surface_y, term.scale);
@@ -4336,8 +4196,7 @@ export fn wl_pointer_motion(
             if (button == BTN_LEFT and win.csd.move_timeout_fd != -1) {
                 _ = fdm_del(seat.wayl.?.fdm.?, win.csd.move_timeout_fd);
                 win.csd.move_timeout_fd = -1;
-                terminal_shim_xdg_toplevel_move(
-                    win.xdg_toplevel, seat.wl_seat, win.csd.serial);
+                terminal_shim_xdg_toplevel_move(win.xdg_toplevel, seat.wl_seat, win.csd.serial);
             }
         },
 
@@ -4402,15 +4261,10 @@ export fn wl_pointer_motion(
                         y - (term.height - term.margins.bottom);
 
                     std.debug.assert(distance > 0);
-                    const divisor: c_int = @intFromFloat(
-                        @as(f32, @floatFromInt(distance)) *
-                            term.conf.?.scrollback.multiplier / term.scale);
+                    const divisor: c_int = @intFromFloat(@as(f32, @floatFromInt(distance)) *
+                        term.conf.?.scrollback.multiplier / term.scale);
 
-                    selection_start_scroll_timer(
-                        term,
-                        @divTrunc(400_000_000, if (divisor > 0) divisor else 1),
-                        @intFromEnum(auto_scroll_direction),
-                        seat.mouse.col);
+                    selection_start_scroll_timer(term, @divTrunc(400_000_000, if (divisor > 0) divisor else 1), @intFromEnum(auto_scroll_direction), seat.mouse.col);
                 }
 
                 if (term.selection.ongoing and
@@ -4435,16 +4289,7 @@ export fn wl_pointer_motion(
                 std.debug.assert(seat.mouse.col < term.cols);
                 std.debug.assert(seat.mouse.row < term.rows);
 
-                term_mouse_motion(
-                    term,
-                    button,
-                    seat.mouse.row,
-                    seat.mouse.col,
-                    seat.mouse.y - term.margins.top,
-                    seat.mouse.x - term.margins.left,
-                    seat.kbd.shift,
-                    seat.kbd.alt,
-                    seat.kbd.ctrl);
+                term_mouse_motion(term, button, seat.mouse.row, seat.mouse.col, seat.mouse.y - term.margins.top, seat.mouse.x - term.margins.left, seat.kbd.shift, seat.kbd.alt, seat.kbd.ctrl);
             }
         },
     }
@@ -4461,10 +4306,7 @@ fn fdm_csd_move(
     _ = fdm_del(fdm, fd);
 
     const term = seat.mouse_focus orelse {
-        log_msg(
-            LOG_CLASS_WARNING, "input", "input.zig", @intCast(@src().line),
-            "%s: CSD move timeout triggered, but seat's has no mouse focused terminal",
-            seat.name.?);
+        log_msg(LOG_CLASS_WARNING, "input", "input.zig", @intCast(@src().line), "%s: CSD move timeout triggered, but seat's has no mouse focused terminal", seat.name.?);
         return true;
     };
 
@@ -4484,10 +4326,7 @@ export fn wl_pointer_button(
     state: u32,
 ) callconv(.c) void {
     _ = time;
-    log_msg(
-        LOG_CLASS_DEBUG, "input", "input.zig", @intCast(@src().line),
-        "BUTTON: pointer=%p, serial=%u, button=%x, state=%u",
-        wl_pointer, serial, button, state);
+    log_msg(LOG_CLASS_DEBUG, "input", "input.zig", @intCast(@src().line), "BUTTON: pointer=%p, serial=%u, button=%x, state=%u", wl_pointer, serial, button, state);
 
     std.debug.assert(serial != 0);
 
@@ -4524,8 +4363,7 @@ export fn wl_pointer_button(
             since_last.tv_sec == 0 and since_last.tv_nsec <= 300 * 1000 * 1000)
         {
             seat.mouse.count += 1;
-        } else
-            seat.mouse.count = 1;
+        } else seat.mouse.count = 1;
 
         // Workaround GNOME bug: dragging the window, then stopping the drag
         // (releasing the mouse button) *without* moving the mouse, and then
@@ -4535,10 +4373,8 @@ export fn wl_pointer_button(
         var it = buttons.foreach();
         while (it.next()) |node| {
             if (node.item.button == button) {
-                log_msg(
-                    LOG_CLASS_WARNING, "input", "input.zig", @intCast(@src().line),
-                    "multiple button press events for button %d " ++
-                        "(compositor bug?)", button);
+                log_msg(LOG_CLASS_WARNING, "input", "input.zig", @intCast(@src().line), "multiple button press events for button %d " ++
+                    "(compositor bug?)", button);
                 buttons.removeNode(node);
                 break;
             }
@@ -4585,9 +4421,7 @@ export fn wl_pointer_button(
         if (!have_button) {
             // Seen on Sway with slurp: press and hold LMB, cancel slurp with
             // escape, release LMB -> stray release.
-            log_msg(
-                LOG_CLASS_WARNING, "input", "input.zig", @intCast(@src().line),
-                "stray button release event (compositor bug?)");
+            log_msg(LOG_CLASS_WARNING, "input", "input.zig", @intCast(@src().line), "stray button release event (compositor bug?)");
             return;
         }
 
@@ -4621,9 +4455,7 @@ export fn wl_pointer_button(
                         win.csd.move_timeout_fd = fd;
                         win.csd.serial = serial;
                     } else {
-                        log_errno(
-                            LOG_CLASS_ERROR, "input", "input.zig", @intCast(@src().line),
-                            "failed to configure XDG toplevel move timer FD");
+                        log_errno(LOG_CLASS_ERROR, "input", "input.zig", @intCast(@src().line), "failed to configure XDG toplevel move timer FD");
                         if (fd >= 0)
                             _ = close(fd);
                     }
@@ -4631,12 +4463,7 @@ export fn wl_pointer_button(
 
                 if (button == BTN_RIGHT and buttons.len() == 1) {
                     const info = get_csd_data(term, .title);
-                    terminal_shim_xdg_toplevel_show_window_menu(
-                        win.xdg_toplevel,
-                        seat.wl_seat,
-                        seat.pointer.serial,
-                        seat.mouse.x + info.x,
-                        seat.mouse.y + info.y);
+                    terminal_shim_xdg_toplevel_show_window_menu(win.xdg_toplevel, seat.wl_seat, seat.pointer.serial, seat.mouse.x + info.x, seat.mouse.y + info.y);
                 }
             } else if (state == WL_POINTER_BUTTON_STATE_RELEASED) {
                 if (win.csd.move_timeout_fd >= 0) {
@@ -4688,8 +4515,7 @@ export fn wl_pointer_button(
                 }
 
                 if (resize_type != XDG_TOPLEVEL_RESIZE_EDGE_NONE) {
-                    terminal_shim_xdg_toplevel_resize(
-                        term.window.?.xdg_toplevel, seat.wl_seat, serial, resize_type);
+                    terminal_shim_xdg_toplevel_resize(term.window.?.xdg_toplevel, seat.wl_seat, serial, resize_type);
                 }
             }
             return;
@@ -4751,16 +4577,7 @@ export fn wl_pointer_button(
                         !term_mouse_grabbed(term, seat) and
                         cursor_is_on_grid)
                     {
-                        term_mouse_down(
-                            term,
-                            @intCast(button),
-                            seat.mouse.row,
-                            seat.mouse.col,
-                            seat.mouse.y - term.margins.top,
-                            seat.mouse.x - term.margins.left,
-                            seat.kbd.shift,
-                            seat.kbd.alt,
-                            seat.kbd.ctrl);
+                        term_mouse_down(term, @intCast(button), seat.mouse.row, seat.mouse.col, seat.mouse.y - term.margins.top, seat.mouse.x - term.margins.left, seat.kbd.shift, seat.kbd.alt, seat.kbd.ctrl);
                     }
                 },
 
@@ -4768,16 +4585,7 @@ export fn wl_pointer_button(
                     selection_finalize(seat, term, serial);
 
                     if (send_to_client and !term_mouse_grabbed(term, seat)) {
-                        term_mouse_up(
-                            term,
-                            @intCast(button),
-                            seat.mouse.row,
-                            seat.mouse.col,
-                            seat.mouse.y - term.margins.top,
-                            seat.mouse.x - term.margins.left,
-                            seat.kbd.shift,
-                            seat.kbd.alt,
-                            seat.kbd.ctrl);
+                        term_mouse_up(term, @intCast(button), seat.mouse.row, seat.mouse.col, seat.mouse.y - term.margins.top, seat.mouse.x - term.margins.left, seat.kbd.shift, seat.kbd.alt, seat.kbd.ctrl);
                     }
                 },
 
@@ -4821,8 +4629,7 @@ export fn wl_pointer_axis(
     if (@abs(seat.mouse.aggregated[idx]) < @as(f64, @floatFromInt(term.cell_height)))
         return;
 
-    const lines: c_int = @intFromFloat(
-        seat.mouse.aggregated[idx] / @as(f64, @floatFromInt(term.cell_height)));
+    const lines: c_int = @intFromFloat(seat.mouse.aggregated[idx] / @as(f64, @floatFromInt(term.cell_height)));
     mouse_scroll(seat, lines, axis);
     seat.mouse.aggregated[idx] -=
         @as(f64, @floatFromInt(lines)) * @as(f64, @floatFromInt(term.cell_height));
@@ -4835,9 +4642,7 @@ export fn wl_pointer_axis_discrete(
     discrete: i32,
 ) callconv(.c) void {
     _ = wl_pointer;
-    log_msg(
-        LOG_CLASS_DEBUG, "input", "input.zig", @intCast(@src().line),
-        "axis_discrete: %d", discrete);
+    log_msg(LOG_CLASS_DEBUG, "input", "input.zig", @intCast(@src().line), "axis_discrete: %d", discrete);
 
     const seat: *Seat = @ptrCast(@alignCast(data orelse return));
 
@@ -4851,8 +4656,7 @@ export fn wl_pointer_axis_discrete(
         // Treat mouse wheel left/right as regular buttons
     } else {
         const term = seat.mouse_focus orelse return;
-        amount = @intFromFloat(
-            @as(f64, @floatFromInt(amount)) * mouse_scroll_multiplier(term, seat));
+        amount = @intFromFloat(@as(f64, @floatFromInt(amount)) * mouse_scroll_multiplier(term, seat));
     }
 
     mouse_scroll(seat, amount, axis);
@@ -4865,9 +4669,7 @@ export fn wl_pointer_axis_value120(
     value120: i32,
 ) callconv(.c) void {
     _ = wl_pointer;
-    log_msg(
-        LOG_CLASS_DEBUG, "input", "input.zig", @intCast(@src().line),
-        "axis_value120: %d -> %.2f", value120, @as(f32, @floatFromInt(value120)) / 120.0);
+    log_msg(LOG_CLASS_DEBUG, "input", "input.zig", @intCast(@src().line), "axis_value120: %d -> %.2f", value120, @as(f32, @floatFromInt(value120)) / 120.0);
 
     const seat: *Seat = @ptrCast(@alignCast(data orelse return));
 
@@ -4987,14 +4789,10 @@ export fn wl_touch_down(
     if (touchState(seat) != @intFromEnum(types.TouchState.idle))
         return;
 
-    const win: *types.WlWindow = @ptrCast(@alignCast(
-        wayland_shim_surface_get_user_data(surface) orelse return));
+    const win: *types.WlWindow = @ptrCast(@alignCast(wayland_shim_surface_get_user_data(surface) orelse return));
     const term: *Terminal = @ptrCast(@alignCast(win.term.?));
 
-    log_msg(
-        LOG_CLASS_DEBUG, "input", "input.zig", @intCast(@src().line),
-        "touch_down: touch=%p, x=%d, y=%d",
-        wl_touch, wlFixedToInt(surface_x), wlFixedToInt(surface_y));
+    log_msg(LOG_CLASS_DEBUG, "input", "input.zig", @intCast(@src().line), "touch_down: touch=%p, x=%d, y=%d", wl_touch, wlFixedToInt(surface_x), wlFixedToInt(surface_y));
 
     const x = scaledFixedToInt(surface_x, term.scale);
     const y = scaledFixedToInt(surface_y, term.scale);
@@ -5024,12 +4822,9 @@ export fn wl_touch_up(
     if (state <= 0 or id != seat.touch.id)
         return;
 
-    log_msg(
-        LOG_CLASS_DEBUG, "input", "input.zig", @intCast(@src().line),
-        "touch_up: touch=%p", wl_touch);
+    log_msg(LOG_CLASS_DEBUG, "input", "input.zig", @intCast(@src().line), "touch_up: touch=%p", wl_touch);
 
-    const win: *types.WlWindow = @ptrCast(@alignCast(
-        wayland_shim_surface_get_user_data(seat.touch.surface) orelse return));
+    const win: *types.WlWindow = @ptrCast(@alignCast(wayland_shim_surface_get_user_data(seat.touch.surface) orelse return));
     const term: *Terminal = @ptrCast(@alignCast(win.term.?));
 
     const old_term = seat.mouse_focus;
@@ -5041,20 +4836,12 @@ export fn wl_touch_up(
     // both the press and the release, and every terminal state clears the
     // active surface.
     if (state == @intFromEnum(types.TouchState.held)) {
-        wl_pointer_button(
-            seat, null, seat.touch.serial, time, @intCast(BTN_LEFT),
-            WL_POINTER_BUTTON_STATE_PRESSED);
-        wl_pointer_button(
-            seat, null, serial, time, @intCast(BTN_LEFT),
-            WL_POINTER_BUTTON_STATE_RELEASED);
+        wl_pointer_button(seat, null, seat.touch.serial, time, @intCast(BTN_LEFT), WL_POINTER_BUTTON_STATE_PRESSED);
+        wl_pointer_button(seat, null, serial, time, @intCast(BTN_LEFT), WL_POINTER_BUTTON_STATE_RELEASED);
     } else if (state == @intFromEnum(types.TouchState.dragging)) {
-        wl_pointer_button(
-            seat, null, serial, time, @intCast(BTN_LEFT),
-            WL_POINTER_BUTTON_STATE_RELEASED);
+        wl_pointer_button(seat, null, serial, time, @intCast(BTN_LEFT), WL_POINTER_BUTTON_STATE_RELEASED);
     } else if (state != @intFromEnum(types.TouchState.scrolling)) {
-        bug(
-            "input.zig", @intCast(@src().line), "wl_touch_up",
-            "Bad touch state: %d", state);
+        bug("input.zig", @intCast(@src().line), "wl_touch_up", "Bad touch state: %d", state);
     }
 
     term.active_surface = .none;
@@ -5078,13 +4865,9 @@ export fn wl_touch_motion(
     if (state <= 0 or id != seat.touch.id)
         return;
 
-    log_msg(
-        LOG_CLASS_DEBUG, "input", "input.zig", @intCast(@src().line),
-        "touch_motion: touch=%p, x=%d, y=%d",
-        wl_touch, wlFixedToInt(surface_x), wlFixedToInt(surface_y));
+    log_msg(LOG_CLASS_DEBUG, "input", "input.zig", @intCast(@src().line), "touch_motion: touch=%p, x=%d, y=%d", wl_touch, wlFixedToInt(surface_x), wlFixedToInt(surface_y));
 
-    const win: *types.WlWindow = @ptrCast(@alignCast(
-        wayland_shim_surface_get_user_data(seat.touch.surface) orelse return));
+    const win: *types.WlWindow = @ptrCast(@alignCast(wayland_shim_surface_get_user_data(seat.touch.surface) orelse return));
     const term: *Terminal = @ptrCast(@alignCast(win.term.?));
 
     const old_term = seat.mouse_focus;
@@ -5097,9 +4880,7 @@ export fn wl_touch_motion(
             if (touchToScroll(seat, term, surface_x, surface_y))
                 seat.touch.state = .scrolling;
         } else {
-            wl_pointer_button(
-                seat, null, seat.touch.serial, time, @intCast(BTN_LEFT),
-                WL_POINTER_BUTTON_STATE_PRESSED);
+            wl_pointer_button(seat, null, seat.touch.serial, time, @intCast(BTN_LEFT), WL_POINTER_BUTTON_STATE_PRESSED);
             seat.touch.state = .dragging;
             wl_pointer_motion(seat, null, time, surface_x, surface_y);
         }
@@ -5108,9 +4889,7 @@ export fn wl_touch_motion(
     } else if (state == @intFromEnum(types.TouchState.scrolling)) {
         _ = touchToScroll(seat, term, surface_x, surface_y);
     } else {
-        bug(
-            "input.zig", @intCast(@src().line), "wl_touch_motion",
-            "Bad touch state: %d", state);
+        bug("input.zig", @intCast(@src().line), "wl_touch_motion", "Bad touch state: %d", state);
     }
 
     seat.mouse_focus = old_term;

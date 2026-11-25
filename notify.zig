@@ -20,14 +20,7 @@ extern fn spawn_expand_template(
 const O_CLOEXEC: c_int = 0x80000;
 const LOG_CLASS_WARNING: c_int = 2;
 
-extern fn log_msg(
-    class: c_int,
-    module: [*:0]const u8,
-    file: [*:0]const u8,
-    lineno: c_int,
-    fmt: [*:0]const u8,
-    ...
-) callconv(.c) void;
+extern fn log_msg(class: c_int, module: [*:0]const u8, file: [*:0]const u8, lineno: c_int, fmt: [*:0]const u8, ...) callconv(.c) void;
 
 fn freePtr(p: anytype) void {
     if (p) |v| free(@ptrCast(@constCast(v)));
@@ -422,8 +415,12 @@ export fn notify_close(term: *types.Terminal, id: [*:0]const u8) callconv(.c) vo
         if (term.conf.?.desktop_notifications.close.argv.args == null) {
             if (notif.pid == 0) {
                 log_msg(
-                    LOG_CLASS_WARNING, "notify", "notify.zig", @intCast(@src().line),
-                    "cannot close notification \"%s\": no helper process running", id,
+                    LOG_CLASS_WARNING,
+                    "notify",
+                    "notify.zig",
+                    @intCast(@src().line),
+                    "cannot close notification \"%s\": no helper process running",
+                    id,
                 );
             } else {
                 _ = kill(notif.pid, SIGINT);
@@ -431,8 +428,12 @@ export fn notify_close(term: *types.Terminal, id: [*:0]const u8) callconv(.c) vo
         } else {
             if (notif.external_id == 0) {
                 log_msg(
-                    LOG_CLASS_WARNING, "notify", "notify.zig", @intCast(@src().line),
-                    "cannot close notification \"%s\": no daemon assigned notification ID available", id,
+                    LOG_CLASS_WARNING,
+                    "notify",
+                    "notify.zig",
+                    @intCast(@src().line),
+                    "cannot close notification \"%s\": no daemon assigned notification ID available",
+                    id,
                 );
                 return;
             }
@@ -461,8 +462,12 @@ export fn notify_close(term: *types.Terminal, id: [*:0]const u8) callconv(.c) vo
     }
 
     log_msg(
-        LOG_CLASS_WARNING, "notify", "notify.zig", @intCast(@src().line),
-        "cannot close notification \"%s\": no such notification", id,
+        LOG_CLASS_WARNING,
+        "notify",
+        "notify.zig",
+        @intCast(@src().line),
+        "cannot close notification \"%s\": no such notification",
+        id,
     );
 }
 
@@ -522,7 +527,10 @@ export fn notif_done(_reaper: ?*anyopaque, pid: c_int, _status: c_int, data: ?*a
 
     const found_term = term orelse {
         log_msg(
-            LOG_CLASS_WARNING, "notify", "notify.zig", @intCast(@src().line),
+            LOG_CLASS_WARNING,
+            "notify",
+            "notify.zig",
+            @intCast(@src().line),
             "notification closed, but the associated terminal instance is already gone",
         );
         return;
@@ -540,7 +548,10 @@ export fn notif_done(_reaper: ?*anyopaque, pid: c_int, _status: c_int, data: ?*a
                 if (window) |w| {
                     if (!wayl_win_set_urgent(w)) {
                         log_msg(
-                            LOG_CLASS_WARNING, "notify", "notify.zig", @intCast(@src().line),
+                            LOG_CLASS_WARNING,
+                            "notify",
+                            "notify.zig",
+                            @intCast(@src().line),
                             "cannot focus window: no activation token available",
                         );
                     }
@@ -800,7 +811,10 @@ export fn notify_notify(term: *types.Terminal, notif_in: *types.Notification) ca
     if (track) {
         if (notify_pipe2(&stdout_fds, O_CLOEXEC | O_NONBLOCK) < 0) {
             log_msg(
-                LOG_CLASS_WARNING, "notify", "notify.zig", @intCast(@src().line),
+                LOG_CLASS_WARNING,
+                "notify",
+                "notify.zig",
+                @intCast(@src().line),
                 "failed to create stdout pipe",
             );
             track = false;

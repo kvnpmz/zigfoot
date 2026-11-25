@@ -34,14 +34,7 @@ extern fn ambstoc32(s: [*:0]const u8) callconv(.c) ?[*]u32;
 
 // config.c
 extern fn tokenize_cmdline(cmdline: [*:0]const u8, argv: *?[*:null]?[*:0]u8) callconv(.c) bool;
-extern fn log_msg(
-    class: c_int,
-    module: [*:0]const u8,
-    file: [*:0]const u8,
-    lineno: c_int,
-    fmt: [*:0]const u8,
-    ...
-) callconv(.c) void;
+extern fn log_msg(class: c_int, module: [*:0]const u8, file: [*:0]const u8, lineno: c_int, fmt: [*:0]const u8, ...) callconv(.c) void;
 extern fn vasprintf(strp: *?[*:0]u8, fmt: [*:0]const u8, ap: *std.builtin.VaList) callconv(.c) c_int;
 extern fn strerror(errnum: c_int) callconv(.c) [*:0]u8;
 extern fn user_notification_add_owned(
@@ -49,13 +42,7 @@ extern fn user_notification_add_owned(
     kind: c_int,
     text: [*:0]u8,
 ) callconv(.c) void;
-extern fn bug(
-    file: [*:0]const u8,
-    line: c_int,
-    func: [*:0]const u8,
-    fmt: [*:0]const u8,
-    ...
-) callconv(.c) noreturn;
+extern fn bug(file: [*:0]const u8, line: c_int, func: [*:0]const u8, fmt: [*:0]const u8, ...) callconv(.c) noreturn;
 
 // ── the config.c logger tail: ported to Zig ───────────────────────
 //
@@ -108,14 +95,7 @@ fn logAndNotifyStr(
     user_notification_add_owned(&conf.notifications, kind, owned);
 }
 
-export fn log_and_notify(
-    conf: *types.Config,
-    class: c_int,
-    file: [*:0]const u8,
-    lineno: c_int,
-    fmt: [*:0]const u8,
-    ...
-) callconv(.c) void {
+export fn log_and_notify(conf: *types.Config, class: c_int, file: [*:0]const u8, lineno: c_int, fmt: [*:0]const u8, ...) callconv(.c) void {
     var va = @cVaStart();
     const msg = vformat(fmt, &va);
     defer std.c.free(@ptrCast(msg.ptr));
@@ -147,13 +127,7 @@ fn logAndNotifyErrnoVa(
     logAndNotifyStr(conf, LOG_CLASS_ERROR, file, lineno, msg);
 }
 
-export fn log_and_notify_errno(
-    conf: *types.Config,
-    file: [*:0]const u8,
-    lineno: c_int,
-    fmt: [*:0]const u8,
-    ...
-) callconv(.c) void {
+export fn log_and_notify_errno(conf: *types.Config, file: [*:0]const u8, lineno: c_int, fmt: [*:0]const u8, ...) callconv(.c) void {
     var va = @cVaStart();
     defer @cVaEnd(&va);
 
@@ -198,14 +172,7 @@ fn logContextualStr(
     logAndNotifyStr(ctx.conf.?, class, file, lineno, line);
 }
 
-export fn log_contextual(
-    ctx: *Context,
-    class: c_int,
-    file: [*:0]const u8,
-    lineno: c_int,
-    fmt: [*:0]const u8,
-    ...
-) callconv(.c) void {
+export fn log_contextual(ctx: *Context, class: c_int, file: [*:0]const u8, lineno: c_int, fmt: [*:0]const u8, ...) callconv(.c) void {
     var va = @cVaStart();
     const msg = vformat(fmt, &va);
     defer std.c.free(@ptrCast(msg.ptr));
@@ -214,13 +181,7 @@ export fn log_contextual(
     logContextualStr(ctx, class, file, lineno, msg);
 }
 
-export fn log_contextual_errno(
-    ctx: *Context,
-    file: [*:0]const u8,
-    lineno: c_int,
-    fmt: [*:0]const u8,
-    ...
-) callconv(.c) void {
+export fn log_contextual_errno(ctx: *Context, file: [*:0]const u8, lineno: c_int, fmt: [*:0]const u8, ...) callconv(.c) void {
     var va = @cVaStart();
     const formatted = vformat(fmt, &va);
     defer std.c.free(@ptrCast(formatted.ptr));
@@ -385,7 +346,7 @@ export fn value_to_str(ctx: *Context, res: *?[*:0]u8) callconv(.c) bool {
     // quote character (or a backslash) may be escaped inside it.
     if (len > 0 and
         ((copy[0] == '"' and copy[len - 1] == '"') or
-        (copy[0] == '\'' and copy[len - 1] == '\'')))
+            (copy[0] == '\'' and copy[len - 1] == '\'')))
     {
         const quote = copy[0];
 
@@ -624,7 +585,6 @@ export fn value_to_spawn_template(
     template.argv.args = argv;
     return true;
 }
-
 
 // ── section parsers (C2b) ─────────────────────────────────────────
 //
@@ -1350,7 +1310,6 @@ const default_color_table = [256]u32{
     0xa8a8a8, 0xb2b2b2, 0xbcbcbc, 0xc6c6c6, 0xd0d0d0, 0xdadada, 0xe4e4e4, 0xeeeeee,
 };
 
-
 /// VT330/VT340 default colour map (sixel).
 const default_sixel_colors = [16]u32{
     0xff000000, 0xff3333cc, 0xffcc2121, 0xff33cc33,
@@ -1358,7 +1317,6 @@ const default_sixel_colors = [16]u32{
     0xff424242, 0xff545499, 0xff994242, 0xff549954,
     0xff995499, 0xff549999, 0xff999954, 0xffcccccc,
 };
-
 
 const default_url_regex_string: [:0]const u8 =
     "(" ++
@@ -1390,7 +1348,6 @@ const default_url_regex_string: [:0]const u8 =
     "'[]\\[\\(\\)0-9a-zA-Z:/?#@!$&*+,;=.~_%^\\-]+'" ++
     ")" ++
     ")";
-
 
 // ── default bindings and server socket path (C2l) ────────────────
 
@@ -1775,7 +1732,6 @@ export fn config_action_map_name(kind: c_int, action: c_int) callconv(.c) ?[*:0]
         return null;
     return map[@intCast(action)];
 }
-
 
 // ── key-binding values (C2j) ──────────────────────────────────────
 
@@ -2430,7 +2386,6 @@ extern fn getenv(name: [*:0]const u8) callconv(.c) ?[*:0]const u8;
 extern fn fopen(path: [*:0]const u8, mode: [*:0]const u8) callconv(.c) ?*anyopaque;
 extern fn fclose(f: *anyopaque) callconv(.c) c_int;
 
-
 export fn parse_color_theme(ctx: *Context, theme: *types.ColorTheme) callconv(.c) bool {
     const key = ctx.key orelse return true;
     const k = std.mem.span(key);
@@ -2468,7 +2423,7 @@ export fn parse_color_theme(ctx: *Context, theme: *types.ColorTheme) callconv(.c
         return true;
     } else if (std.mem.startsWith(u8, k, "sixel") and
         ((key_len == 6 and last_digit < 10) or
-        (key_len == 7 and k[5] == '1' and last_digit < 6)))
+            (key_len == 7 and k[5] == '1' and last_digit < 6)))
     {
         const idx: usize = if (key_len == 6) last_digit else 10 + last_digit;
         return value_to_color(ctx, &theme.sixel[idx], false);
@@ -2695,8 +2650,8 @@ export fn parse_section_tweak(ctx: *Context) callconv(.c) bool {
         return value_to_enum(
             ctx,
             valueMap(&.{
-                "none",     "nearest",  "bilinear", "cubic",
-                "lanczos3", "impulse",  "box",      "linear",
+                "none",     "nearest",  "bilinear",           "cubic",
+                "lanczos3", "impulse",  "box",                "linear",
                 "gaussian", "lanczos2", "lanczos3-stretched",
             }),
             @ptrCast(&conf.tweak.fcft_filter),
@@ -3012,10 +2967,7 @@ export fn parse_section_main(ctx: *Context) callconv(.c) bool {
         eq(key, "font-bold-italic"))
     {
         const idx: usize =
-            if (eq(key, "font")) 0
-            else if (eq(key, "font-bold")) 1
-            else if (eq(key, "font-italic")) 2
-            else 3;
+            if (eq(key, "font")) 0 else if (eq(key, "font-bold")) 1 else if (eq(key, "font-italic")) 2 else 3;
 
         const new_list = value_to_fonts(ctx);
         if (new_list.arr == null)
@@ -3131,7 +3083,6 @@ const SectionInfo = struct {
     name: [:0]const u8,
     allow_colon_suffix: bool = false,
 };
-
 
 const SECTION_MAIN = 0;
 const SECTION_COUNT = 20;
@@ -3464,7 +3415,6 @@ export fn parse_config_file(
 
 const tll = @import("tll.zig");
 const Overrides = tll.Tll(?[*:0]u8);
-
 
 const SECTION_KEY_BINDINGS = 12;
 const SECTION_SEARCH_BINDINGS = 13;
@@ -3936,7 +3886,6 @@ fn keyBindingListClone(
     dst: *types.ConfigKeyBindingList,
     src: *const types.ConfigKeyBindingList,
 ) void {
-
     var last_master_argv: ?*types.Argv = null;
     var last_master_text_data: ?[*]u8 = null;
     var last_master_text_len: usize = 0;
@@ -4272,12 +4221,7 @@ extern fn fcft_rasterize_char_utf32(
     subpixel: c_int,
 ) callconv(.c) ?*const anyopaque;
 extern fn fcft_destroy(font: *anyopaque) callconv(.c) void;
-extern fn user_notification_add_fmt(
-    notifications: *types.UserNotifications,
-    kind: types.UserNotificationKind,
-    fmt: [*:0]const u8,
-    ...
-) callconv(.c) void;
+extern fn user_notification_add_fmt(notifications: *types.UserNotifications, kind: types.UserNotificationKind, fmt: [*:0]const u8, ...) callconv(.c) void;
 
 // struct fcft_font / struct fcft_glyph are fcft's business; the shims hand
 // over the two fields this file needs.
@@ -4290,14 +4234,7 @@ const FC_PIXEL_SIZE: [*:0]const u8 = "pixelsize";
 const FCFT_SUBPIXEL_NONE: c_int = 0;
 const USER_NOTIFICATION_WARNING: types.UserNotificationKind = .warning;
 
-extern fn log_errno(
-    class: c_int,
-    module: [*:0]const u8,
-    file: [*:0]const u8,
-    lineno: c_int,
-    fmt: [*:0]const u8,
-    ...
-) callconv(.c) void;
+extern fn log_errno(class: c_int, module: [*:0]const u8, file: [*:0]const u8, lineno: c_int, fmt: [*:0]const u8, ...) callconv(.c) void;
 
 export fn config_font_parse(
     pattern: [*:0]const u8,

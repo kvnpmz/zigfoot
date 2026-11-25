@@ -289,9 +289,9 @@ fn decrqssUnhook(term: *types.Terminal) void {
         appendSgrAttrN(&reply, &len, "0");
 
         const a = &term.vt.attrs;
-        if (a.bold)        appendSgrAttrN(&reply, &len, "1");
-        if (a.dim)         appendSgrAttrN(&reply, &len, "2");
-        if (a.italic)      appendSgrAttrN(&reply, &len, "3");
+        if (a.bold) appendSgrAttrN(&reply, &len, "1");
+        if (a.dim) appendSgrAttrN(&reply, &len, "2");
+        if (a.italic) appendSgrAttrN(&reply, &len, "3");
         if (a.underline) {
             if (term.vt.underline.style != .none and
                 term.vt.underline.style != .single)
@@ -305,10 +305,10 @@ fn decrqssUnhook(term: *types.Terminal) void {
                 appendSgrAttrN(&reply, &len, "4");
             }
         }
-        if (a.blink)       appendSgrAttrN(&reply, &len, "5");
-        if (a.reverse)     appendSgrAttrN(&reply, &len, "7");
-        if (a.conceal)     appendSgrAttrN(&reply, &len, "8");
-        if (a.strikethrough)      appendSgrAttrN(&reply, &len, "9");
+        if (a.blink) appendSgrAttrN(&reply, &len, "5");
+        if (a.reverse) appendSgrAttrN(&reply, &len, "7");
+        if (a.conceal) appendSgrAttrN(&reply, &len, "8");
+        if (a.strikethrough) appendSgrAttrN(&reply, &len, "9");
 
         // fg
         switch (@as(types.ColorSource, @enumFromInt(a.fg_src))) {

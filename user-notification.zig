@@ -21,8 +21,7 @@ export fn user_notification_add_owned(
     kind: c_int,
     text: [*:0]u8,
 ) callconv(.c) void {
-    const node: *types.UserNotificationNode = @ptrCast(@alignCast(
-        mallocOrAbort(@sizeOf(types.UserNotificationNode))));
+    const node: *types.UserNotificationNode = @ptrCast(@alignCast(mallocOrAbort(@sizeOf(types.UserNotificationNode))));
 
     const tail: ?*types.UserNotificationNode = if (notifications.tail) |t|
         @ptrCast(@alignCast(t))
@@ -40,12 +39,7 @@ export fn user_notification_add_owned(
     notifications.length += 1;
 }
 
-export fn user_notification_add_fmt(
-    notifications: *types.UserNotifications,
-    kind: c_int,
-    fmt: [*:0]const u8,
-    ...
-) callconv(.c) void {
+export fn user_notification_add_fmt(notifications: *types.UserNotifications, kind: c_int, fmt: [*:0]const u8, ...) callconv(.c) void {
     var va = @cVaStart();
     var text: ?[*:0]u8 = null;
     const n = vasprintf(&text, fmt, &va);

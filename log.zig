@@ -205,14 +205,7 @@ export fn log_msg_va(
     @cVaEnd(&va2);
 }
 
-export fn log_msg(
-    class: c_int,
-    module: [*:0]const u8,
-    file: [*:0]const u8,
-    lineno: c_int,
-    fmt: [*:0]const u8,
-    ...
-) callconv(.c) void {
+export fn log_msg(class: c_int, module: [*:0]const u8, file: [*:0]const u8, lineno: c_int, fmt: [*:0]const u8, ...) callconv(.c) void {
     var va = @cVaStart();
     defer @cVaEnd(&va);
     log_msg_va(class, module, file, lineno, fmt, &va);
@@ -229,14 +222,7 @@ export fn log_errno_va(
     log_errno_provided_va(class, module, file, lineno, std.c._errno().*, fmt, va);
 }
 
-export fn log_errno(
-    class: c_int,
-    module: [*:0]const u8,
-    file: [*:0]const u8,
-    lineno: c_int,
-    fmt: [*:0]const u8,
-    ...
-) callconv(.c) void {
+export fn log_errno(class: c_int, module: [*:0]const u8, file: [*:0]const u8, lineno: c_int, fmt: [*:0]const u8, ...) callconv(.c) void {
     var va = @cVaStart();
     defer @cVaEnd(&va);
     log_errno_va(class, module, file, lineno, fmt, &va);
@@ -259,15 +245,7 @@ export fn log_errno_provided_va(
     @cVaEnd(&va2);
 }
 
-export fn log_errno_provided(
-    class: c_int,
-    module: [*:0]const u8,
-    file: [*:0]const u8,
-    lineno: c_int,
-    errno_copy: c_int,
-    fmt: [*:0]const u8,
-    ...
-) callconv(.c) void {
+export fn log_errno_provided(class: c_int, module: [*:0]const u8, file: [*:0]const u8, lineno: c_int, errno_copy: c_int, fmt: [*:0]const u8, ...) callconv(.c) void {
     var va = @cVaStart();
     defer @cVaEnd(&va);
     log_errno_provided_va(class, module, file, lineno, errno_copy, fmt, &va);

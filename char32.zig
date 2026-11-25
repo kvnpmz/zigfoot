@@ -195,7 +195,6 @@ export fn c32cat(dst: [*]u32, src: [*]const u32) callconv(.c) [*]u32 {
     return c32ncat(dst, src, std.math.maxInt(usize));
 }
 
-
 /// `wcscpy()`.
 export fn c32cpy(dst: [*]u32, src: [*]const u32) callconv(.c) [*]u32 {
     var i: usize = 0;
@@ -223,4 +222,3 @@ export fn toc32upper(c: u32) callconv(.c) u32 {
 export fn toc32lower(c: u32) callconv(.c) u32 {
     return @bitCast(towlower(@bitCast(c)));
 }
-

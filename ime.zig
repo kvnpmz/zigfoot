@@ -29,8 +29,7 @@ extern fn ambstoc32(src: [*c]const u8) callconv(.c) ?[*]u32;
 extern fn c32width(c: u32) callconv(.c) c_int;
 extern fn mblen(s: [*:0]const u8, n: usize) callconv(.c) c_int;
 
-extern fn term_ime_set_cursor_rect(
-    term: *Terminal, x: c_int, y: c_int, width: c_int, height: c_int) callconv(.c) void;
+extern fn term_ime_set_cursor_rect(term: *Terminal, x: c_int, y: c_int, width: c_int, height: c_int) callconv(.c) void;
 extern fn term_to_slave(term: *Terminal, data: ?*const anyopaque, len: usize) callconv(.c) bool;
 extern fn term_reset_view(term: *Terminal) callconv(.c) void;
 extern fn selection_cancel(term: *Terminal) callconv(.c) void;
@@ -39,14 +38,7 @@ extern fn render_refresh_search(term: *Terminal) callconv(.c) void;
 extern fn search_add_chars(term: *Terminal, src: [*c]const u8, count: usize) callconv(.c) void;
 extern fn search_find_next(term: *Terminal, direction: types.SearchDirection) callconv(.c) void;
 extern fn wayland_shim_surface_get_user_data(surf: ?*anyopaque) callconv(.c) ?*anyopaque;
-extern fn log_msg(
-    class: c_int,
-    module: [*:0]const u8,
-    file: [*:0]const u8,
-    lineno: c_int,
-    fmt: [*:0]const u8,
-    ...
-) callconv(.c) void;
+extern fn log_msg(class: c_int, module: [*:0]const u8, file: [*:0]const u8, lineno: c_int, fmt: [*:0]const u8, ...) callconv(.c) void;
 
 const LOG_CLASS_WARNING: c_int = 2;
 
@@ -54,10 +46,8 @@ const LOG_CLASS_WARNING: c_int = 2;
 extern fn terminal_shim_text_input_enable(ti: ?*anyopaque) callconv(.c) void;
 extern fn terminal_shim_text_input_disable(ti: ?*anyopaque) callconv(.c) void;
 extern fn terminal_shim_text_input_commit(ti: ?*anyopaque) callconv(.c) void;
-extern fn terminal_shim_text_input_set_content_type(
-    ti: ?*anyopaque, hint: u32, purpose: u32) callconv(.c) void;
-extern fn terminal_shim_text_input_set_cursor_rectangle(
-    ti: ?*anyopaque, x: i32, y: i32, width: i32, height: i32) callconv(.c) void;
+extern fn terminal_shim_text_input_set_content_type(ti: ?*anyopaque, hint: u32, purpose: u32) callconv(.c) void;
+extern fn terminal_shim_text_input_set_cursor_rectangle(ti: ?*anyopaque, x: i32, y: i32, width: i32, height: i32) callconv(.c) void;
 
 /// C's `x / term->scale` (float divide, truncate to int).
 fn scaleInt(v: c_int, scale: f32) i32 {
@@ -109,22 +99,17 @@ export fn ime_enter(
 
     if (surface == null) {
         // Seen on Hyprland
-        log_msg(
-            LOG_CLASS_WARNING, "ime", "ime.zig", @intCast(@src().line),
-            "compositor sent ime_enter event with a NULL surface");
+        log_msg(LOG_CLASS_WARNING, "ime", "ime.zig", @intCast(@src().line), "compositor sent ime_enter event with a NULL surface");
         return;
     }
 
     const seat: *Seat = @ptrCast(@alignCast(data orelse return));
-    const win: *types.WlWindow = @ptrCast(@alignCast(
-        wayland_shim_surface_get_user_data(surface) orelse return));
+    const win: *types.WlWindow = @ptrCast(@alignCast(wayland_shim_surface_get_user_data(surface) orelse return));
     const term: *Terminal = @ptrCast(@alignCast(win.term.?));
 
     if (seat.kbd_focus != term) {
-        log_msg(
-            LOG_CLASS_WARNING, "ime", "ime.zig", @intCast(@src().line),
-            "compositor sent ime::enter() event before the " ++
-                "corresponding keyboard_enter() event");
+        log_msg(LOG_CLASS_WARNING, "ime", "ime.zig", @intCast(@src().line), "compositor sent ime::enter() event before the " ++
+            "corresponding keyboard_enter() event");
     }
 
     // The main grid is the *only* input-receiving surface we have
@@ -133,12 +118,7 @@ export fn ime_enter(
     const grid = term.grid orelse return;
     const cursor = &grid.cursor.point;
 
-    term_ime_set_cursor_rect(
-        term,
-        term.margins.left + cursor.col * term.cell_width,
-        term.margins.top + cursor.row * term.cell_height,
-        term.cell_width,
-        term.cell_height);
+    term_ime_set_cursor_rect(term, term.margins.left + cursor.col * term.cell_width, term.margins.top + cursor.row * term.cell_height, term.cell_width, term.cell_height);
 
     ime_enable(seat);
 }
@@ -230,10 +210,8 @@ export fn ime_done(
         return;
 
     if (term == null and !done_have_warned) {
-        log_msg(
-            LOG_CLASS_WARNING, "ime", "ime.zig", @intCast(@src().line),
-            "%s: text-input::done() received on seat that isn't " ++
-                "focusing a terminal window", seat.name.?);
+        log_msg(LOG_CLASS_WARNING, "ime", "ime.zig", @intCast(@src().line), "%s: text-input::done() received on seat that isn't " ++
+            "focusing a terminal window", seat.name.?);
         done_have_warned = true;
     }
 
@@ -460,12 +438,7 @@ fn imeSendCursorRect(seat: *Seat) void {
         return;
     }
 
-    terminal_shim_text_input_set_cursor_rectangle(
-        seat.wl_text_input,
-        scaleInt(pending.x, term.scale),
-        scaleInt(pending.y, term.scale),
-        scaleInt(pending.width, term.scale),
-        scaleInt(pending.height, term.scale));
+    terminal_shim_text_input_set_cursor_rectangle(seat.wl_text_input, scaleInt(pending.x, term.scale), scaleInt(pending.y, term.scale), scaleInt(pending.width, term.scale), scaleInt(pending.height, term.scale));
 
     terminal_shim_text_input_commit(seat.wl_text_input);
     seat.ime.serial += 1;
@@ -486,18 +459,10 @@ export fn ime_enable(seat: *Seat) callconv(.c) void {
     ime_reset_preedit(seat);
 
     terminal_shim_text_input_enable(seat.wl_text_input);
-    terminal_shim_text_input_set_content_type(
-        seat.wl_text_input,
-        ZWP_TEXT_INPUT_V3_CONTENT_HINT_NONE,
-        ZWP_TEXT_INPUT_V3_CONTENT_PURPOSE_TERMINAL);
+    terminal_shim_text_input_set_content_type(seat.wl_text_input, ZWP_TEXT_INPUT_V3_CONTENT_HINT_NONE, ZWP_TEXT_INPUT_V3_CONTENT_PURPOSE_TERMINAL);
 
     const pending = seat.ime.cursor_rect.pending;
-    terminal_shim_text_input_set_cursor_rectangle(
-        seat.wl_text_input,
-        scaleInt(pending.x, term.scale),
-        scaleInt(pending.y, term.scale),
-        scaleInt(pending.width, term.scale),
-        scaleInt(pending.height, term.scale));
+    terminal_shim_text_input_set_cursor_rectangle(seat.wl_text_input, scaleInt(pending.x, term.scale), scaleInt(pending.y, term.scale), scaleInt(pending.width, term.scale), scaleInt(pending.height, term.scale));
 
     seat.ime.cursor_rect.sent = pending;
 

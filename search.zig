@@ -10,29 +10,9 @@ const types = @import("terminal_types.zig");
 const LOG_CLASS_ERROR: c_int = 1;
 const LOG_CLASS_DEBUG: c_int = 4;
 
-extern fn log_msg(
-    class: c_int,
-    module: [*:0]const u8,
-    file: [*:0]const u8,
-    lineno: c_int,
-    fmt: [*:0]const u8,
-    ...
-) callconv(.c) void;
-extern fn log_errno(
-    class: c_int,
-    module: [*:0]const u8,
-    file: [*:0]const u8,
-    lineno: c_int,
-    fmt: [*:0]const u8,
-    ...
-) callconv(.c) void;
-extern fn bug(
-    file: [*:0]const u8,
-    line: c_int,
-    func: [*:0]const u8,
-    fmt: [*:0]const u8,
-    ...
-) callconv(.c) noreturn;
+extern fn log_msg(class: c_int, module: [*:0]const u8, file: [*:0]const u8, lineno: c_int, fmt: [*:0]const u8, ...) callconv(.c) void;
+extern fn log_errno(class: c_int, module: [*:0]const u8, file: [*:0]const u8, lineno: c_int, fmt: [*:0]const u8, ...) callconv(.c) void;
+extern fn bug(file: [*:0]const u8, line: c_int, func: [*:0]const u8, fmt: [*:0]const u8, ...) callconv(.c) noreturn;
 
 extern fn realloc(ptr: ?*anyopaque, size: usize) callconv(.c) ?*anyopaque;
 extern fn xmalloc(size: usize) callconv(.c) ?*anyopaque;

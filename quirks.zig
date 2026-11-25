@@ -20,14 +20,7 @@ extern fn getenv(name: [*:0]const u8) ?[*:0]u8;
 extern fn quirk_shim_subsurface_set_desync(sub: *anyopaque) void;
 extern fn quirk_shim_subsurface_set_sync(sub: *anyopaque) void;
 
-extern fn log_msg(
-    class: c_int,
-    module: [*:0]const u8,
-    file: [*:0]const u8,
-    lineno: c_int,
-    fmt: [*:0]const u8,
-    ...
-) void;
+extern fn log_msg(class: c_int, module: [*:0]const u8, file: [*:0]const u8, lineno: c_int, fmt: [*:0]const u8, ...) void;
 
 var is_weston_state: bool = false;
 var is_weston_initialized: bool = false;

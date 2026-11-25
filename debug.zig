@@ -9,14 +9,7 @@ const build_options = @import("build_options");
 
 const LOG_CLASS_ERROR: c_int = 1;
 
-extern fn log_msg(
-    class: c_int,
-    module: [*:0]const u8,
-    file: [*:0]const u8,
-    lineno: c_int,
-    fmt: [*:0]const u8,
-    ...
-) void;
+extern fn log_msg(class: c_int, module: [*:0]const u8, file: [*:0]const u8, lineno: c_int, fmt: [*:0]const u8, ...) void;
 extern fn vsnprintf(
     str: [*]u8,
     size: usize,
@@ -48,13 +41,7 @@ export fn fatal_error(
     std.c.abort();
 }
 
-export fn bug(
-    file: [*:0]const u8,
-    line: c_int,
-    func: [*:0]const u8,
-    fmt: [*:0]const u8,
-    ...
-) callconv(.c) noreturn {
+export fn bug(file: [*:0]const u8, line: c_int, func: [*:0]const u8, fmt: [*:0]const u8, ...) callconv(.c) noreturn {
     var ap = @cVaStart();
 
     var buf: [4096]u8 = undefined;

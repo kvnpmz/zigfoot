@@ -79,8 +79,7 @@ export fn box_change_buffer_format(buf: *types.BoxBuf, new_format: u32) callconv
     _ = bppOf(new_format);
 
     const stride = strideForFormatAndWidth(new_format, buf.width);
-    const new_data: [*]u8 = @ptrCast(@alignCast(
-        std.c.calloc(@intCast(buf.height * stride), 1) orelse @panic("out of memory")));
+    const new_data: [*]u8 = @ptrCast(@alignCast(std.c.calloc(@intCast(buf.height * stride), 1) orelse @panic("out of memory")));
 
     const new_pix = pixman_image_create_bits_no_clear(
         @intCast(new_format),
@@ -269,7 +268,6 @@ fn vlineMiddleUpMixed(buf: *types.BoxBuf, vthick: c_int, hthick: c_int) void {
 fn vlineMiddleDownMixed(buf: *types.BoxBuf, vthick: c_int, hthick: c_int) void {
     box_vline_middle_down(buf, vthick, hthick);
 }
-
 
 /// C: draw_box_drawings_dash_horizontal()
 export fn draw_box_drawings_dash_horizontal(
@@ -1397,14 +1395,7 @@ extern fn pixman_image_fill_rectangles(
     rects: [*]const PixmanRectangle16,
 ) c_int;
 
-extern fn log_msg(
-    class: c_int,
-    module: [*:0]const u8,
-    file: [*:0]const u8,
-    lineno: c_int,
-    fmt: [*:0]const u8,
-    ...
-) void;
+extern fn log_msg(class: c_int, module: [*:0]const u8, file: [*:0]const u8, lineno: c_int, fmt: [*:0]const u8, ...) void;
 
 fn setA1Bit(data: [*]u8, ofs: usize, bit_no: usize) void {
     if (comptime builtin.cpu.arch.endian() == .little) {
@@ -1584,14 +1575,14 @@ export fn draw_braille(buf: *types.BoxBuf, wc: u32) callconv(.c) void {
         y_px_left,
     );
 
-        // First, try hard to ensure the DOT width is non-zero
+    // First, try hard to ensure the DOT width is non-zero
     if (x_px_left >= 2 and y_px_left >= 4 and w == 0) {
         w += 1;
         x_px_left -= 2;
         y_px_left -= 4;
     }
 
-        // Second, prefer a non-zero margin
+    // Second, prefer a non-zero margin
     if (x_px_left >= 2 and x_margin == 0) {
         x_margin = 1;
         x_px_left -= 2;
@@ -1601,7 +1592,7 @@ export fn draw_braille(buf: *types.BoxBuf, wc: u32) callconv(.c) void {
         y_px_left -= 2;
     }
 
-        // Third, increase spacing
+    // Third, increase spacing
     if (x_px_left >= 1) {
         x_spacing += 1;
         x_px_left -= 1;
@@ -1611,7 +1602,7 @@ export fn draw_braille(buf: *types.BoxBuf, wc: u32) callconv(.c) void {
         y_px_left -= 3;
     }
 
-        // Fourth, margins ("spacing", but on the sides)
+    // Fourth, margins ("spacing", but on the sides)
     if (x_px_left >= 2) {
         x_margin += 1;
         x_px_left -= 2;
@@ -1621,7 +1612,7 @@ export fn draw_braille(buf: *types.BoxBuf, wc: u32) callconv(.c) void {
         y_px_left -= 2;
     }
 
-        // Last - increase dot width
+    // Last - increase dot width
     if (x_px_left >= 2 and y_px_left >= 4) {
         w += 1;
         x_px_left -= 2;
@@ -1663,7 +1654,7 @@ export fn draw_braille(buf: *types.BoxBuf, wc: u32) callconv(.c) void {
     std.debug.assert(wc <= 0x28ff);
     const sym: u8 = @intCast(wc - 0x2800);
 
-        // Left side
+    // Left side
     if (sym & 1 != 0)
         rect(buf, x[0], y[0], x[0] + w, y[0] + w);
     if (sym & 2 != 0)
@@ -1671,7 +1662,7 @@ export fn draw_braille(buf: *types.BoxBuf, wc: u32) callconv(.c) void {
     if (sym & 4 != 0)
         rect(buf, x[0], y[2], x[0] + w, y[2] + w);
 
-        // Right side
+    // Right side
     if (sym & 8 != 0)
         rect(buf, x[1], y[0], x[1] + w, y[0] + w);
     if (sym & 16 != 0)
@@ -1679,7 +1670,7 @@ export fn draw_braille(buf: *types.BoxBuf, wc: u32) callconv(.c) void {
     if (sym & 32 != 0)
         rect(buf, x[1], y[2], x[1] + w, y[2] + w);
 
-        // 8-dot patterns
+    // 8-dot patterns
     if (sym & 64 != 0)
         rect(buf, x[0], y[3], x[0] + w, y[3] + w);
     if (sym & 128 != 0)
@@ -3252,8 +3243,7 @@ export fn box_drawing(term: *const types.Terminal, wc: u32) callconv(.c) *types.
     const fmt: u32 = if (terminal_shim_fcft_font_antialias(@ptrCast(font))) PIXMAN_a8 else PIXMAN_a1;
 
     const stride = strideForFormatAndWidth(fmt, width);
-    const data: [*]u8 = @ptrCast(@alignCast(
-        std.c.calloc(@intCast(height * stride), 1) orelse @panic("out of memory")));
+    const data: [*]u8 = @ptrCast(@alignCast(std.c.calloc(@intCast(height * stride), 1) orelse @panic("out of memory")));
 
     const pix = pixman_image_create_bits_no_clear(
         @intCast(fmt),
@@ -3352,8 +3342,7 @@ export fn box_drawing(term: *const types.Terminal, wc: u32) callconv(.c) *types.
 
     drawGlyph(&buf, wc);
 
-    const glyph: *types.FcftGlyph = @ptrCast(@alignCast(
-        std.c.malloc(@sizeOf(types.FcftGlyph)) orelse @panic("out of memory")));
+    const glyph: *types.FcftGlyph = @ptrCast(@alignCast(std.c.malloc(@sizeOf(types.FcftGlyph)) orelse @panic("out of memory")));
     glyph.* = .{
         .cp = wc,
         .cols = 1,

@@ -68,21 +68,8 @@ extern fn xkb_keysym_get_name(sym: u32, buffer: [*]u8, size: usize) callconv(.c)
 
 extern fn xcalloc(n: usize, size: usize) callconv(.c) ?*anyopaque;
 extern fn free(ptr: ?*anyopaque) callconv(.c) void;
-extern fn log_msg(
-    class: c_int,
-    module: [*:0]const u8,
-    file: [*:0]const u8,
-    lineno: c_int,
-    fmt: [*:0]const u8,
-    ...
-) callconv(.c) void;
-extern fn bug(
-    file: [*:0]const u8,
-    line: c_int,
-    func: [*:0]const u8,
-    fmt: [*:0]const u8,
-    ...
-) callconv(.c) noreturn;
+extern fn log_msg(class: c_int, module: [*:0]const u8, file: [*:0]const u8, lineno: c_int, fmt: [*:0]const u8, ...) callconv(.c) void;
+extern fn bug(file: [*:0]const u8, line: c_int, func: [*:0]const u8, fmt: [*:0]const u8, ...) callconv(.c) noreturn;
 
 const LOG_CLASS_ERROR: c_int = 1;
 const LOG_CLASS_WARNING: c_int = 2;
@@ -367,8 +354,7 @@ fn maybeRepairKeyCombo(seat: *const Seat, sym: u32, mods: u32) u32 {
 
         // Get all unshifted symbols for this key
         var base_syms: ?[*]const u32 = null;
-        const base_count = xkb_keymap_key_get_syms_by_level(
-            keymap, code, layout_idx, 0, &base_syms);
+        const base_count = xkb_keymap_key_get_syms_by_level(keymap, code, layout_idx, 0, &base_syms);
         if (base_count == 0)
             continue;
 
@@ -389,8 +375,7 @@ fn maybeRepairKeyCombo(seat: *const Seat, sym: u32, mods: u32) u32 {
         while (level_idx < num_levels) : (level_idx += 1) {
             // Get all symbols for current shift level
             var shifted_syms: ?[*]const u32 = null;
-            const shifted_count = xkb_keymap_key_get_syms_by_level(
-                keymap, code, layout_idx, level_idx, &shifted_syms);
+            const shifted_count = xkb_keymap_key_get_syms_by_level(keymap, code, layout_idx, level_idx, &shifted_syms);
             if (shifted_count == 0)
                 continue;
 
@@ -402,8 +387,7 @@ fn maybeRepairKeyCombo(seat: *const Seat, sym: u32, mods: u32) u32 {
 
                 // Get modifier sets that produces the current shift level
                 var mod_masks: [16]u32 = undefined;
-                const mod_mask_count = xkb_keymap_key_get_mods_for_level(
-                    keymap, code, layout_idx, level_idx, &mod_masks, mod_masks.len);
+                const mod_mask_count = xkb_keymap_key_get_mods_for_level(keymap, code, layout_idx, level_idx, &mod_masks, mod_masks.len);
 
                 // Check if key combo's modifier set intersects
                 for (mod_masks[0..mod_mask_count]) |mod_mask| {
@@ -428,18 +412,10 @@ fn maybeRepairKeyCombo(seat: *const Seat, sym: u32, mods: u32) u32 {
                         if (k == 31) break;
                     }
 
-                    _ = xkb_keysym_get_name(
-                        sym, combo_buf[combo_len..].ptr, combo_buf.len - combo_len);
+                    _ = xkb_keysym_get_name(sym, combo_buf[combo_len..].ptr, combo_buf.len - combo_len);
 
-                    log_msg(
-                        LOG_CLASS_WARNING, "key-binding", "key-binding.zig",
-                        @intCast(@src().line),
-                        "%s: combo with both explicit modifier and shifted symbol " ++
-                            "(level=%d, mod-mask=0x%08x), replacing with %s",
-                        @as([*:0]const u8, @ptrCast(&combo_buf)),
-                        level_idx,
-                        mod_mask,
-                        @as([*:0]const u8, @ptrCast(&base_name)));
+                    log_msg(LOG_CLASS_WARNING, "key-binding", "key-binding.zig", @intCast(@src().line), "%s: combo with both explicit modifier and shifted symbol " ++
+                        "(level=%d, mod-mask=0x%08x), replacing with %s", @as([*:0]const u8, @ptrCast(&combo_buf)), level_idx, mod_mask, @as([*:0]const u8, @ptrCast(&base_name)));
 
                     // Replace with unshifted symbol
                     return base_sym;
@@ -499,9 +475,7 @@ fn modsToMask(
 
         const idx = xkb_keymap_mod_get_index(seat.kbd.xkb_keymap, name);
         if (idx == XKB_MOD_INVALID) {
-            log_msg(
-                LOG_CLASS_ERROR, "key-binding", "key-binding.zig", @intCast(@src().line),
-                "%s: invalid modifier name", name);
+            log_msg(LOG_CLASS_ERROR, "key-binding", "key-binding.zig", @intCast(@src().line), "%s: invalid modifier name", name);
             continue;
         }
 
@@ -620,8 +594,7 @@ fn loadKeymap(set: *KeySet) void {
     convertUrlBindings(set);
     convertMouseBindings(set);
 
-    set.public.selection_overrides = modsToMask(
-        seat, &set.vmods, &conf.mouse.selection_override_modifiers);
+    set.public.selection_overrides = modsToMask(seat, &set.vmods, &conf.mouse.selection_override_modifiers);
 }
 
 export fn key_binding_load_keymap(
