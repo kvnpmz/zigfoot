@@ -102,8 +102,6 @@ export fn notify_icon_free(icon: *types.NotificationIcon) callconv(.c) void {
 }
 
 // ── notify-shim.c additions ───────────────────────────────────────
-extern fn notify_icon_at(term: *types.Terminal, idx: usize) callconv(.c) *types.NotificationIcon;
-extern fn notify_icon_count() callconv(.c) usize;
 extern fn notify_tll_free_and_free_actions(notif: *types.Notification) callconv(.c) void;
 
 // ── consume_stdout ────────────────────────────────────────────────
@@ -201,11 +199,11 @@ export fn notify_icon_add(
     data: ?[*]const u8,
     data_sz: usize,
 ) callconv(.c) void {
-    const count = notify_icon_count();
+    const count = term.notification_icons.len;
 
     var i: usize = 0;
     while (i < count) : (i += 1) {
-        const icon = notify_icon_at(term, i);
+        const icon = &term.notification_icons[i];
         if (icon.id == null) {
             addIcon(icon, id, symbolic_name, data, data_sz);
             return;
@@ -213,20 +211,20 @@ export fn notify_icon_add(
     }
 
     // Cache full — throw out first, shift left, add new at end
-    notify_icon_free(notify_icon_at(term, 0));
+    notify_icon_free(&term.notification_icons[0]);
     var j: usize = 0;
     while (j < count - 1) : (j += 1) {
-        notify_icon_at(term, j).* = notify_icon_at(term, j + 1).*;
+        term.notification_icons[j] = term.notification_icons[j + 1];
     }
-    addIcon(notify_icon_at(term, count - 1), id, symbolic_name, data, data_sz);
+    addIcon(&term.notification_icons[count - 1], id, symbolic_name, data, data_sz);
 }
 
 // ── notify_icon_del ───────────────────────────────────────────────
 export fn notify_icon_del(term: *types.Terminal, id: [*:0]const u8) callconv(.c) void {
-    const count = notify_icon_count();
+    const count = term.notification_icons.len;
     var i: usize = 0;
     while (i < count) : (i += 1) {
-        const icon = notify_icon_at(term, i);
+        const icon = &term.notification_icons[i];
         if (icon.id == null) continue;
         if (!std.mem.eql(u8, std.mem.span(icon.id.?), std.mem.span(id))) continue;
         notify_icon_free(icon);
@@ -238,9 +236,7 @@ export fn notify_icon_del(term: *types.Terminal, id: [*:0]const u8) callconv(.c)
 extern fn read(fd: c_int, buf: *anyopaque, count: usize) callconv(.c) isize;
 extern fn notify_active_first(term: *types.Terminal) callconv(.c) ?*types.Notification;
 extern fn notify_active_next(term: *types.Terminal, prev: *types.Notification) callconv(.c) ?*types.Notification;
-extern fn notify_conf_action_arg_configured(term: *types.Terminal) callconv(.c) bool;
 extern fn notify_spawn_expand_action_arg(term: *types.Terminal, name: [*:0]const u8, label: [*:0]const u8, argc: *usize, argv: *?[*:null]?[*:0]u8) callconv(.c) bool;
-extern fn notify_term_fdm(term: *types.Terminal) callconv(.c) ?*anyopaque;
 extern fn fdm_add(fdm: *anyopaque, fd: c_int, events: c_int, handler: *const fn (*anyopaque, c_int, c_int, ?*anyopaque) callconv(.c) bool, data: ?*anyopaque) callconv(.c) bool;
 extern fn fdm_del(fdm: *anyopaque, fd: c_int) callconv(.c) bool;
 extern fn xrealloc(ptr: ?*anyopaque, size: usize) callconv(.c) ?*anyopaque;
@@ -320,8 +316,6 @@ export fn expand_action_to_argv(
 
 // ── chunk B-2 ─────────────────────────────────────────────────────
 extern fn notify_active_remove(term: *types.Terminal, notif: *types.Notification) callconv(.c) void;
-extern fn notify_term_reaper(term: *types.Terminal) callconv(.c) ?*anyopaque;
-extern fn notify_conf_close_configured(term: *types.Terminal) callconv(.c) bool;
 extern fn notify_spawn_expand_close(term: *types.Terminal, id: [*:0]const u8, argc: *usize, argv: *?[*:null]?[*:0]u8) callconv(.c) bool;
 extern fn xsnprintf(buf: [*]u8, size: usize, fmt: [*:0]const u8, ...) callconv(.c) c_int;
 extern fn kill(pid: c_int, sig: c_int) callconv(.c) c_int;
@@ -337,7 +331,7 @@ export fn notify_close(term: *types.Terminal, id: [*:0]const u8) callconv(.c) vo
         const nid = notif.id orelse continue;
         if (!std.mem.eql(u8, std.mem.span(nid), std.mem.span(id))) continue;
 
-        if (!notify_conf_close_configured(term)) {
+        if (term.conf.?.desktop_notifications.close.argv.args == null) {
             if (notif.pid != 0) {
                 _ = kill(notif.pid, SIGINT);
             }
@@ -353,7 +347,7 @@ export fn notify_close(term: *types.Terminal, id: [*:0]const u8) callconv(.c) vo
             if (!notify_spawn_expand_close(term, @ptrCast(&external_id_buf), &argc, &argv)) return;
 
             const devnull = open("/dev/null", O_RDONLY);
-            _ = spawn(notify_term_reaper(term), null, argv, devnull, -1, -1, null, null, null);
+            _ = spawn(term.reaper, null, argv, devnull, -1, -1, null, null, null);
             if (devnull >= 0) _ = close(devnull);
 
             if (argv) |a| {
@@ -371,8 +365,6 @@ export fn notify_close(term: *types.Terminal, id: [*:0]const u8) callconv(.c) vo
 // ── chunk B-3a ────────────────────────────────────────────────────
 extern fn notify_wayl_terms_first(wayl: *anyopaque) callconv(.c) ?*types.Terminal;
 extern fn notify_wayl_terms_next(wayl: *anyopaque, prev: *types.Terminal) callconv(.c) ?*types.Terminal;
-extern fn notify_term_window(term: *types.Terminal) callconv(.c) ?*anyopaque;
-extern fn notify_term_wayl(term: *types.Terminal) callconv(.c) ?*anyopaque;
 extern fn wayl_win_set_urgent(window: *anyopaque) callconv(.c) bool;
 extern fn wayl_activate(wayl: *anyopaque, window: *anyopaque, token: [*:0]const u8) callconv(.c) void;
 extern fn term_to_slave(term: *types.Terminal, data: *const anyopaque, len: usize) callconv(.c) bool;
@@ -403,9 +395,9 @@ export fn notif_done(_reaper: ?*anyopaque, pid: c_int, _status: c_int, data: ?*a
         if (notif.pid != pid) continue;
 
         if (notif.activated and notif.focus) {
-            const window = notify_term_window(found_term);
+            const window = found_term.window;
             if (notif.xdg_token) |token| {
-                _ = wayl_activate(notify_term_wayl(found_term).?, window.?, token);
+                _ = wayl_activate(found_term.wl.?, window.?, token);
             } else {
                 if (window) |w| _ = wayl_win_set_urgent(w);
             }
@@ -443,13 +435,7 @@ extern fn notify_actions_first(notif: *types.Notification) callconv(.c) ?[*:0]co
 extern fn notify_actions_next(notif: *types.Notification, prev: [*:0]const u8) callconv(.c) ?[*:0]const u8;
 extern fn notify_actions_len(notif: *types.Notification) callconv(.c) usize;
 extern fn notify_actions_zero(notif: *types.Notification) callconv(.c) void;
-extern fn notify_conf_command_configured(term: *types.Terminal) callconv(.c) bool;
-extern fn notify_conf_inhibit_when_focused(term: *types.Terminal) callconv(.c) bool;
-extern fn notify_conf_app_id(term: *types.Terminal) callconv(.c) ?[*:0]const u8;
 extern fn notify_spawn_expand_command(term: *types.Terminal, app_id: [*:0]const u8, window_title: [*:0]const u8, icon: [*:0]const u8, title: [*:0]const u8, body: [*:0]const u8, category: [*:0]const u8, urgency: [*:0]const u8, muted: [*:0]const u8, sound_name: [*:0]const u8, expire_time: [*:0]const u8, replace_id: [*:0]const u8, action_argument: [*:0]const u8, argc: *usize, argv: *?[*:null]?[*:0]u8) callconv(.c) bool;
-extern fn notify_term_window_title(term: *types.Terminal) callconv(.c) ?[*:0]const u8;
-extern fn notify_term_app_id(term: *types.Terminal) callconv(.c) ?[*:0]const u8;
-extern fn notify_term_kbd_focus(term: *types.Terminal) callconv(.c) bool;
 extern fn notify_pipe2(fds: [*]c_int, flags: c_int) callconv(.c) c_int;
 extern fn notify_fdm_add_stdout(fdm: *anyopaque, fd: c_int, term: *types.Terminal) callconv(.c) void;
 
@@ -464,17 +450,17 @@ export fn notify_notify(term: *types.Terminal, notif_in: *types.Notification) ca
     notif.stdout_fd = -1;
     notif.icon_fd = -1;
 
-    if (!notify_conf_command_configured(term)) return false;
+    if (term.conf.?.desktop_notifications.command.argv.args == null) return false;
 
-    if ((notify_conf_inhibit_when_focused(term) or notif.when != NOTIFY_ALWAYS)
-        and notify_term_kbd_focus(term))
+    if ((term.conf.?.desktop_notifications.inhibit_when_focused or notif.when != NOTIFY_ALWAYS)
+        and term.kbd_focus)
     {
         return false;
     }
 
     const app_id: [*:0]const u8 = if (notif.app_id) |a| a
-        else if (notify_term_app_id(term)) |a| a
-        else notify_conf_app_id(term) orelse "";
+        else if (term.app_id) |a| a
+        else term.conf.?.app_id orelse "";
 
     const title: [*:0]const u8 = if (notif.title) |t| t
         else if (notif.body) |b| b else "";
@@ -484,10 +470,10 @@ export fn notify_notify(term: *types.Terminal, notif_in: *types.Notification) ca
     var icon_name_or_path: [*:0]const u8 = "";
 
     if (notif.icon_cache_id) |cache_id| {
-        const count = notify_icon_count();
+        const count = term.notification_icons.len;
         var i: usize = 0;
         while (i < count) : (i += 1) {
-            const icon = notify_icon_at(term, i);
+            const icon = &term.notification_icons[i];
             if (icon.id) |iid| {
                 if (std.mem.eql(u8, std.mem.span(iid), std.mem.span(cache_id))) {
                     icon_name_or_path = icon.symbolic_name.?;
@@ -534,7 +520,7 @@ export fn notify_notify(term: *types.Terminal, notif_in: *types.Notification) ca
     const en = xsnprintf(&expire_time_buf, expire_time_buf.len, "%d", notif.expire_time);
     expire_time_buf[@intCast(en)] = 0;
 
-    if (notify_conf_action_arg_configured(term)) {
+    if (term.conf.?.desktop_notifications.command_action_arg.argv.args != null) {
         if (!expand_action_to_argv(term, "default", "Activate", &action_argc, &action_argv)) return false;
 
         var action_idx: usize = 1;
@@ -556,7 +542,7 @@ export fn notify_notify(term: *types.Terminal, notif_in: *types.Notification) ca
         }
     }
 
-    const window_title = notify_term_window_title(term) orelse "";
+    const window_title = term.window_title orelse "";
     const category: [*:0]const u8 = notif.category orelse "";
     const muted_str: [*:0]const u8 = if (notif.muted) "true" else "false";
     const sound_name: [*:0]const u8 = notif.sound_name orelse "";
@@ -632,7 +618,7 @@ export fn notify_notify(term: *types.Terminal, notif_in: *types.Notification) ca
         }
     }
 
-    const fdm = notify_term_fdm(term).?;
+    const fdm = term.fdm.?;
     if (stdout_fds[0] >= 0) {
         notify_fdm_add_stdout(fdm, stdout_fds[0], term);
     }
@@ -640,12 +626,12 @@ export fn notify_notify(term: *types.Terminal, notif_in: *types.Notification) ca
     var ctx: ?*DoneContext = null;
     if (track) {
         ctx = @ptrCast(@alignCast(xmalloc(@sizeOf(DoneContext)) orelse return false));
-        ctx.?.wayl = notify_term_wayl(term) orelse @ptrFromInt(1);
+        ctx.?.wayl = term.wl orelse @ptrFromInt(1);
         ctx.?.term = term;
     }
 
     const devnull = open("/dev/null", O_RDONLY);
-    const reaper = notify_term_reaper(term);
+    const reaper = term.reaper;
     const cb: ?*const fn (?*anyopaque, c_int, c_int, ?*anyopaque) callconv(.c) void =
         if (track) @ptrCast(&notif_done) else null;
     const pid = spawn(reaper, null, argv, devnull, stdout_fds[1], -1, cb, if (ctx) |c| @ptrCast(c) else null, null);
