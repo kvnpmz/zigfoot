@@ -210,10 +210,8 @@ export fn term_set_fonts(
 // change ends up here. The four faces are loaded on separate threads, like
 // the C version, and the actual swap is term_set_fonts().
 //
-// fcft_font_options is configured through a shim (three fields); whether
-// linear blending is on and whether the grid wants a high-bit-depth emoji
-// format are environment-dependent, so those also go through shims that are
-// null-safe for the headless harness.
+// The font-option fields and the two environment predicates are owned here;
+// the generated Wayland requests and libc/fcft entry points remain in C.
 //
 
 const FontLoadData = struct {
@@ -239,8 +237,21 @@ extern fn terminal_shim_fcft_font_options_configure(
     srgb_decode: bool,
     high_res_color: bool,
 ) callconv(.c) void;
-extern fn terminal_shim_linear_blending(term: *const types.Terminal) callconv(.c) bool;
-extern fn terminal_shim_grid_is_high_bit_depth(term: *const types.Terminal) callconv(.c) bool;
+extern fn shm_chain_bit_depth(chain: *const types.ShmBufferChain) callconv(.c) c_int;
+
+const SHM_BITS_10: c_int = 2;
+
+export fn terminal_shim_linear_blending(term: *const types.Terminal) callconv(.c) bool {
+    const wl = term.wl orelse return false;
+    return wayl_do_linear_blending(wl, term.conf.?);
+}
+
+export fn terminal_shim_grid_is_high_bit_depth(term: *const types.Terminal) callconv(.c) bool {
+    const chain: *const types.ShmBufferChain = @ptrCast(@alignCast(
+        term.render.chains.grid orelse return false,
+    ));
+    return shm_chain_bit_depth(chain) >= SHM_BITS_10;
+}
 extern fn snprintf(buf: [*]u8, size: usize, format: [*:0]const u8, ...) callconv(.c) c_int;
 extern fn asprintf(strp: *?[*:0]u8, format: [*:0]const u8, ...) callconv(.c) c_int;
 
@@ -813,7 +824,7 @@ fn damageRows(term: *types.Terminal, start: c_int, end: c_int) void {
 
         var c: c_int = 0;
         while (c < term.grid.?.num_cols) : (c += 1) {
-            current_row.cells.?[ @intCast(c) ].attrs.clean = false;
+            current_row.cells.?[@intCast(c)].attrs.clean = false;
         }
     }
 }
@@ -828,7 +839,7 @@ fn damageRowsInView(term: *types.Terminal, start: c_int, end: c_int) void {
 
         var c: c_int = 0;
         while (c < term.grid.?.num_cols) : (c += 1) {
-            current_row.cells.?[ @intCast(c) ].attrs.clean = false;
+            current_row.cells.?[@intCast(c)].attrs.clean = false;
         }
     }
 }
@@ -865,7 +876,6 @@ export fn term_damage_cursor(term: *types.Terminal) void {
 export fn term_damage_margins(term: *types.Terminal) void {
     term.render.margins = true;
 }
-
 
 fn damagePushBack(list: *types.DamageList, item: types.Damage) void {
     const node: *types.DamageNode = @ptrCast(@alignCast(std.c.malloc(@sizeOf(types.DamageNode)) orelse unreachable));
@@ -933,15 +943,15 @@ export fn term_damage_color(
 
         if (current_row.extra) |extra| {
             const underlines = &extra.underline_ranges;
-    var i: c_int = 0;
+            var i: c_int = 0;
 
             while (i < underlines.count) : (i += 1) {
                 const range = &underlines.v.?[@intCast(i)];
 
                 std.debug.assert(
                     range.data.underline.color_src == .default or
-                    range.data.underline.color_src == .base256 or
-                    range.data.underline.color_src == .rgb,
+                        range.data.underline.color_src == .base256 or
+                        range.data.underline.color_src == .rgb,
                 );
 
                 if (range.data.underline.color_src == src) {
@@ -1020,7 +1030,6 @@ export fn term_visual_focus_out(term: *types.Terminal) void {
     term_cursor_blink_update(term);
     render_refresh_csd(term);
 }
-
 
 export fn term_restore_cursor(
     term: *types.Terminal,
@@ -1445,14 +1454,12 @@ export fn term_reverse_index(term: *types.Terminal) callconv(.c) void {
 // Hot path. Depends on grid row access, URI/underline ranges, the
 // print_linewrap/print_insert helpers below, and sixel_overwrite_* (sixel.zig).
 
-
 extern fn grid_row_uri_range_put(row: *types.Row, col: c_int, uri: [*:0]const u8, id: u64) callconv(.c) void;
 extern fn grid_row_underline_range_put(row: *types.Row, col: c_int, range: types.UnderlineRangeData) callconv(.c) void;
 
 extern fn sixel_overwrite_by_row(term: *types.Terminal, row: c_int, col: c_int, width: c_int) callconv(.c) void;
 extern fn sixel_overwrite_by_rectangle(term: *types.Terminal, row: c_int, col: c_int, height: c_int, width: c_int) callconv(.c) void;
 extern fn sixel_overwrite_at_cursor(term: *types.Terminal, width: c_int) callconv(.c) void;
-
 
 export fn term_erase(
     term: *types.Terminal,
@@ -1530,7 +1537,7 @@ export fn term_fill(
 
         if (use_sgr_attrs and
             (term.vt.underline.style != .none and term.vt.underline.style != .single or
-            term.vt.underline.color_src != .default))
+                term.vt.underline.color_src != .default))
         {
             grid_row_underline_range_put(current_row, c, term.vt.underline);
         }
@@ -1747,14 +1754,7 @@ extern fn composed_lookup_without_collision(
 extern fn composed_insert(root: *?*types.Composed, node: ?*types.Composed) void;
 
 extern fn xmalloc(size: usize) ?*anyopaque;
-extern fn log_msg(
-    class: c_int,
-    module: [*:0]const u8,
-    file: [*:0]const u8,
-    lineno: c_int,
-    fmt: [*:0]const u8,
-    ...
-) void;
+extern fn log_msg(class: c_int, module: [*:0]const u8, file: [*:0]const u8, lineno: c_int, fmt: [*:0]const u8, ...) void;
 
 extern fn terminal_shim_precompose(
     term: *types.Terminal,
@@ -1830,8 +1830,7 @@ export fn term_process_and_print_non_ascii(
                     @bitCast(last),
                     @bitCast(wc),
                     &term.vt.grapheme_state,
-                ) != 0)
-                {
+                ) != 0) {
                     termResetGraphemeState(term);
                     break :out;
                 }
@@ -1999,14 +1998,7 @@ extern fn async_write(fd: c_int, data: ?*const anyopaque, len: usize, idx: *usiz
 extern fn fdm_event_add(fdm: *anyopaque, fd: c_int, events: c_int) callconv(.c) bool;
 extern fn fdm_event_del(fdm: *anyopaque, fd: c_int, events: c_int) callconv(.c) bool;
 extern fn free(ptr: ?*anyopaque) callconv(.c) void;
-extern fn log_errno(
-    class: c_int,
-    module: [*:0]const u8,
-    file: [*:0]const u8,
-    lineno: c_int,
-    fmt: [*:0]const u8,
-    ...
-) callconv(.c) void;
+extern fn log_errno(class: c_int, module: [*:0]const u8, file: [*:0]const u8, lineno: c_int, fmt: [*:0]const u8, ...) callconv(.c) void;
 
 inline fn ptmxBuffers(term: *types.Terminal) *PtmxBufferList {
     return @ptrCast(&term.ptmx_buffers);
@@ -3352,7 +3344,6 @@ export fn term_mouse_motion(
 // print_linewrap / print_insert — helpers used by term_print().
 //
 
-
 export fn print_linewrap(term: *types.Terminal) void {
     const grid = term.grid.?;
 
@@ -3481,7 +3472,6 @@ export fn term_kbd_focus_in(term: *types.Terminal) void {
 //
 
 const COLOR_SRC_DEFAULT: u2 = 0;
-
 
 export fn erase_cell_range(term: *types.Terminal, r: *types.Row, start: c_int, end: c_int) void {
     std.debug.assert(start < term.cols);
@@ -3674,13 +3664,7 @@ extern fn key_binding_for(
 extern fn render_xcursor_is_valid(seat: *const types.Seat, xcursor: [*c]const u8) callconv(.c) bool;
 extern fn render_xcursor_set(seat: *types.Seat, term: *types.Terminal, shape: types.CursorShape) callconv(.c) bool;
 extern fn cursor_string_to_server_shape(xcursor: [*c]const u8, bound_version: c_int) callconv(.c) c_int;
-extern fn bug(
-    file: [*:0]const u8,
-    line: c_int,
-    func: [*:0]const u8,
-    fmt: [*:0]const u8,
-    ...
-) callconv(.c) noreturn;
+extern fn bug(file: [*:0]const u8, line: c_int, func: [*:0]const u8, fmt: [*:0]const u8, ...) callconv(.c) noreturn;
 
 /// A missing wayland instance can't produce override modifiers, and C never
 /// dereferences it in a valid program: the `orelse` paths below degrade to
@@ -3723,8 +3707,8 @@ fn isTopLeft(term: *const types.Terminal, x: c_int, y: c_int) bool {
     return !win.is_constrained_top and !win.is_constrained_left and
         ((term.active_surface == .border_left and
             @as(f32, @floatFromInt(y)) < 10.0 * scale) or
-        (term.active_surface == .border_top and
-            @as(f32, @floatFromInt(x)) < (10.0 + csdBorderSize(term)) * scale));
+            (term.active_surface == .border_top and
+                @as(f32, @floatFromInt(x)) < (10.0 + csdBorderSize(term)) * scale));
 }
 
 fn isTopRight(term: *const types.Terminal, x: c_int, y: c_int) bool {
@@ -3733,9 +3717,9 @@ fn isTopRight(term: *const types.Terminal, x: c_int, y: c_int) bool {
     return !win.is_constrained_top and !win.is_constrained_right and
         ((term.active_surface == .border_right and
             @as(f32, @floatFromInt(y)) < 10.0 * scale) or
-        (term.active_surface == .border_top and
-            @as(f32, @floatFromInt(x)) > @as(f32, @floatFromInt(term.width)) +
-            csdBorderSize(term) * scale - 10.0 * scale));
+            (term.active_surface == .border_top and
+                @as(f32, @floatFromInt(x)) > @as(f32, @floatFromInt(term.width)) +
+                    csdBorderSize(term) * scale - 10.0 * scale));
 }
 
 fn isBottomLeft(term: *const types.Terminal, x: c_int, y: c_int) bool {
@@ -3744,9 +3728,9 @@ fn isBottomLeft(term: *const types.Terminal, x: c_int, y: c_int) bool {
     return !win.is_constrained_bottom and !win.is_constrained_left and
         ((term.active_surface == .border_left and
             @as(f32, @floatFromInt(y)) > csdTitleSize(term) * scale +
-            @as(f32, @floatFromInt(term.height))) or
-        (term.active_surface == .border_bottom and
-            @as(f32, @floatFromInt(x)) < (10.0 + csdBorderSize(term)) * scale));
+                @as(f32, @floatFromInt(term.height))) or
+            (term.active_surface == .border_bottom and
+                @as(f32, @floatFromInt(x)) < (10.0 + csdBorderSize(term)) * scale));
 }
 
 fn isBottomRight(term: *const types.Terminal, x: c_int, y: c_int) bool {
@@ -3755,10 +3739,10 @@ fn isBottomRight(term: *const types.Terminal, x: c_int, y: c_int) bool {
     return !win.is_constrained_bottom and !win.is_constrained_right and
         ((term.active_surface == .border_right and
             @as(f32, @floatFromInt(y)) > csdTitleSize(term) * scale +
-            @as(f32, @floatFromInt(term.height))) or
-        (term.active_surface == .border_bottom and
-            @as(f32, @floatFromInt(x)) > @as(f32, @floatFromInt(term.width)) +
-            csdBorderSize(term) * scale - 10.0 * scale));
+                @as(f32, @floatFromInt(term.height))) or
+            (term.active_surface == .border_bottom and
+                @as(f32, @floatFromInt(x)) > @as(f32, @floatFromInt(term.width)) +
+                    csdBorderSize(term) * scale - 10.0 * scale));
 }
 
 // Exported because input.c's border-drag code still calls these helpers
@@ -4802,7 +4786,6 @@ export fn term_destroy(term_arg: ?*types.Terminal) callconv(.c) c_int {
 // in the mirror, and the helpers it calls (term_set_window_title, erase_line,
 // grid_row_and_alloc, term_damage_all, ...) are already Zig or C externs.
 //
-
 
 const SIXEL_MAX_COLORS: c_uint = 1024;
 const SIXEL_MAX_WIDTH: c_uint = 10000;

@@ -10,14 +10,7 @@ const tll = @import("tll.zig");
 const LOG_CLASS_WARNING: c_int = 2;
 const LOG_CLASS_DEBUG: c_int = 4;
 
-extern fn log_msg(
-    class: c_int,
-    module: [*:0]const u8,
-    file: [*:0]const u8,
-    lineno: c_int,
-    fmt: [*:0]const u8,
-    ...
-) callconv(.c) void;
+extern fn log_msg(class: c_int, module: [*:0]const u8, file: [*:0]const u8, lineno: c_int, fmt: [*:0]const u8, ...) callconv(.c) void;
 extern fn xstrdup(s: [*:0]const u8) callconv(.c) ?[*:0]u8;
 extern fn free(ptr: ?*anyopaque) callconv(.c) void;
 
@@ -245,13 +238,7 @@ extern fn term_preferred_buffer_scale(term: *const types.Terminal) callconv(.c) 
 // Generated-protocol static inlines, wrapped in terminal-shim.c.
 extern fn wayland_shim_surface_set_buffer_scale(surf: ?*anyopaque, scale: i32) callconv(.c) void;
 extern fn wayland_shim_viewport_set_destination(viewport: ?*anyopaque, width: i32, height: i32) callconv(.c) void;
-extern fn bug(
-    file: [*:0]const u8,
-    line: c_int,
-    func: [*:0]const u8,
-    fmt: [*:0]const u8,
-    ...
-) callconv(.c) noreturn;
+extern fn bug(file: [*:0]const u8, line: c_int, func: [*:0]const u8, fmt: [*:0]const u8, ...) callconv(.c) noreturn;
 
 fn surfaceScaleExplicitWidthHeight(
     win: *const types.WlWindow,
@@ -337,9 +324,9 @@ export fn wayl_win_csd_titlebar_visible(win: *const types.WlWindow) callconv(.c)
     return win.csd_mode == .yes and
         !win.is_fullscreen and
         !(win.is_maximized and blk: {
-        const term: *types.Terminal = @ptrCast(@alignCast(win.term.?));
-        break :blk term.conf.?.csd.hide_when_maximized;
-    });
+            const term: *types.Terminal = @ptrCast(@alignCast(win.term.?));
+            break :blk term.conf.?.csd.hide_when_maximized;
+        });
 }
 
 export fn wayl_win_csd_borders_visible(win: *const types.WlWindow) callconv(.c) bool {
@@ -440,12 +427,46 @@ extern fn wayland_shim_color_management_surface_destroy(cm_surface: ?*anyopaque)
 extern fn wayland_shim_surface_destroy(surf: ?*anyopaque) callconv(.c) void;
 extern fn wayland_shim_surface_set_user_data(surf: ?*anyopaque, data: ?*anyopaque) callconv(.c) void;
 extern fn wayland_shim_surface_set_input_region(surf: ?*anyopaque, region: ?*anyopaque) callconv(.c) void;
+extern fn wayland_shim_surface_damage_buffer_request(
+    surf: ?*anyopaque,
+    x: i32,
+    y: i32,
+    width: i32,
+    height: i32,
+) callconv(.c) void;
+extern fn wayland_shim_subsurface_set_position_request(
+    sub: ?*anyopaque,
+    x: i32,
+    y: i32,
+) callconv(.c) void;
 extern fn wayland_shim_region_destroy(region: ?*anyopaque) callconv(.c) void;
 extern fn wayland_shim_subsurface_destroy(sub: ?*anyopaque) callconv(.c) void;
 extern fn wayland_shim_viewport_destroy(viewport: ?*anyopaque) callconv(.c) void;
 extern fn quirk_shim_subsurface_set_sync(sub: ?*anyopaque) callconv(.c) void;
 
 const LOG_CLASS_ERROR: c_int = 1;
+
+/// Keep the C ABI names used by render.zig. The defensive null checks are
+/// behavior; the generated requests themselves stay in C.
+export fn wayland_shim_surface_damage_buffer(
+    surf: ?*anyopaque,
+    x: i32,
+    y: i32,
+    width: i32,
+    height: i32,
+) callconv(.c) void {
+    const surface = surf orelse return;
+    wayland_shim_surface_damage_buffer_request(surface, x, y, width, height);
+}
+
+export fn wayland_shim_subsurface_set_position(
+    sub: ?*anyopaque,
+    x: i32,
+    y: i32,
+) callconv(.c) void {
+    const subsurface = sub orelse return;
+    wayland_shim_subsurface_set_position_request(subsurface, x, y);
+}
 
 export fn wayl_win_subsurface_new_with_custom_parent(
     win: *types.WlWindow,
@@ -565,23 +586,8 @@ extern fn wl_display_cancel_read(display: ?*anyopaque) callconv(.c) void;
 extern fn wl_display_roundtrip(display: ?*anyopaque) callconv(.c) c_int;
 extern fn wl_display_prepare_read(display: ?*anyopaque) callconv(.c) c_int;
 extern fn poll(fds: [*]PollFd, nfds: c_ulong, timeout: c_int) callconv(.c) c_int;
-extern fn log_errno(
-    class: c_int,
-    module: [*:0]const u8,
-    file: [*:0]const u8,
-    lineno: c_int,
-    fmt: [*:0]const u8,
-    ...
-) callconv(.c) void;
-extern fn log_errno_provided(
-    class: c_int,
-    module: [*:0]const u8,
-    file: [*:0]const u8,
-    lineno: c_int,
-    errnum: c_int,
-    fmt: [*:0]const u8,
-    ...
-) callconv(.c) void;
+extern fn log_errno(class: c_int, module: [*:0]const u8, file: [*:0]const u8, lineno: c_int, fmt: [*:0]const u8, ...) callconv(.c) void;
+extern fn log_errno_provided(class: c_int, module: [*:0]const u8, file: [*:0]const u8, lineno: c_int, errnum: c_int, fmt: [*:0]const u8, ...) callconv(.c) void;
 extern fn __errno_location() callconv(.c) *c_int;
 
 const EINTR: c_int = 4;
@@ -1129,7 +1135,25 @@ extern fn wayland_shim_xdg_wm_base_get_xdg_surface(shell: ?*anyopaque, surf: ?*a
 extern fn wayland_shim_xdg_surface_get_toplevel(xdg_surface: ?*anyopaque) callconv(.c) ?*anyopaque;
 extern fn wayland_shim_xdg_toplevel_set_app_id(toplevel: ?*anyopaque, app_id: [*:0]const u8) callconv(.c) void;
 extern fn wayland_shim_toplevel_tag_set(m: ?*anyopaque, toplevel: ?*anyopaque, tag: [*:0]const u8) callconv(.c) void;
-extern fn wayland_shim_toplevel_icon_set(m: ?*anyopaque, toplevel: ?*anyopaque, name: [*:0]const u8) callconv(.c) void;
+extern fn wayland_shim_toplevel_icon_manager_create_icon(m: ?*anyopaque) callconv(.c) ?*anyopaque;
+extern fn wayland_shim_toplevel_icon_set_name(icon: ?*anyopaque, name: [*:0]const u8) callconv(.c) void;
+extern fn wayland_shim_toplevel_icon_manager_set_icon(
+    m: ?*anyopaque,
+    toplevel: ?*anyopaque,
+    icon: ?*anyopaque,
+) callconv(.c) void;
+extern fn wayland_shim_toplevel_icon_destroy(icon: ?*anyopaque) callconv(.c) void;
+
+export fn wayland_shim_toplevel_icon_set(
+    m: ?*anyopaque,
+    toplevel: ?*anyopaque,
+    name: [*:0]const u8,
+) callconv(.c) void {
+    const icon = wayland_shim_toplevel_icon_manager_create_icon(m);
+    wayland_shim_toplevel_icon_set_name(icon, name);
+    wayland_shim_toplevel_icon_manager_set_icon(m, toplevel, icon);
+    wayland_shim_toplevel_icon_destroy(icon);
+}
 extern fn wayland_shim_decoration_get(m: ?*anyopaque, toplevel: ?*anyopaque) callconv(.c) ?*anyopaque;
 extern fn wayland_shim_decoration_set_mode(decoration: ?*anyopaque, mode: u32) callconv(.c) void;
 extern fn wayland_shim_add_surface_listener(surf: ?*anyopaque, win: *types.WlWindow) callconv(.c) void;
@@ -1316,6 +1340,26 @@ extern fn wayland_shim_activation_token_commit(token: ?*anyopaque) callconv(.c) 
 extern fn xmalloc(size: usize) callconv(.c) ?*anyopaque;
 
 const INT32_MAX: i32 = 0x7fffffff;
+
+/// Opaque-region lifecycle, with C's early-outs and request order preserved.
+export fn wayland_shim_set_opaque_region_rect(
+    compositor: ?*anyopaque,
+    surf: ?*anyopaque,
+    x: i32,
+    y: i32,
+    width: i32,
+    height: i32,
+) callconv(.c) void {
+    const surface = surf orelse return;
+    const comp = compositor orelse return;
+
+    const region = wayland_shim_compositor_create_region(comp);
+    if (region) |r| {
+        wayland_shim_region_add(r, x, y, width, height);
+        wayland_shim_surface_set_opaque_region(surface, r);
+        wayland_shim_region_destroy(r);
+    }
+}
 
 export fn wayl_win_alpha_changed(win: *types.WlWindow) callconv(.c) void {
     const term: *types.Terminal = @ptrCast(@alignCast(win.term.?));
@@ -2099,11 +2143,17 @@ const FdHandler = *const fn (*Fdm, c_int, c_int, ?*anyopaque) callconv(.c) bool;
 const HookCb = *const fn (*Fdm, ?*anyopaque) callconv(.c) void;
 
 extern fn fdm_add(
-    fdm: *Fdm, fd: c_int, events: c_int, handler: FdHandler,
+    fdm: *Fdm,
+    fd: c_int,
+    events: c_int,
+    handler: FdHandler,
     data: ?*anyopaque,
 ) callconv(.c) bool;
 extern fn fdm_hook_add(
-    fdm: *Fdm, hook: HookCb, data: ?*anyopaque, priority: c_int,
+    fdm: *Fdm,
+    hook: HookCb,
+    data: ?*anyopaque,
+    priority: c_int,
 ) callconv(.c) bool;
 extern fn fdm_hook_del(fdm: *Fdm, hook: HookCb, priority: c_int) callconv(.c) bool;
 extern fn read(fd: c_int, buf: *anyopaque, count: usize) callconv(.c) isize;
@@ -2114,7 +2164,10 @@ const EPOLLHUP: c_int = 0x010;
 const FDM_HOOK_PRIORITY_LOW: c_int = 0;
 
 export fn fdm_repeat(
-    fdm_ptr: *Fdm, fd: c_int, events: c_int, data: ?*anyopaque,
+    fdm_ptr: *Fdm,
+    fd: c_int,
+    events: c_int,
+    data: ?*anyopaque,
 ) callconv(.c) bool {
     _ = fdm_ptr;
     _ = fd;
@@ -2149,7 +2202,10 @@ export fn fdm_hook(fdm_ptr: *Fdm, data: ?*anyopaque) callconv(.c) void {
 }
 
 export fn fdm_wayl(
-    fdm_ptr: *Fdm, fd: c_int, events: c_int, data: ?*anyopaque,
+    fdm_ptr: *Fdm,
+    fd: c_int,
+    events: c_int,
+    data: ?*anyopaque,
 ) callconv(.c) bool {
     _ = fdm_ptr;
     _ = fd;
@@ -2185,7 +2241,8 @@ export fn fdm_wayl(
 }
 
 export fn wayland_shim_hook_add(
-    fdm_ptr: ?*anyopaque, wayl: *types.Wayland,
+    fdm_ptr: ?*anyopaque,
+    wayl: *types.Wayland,
 ) callconv(.c) bool {
     const fdm: *Fdm = @ptrCast(@alignCast(fdm_ptr orelse return false));
     return fdm_hook_add(fdm, &fdm_hook, wayl, FDM_HOOK_PRIORITY_LOW);
@@ -2197,14 +2254,16 @@ export fn wayland_shim_hook_del(fdm_ptr: ?*anyopaque) callconv(.c) bool {
 }
 
 export fn wayland_shim_fdm_add_repeat(
-    fdm_ptr: ?*anyopaque, seat: *types.Seat,
+    fdm_ptr: ?*anyopaque,
+    seat: *types.Seat,
 ) callconv(.c) bool {
     const fdm: *Fdm = @ptrCast(@alignCast(fdm_ptr orelse return false));
     return fdm_add(fdm, seat.kbd.repeat.fd, EPOLLIN, &fdm_repeat, seat);
 }
 
 export fn wayland_shim_fdm_add(
-    fdm_ptr: ?*anyopaque, wayl: *types.Wayland,
+    fdm_ptr: ?*anyopaque,
+    wayl: *types.Wayland,
 ) callconv(.c) bool {
     const fdm: *Fdm = @ptrCast(@alignCast(fdm_ptr orelse return false));
     return fdm_add(fdm, wayl.fd, EPOLLIN, &fdm_wayl, wayl);

@@ -48,11 +48,6 @@ size_t terminal_shim_mb_cur_max(void) {
 }
 
 
-/* urls_mode_is_active() is static inline in url-mode.h. */
-bool terminal_shim_urls_mode_active(const struct terminal *term) {
-    return urls_mode_is_active(term);
-}
-
 /* The null checks are defensive: in foot itself `window` is always set, but
  * the headless harness runs these paths without a wayland window. */
 
@@ -242,22 +237,16 @@ void render_shim_region_union_rect(
     pixman_region32_union_rect(region, region, x, y, width, height);
 }
 
-void wayland_shim_surface_damage_buffer(
+/* Generated requests; wayland.zig owns their defensive null checks. */
+void wayland_shim_surface_damage_buffer_request(
     struct wl_surface *surface, int x, int y, int width, int height)
 {
-    /* Defensive: the headless harness renders without a wayland surface. */
-    if (surface == NULL)
-        return;
     wl_surface_damage_buffer(surface, x, y, width, height);
 }
 
-/* wl_subsurface_set_position() is a generated static inline. */
-void wayland_shim_subsurface_set_position(
+void wayland_shim_subsurface_set_position_request(
     struct wl_subsurface *sub, int x, int y)
 {
-    /* Defensive: the headless harness has no wayland sub-surfaces. */
-    if (sub == NULL)
-        return;
     wl_subsurface_set_position(sub, x, y);
 }
 
@@ -327,34 +316,6 @@ void wayland_shim_set_opaque_region(
     }
 }
 
-
-/* The search box's opaque region only covers the visible part of the
- * sub-surface, so it cannot use wayland_shim_set_opaque_region(). */
-void wayland_shim_set_opaque_region_rect(
-    struct wl_compositor *compositor, struct wl_surface *surf,
-    int x, int y, int width, int height)
-{
-    if (surf == NULL || compositor == NULL)
-        return;
-
-    struct wl_region *region = wl_compositor_create_region(compositor);
-    if (region != NULL) {
-        wl_region_add(region, x, y, width, height);
-        wl_surface_set_opaque_region(surf, region);
-        wl_region_destroy(region);
-    }
-}
-
-/* pixman region/image helpers for render_cell(). The clip is always
- * "this rect", so init+set+fini collapse into one call. */
-void render_shim_clip_rect(
-    pixman_image_t *pix, int x, int y, int width, int height)
-{
-    pixman_region32_t clip;
-    pixman_region32_init_rect(&clip, x, y, width, height);
-    pixman_image_set_clip_region32(pix, &clip);
-    pixman_region32_fini(&clip);
-}
 
 void render_shim_clip_clear(pixman_image_t *pix)
 {
@@ -593,17 +554,6 @@ void render_shim_curly_underline(
 }
 
 /* ── font loading (terminal.zig) ─────────────────────────────────── */
-
-/* Headless harness has no wayland object; foot itself always does. */
-bool terminal_shim_linear_blending(const struct terminal *term) {
-    return term->wl != NULL && wayl_do_linear_blending(term->wl, term->conf);
-}
-
-/* Likewise: the harness has no buffer chains. */
-bool terminal_shim_grid_is_high_bit_depth(const struct terminal *term) {
-    return term->render.chains.grid != NULL &&
-           shm_chain_bit_depth(term->render.chains.grid) >= SHM_BITS_10;
-}
 
 /* struct fcft_font_options is fcft's business; set only the three fields
  * reload_fonts() needs. The high-res format choice keeps the
@@ -1513,14 +1463,29 @@ void wayland_shim_toplevel_tag_set(
 #endif
 }
 
-void wayland_shim_toplevel_icon_set(
-    struct xdg_toplevel_icon_manager_v1 *m, struct xdg_toplevel *toplevel,
-    const char *name)
+/* Generated requests; wayland.zig preserves the create/set/destroy order. */
+struct xdg_toplevel_icon_v1 *
+wayland_shim_toplevel_icon_manager_create_icon(
+    struct xdg_toplevel_icon_manager_v1 *m)
 {
-    struct xdg_toplevel_icon_v1 *icon =
-        xdg_toplevel_icon_manager_v1_create_icon(m);
+    return xdg_toplevel_icon_manager_v1_create_icon(m);
+}
+
+void wayland_shim_toplevel_icon_set_name(
+    struct xdg_toplevel_icon_v1 *icon, const char *name)
+{
     xdg_toplevel_icon_v1_set_name(icon, name);
+}
+
+void wayland_shim_toplevel_icon_manager_set_icon(
+    struct xdg_toplevel_icon_manager_v1 *m, struct xdg_toplevel *toplevel,
+    struct xdg_toplevel_icon_v1 *icon)
+{
     xdg_toplevel_icon_manager_v1_set_icon(m, toplevel, icon);
+}
+
+void wayland_shim_toplevel_icon_destroy(struct xdg_toplevel_icon_v1 *icon)
+{
     xdg_toplevel_icon_v1_destroy(icon);
 }
 
@@ -1942,4 +1907,3 @@ render_shim_callback_destroy(struct wl_callback *callback)
     if (callback != NULL)
         wl_callback_destroy(callback);
 }
-
