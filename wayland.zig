@@ -2055,7 +2055,7 @@ export fn ext_background_capabilities(data: ?*anyopaque, manager: ?*anyopaque, f
     wayl.have_background_blur =
         (flags & EXT_BACKGROUND_EFFECT_MANAGER_V1_CAPABILITY_BLUR) != 0;
 
-    log_msg(LOG_CLASS_DEBUG, "wayland", "wayland.zig", @intCast(@src().line), "compositor supports background blur: %s", @as([*:0]const u8, if (wayl.have_background_blur) "yes" else "no"));
+    log_msg(LOG_CLASS_DEBUG, "wayland", "wayland.zig", @intCast(@src().line), "compositor supports background blur: %s", @as([*:0]const u8, yesNo(wayl.have_background_blur)));
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -2346,4 +2346,135 @@ export fn wayl_destroy(wayl_in: ?*types.Wayland) callconv(.c) void {
     }
 
     free(@as(?*anyopaque, @ptrCast(wayl)));
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Seat capabilities
+// ─────────────────────────────────────────────────────────────────────────
+
+extern fn wayland_shim_seat_get_keyboard(seat: ?*anyopaque) callconv(.c) ?*anyopaque;
+extern fn wayland_shim_seat_get_pointer(seat: ?*anyopaque) callconv(.c) ?*anyopaque;
+extern fn wayland_shim_seat_get_touch(seat: ?*anyopaque) callconv(.c) ?*anyopaque;
+extern fn wayland_shim_cursor_shape_get_pointer(manager: ?*anyopaque, pointer: ?*anyopaque) callconv(.c) ?*anyopaque;
+extern fn wayland_shim_add_keyboard_listener(kbd: ?*anyopaque, seat: *types.Seat) callconv(.c) void;
+extern fn wayland_shim_add_pointer_listener(pointer: ?*anyopaque, seat: *types.Seat) callconv(.c) void;
+extern fn wayland_shim_add_touch_listener(touch: ?*anyopaque, seat: *types.Seat) callconv(.c) void;
+
+// wayland-client: enum wl_seat_capability
+const WL_SEAT_CAPABILITY_POINTER: u32 = 1;
+const WL_SEAT_CAPABILITY_KEYBOARD: u32 = 2;
+const WL_SEAT_CAPABILITY_TOUCH: u32 = 4;
+
+fn yesNo(b: bool) [*:0]const u8 {
+    return if (b) "yes" else "no";
+}
+
+export fn seat_handle_capabilities(data: ?*anyopaque, wl_seat: ?*anyopaque, caps: u32) callconv(.c) void {
+    const seat: *types.Seat = @ptrCast(@alignCast(data.?));
+    std.debug.assert(seat.wl_seat == wl_seat);
+
+    log_msg(
+        LOG_CLASS_DEBUG,
+        "wayland",
+        "wayland.zig",
+        @intCast(@src().line),
+        "%s: keyboard=%s, pointer=%s, touch=%s",
+        seat.name,
+        yesNo(caps & WL_SEAT_CAPABILITY_KEYBOARD != 0),
+        yesNo(caps & WL_SEAT_CAPABILITY_POINTER != 0),
+        yesNo(caps & WL_SEAT_CAPABILITY_TOUCH != 0),
+    );
+
+    if (caps & WL_SEAT_CAPABILITY_KEYBOARD != 0) {
+        if (seat.wl_keyboard == null) {
+            seat.wl_keyboard = wayland_shim_seat_get_keyboard(wl_seat);
+            wayland_shim_add_keyboard_listener(seat.wl_keyboard, seat);
+        }
+    } else {
+        if (seat.wl_keyboard != null) {
+            wayland_shim_keyboard_release(seat.wl_keyboard);
+            seat.wl_keyboard = null;
+        }
+    }
+
+    if (caps & WL_SEAT_CAPABILITY_POINTER != 0) {
+        if (seat.wl_pointer == null) {
+            std.debug.assert(seat.pointer.surface.surf == null);
+            const wayl = seatWayl(seat);
+            seat.pointer.surface.surf = wayland_shim_compositor_create_surface(wayl.compositor);
+
+            if (seat.pointer.surface.surf == null) {
+                log_msg(LOG_CLASS_ERROR, "wayland", "wayland.zig", @intCast(@src().line), "%s: failed to create pointer surface", seat.name);
+                return;
+            }
+
+            if (wayl.viewporter != null) {
+                std.debug.assert(seat.pointer.surface.viewport == null);
+                seat.pointer.surface.viewport = wayland_shim_viewporter_get_viewport(
+                    wayl.viewporter,
+                    seat.pointer.surface.surf,
+                );
+
+                if (seat.pointer.surface.viewport == null) {
+                    log_msg(LOG_CLASS_ERROR, "wayland", "wayland.zig", @intCast(@src().line), "%s: failed to create pointer viewport", seat.name);
+                    wayland_shim_surface_destroy(seat.pointer.surface.surf);
+                    seat.pointer.surface.surf = null;
+                    return;
+                }
+            }
+
+            seat.wl_pointer = wayland_shim_seat_get_pointer(wl_seat);
+            wayland_shim_add_pointer_listener(seat.wl_pointer, seat);
+
+            if (wayl.cursor_shape_manager != null) {
+                std.debug.assert(seat.pointer.shape_device == null);
+                seat.pointer.shape_device = wayland_shim_cursor_shape_get_pointer(
+                    wayl.cursor_shape_manager,
+                    seat.wl_pointer,
+                );
+            }
+        }
+    } else {
+        if (seat.wl_pointer != null) {
+            if (seat.pointer.shape_device != null) {
+                wayland_shim_cursor_shape_device_destroy(seat.pointer.shape_device);
+                seat.pointer.shape_device = null;
+            }
+
+            wayland_shim_pointer_release(seat.wl_pointer);
+            wayland_shim_surface_destroy(seat.pointer.surface.surf);
+
+            if (seat.pointer.surface.viewport != null) {
+                wayland_shim_viewport_destroy(seat.pointer.surface.viewport);
+                seat.pointer.surface.viewport = null;
+            }
+
+            if (seat.pointer.theme != null)
+                wl_cursor_theme_destroy(seat.pointer.theme);
+
+            if (seat.wl_touch != null and seat.touch.state == .inhibited)
+                seat.touch.state = .idle;
+
+            seat.wl_pointer = null;
+            seat.pointer.surface.surf = null;
+            seat.pointer.theme = null;
+            seat.pointer.cursor = null;
+        }
+    }
+
+    if (caps & WL_SEAT_CAPABILITY_TOUCH != 0) {
+        if (seat.wl_touch == null) {
+            seat.wl_touch = wayland_shim_seat_get_touch(wl_seat);
+            wayland_shim_add_touch_listener(seat.wl_touch, seat);
+
+            seat.touch.state = .idle;
+        }
+    } else {
+        if (seat.wl_touch != null) {
+            wayland_shim_touch_release(seat.wl_touch);
+            seat.wl_touch = null;
+        }
+
+        seat.touch.state = .inhibited;
+    }
 }

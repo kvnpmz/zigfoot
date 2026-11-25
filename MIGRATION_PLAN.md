@@ -650,9 +650,9 @@ utmp backends where available.
 
 ## 13. Sequenced backlog (refreshed 2026-11-24)
 
-State: **33,276 of 48,830 C lines gone (68.2%)**, ~55% by effort, 34 modules
-ported, 489 harness assertions, `meson test` 5/5 in three build dirs.
-Remaining C: 15,554 lines, 2,100 of which are `*-shim.c` accessors.
+State: **33,381 of 48,830 C lines gone (68.4%)**, ~55% by effort, 34 modules
+ported, 492 harness assertions, `meson test` 5/5 in three build dirs.
+Remaining C: 15,449 lines, 2,163 of which are `*-shim.c` accessors.
 
 `smoke.sh` now launches **real windows**: weston's headless backend creates no
 `wl_seat`, so foot refused to start ("no seats available"). When `Xvfb` is
@@ -781,7 +781,8 @@ Order matters: `search` and `wayland` first (they unblock the rest), then
 | **D2k3** done | `wayland`: the `wl_surface` listener — `surface_enter()`/`surface_leave()` (monitor lookup, the window's `on_outputs` list, and the DPI/font refresh) — plus `verify_iface_version()` and the two preferred-buffer callbacks. 4 new harness checks | D2k2 | 0.5d |
 | **D2k4** done | `wayland`: the small protocol listeners — `shm_format()` (the three 10/16-bit formats; the debug description block is compiled out by `LOG_ENABLE_DBG 0`), `seat_handle_name()`, `xdg_toplevel_decoration_configure()` (CSD/SSD mode → pending `csd_mode`), `fractional_scale_preferred_scale()` (÷120, no-op when unchanged) and `ext_background_capabilities()`. 10 new harness checks | D2k3 | 0.5d |
 | **D2k5** done | `wayland`: `wayl_init()` (calloc, FDM hook, `wl_display_connect`, registry + roundtrip, the seven hard interface requirements and five warnings, the second roundtrip that fires the deferred listeners, the monitor summary log line, non-blocking socket, `fdm_add`, `wl_display_prepare_read`) and `wayl_destroy()` (the "terminals still running" sweep, monitor/seat teardown, 24 interface destroys, `fdm_del_no_close`, flush + disconnect). `fdm_hook`, `fdm_wayl` and `registry_listener` stay in C behind four forwarders; 28 new shims. 2 new harness checks run the real init-failure path | D2k4 | 1d |
-| **D2k6** | `wayland`: `handle_global` (383 lines)/`handle_global_remove`, `seat_handle_capabilities`, `fdm_wayl`/`fdm_repeat`, `color_manager_*`, `fdm_hook` | D2k5 | 3–4d |
+| **D2k6** done | `wayland`: `seat_handle_capabilities()` — keyboard/pointer/touch object creation and release, the client-side pointer surface + viewport, the cursor-shape device, and the touch inhibit/restore rules. Seven more shims; the keyboard/pointer/touch listener tables come from input.c through three forwarders. 3 new harness checks; every smoke launch drives it (weston announces pointer+keyboard) | D2k5 | 1d |
+| **D2k7** | `wayland`: `handle_global` (383 lines) + `handle_global_remove`, `fdm_hook`/`fdm_wayl`/`fdm_repeat`, `color_manager_*` | D2k6 | 3–4d |
 | **D2d** | `wayland`: `handle_global`/`handle_global_remove`, `wayl_init`/`wayl_destroy`, seat capabilities and data devices | D2c | 3–4d |
 | **D3** | `render` (5,479) — split into D3a chains/damage/cursor, D3b grid/csd/box-drawing glyph cache, D3c sixel/notifications/search-highlight | biggest module; do it after `wayland` so the surface/scale paths are Zig | 1.5–2w |
 | **D4** | `input` (3,687) — split into D4a keyboard/legacy+kitty protocols, D4b pointer/mouse/touch, D4c compose/IME plumbing | after B2 + key-binding | 1–1.5w |

@@ -249,6 +249,7 @@ terminal_shim_fcft_font_options_configure(
  * call; the render-worker error paths log through this. */
 #include "util.h"
 #include "char32.h"
+#include "input.h"
 const char *terminal_shim_thrd_err_as_string(int thrd_err)
 {
     return thrd_err_as_string(thrd_err);
@@ -451,6 +452,45 @@ struct wl_registry *wayland_shim_display_get_registry(
     struct wl_display *display)
 {
     return wl_display_get_registry(display);
+}
+
+/* wayland.zig: seat capabilities (D2k6). */
+struct wl_keyboard *wayland_shim_seat_get_keyboard(struct wl_seat *seat)
+{
+    return wl_seat_get_keyboard(seat);
+}
+
+struct wl_pointer *wayland_shim_seat_get_pointer(struct wl_seat *seat)
+{
+    return wl_seat_get_pointer(seat);
+}
+
+struct wl_touch *wayland_shim_seat_get_touch(struct wl_seat *seat)
+{
+    return wl_seat_get_touch(seat);
+}
+
+struct wp_cursor_shape_device_v1 *wayland_shim_cursor_shape_get_pointer(
+    struct wp_cursor_shape_manager_v1 *manager, struct wl_pointer *pointer)
+{
+    return wp_cursor_shape_manager_v1_get_pointer(manager, pointer);
+}
+
+void wayland_shim_add_keyboard_listener(
+    struct wl_keyboard *kbd, struct seat *seat)
+{
+    wl_keyboard_add_listener(kbd, &keyboard_listener, seat);
+}
+
+void wayland_shim_add_pointer_listener(
+    struct wl_pointer *pointer, struct seat *seat)
+{
+    wl_pointer_add_listener(pointer, &pointer_listener, seat);
+}
+
+void wayland_shim_add_touch_listener(struct wl_touch *touch, struct seat *seat)
+{
+    wl_touch_add_listener(touch, &touch_listener, seat);
 }
 
 int wayland_shim_fcntl_getfl(int fd)

@@ -3791,6 +3791,26 @@ test_wayl_init_failure(void)
     fdm_destroy(fdm);
 }
 
+
+static void
+test_seat_capabilities(void)
+{
+    struct seat seat = {0};
+
+    /* No capabilities: nothing is created, touch is inhibited */
+    seat_handle_capabilities(&seat, NULL, 0);
+    check(seat.wl_keyboard == NULL && seat.wl_pointer == NULL &&
+          seat.wl_touch == NULL,
+          "no capabilities creates no wl objects");
+    check(seat.touch.state == TOUCH_STATE_INHIBITED,
+          "no touch capability inhibits touch");
+
+    /* Idempotent */
+    seat_handle_capabilities(&seat, NULL, 0);
+    check(seat.touch.state == TOUCH_STATE_INHIBITED,
+          "repeating the empty capability set is harmless");
+}
+
 int
 main(void)
 {
@@ -3818,6 +3838,7 @@ main(void)
     test_surface_listener();
     test_small_listeners();
     test_wayl_init_failure();
+    test_seat_capabilities();
     test_wayland_misc();
     test_osc8();
     test_size_notifications();
