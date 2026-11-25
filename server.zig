@@ -14,22 +14,8 @@ const LOG_CLASS_ERROR: c_int = 1;
 const LOG_CLASS_WARNING: c_int = 2;
 const LOG_CLASS_INFO: c_int = 3;
 
-extern fn log_msg(
-    class: c_int,
-    module: [*:0]const u8,
-    file: [*:0]const u8,
-    lineno: c_int,
-    fmt: [*:0]const u8,
-    ...
-) callconv(.c) void;
-extern fn log_errno(
-    class: c_int,
-    module: [*:0]const u8,
-    file: [*:0]const u8,
-    lineno: c_int,
-    fmt: [*:0]const u8,
-    ...
-) callconv(.c) void;
+extern fn log_msg(class: c_int, module: [*:0]const u8, file: [*:0]const u8, lineno: c_int, fmt: [*:0]const u8, ...) callconv(.c) void;
+extern fn log_errno(class: c_int, module: [*:0]const u8, file: [*:0]const u8, lineno: c_int, fmt: [*:0]const u8, ...) callconv(.c) void;
 
 extern fn free(ptr: ?*anyopaque) callconv(.c) void;
 extern fn xmalloc(size: usize) callconv(.c) ?*anyopaque;
@@ -47,14 +33,23 @@ extern fn connect(fd: c_int, addr: ?*const anyopaque, len: u32) callconv(.c) c_i
 extern fn bind(fd: c_int, addr: ?*const anyopaque, len: u32) callconv(.c) c_int;
 extern fn listen(fd: c_int, backlog: c_int) callconv(.c) c_int;
 extern fn accept4(
-    fd: c_int, addr: ?*anyopaque, addr_len: ?*u32, flags: c_int,
+    fd: c_int,
+    addr: ?*anyopaque,
+    addr_len: ?*u32,
+    flags: c_int,
 ) callconv(.c) c_int;
 extern fn getsockopt(
-    fd: c_int, level: c_int, optname: c_int, optval: ?*anyopaque, optlen: ?*u32,
+    fd: c_int,
+    level: c_int,
+    optname: c_int,
+    optval: ?*anyopaque,
+    optlen: ?*u32,
 ) callconv(.c) c_int;
 extern fn fcntl(fd: c_int, cmd: c_int, ...) callconv(.c) c_int;
 extern fn strtol(
-    nptr: [*:0]const u8, endptr: *?[*:0]u8, base: c_int,
+    nptr: [*:0]const u8,
+    endptr: *?[*:0]u8,
+    base: c_int,
 ) callconv(.c) c_long;
 
 extern fn fdm_add(
@@ -103,24 +98,40 @@ extern fn config_override_apply(
     errors_are_fatal: bool,
 ) callconv(.c) bool;
 
-// Linux ABI values, checked against the C macros by the harness.
-const EPOLLIN: c_int = 0x001;
-const EPOLLHUP: c_int = 0x010;
-const AF_UNIX: c_int = 1;
-const SOCK_STREAM: c_int = 1;
-const SOCK_CLOEXEC: c_int = 0x80000;
-const SOCK_NONBLOCK: c_int = 0x800;
-const FD_CLOEXEC: c_int = 1;
-const F_GETFD: c_int = 1;
-const F_SETFD: c_int = 2;
-const F_GETFL: c_int = 3;
-const F_SETFL: c_int = 4;
-const SOL_SOCKET: c_int = 1;
-const SO_DOMAIN: c_int = 39;
-const SO_ACCEPTCONN: c_int = 30;
-const SO_TYPE: c_int = 3;
-const SIGUSR1: c_int = 10;
-const SIGUSR2: c_int = 12;
+const builtin = @import("builtin");
+
+// epoll-shim exposes the Linux epoll API on FreeBSD.
+const EPOLLIN: c_int = if (builtin.os.tag == .linux)
+    @intCast(std.os.linux.EPOLL.IN)
+else
+    0x001;
+const EPOLLHUP: c_int = if (builtin.os.tag == .linux)
+    @intCast(std.os.linux.EPOLL.HUP)
+else
+    0x010;
+const AF_UNIX: c_int = @intCast(std.posix.AF.UNIX);
+const SOCK_STREAM: c_int = @intCast(std.posix.SOCK.STREAM);
+const SOCK_CLOEXEC: c_int = if (builtin.os.tag == .linux)
+    @as(c_int, 1) << @bitOffsetOf(std.posix.O, "CLOEXEC")
+else
+    0; // FreeBSD sets FD_CLOEXEC with fcntl() after socket()
+
+const SOCK_NONBLOCK: c_int = if (builtin.os.tag == .linux)
+    @as(c_int, 1) << @bitOffsetOf(std.posix.O, "NONBLOCK")
+else
+    0; // FreeBSD sets O_NONBLOCK with fcntl() after socket()
+
+const FD_CLOEXEC: c_int = std.posix.FD_CLOEXEC;
+const F_GETFD: c_int = @intCast(std.posix.F.GETFD);
+const F_SETFD: c_int = @intCast(std.posix.F.SETFD);
+const F_GETFL: c_int = @intCast(std.posix.F.GETFL);
+const F_SETFL: c_int = @intCast(std.posix.F.SETFL);
+const SOL_SOCKET: c_int = @intCast(std.posix.SOL.SOCKET);
+const SO_DOMAIN: c_int = @intCast(std.posix.SO.DOMAIN);
+const SO_ACCEPTCONN: c_int = @intCast(std.posix.SO.ACCEPTCONN);
+const SO_TYPE: c_int = @intCast(std.posix.SO.TYPE);
+const SIGUSR1: c_int = @intFromEnum(std.posix.SIG.USR1);
+const SIGUSR2: c_int = @intFromEnum(std.posix.SIG.USR2);
 const NON_ZERO_OPT: c_int = @divTrunc(std.math.minInt(c_int), 7);
 const MAX_SETUP_SIZE: u32 = 128 * 1024;
 const EXIT_CODE_NO_MONITORS: c_int = -26;
@@ -516,17 +527,26 @@ export fn fdm_client(
                     SIGUSR1 => term_theme_switch_to_dark(term),
                     SIGUSR2 => term_theme_switch_to_light(term),
                     else => log_msg(
-                        LOG_CLASS_ERROR, "server", "server.zig", @intCast(@src().line),
+                        LOG_CLASS_ERROR,
+                        "server",
+                        "server.zig",
+                        @intCast(@src().line),
                         "client sent bad SIGUSR number: %d (expected SIGUSR1=%d or SIGUSR2=%d)",
-                        @as(c_int, @bitCast(sigusr.signo)), SIGUSR1, SIGUSR2,
+                        @as(c_int, @bitCast(sigusr.signo)),
+                        SIGUSR1,
+                        SIGUSR2,
                     ),
                 }
             },
             else => {
                 log_msg(
-                    LOG_CLASS_WARNING, "server", "server.zig", @intCast(@src().line),
+                    LOG_CLASS_WARNING,
+                    "server",
+                    "server.zig",
+                    @intCast(@src().line),
                     "client sent unrecognized IPC (0x%04x), ignoring %hhu bytes",
-                    ipc_code, hdr.size,
+                    ipc_code,
+                    hdr.size,
                 );
                 // Drain the advertised payload; C could not know whether all
                 // of it had arrived yet, so this is best-effort here too.
@@ -686,7 +706,7 @@ export fn server_try_connect(sock_path: [*:0]const u8) callconv(.c) c_int {
     return @intFromEnum(tryConnect(sock_path));
 }
 
-export fn prepare_socket(fd: c_int) callconv(.c) bool {
+fn setSocketFdFlags(fd: c_int) bool {
     var flags = fcntl(fd, F_GETFD);
     if (flags < 0) {
         log_errno(LOG_CLASS_ERROR, "server", "server.zig", @intCast(@src().line), "failed to get file descriptors flag for passed socket");
@@ -702,10 +722,17 @@ export fn prepare_socket(fd: c_int) callconv(.c) bool {
         log_errno(LOG_CLASS_ERROR, "server", "server.zig", @intCast(@src().line), "failed to get file status flags for passed socket");
         return false;
     }
-    if (fcntl(fd, F_SETFL, flags | SOCK_NONBLOCK) == -1) {
+    if (fcntl(fd, F_SETFL, flags | @as(c_int, 1) << @bitOffsetOf(std.posix.O, "NONBLOCK")) == -1) {
         log_errno(LOG_CLASS_ERROR, "server", "server.zig", @intCast(@src().line), "failed to set non-blocking mode on passed socket");
         return false;
     }
+
+    return true;
+}
+
+export fn prepare_socket(fd: c_int) callconv(.c) bool {
+    if (!setSocketFdFlags(fd))
+        return false;
 
     const options = [_]c_int{ SO_DOMAIN, SO_ACCEPTCONN, SO_TYPE };
     const expected = [_]c_int{ AF_UNIX, NON_ZERO_OPT, SOCK_STREAM };
@@ -766,6 +793,8 @@ export fn server_init(
             log_errno(LOG_CLASS_ERROR, "server", "server.zig", @intCast(@src().line), "failed to create UNIX socket");
             return null;
         }
+        if (builtin.os.tag != .linux and !setSocketFdFlags(fd))
+            return initFail(null, fd);
 
         switch (tryConnect(configured_path)) {
             .fail => {},

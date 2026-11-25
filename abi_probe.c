@@ -15,6 +15,8 @@
 #include "grid.h"
 #include "notify.h"
 #include <sys/un.h>
+#include <time.h>
+#include <time.h>
 #include "client-protocol.h"
 #include "server.h"
 #include "shm.h"
@@ -22,6 +24,12 @@
 #include "render.h"
 #include "wayland.h"
 #include "client-protocol.h"
+
+/* Anonymous tll() structs need named probe objects for sizeof/offsetof. */
+typedef tll(char *) foot_tll_str_t;
+static foot_tll_str_t foot_tll_str_probe;
+static env_var_list_t foot_env_var_probe;
+static user_notifications_t foot_notification_probe;
 
 int main(int argc, char **argv) {
     FILE *out = stdout;
@@ -1230,6 +1238,13 @@ fprintf(out, "pub const Terminal_kitty_notification_expire_time__size: usize = %
 fprintf(out, "pub const Terminal_kitty_notification_expire_time: usize = %zu;\n", offsetof(struct terminal, kitty_notification.expire_time) - offsetof(struct terminal, kitty_notification));
 fprintf(out, "pub const Terminal_kitty_notification_actions__size: usize = %zu;\n", sizeof(((struct terminal *)0)->kitty_notification.actions));
 fprintf(out, "pub const Terminal_kitty_notification_actions: usize = %zu;\n", offsetof(struct terminal, kitty_notification.actions) - offsetof(struct terminal, kitty_notification));
+fprintf(out, "pub const Terminal_kitty_notification_actions__abi_fields: usize = 1;\n");
+fprintf(out, "pub const Terminal_kitty_notification_actions_head__size: usize = %zu;\n", sizeof(((struct terminal *)0)->kitty_notification.actions.head));
+fprintf(out, "pub const Terminal_kitty_notification_actions_head: usize = %zu;\n", offsetof(struct terminal, kitty_notification.actions.head) - offsetof(struct terminal, kitty_notification.actions));
+fprintf(out, "pub const Terminal_kitty_notification_actions_tail__size: usize = %zu;\n", sizeof(((struct terminal *)0)->kitty_notification.actions.tail));
+fprintf(out, "pub const Terminal_kitty_notification_actions_tail: usize = %zu;\n", offsetof(struct terminal, kitty_notification.actions.tail) - offsetof(struct terminal, kitty_notification.actions));
+fprintf(out, "pub const Terminal_kitty_notification_actions_length__size: usize = %zu;\n", sizeof(((struct terminal *)0)->kitty_notification.actions.length));
+fprintf(out, "pub const Terminal_kitty_notification_actions_length: usize = %zu;\n", offsetof(struct terminal, kitty_notification.actions.length) - offsetof(struct terminal, kitty_notification.actions));
 fprintf(out, "pub const Terminal_kitty_notification_icon_cache_id__size: usize = %zu;\n", sizeof(((struct terminal *)0)->kitty_notification.icon_cache_id));
 fprintf(out, "pub const Terminal_kitty_notification_icon_cache_id: usize = %zu;\n", offsetof(struct terminal, kitty_notification.icon_cache_id) - offsetof(struct terminal, kitty_notification));
 fprintf(out, "pub const Terminal_kitty_notification_icon_symbolic_name__size: usize = %zu;\n", sizeof(((struct terminal *)0)->kitty_notification.icon_symbolic_name));
@@ -1329,6 +1344,13 @@ fprintf(out, "pub const Notification_expire_time__size: usize = %zu;\n", sizeof(
 fprintf(out, "pub const Notification_expire_time: usize = %zu;\n", offsetof(struct notification, expire_time));
 fprintf(out, "pub const Notification_actions__size: usize = %zu;\n", sizeof(((struct notification *)0)->actions));
 fprintf(out, "pub const Notification_actions: usize = %zu;\n", offsetof(struct notification, actions));
+fprintf(out, "pub const Notification_actions__abi_fields: usize = 1;\n");
+fprintf(out, "pub const Notification_actions_head__size: usize = %zu;\n", sizeof(((struct notification *)0)->actions.head));
+fprintf(out, "pub const Notification_actions_head: usize = %zu;\n", offsetof(struct notification, actions.head) - offsetof(struct notification, actions));
+fprintf(out, "pub const Notification_actions_tail__size: usize = %zu;\n", sizeof(((struct notification *)0)->actions.tail));
+fprintf(out, "pub const Notification_actions_tail: usize = %zu;\n", offsetof(struct notification, actions.tail) - offsetof(struct notification, actions));
+fprintf(out, "pub const Notification_actions_length__size: usize = %zu;\n", sizeof(((struct notification *)0)->actions.length));
+fprintf(out, "pub const Notification_actions_length: usize = %zu;\n", offsetof(struct notification, actions.length) - offsetof(struct notification, actions));
 fprintf(out, "pub const Notification_icon_cache_id__size: usize = %zu;\n", sizeof(((struct notification *)0)->icon_cache_id));
 fprintf(out, "pub const Notification_icon_cache_id: usize = %zu;\n", offsetof(struct notification, icon_cache_id));
 fprintf(out, "pub const Notification_icon_symbolic_name__size: usize = %zu;\n", sizeof(((struct notification *)0)->icon_symbolic_name));
@@ -1872,6 +1894,13 @@ fprintf(out, "pub const Config_mouse_alternate_scroll_mode__size: usize = %zu;\n
 fprintf(out, "pub const Config_mouse_alternate_scroll_mode: usize = %zu;\n", offsetof(struct config, mouse.alternate_scroll_mode) - offsetof(struct config, mouse));
 fprintf(out, "pub const Config_mouse_selection_override_modifiers__size: usize = %zu;\n", sizeof(((struct config *)0)->mouse.selection_override_modifiers));
 fprintf(out, "pub const Config_mouse_selection_override_modifiers: usize = %zu;\n", offsetof(struct config, mouse.selection_override_modifiers) - offsetof(struct config, mouse));
+fprintf(out, "pub const Config_mouse_selection_override_modifiers__abi_fields: usize = 1;\n");
+fprintf(out, "pub const Config_mouse_selection_override_modifiers_head__size: usize = %zu;\n", sizeof(((struct config *)0)->mouse.selection_override_modifiers.head));
+fprintf(out, "pub const Config_mouse_selection_override_modifiers_head: usize = %zu;\n", offsetof(struct config, mouse.selection_override_modifiers.head) - offsetof(struct config, mouse.selection_override_modifiers));
+fprintf(out, "pub const Config_mouse_selection_override_modifiers_tail__size: usize = %zu;\n", sizeof(((struct config *)0)->mouse.selection_override_modifiers.tail));
+fprintf(out, "pub const Config_mouse_selection_override_modifiers_tail: usize = %zu;\n", offsetof(struct config, mouse.selection_override_modifiers.tail) - offsetof(struct config, mouse.selection_override_modifiers));
+fprintf(out, "pub const Config_mouse_selection_override_modifiers_length__size: usize = %zu;\n", sizeof(((struct config *)0)->mouse.selection_override_modifiers.length));
+fprintf(out, "pub const Config_mouse_selection_override_modifiers_length: usize = %zu;\n", offsetof(struct config, mouse.selection_override_modifiers.length) - offsetof(struct config, mouse.selection_override_modifiers));
 fprintf(out, "pub const Config_bindings__size: usize = %zu;\n", sizeof(((struct config *)0)->bindings));
 fprintf(out, "pub const Config_bindings: usize = %zu;\n", offsetof(struct config, bindings));
 fprintf(out, "pub const Config_bindings__abi_fields: usize = 1;\n");
@@ -2089,6 +2118,13 @@ fprintf(out, "pub const ConfigKeyBinding_action__size: usize = %zu;\n", sizeof((
 fprintf(out, "pub const ConfigKeyBinding_action: usize = %zu;\n", offsetof(struct config_key_binding, action));
 fprintf(out, "pub const ConfigKeyBinding_modifiers__size: usize = %zu;\n", sizeof(((struct config_key_binding *)0)->modifiers));
 fprintf(out, "pub const ConfigKeyBinding_modifiers: usize = %zu;\n", offsetof(struct config_key_binding, modifiers));
+fprintf(out, "pub const ConfigKeyBinding_modifiers__abi_fields: usize = 1;\n");
+fprintf(out, "pub const ConfigKeyBinding_modifiers_head__size: usize = %zu;\n", sizeof(((struct config_key_binding *)0)->modifiers.head));
+fprintf(out, "pub const ConfigKeyBinding_modifiers_head: usize = %zu;\n", offsetof(struct config_key_binding, modifiers.head) - offsetof(struct config_key_binding, modifiers));
+fprintf(out, "pub const ConfigKeyBinding_modifiers_tail__size: usize = %zu;\n", sizeof(((struct config_key_binding *)0)->modifiers.tail));
+fprintf(out, "pub const ConfigKeyBinding_modifiers_tail: usize = %zu;\n", offsetof(struct config_key_binding, modifiers.tail) - offsetof(struct config_key_binding, modifiers));
+fprintf(out, "pub const ConfigKeyBinding_modifiers_length__size: usize = %zu;\n", sizeof(((struct config_key_binding *)0)->modifiers.length));
+fprintf(out, "pub const ConfigKeyBinding_modifiers_length: usize = %zu;\n", offsetof(struct config_key_binding, modifiers.length) - offsetof(struct config_key_binding, modifiers));
 fprintf(out, "pub const ConfigKeyBinding_aux__size: usize = %zu;\n", sizeof(((struct config_key_binding *)0)->aux));
 fprintf(out, "pub const ConfigKeyBinding_aux: usize = %zu;\n", offsetof(struct config_key_binding, aux));
 fprintf(out, "pub const ConfigKeyBinding_aux__abi_fields: usize = 1;\n");
@@ -2888,6 +2924,11 @@ fprintf(out, "pub const Seat_mouse_last_released_button__size: usize = %zu;\n", 
 fprintf(out, "pub const Seat_mouse_last_released_button: usize = %zu;\n", offsetof(struct seat, mouse.last_released_button) - offsetof(struct seat, mouse));
 fprintf(out, "pub const Seat_mouse_last_time__size: usize = %zu;\n", sizeof(((struct seat *)0)->mouse.last_time));
 fprintf(out, "pub const Seat_mouse_last_time: usize = %zu;\n", offsetof(struct seat, mouse.last_time) - offsetof(struct seat, mouse));
+fprintf(out, "pub const Seat_mouse_last_time__abi_fields: usize = 1;\n");
+fprintf(out, "pub const Seat_mouse_last_time_tv_sec__size: usize = %zu;\n", sizeof(((struct seat *)0)->mouse.last_time.tv_sec));
+fprintf(out, "pub const Seat_mouse_last_time_tv_sec: usize = %zu;\n", offsetof(struct seat, mouse.last_time.tv_sec) - offsetof(struct seat, mouse.last_time));
+fprintf(out, "pub const Seat_mouse_last_time_tv_nsec__size: usize = %zu;\n", sizeof(((struct seat *)0)->mouse.last_time.tv_nsec));
+fprintf(out, "pub const Seat_mouse_last_time_tv_nsec: usize = %zu;\n", offsetof(struct seat, mouse.last_time.tv_nsec) - offsetof(struct seat, mouse.last_time));
 fprintf(out, "pub const Seat_mouse_aggregated__size: usize = %zu;\n", sizeof(((struct seat *)0)->mouse.aggregated));
 fprintf(out, "pub const Seat_mouse_aggregated: usize = %zu;\n", offsetof(struct seat, mouse.aggregated) - offsetof(struct seat, mouse));
 fprintf(out, "pub const Seat_mouse_aggregated_120__size: usize = %zu;\n", sizeof(((struct seat *)0)->mouse.aggregated_120));
@@ -3180,6 +3221,71 @@ fprintf(out, "pub const SockaddrUn_sun_family__size: usize = %zu;\n", sizeof(((s
 fprintf(out, "pub const SockaddrUn_sun_family: usize = %zu;\n", offsetof(struct sockaddr_un, sun_family));
 fprintf(out, "pub const SockaddrUn_sun_path__size: usize = %zu;\n", sizeof(((struct sockaddr_un *)0)->sun_path));
 fprintf(out, "pub const SockaddrUn_sun_path: usize = %zu;\n", offsetof(struct sockaddr_un, sun_path));
+fprintf(out, "pub const PtOrPx__size: usize = %zu;\n", sizeof(struct pt_or_px));
+fprintf(out, "pub const PtOrPx_px__size: usize = %zu;\n", sizeof(((struct pt_or_px *)0)->px));
+fprintf(out, "pub const PtOrPx_px: usize = %zu;\n", offsetof(struct pt_or_px, px));
+fprintf(out, "pub const PtOrPx_pt__size: usize = %zu;\n", sizeof(((struct pt_or_px *)0)->pt));
+fprintf(out, "pub const PtOrPx_pt: usize = %zu;\n", offsetof(struct pt_or_px, pt));
+fprintf(out, "pub const Timespec__size: usize = %zu;\n", sizeof(struct timespec));
+fprintf(out, "pub const Timespec_tv_sec__size: usize = %zu;\n", sizeof(((struct timespec *)0)->tv_sec));
+fprintf(out, "pub const Timespec_tv_sec: usize = %zu;\n", offsetof(struct timespec, tv_sec));
+fprintf(out, "pub const Timespec_tv_nsec__size: usize = %zu;\n", sizeof(((struct timespec *)0)->tv_nsec));
+fprintf(out, "pub const Timespec_tv_nsec: usize = %zu;\n", offsetof(struct timespec, tv_nsec));
+fprintf(out, "pub const TllStr__size: usize = %zu;\n", sizeof(__typeof__(foot_tll_str_probe)));
+fprintf(out, "pub const TllStr_head__size: usize = %zu;\n", sizeof(((__typeof__(foot_tll_str_probe) *)0)->head));
+fprintf(out, "pub const TllStr_head: usize = %zu;\n", offsetof(__typeof__(foot_tll_str_probe), head));
+fprintf(out, "pub const TllStr_tail__size: usize = %zu;\n", sizeof(((__typeof__(foot_tll_str_probe) *)0)->tail));
+fprintf(out, "pub const TllStr_tail: usize = %zu;\n", offsetof(__typeof__(foot_tll_str_probe), tail));
+fprintf(out, "pub const TllStr_length__size: usize = %zu;\n", sizeof(((__typeof__(foot_tll_str_probe) *)0)->length));
+fprintf(out, "pub const TllStr_length: usize = %zu;\n", offsetof(__typeof__(foot_tll_str_probe), length));
+fprintf(out, "pub const EnvVar__size: usize = %zu;\n", sizeof(struct env_var));
+fprintf(out, "pub const EnvVar_name__size: usize = %zu;\n", sizeof(((struct env_var *)0)->name));
+fprintf(out, "pub const EnvVar_name: usize = %zu;\n", offsetof(struct env_var, name));
+fprintf(out, "pub const EnvVar_value__size: usize = %zu;\n", sizeof(((struct env_var *)0)->value));
+fprintf(out, "pub const EnvVar_value: usize = %zu;\n", offsetof(struct env_var, value));
+fprintf(out, "pub const EnvVarNode__size: usize = %zu;\n", sizeof(__typeof__(*foot_env_var_probe.head)));
+fprintf(out, "pub const EnvVarNode_item__size: usize = %zu;\n", sizeof(((__typeof__(*foot_env_var_probe.head) *)0)->item));
+fprintf(out, "pub const EnvVarNode_item: usize = %zu;\n", offsetof(__typeof__(*foot_env_var_probe.head), item));
+fprintf(out, "pub const EnvVarNode_item__abi_fields: usize = 1;\n");
+fprintf(out, "pub const EnvVarNode_item_name__size: usize = %zu;\n", sizeof(((__typeof__(*foot_env_var_probe.head) *)0)->item.name));
+fprintf(out, "pub const EnvVarNode_item_name: usize = %zu;\n", offsetof(__typeof__(*foot_env_var_probe.head), item.name) - offsetof(__typeof__(*foot_env_var_probe.head), item));
+fprintf(out, "pub const EnvVarNode_item_value__size: usize = %zu;\n", sizeof(((__typeof__(*foot_env_var_probe.head) *)0)->item.value));
+fprintf(out, "pub const EnvVarNode_item_value: usize = %zu;\n", offsetof(__typeof__(*foot_env_var_probe.head), item.value) - offsetof(__typeof__(*foot_env_var_probe.head), item));
+fprintf(out, "pub const EnvVarNode_prev__size: usize = %zu;\n", sizeof(((__typeof__(*foot_env_var_probe.head) *)0)->prev));
+fprintf(out, "pub const EnvVarNode_prev: usize = %zu;\n", offsetof(__typeof__(*foot_env_var_probe.head), prev));
+fprintf(out, "pub const EnvVarNode_next__size: usize = %zu;\n", sizeof(((__typeof__(*foot_env_var_probe.head) *)0)->next));
+fprintf(out, "pub const EnvVarNode_next: usize = %zu;\n", offsetof(__typeof__(*foot_env_var_probe.head), next));
+fprintf(out, "pub const EnvVarList__size: usize = %zu;\n", sizeof(env_var_list_t));
+fprintf(out, "pub const EnvVarList_head__size: usize = %zu;\n", sizeof(((env_var_list_t *)0)->head));
+fprintf(out, "pub const EnvVarList_head: usize = %zu;\n", offsetof(env_var_list_t, head));
+fprintf(out, "pub const EnvVarList_tail__size: usize = %zu;\n", sizeof(((env_var_list_t *)0)->tail));
+fprintf(out, "pub const EnvVarList_tail: usize = %zu;\n", offsetof(env_var_list_t, tail));
+fprintf(out, "pub const EnvVarList_length__size: usize = %zu;\n", sizeof(((env_var_list_t *)0)->length));
+fprintf(out, "pub const EnvVarList_length: usize = %zu;\n", offsetof(env_var_list_t, length));
+fprintf(out, "pub const UserNotification__size: usize = %zu;\n", sizeof(struct user_notification));
+fprintf(out, "pub const UserNotification_kind__size: usize = %zu;\n", sizeof(((struct user_notification *)0)->kind));
+fprintf(out, "pub const UserNotification_kind: usize = %zu;\n", offsetof(struct user_notification, kind));
+fprintf(out, "pub const UserNotification_text__size: usize = %zu;\n", sizeof(((struct user_notification *)0)->text));
+fprintf(out, "pub const UserNotification_text: usize = %zu;\n", offsetof(struct user_notification, text));
+fprintf(out, "pub const UserNotificationNode__size: usize = %zu;\n", sizeof(__typeof__(*foot_notification_probe.head)));
+fprintf(out, "pub const UserNotificationNode_item__size: usize = %zu;\n", sizeof(((__typeof__(*foot_notification_probe.head) *)0)->item));
+fprintf(out, "pub const UserNotificationNode_item: usize = %zu;\n", offsetof(__typeof__(*foot_notification_probe.head), item));
+fprintf(out, "pub const UserNotificationNode_item__abi_fields: usize = 1;\n");
+fprintf(out, "pub const UserNotificationNode_item_kind__size: usize = %zu;\n", sizeof(((__typeof__(*foot_notification_probe.head) *)0)->item.kind));
+fprintf(out, "pub const UserNotificationNode_item_kind: usize = %zu;\n", offsetof(__typeof__(*foot_notification_probe.head), item.kind) - offsetof(__typeof__(*foot_notification_probe.head), item));
+fprintf(out, "pub const UserNotificationNode_item_text__size: usize = %zu;\n", sizeof(((__typeof__(*foot_notification_probe.head) *)0)->item.text));
+fprintf(out, "pub const UserNotificationNode_item_text: usize = %zu;\n", offsetof(__typeof__(*foot_notification_probe.head), item.text) - offsetof(__typeof__(*foot_notification_probe.head), item));
+fprintf(out, "pub const UserNotificationNode_prev__size: usize = %zu;\n", sizeof(((__typeof__(*foot_notification_probe.head) *)0)->prev));
+fprintf(out, "pub const UserNotificationNode_prev: usize = %zu;\n", offsetof(__typeof__(*foot_notification_probe.head), prev));
+fprintf(out, "pub const UserNotificationNode_next__size: usize = %zu;\n", sizeof(((__typeof__(*foot_notification_probe.head) *)0)->next));
+fprintf(out, "pub const UserNotificationNode_next: usize = %zu;\n", offsetof(__typeof__(*foot_notification_probe.head), next));
+fprintf(out, "pub const UserNotifications__size: usize = %zu;\n", sizeof(user_notifications_t));
+fprintf(out, "pub const UserNotifications_head__size: usize = %zu;\n", sizeof(((user_notifications_t *)0)->head));
+fprintf(out, "pub const UserNotifications_head: usize = %zu;\n", offsetof(user_notifications_t, head));
+fprintf(out, "pub const UserNotifications_tail__size: usize = %zu;\n", sizeof(((user_notifications_t *)0)->tail));
+fprintf(out, "pub const UserNotifications_tail: usize = %zu;\n", offsetof(user_notifications_t, tail));
+fprintf(out, "pub const UserNotifications_length__size: usize = %zu;\n", sizeof(((user_notifications_t *)0)->length));
+fprintf(out, "pub const UserNotifications_length: usize = %zu;\n", offsetof(user_notifications_t, length));
 fprintf(out, "pub const Render__size: usize = %zu;\n", sizeof(((struct terminal *)0)->render));
 fprintf(out, "pub const Render_chains__size: usize = %zu;\n", sizeof(((struct terminal *)0)->render.chains));
 fprintf(out, "pub const Render_chains: usize = %zu;\n", offsetof(struct terminal, render.chains) - offsetof(struct terminal, render));

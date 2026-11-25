@@ -16,31 +16,14 @@ const build_options = @import("build_options");
 const LOG_CLASS_ERROR: c_int = 1;
 const LOG_CLASS_DEBUG: c_int = 4;
 
-extern fn log_msg(
-    class: c_int,
-    module: [*:0]const u8,
-    file: [*:0]const u8,
-    lineno: c_int,
-    fmt: [*:0]const u8,
-    ...
-) void;
-extern fn log_errno(
-    class: c_int,
-    module: [*:0]const u8,
-    file: [*:0]const u8,
-    lineno: c_int,
-    fmt: [*:0]const u8,
-    ...
-) void;
-extern fn log_errno_provided(
-    class: c_int,
-    module: [*:0]const u8,
-    file: [*:0]const u8,
-    lineno: c_int,
-    err_no: c_int,
-    fmt: [*:0]const u8,
-    ...
-) void;
+const libc = @cImport({
+    @cInclude("sys/ioctl.h");
+    @cInclude("unistd.h");
+});
+
+extern fn log_msg(class: c_int, module: [*:0]const u8, file: [*:0]const u8, lineno: c_int, fmt: [*:0]const u8, ...) void;
+extern fn log_errno(class: c_int, module: [*:0]const u8, file: [*:0]const u8, lineno: c_int, fmt: [*:0]const u8, ...) void;
+extern fn log_errno_provided(class: c_int, module: [*:0]const u8, file: [*:0]const u8, lineno: c_int, err_no: c_int, fmt: [*:0]const u8, ...) void;
 
 extern fn tokenize_cmdline(cmdline: [*c]const u8, argv: *[*c][*c]u8) bool;
 extern fn getline(lineptr: *?[*]u8, n: *usize, stream: *std.c.FILE) isize;
@@ -62,23 +45,22 @@ const SlaveConstants = extern struct {
     tiocsctty: c_ulong,
 };
 
-// The open/fcntl/confstr/ioctl constants are C macros (and differ per
-// platform); these are the Linux values foot targets. Keeping them in the
-// `SlaveConstants` struct preserves the shape the rest of this file uses.
-const O_RDWR: c_int = 2;
-const O_CLOEXEC: c_int = 0o2000000; // 0x80000
-const O_NONBLOCK: c_int = 0o4000; // 0x800
-const F_GETFL: c_int = 3;
-const F_SETFL: c_int = 4;
-const F_GETFD: c_int = 1;
-const F_SETFD: c_int = 2;
-const FD_CLOEXEC: c_int = 1;
-const F_OK: c_int = 0;
-const STDIN_FILENO: c_int = 0;
-const STDOUT_FILENO: c_int = 1;
-const STDERR_FILENO: c_int = 2;
-const CS_PATH: c_int = 0; // glibc/musl _CS_PATH
-const TIOCSCTTY: c_ulong = 0x540e;
+// These values are C macros and differ per platform. Read them from the
+// target libc headers, then expose the same private struct to the C harness.
+const O_RDWR: c_int = @intFromEnum(std.posix.ACCMODE.RDWR);
+const O_CLOEXEC: c_int = @as(c_int, 1) << @bitOffsetOf(std.posix.O, "CLOEXEC");
+const O_NONBLOCK: c_int = @as(c_int, 1) << @bitOffsetOf(std.posix.O, "NONBLOCK");
+const F_GETFL: c_int = @intCast(std.posix.F.GETFL);
+const F_SETFL: c_int = @intCast(std.posix.F.SETFL);
+const F_GETFD: c_int = @intCast(std.posix.F.GETFD);
+const F_SETFD: c_int = @intCast(std.posix.F.SETFD);
+const FD_CLOEXEC: c_int = std.posix.FD_CLOEXEC;
+const F_OK: c_int = @intCast(std.posix.F_OK);
+const STDIN_FILENO: c_int = std.posix.STDIN_FILENO;
+const STDOUT_FILENO: c_int = std.posix.STDOUT_FILENO;
+const STDERR_FILENO: c_int = std.posix.STDERR_FILENO;
+const CS_PATH: c_int = libc._CS_PATH;
+const TIOCSCTTY: c_ulong = libc.TIOCSCTTY;
 
 const constants = SlaveConstants{
     .o_rdwr = O_RDWR,
@@ -106,11 +88,17 @@ export fn slave_shim_constants() *const SlaveConstants {
 // attributes cannot be read, 2 if they cannot be written".
 extern fn tcgetattr(fd: c_int, termios: *std.posix.termios) c_int;
 extern fn tcsetattr(fd: c_int, action: c_int, termios: *const std.posix.termios) c_int;
-const TCSANOW: c_int = 0;
+const TCSANOW: c_int = @intFromEnum(std.posix.TCSA.NOW);
 
 /// Enable IUTF8 on the pty slave: return 0 on success, 1 if the attributes
 /// cannot be read, 2 if they cannot be written (the C shim's contract).
 export fn slave_shim_set_iutf8(pts: c_int) c_int {
+    if (comptime !@hasField(std.posix.tc_iflag_t, "IUTF8"))
+        return 0; // the C shim compiles this step out when IUTF8 is undefined
+
+    if (comptime !@hasField(std.posix.tc_iflag_t, "IUTF8"))
+        return 0; // the C shim compiles this step out when IUTF8 is undefined
+
     var flags: std.posix.termios = undefined;
     if (tcgetattr(pts, &flags) < 0)
         return 1;
@@ -122,19 +110,29 @@ export fn slave_shim_set_iutf8(pts: c_int) c_int {
     return 0;
 }
 
-/// Restore the child signal mask and the SIGHUP/SIGPIPE handlers. All
-/// arguments are valid, so the std.posix calls cannot fail.
+const SigSet = std.c.sigset_t;
+const Sigaction = std.c.Sigaction;
+extern fn sigemptyset(set: *SigSet) c_int;
+extern fn sigprocmask(how: c_int, set: ?*const SigSet, old: ?*SigSet) c_int;
+extern fn sigaction(sig: c_int, act: ?*const Sigaction, old: ?*Sigaction) c_int;
+
+/// Restore the child signal mask and the SIGHUP/SIGPIPE handlers. The
+/// caller checks the returned status and reports the libc error.
 export fn slave_shim_reset_signals() bool {
-    const dfl: std.posix.Sigaction = .{
+    var dfl = Sigaction{
         .handler = .{ .handler = std.posix.SIG.DFL },
-        .mask = std.posix.sigemptyset(),
+        .mask = std.mem.zeroes(SigSet),
         .flags = 0,
     };
-    const mask = std.posix.sigemptyset();
-
-    std.posix.sigprocmask(std.posix.SIG.SETMASK, &mask, null);
-    std.posix.sigaction(.HUP, &dfl, null);
-    std.posix.sigaction(.PIPE, &dfl, null);
+    var mask = std.mem.zeroes(SigSet);
+    _ = sigemptyset(&dfl.mask);
+    _ = sigemptyset(&mask);
+    if (sigprocmask(std.posix.SIG.SETMASK, &mask, null) < 0 or
+        sigaction(@intFromEnum(std.posix.SIG.HUP), &dfl, null) < 0 or
+        sigaction(@intFromEnum(std.posix.SIG.PIPE), &dfl, null) < 0)
+    {
+        return false;
+    }
     return true;
 }
 
@@ -338,20 +336,24 @@ fn slaveExec(
     const c = slave_shim_constants().*;
 
     var ptmx = ptmx_in;
+    var child_errno: c_int = 0;
     var pts: c_int = -1;
 
     exec: {
         const pts_name = ptsname(ptmx) orelse {
-            logErrno("failed to get the pseudo terminal slave device name", .{});
+            child_errno = errno();
+            logErrnoProvided(child_errno, "failed to get the pseudo terminal slave device name", .{});
             break :exec;
         };
 
         if (grantpt(ptmx) == -1) {
-            logErrno("failed to grantpt()", .{});
+            child_errno = errno();
+            logErrnoProvided(child_errno, "failed to grantpt()", .{});
             break :exec;
         }
         if (unlockpt(ptmx) == -1) {
-            logErrno("failed to unlockpt()", .{});
+            child_errno = errno();
+            logErrnoProvided(child_errno, "failed to unlockpt()", .{});
             break :exec;
         }
 
@@ -359,29 +361,34 @@ fn slaveExec(
         ptmx = -1;
 
         if (setsid() == -1) {
-            logErrno("failed to setsid()", .{});
+            child_errno = errno();
+            logErrnoProvided(child_errno, "failed to setsid()", .{});
             break :exec;
         }
 
         pts = open(pts_name, c.o_rdwr);
         if (pts == -1) {
-            logErrno("failed to open pseudo terminal slave device", .{});
+            child_errno = errno();
+            logErrnoProvided(child_errno, "failed to open pseudo terminal slave device", .{});
             break :exec;
         }
 
         if (ioctl(pts, c.tiocsctty, @as(c_int, 0)) < 0) {
-            logErrno("failed to configure controlling terminal", .{});
+            child_errno = errno();
+            logErrnoProvided(child_errno, "failed to configure controlling terminal", .{});
             break :exec;
         }
 
         switch (slave_shim_set_iutf8(pts)) {
             0 => {},
             1 => {
-                logErrno("failed to get terminal attributes", .{});
+                child_errno = errno();
+                logErrnoProvided(child_errno, "failed to get terminal attributes", .{});
                 break :exec;
             },
             2 => {
-                logErrno("failed to set IUTF8 terminal attribute", .{});
+                child_errno = errno();
+                logErrnoProvided(child_errno, "failed to set IUTF8 terminal attribute", .{});
                 break :exec;
             },
             else => unreachable,
@@ -389,13 +396,19 @@ fn slaveExec(
 
         if (notifications.length > 0) {
             const flags = fcntl(pts, c.f_getfl);
-            if (flags < 0)
+            if (flags < 0) {
+                child_errno = errno();
                 break :exec;
-            if (fcntl(pts, c.f_setfl, flags | c.o_nonblock) < 0)
+            }
+            if (fcntl(pts, c.f_setfl, flags | c.o_nonblock) < 0) {
+                child_errno = errno();
                 break :exec;
+            }
 
-            if (!emitNotifications(pts, notifications))
+            if (!emitNotifications(pts, notifications)) {
+                child_errno = errno();
                 break :exec;
+            }
 
             _ = fcntl(pts, c.f_setfl, flags);
         }
@@ -404,7 +417,8 @@ fn slaveExec(
             std.c.dup2(pts, c.stdout_fileno) == -1 or
             std.c.dup2(pts, c.stderr_fileno) == -1)
         {
-            logErrno("failed to dup stdin/stdout/stderr", .{});
+            child_errno = errno();
+            logErrnoProvided(child_errno, "failed to dup stdin/stdout/stderr", .{});
             break :exec;
         }
 
@@ -428,16 +442,19 @@ fn slaveExec(
         }
 
         _ = slave_shim_execvpe(file, argv, envp);
+        child_errno = errno();
         // Getting here is an error
     }
 
-    _ = std.c.write(err_fd, @as([*]const u8, @ptrCast(std.c._errno())), @sizeOf(c_int));
+    const err_no = child_errno;
+    _ = std.c.write(err_fd, @as([*]const u8, @ptrCast(&err_no)), @sizeOf(c_int));
     if (pts != -1)
         _ = std.c.close(pts);
     if (ptmx != -1)
         _ = std.c.close(ptmx);
     _ = std.c.close(err_fd);
-    std.c._exit(errno());
+    logErrnoProvided(err_no, "failed to spawn child", .{});
+    std.c._exit(err_no);
 }
 
 // ── environment list ────────────────────────────────────────────────
@@ -492,9 +509,8 @@ fn addToEnv(env: *Environ, name: [*:0]const u8, value: [*:0]const u8) void {
     }
 
     // If the variable does not already exist, add it.
-    env.envp = @ptrCast(@alignCast(
-        std.c.realloc(@ptrCast(env.envp.?), (env.count + 2) * @sizeOf(?[*:0]u8)) orelse
-            @panic("out of memory")));
+    env.envp = @ptrCast(@alignCast(std.c.realloc(@ptrCast(env.envp.?), (env.count + 2) * @sizeOf(?[*:0]u8)) orelse
+        @panic("out of memory")));
     env.envp.?[env.count] = e;
     env.count += 1;
     env.envp.?[env.count] = null;
@@ -681,8 +697,7 @@ export fn slave_spawn(
                 while (cmd_argv[count] != null)
                     count += 1;
 
-                const copy: [*]?[*:0]u8 = @ptrCast(@alignCast(
-                    mallocOrAbort((count + 1) * @sizeOf(?[*:0]u8))));
+                const copy: [*]?[*:0]u8 = @ptrCast(@alignCast(mallocOrAbort((count + 1) * @sizeOf(?[*:0]u8))));
                 for (0..count) |i|
                     copy[i] = cmd_argv[i];
                 copy[count] = null;

@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const build_options = @import("build_options");
 
 /// Mirrors `#if defined(FOOT_GRAPHEME_CLUSTERING)` in `struct vt`
@@ -1126,13 +1127,13 @@ comptime {
 }
 
 pub const Timespec = extern struct {
-    tv_sec: i64,
-    tv_nsec: i64,
+    tv_sec: std.c.time_t,
+    tv_nsec: c_long,
 };
 
 pub const Timeval = extern struct {
-    tv_sec: i64,
-    tv_usec: i64,
+    tv_sec: std.c.time_t,
+    tv_usec: c_long,
 };
 
 pub const PresentationContext = extern struct {
@@ -2557,10 +2558,13 @@ pub const ClientIpcSigusr = extern struct {
     signo: i32,
 };
 
-/// Linux struct sockaddr_un (AF_UNIX path socket).
+/// struct sockaddr_un (AF_UNIX path socket). FreeBSD reserves one fewer
+/// path byte than Linux. The native ABI probe checks the selected layout.
+pub const SockaddrUnPathMax: usize = if (builtin.os.tag == .freebsd) 104 else 108;
+
 pub const SockaddrUn = extern struct {
-    sun_family: u16,
-    sun_path: [108]u8,
+    sun_family: std.posix.sa_family_t,
+    sun_path: [SockaddrUnPathMax]u8,
 };
 
 test "server layout matches C probe" {
@@ -2572,6 +2576,30 @@ test "server layout matches C probe" {
     expectAbi(ClientIpcHdr, "ClientIpcHdr");
     expectAbi(ClientIpcSigusr, "ClientIpcSigusr");
     expectAbi(SockaddrUn, "SockaddrUn");
+}
+
+comptime {
+    expectAbi(PtOrPx, "PtOrPx");
+    expectAbi(Timespec, "Timespec");
+    expectAbi(TllStr, "TllStr");
+    expectAbi(EnvVar, "EnvVar");
+    expectAbi(EnvVarNode, "EnvVarNode");
+    expectAbi(EnvVarList, "EnvVarList");
+    expectAbi(UserNotification, "UserNotification");
+    expectAbi(UserNotificationNode, "UserNotificationNode");
+    expectAbi(UserNotifications, "UserNotifications");
+}
+
+comptime {
+    expectAbi(PtOrPx, "PtOrPx");
+    expectAbi(Timespec, "Timespec");
+    expectAbi(TllStr, "TllStr");
+    expectAbi(EnvVar, "EnvVar");
+    expectAbi(EnvVarNode, "EnvVarNode");
+    expectAbi(EnvVarList, "EnvVarList");
+    expectAbi(UserNotification, "UserNotification");
+    expectAbi(UserNotificationNode, "UserNotificationNode");
+    expectAbi(UserNotifications, "UserNotifications");
 }
 
 // ── shm.c internals (shared with shm.zig) ─────────────────────────

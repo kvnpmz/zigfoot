@@ -1,5 +1,9 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const types = @import("terminal_types.zig");
+const libc = @cImport({
+    @cInclude("sys/utsname.h");
+});
 const build_options = @import("build_options");
 
 //
@@ -51,7 +55,6 @@ extern fn unlink(path: [*:0]const u8) c_int;
 extern fn getcwd(buf: [*]u8, size: usize) ?[*:0]u8;
 extern fn realpath(path: [*:0]const u8, resolved: ?[*]u8) ?[*:0]u8;
 extern fn free(ptr: ?*anyopaque) void;
-extern fn __errno_location() *c_int;
 extern fn strlen(s: [*:0]const u8) usize;
 
 // getopt_long() and its globals. `optarg`/`optind` are exported by glibc.
@@ -85,17 +88,16 @@ extern fn xsnprintf(buf: [*]u8, n: usize, format: [*:0]const u8, ...) usize;
 extern fn main_shim_is_directory(path: [*:0]const u8) bool;
 
 extern fn log_init(
-    colorize: c_int, do_syslog: bool, syslog_facility: c_int, log_level: c_int,
+    colorize: c_int,
+    do_syslog: bool,
+    syslog_facility: c_int,
+    log_level: c_int,
 ) callconv(.c) void;
 extern fn log_deinit() callconv(.c) void;
-extern fn log_msg(
-    log_class: c_int, module: [*:0]const u8, file: [*:0]const u8, lineno: c_int,
-    fmt: [*:0]const u8, ...
-) callconv(.c) void;
-extern fn log_errno(
-    log_class: c_int, module: [*:0]const u8, file: [*:0]const u8, lineno: c_int,
-    fmt: [*:0]const u8, ...
-) callconv(.c) void;
+extern fn log_msg(log_class: c_int, module: [*:0]const u8, file: [*:0]const u8, lineno: c_int, fmt: [*:0]const u8, ...) callconv(.c) void;
+extern fn log_errno(log_class: c_int, module: [*:0]const u8, file: [*:0]const u8, lineno: c_int, fmt: [*:0]const u8, ...) callconv(.c) void;
+extern fn log_errno_provided(log_class: c_int, module: [*:0]const u8, file: [*:0]const u8, lineno: c_int, errnum: c_int, fmt: [*:0]const u8, ...) callconv(.c) void;
+
 extern fn log_level_from_string(str: [*:0]const u8) callconv(.c) c_int;
 extern fn log_level_string_hint() callconv(.c) [*:0]const u8;
 
@@ -112,7 +114,10 @@ extern fn fdm_init() callconv(.c) ?*Fdm;
 extern fn fdm_destroy(fdm: ?*Fdm) callconv(.c) void;
 extern fn fdm_poll(fdm: *Fdm) callconv(.c) bool;
 extern fn fdm_signal_add(
-    fdm: *Fdm, signo: c_int, handler: SigCb, data: ?*anyopaque,
+    fdm: *Fdm,
+    signo: c_int,
+    handler: SigCb,
+    data: ?*anyopaque,
 ) callconv(.c) bool;
 extern fn fdm_signal_del(fdm: *Fdm, signo: c_int) callconv(.c) bool;
 
@@ -121,7 +126,9 @@ extern fn reaper_destroy(reaper: ?*anyopaque) callconv(.c) void;
 extern fn key_binding_manager_new() callconv(.c) ?*anyopaque;
 extern fn key_binding_manager_destroy(mgr: ?*anyopaque) callconv(.c) void;
 extern fn wayl_init(
-    fdm: ?*anyopaque, key_binding_manager: ?*anyopaque, presentation_timings: bool,
+    fdm: ?*anyopaque,
+    key_binding_manager: ?*anyopaque,
+    presentation_timings: bool,
 ) callconv(.c) ?*types.Wayland;
 extern fn wayl_destroy(wayl: ?*types.Wayland) callconv(.c) void;
 extern fn render_init(fdm: *Fdm, wayl: *types.Wayland) callconv(.c) ?*anyopaque;
@@ -149,7 +156,10 @@ extern fn term_theme_switch_to_dark(term: *types.Terminal) callconv(.c) void;
 extern fn term_theme_switch_to_light(term: *types.Terminal) callconv(.c) void;
 
 extern fn server_init(
-    conf: *types.Config, fdm: ?*anyopaque, reaper: ?*anyopaque, wayl: *types.Wayland,
+    conf: *types.Config,
+    fdm: ?*anyopaque,
+    reaper: ?*anyopaque,
+    wayl: *types.Wayland,
 ) callconv(.c) ?*anyopaque;
 extern fn server_destroy(server: ?*anyopaque) callconv(.c) void;
 extern fn server_global_theme_switch_to_dark(server: ?*anyopaque) callconv(.c) void;
@@ -176,11 +186,10 @@ extern fn config_load(
 ) callconv(.c) bool;
 extern fn config_free(conf: *types.Config) callconv(.c) void;
 extern fn check_if_font_is_monospaced(
-    pattern: [*:0]const u8, notifications: *types.UserNotifications,
+    pattern: [*:0]const u8,
+    notifications: *types.UserNotifications,
 ) callconv(.c) void;
-extern fn user_notification_add_fmt(
-    notifications: *types.UserNotifications, kind: c_int, fmt: [*:0]const u8, ...
-) callconv(.c) void;
+extern fn user_notification_add_fmt(notifications: *types.UserNotifications, kind: c_int, fmt: [*:0]const u8, ...) callconv(.c) void;
 
 extern fn uri_parse(
     uri: [*c]const u8,
@@ -212,6 +221,17 @@ fn logErr(comptime fmt: [*:0]const u8, args: anytype) void {
 
 fn logErrno(comptime fmt: [*:0]const u8) void {
     log_errno(LOG_CLASS_ERROR, "main", "main.zig", @intCast(@src().line), fmt);
+}
+
+fn logErrnoProvided(errnum: c_int, comptime fmt: [*:0]const u8, args: anytype) void {
+    @call(.auto, log_errno_provided, .{
+        LOG_CLASS_ERROR,
+        "main",
+        "main.zig",
+        @as(c_int, @intCast(@src().line)),
+        errnum,
+        fmt,
+    } ++ args);
 }
 
 fn spanOf(s: [*:0]const u8) []const u8 {
@@ -305,48 +325,55 @@ fn fdm_sigusr(fdm: *Fdm, signo: c_int, data: ?*anyopaque) callconv(.c) bool {
     return true;
 }
 
-const SIGHUP: c_int = 1;
-const SIGINT: c_int = 2;
-const SIGPIPE: c_int = 13;
-const SIGTERM: c_int = 15;
-const SIGUSR1: c_int = 10;
-const SIGUSR2: c_int = 12;
-const SIG_IGN_PTR: ?*const fn (c_int) callconv(.c) void = @ptrFromInt(1);
+const SIGHUP: c_int = @intFromEnum(std.posix.SIG.HUP);
+const SIGINT: c_int = @intFromEnum(std.posix.SIG.INT);
+const SIGPIPE: c_int = @intFromEnum(std.posix.SIG.PIPE);
+const SIGTERM: c_int = @intFromEnum(std.posix.SIG.TERM);
+const SIGUSR1: c_int = @intFromEnum(std.posix.SIG.USR1);
+const SIGUSR2: c_int = @intFromEnum(std.posix.SIG.USR2);
 
-const Sigaction = extern struct {
-    handler: ?*const fn (c_int) callconv(.c) void,
-    mask: [16]u64,
-    flags: c_int,
-    restorer: ?*const fn () callconv(.c) void,
-};
-
-extern fn sigemptyset(set: *[16]u64) c_int;
-extern fn sigprocmask(how: c_int, set: ?*const [16]u64, oldset: ?*[16]u64) c_int;
+const SigSet = std.c.sigset_t;
+const Sigaction = std.c.Sigaction;
+extern fn sigemptyset(set: *SigSet) c_int;
+extern fn sigprocmask(how: c_int, set: ?*const SigSet, oldset: ?*SigSet) c_int;
 extern fn sigaction(signo: c_int, act: ?*const Sigaction, oldact: ?*Sigaction) c_int;
 
-const SIG_SETMASK: c_int = 2;
-const SIGRTMAX: c_int = 64;
+const SIG_SETMASK: c_int = std.posix.SIG.SETMASK;
+
+fn signalCount() c_int {
+    if (comptime builtin.os.tag == .linux) {
+        if (comptime builtin.abi.isGnu())
+            return __libc_current_sigrtmax();
+        return @intCast(std.os.linux.sigrtmax());
+    }
+    return std.posix.SIG.RTMAX;
+}
+
+extern fn __libc_current_sigrtmax() c_int;
 
 /// C's sanitize_signals(): clear the mask and reset every handler to SIG_DFL.
 /// SIGKILL/SIGSTOP cannot be changed, so they are skipped (C calls
 /// sigaction() and ignores EINVAL).
 fn sanitizeSignals() void {
-    var mask: [16]u64 = undefined;
+    var mask = std.mem.zeroes(SigSet);
     _ = sigemptyset(&mask);
     _ = sigprocmask(SIG_SETMASK, &mask, null);
 
     var dfl = Sigaction{
-        .handler = null, // SIG_DFL
-        .mask = undefined,
+        .handler = .{ .handler = std.posix.SIG.DFL },
+        .mask = std.mem.zeroes(SigSet),
         .flags = 0,
-        .restorer = null,
     };
     _ = sigemptyset(&dfl.mask);
 
+    const rtmax = signalCount();
     var i: c_int = 1;
-    while (i < SIGRTMAX) : (i += 1) {
-        if (i == 9 or i == 19) // SIGKILL, SIGSTOP
+    while (i < rtmax) : (i += 1) {
+        if (i == @intFromEnum(std.posix.SIG.KILL) or
+            i == @intFromEnum(std.posix.SIG.STOP))
+        {
             continue;
+        }
         _ = sigaction(i, &dfl, null);
     }
 }
@@ -377,24 +404,24 @@ fn term_shutdown_cb(data: ?*anyopaque, exit_code: c_int) callconv(.c) void {
     ctx.exit_code = exit_code;
 }
 
-const O_WRONLY: c_int = 0o1;
-const O_CREAT: c_int = 0o100;
-const O_EXCL: c_int = 0o200;
-const O_CLOEXEC: c_int = 0o2000000;
+const O_WRONLY: c_int = @intFromEnum(std.posix.ACCMODE.WRONLY);
+const O_CREAT: c_int = @as(c_int, 1) << @bitOffsetOf(std.posix.O, "CREAT");
+const O_EXCL: c_int = @as(c_int, 1) << @bitOffsetOf(std.posix.O, "EXCL");
+const O_CLOEXEC: c_int = @as(c_int, 1) << @bitOffsetOf(std.posix.O, "CLOEXEC");
 
-const S_IRUSR: c_int = 0o400;
-const S_IWUSR: c_int = 0o200;
-const S_IRGRP: c_int = 0o40;
-const S_IROTH: c_int = 0o4;
+const S_IRUSR: c_int = @intCast(std.posix.S.IRUSR);
+const S_IWUSR: c_int = @intCast(std.posix.S.IWUSR);
+const S_IRGRP: c_int = @intCast(std.posix.S.IRGRP);
+const S_IROTH: c_int = @intCast(std.posix.S.IROTH);
 
 fn printPid(pid_file: [*:0]const u8, unlink_at_exit: *bool) bool {
-    __errno_location().* = 0;
+    std.c._errno().* = 0;
     var end: ?[*:0]u8 = null;
     const parsed = strtoul(pid_file, &end, 10);
     // C assigns an unsigned long to an int here; keep the same truncation.
     var pid_fd: c_int = @bitCast(@as(u32, @truncate(parsed)));
 
-    const numeric = __errno_location().* == 0 and end != null and end.?[0] == 0;
+    const numeric = std.c._errno().* == 0 and end != null and end.?[0] == 0;
     if (!numeric) {
         pid_fd = open(
             pid_file,
@@ -412,10 +439,11 @@ fn printPid(pid_file: [*:0]const u8, unlink_at_exit: *bool) bool {
         var pid: [32]u8 = undefined;
         const n = xsnprintf(&pid, pid.len, "%u\n", getpid());
         const bytes = write(pid_fd, &pid, n);
+        const write_errno = std.c._errno().*;
         _ = close(pid_fd);
 
         if (bytes < 0) {
-            logErrno("failed to write PID to FD");
+            logErrnoProvided(write_errno, "failed to write PID to FD=%u", .{pid_fd});
             return false;
         }
         return true;
@@ -424,7 +452,7 @@ fn printPid(pid_file: [*:0]const u8, unlink_at_exit: *bool) bool {
     return false;
 }
 
-const PATH_MAX = 4096;
+const PATH_MAX = std.posix.PATH_MAX;
 
 fn getFootExe() [*:0]const u8 {
     // Linux only, fallback to "foot"
@@ -631,8 +659,7 @@ export fn main(argc_in: c_int, argv_in: [*]?[*:0]u8) c_int {
                     return ret;
                 }
 
-                tllPushBack(&overrides, xasprintf(
-                    "initial-window-size-pixels=%ux%u", width, height));
+                tllPushBack(&overrides, xasprintf("initial-window-size-pixels=%ux%u", width, height));
             },
 
             'W' => {
@@ -644,8 +671,7 @@ export fn main(argc_in: c_int, argv_in: [*]?[*:0]u8) c_int {
                     return ret;
                 }
 
-                tllPushBack(&overrides, xasprintf(
-                    "initial-window-size-chars=%ux%u", width, height));
+                tllPushBack(&overrides, xasprintf("initial-window-size-chars=%ux%u", width, height));
             },
 
             's' => {
@@ -746,12 +772,14 @@ export fn main(argc_in: c_int, argv_in: [*]?[*:0]u8) c_int {
     logInfo("%s", .{foot_version_and_features()});
 
     {
-        const name = std.posix.uname();
-        logInfo("arch: %s %s/%zu-bit", .{
-            @as([*:0]const u8, @ptrCast(&name.sysname)),
-            @as([*:0]const u8, @ptrCast(&name.machine)),
-            @as(usize, @sizeOf(usize) * 8),
-        });
+        var name: libc.struct_utsname = undefined;
+        if (libc.uname(&name) == 0) {
+            logInfo("arch: %s %s/%zu-bit", .{
+                @as([*:0]const u8, @ptrCast(&name.sysname)),
+                @as([*:0]const u8, @ptrCast(&name.machine)),
+                @as(usize, @sizeOf(usize) * 8),
+            });
+        }
     }
 
     const now = time(null);
@@ -781,15 +809,19 @@ export fn main(argc_in: c_int, argv_in: [*]?[*:0]u8) c_int {
                 if (saved_locale) |saved| {
                     logWarn("'%s' is not a UTF-8 locale, falling back to '%s'", .{ saved, fallback_locale });
                     user_notification_add_fmt(
-                        &user_notifications, USER_NOTIFICATION_WARNING,
+                        &user_notifications,
+                        USER_NOTIFICATION_WARNING,
                         "'%s' is not a UTF-8 locale, falling back to '%s'",
-                        saved, fallback_locale,
+                        saved,
+                        fallback_locale,
                     );
                 } else {
                     logWarn("invalid locale, falling back to '%s'", .{fallback_locale});
                     user_notification_add_fmt(
-                        &user_notifications, USER_NOTIFICATION_WARNING,
-                        "invalid locale, falling back to '%s'", fallback_locale,
+                        &user_notifications,
+                        USER_NOTIFICATION_WARNING,
+                        "invalid locale, falling back to '%s'",
+                        fallback_locale,
                     );
                 }
 
@@ -802,13 +834,16 @@ export fn main(argc_in: c_int, argv_in: [*]?[*:0]u8) c_int {
             if (saved_locale) |saved| {
                 logErr("'%s' is not a UTF-8 locale, and failed to find a fallback", .{saved});
                 user_notification_add_fmt(
-                    &user_notifications, USER_NOTIFICATION_ERROR,
-                    "'%s' is not a UTF-8 locale, and failed to find a fallback", saved,
+                    &user_notifications,
+                    USER_NOTIFICATION_ERROR,
+                    "'%s' is not a UTF-8 locale, and failed to find a fallback",
+                    saved,
                 );
             } else {
                 logErr("invalid locale, and failed to find a fallback", .{});
                 user_notification_add_fmt(
-                    &user_notifications, USER_NOTIFICATION_ERROR,
+                    &user_notifications,
+                    USER_NOTIFICATION_ERROR,
                     "invalid locale, and failed to find a fallback",
                 );
             }
@@ -818,8 +853,7 @@ export fn main(argc_in: c_int, argv_in: [*]?[*:0]u8) c_int {
     }
 
     var conf: types.Config = std.mem.zeroes(types.Config);
-    const conf_successful = config_load(
-        &conf, conf_path, &user_notifications, &overrides, check_config, as_server);
+    const conf_successful = config_load(&conf, conf_path, &user_notifications, &overrides, check_config, as_server);
 
     freeStrList(&overrides);
     if (!conf_successful) {
@@ -879,13 +913,13 @@ export fn main(argc_in: c_int, argv_in: [*]?[*:0]u8) c_int {
             var buf_len: usize = 1024;
             while (true) {
                 owned_cwd = @ptrCast(xrealloc(owned_cwd, buf_len));
-                __errno_location().* = 0;
-                if (getcwd(owned_cwd.?, buf_len) == null and __errno_location().* != 34) { // ERANGE
+                std.c._errno().* = 0;
+                if (getcwd(owned_cwd.?, buf_len) == null and std.c._errno().* != @intFromEnum(std.posix.E.RANGE)) {
                     logErrno("failed to get current working directory");
                     break :out;
                 }
                 buf_len *= 2;
-                if (__errno_location().* != 34)
+                if (std.c._errno().* != @intFromEnum(std.posix.E.RANGE))
                     break;
             }
             cwd = owned_cwd;
@@ -923,9 +957,21 @@ export fn main(argc_in: c_int, argv_in: [*]?[*:0]u8) c_int {
 
         if (!as_server) {
             term = term_init(
-                &conf, fdm, reaper, wayl.?, getFootExe(), cwd, token, pty_path,
-                argc, argv, null, foot_argc, @ptrCast(foot_argv),
-                &term_shutdown_cb, &shutdown_ctx,
+                &conf,
+                fdm,
+                reaper,
+                wayl.?,
+                getFootExe(),
+                cwd,
+                token,
+                pty_path,
+                argc,
+                argv,
+                null,
+                foot_argc,
+                @ptrCast(foot_argv),
+                &term_shutdown_cb,
+                &shutdown_ctx,
             ) orelse break :out;
         }
         if (owned_cwd) |c| {
@@ -951,7 +997,7 @@ export fn main(argc_in: c_int, argv_in: [*]?[*:0]u8) c_int {
             break :out;
         }
 
-        var sig_ign = Sigaction{ .handler = SIG_IGN_PTR, .mask = undefined, .flags = 0, .restorer = null };
+        var sig_ign = Sigaction{ .handler = .{ .handler = std.posix.SIG.IGN }, .mask = undefined, .flags = 0 };
         _ = sigemptyset(&sig_ign.mask);
         if (sigaction(SIGHUP, &sig_ign, null) < 0 or
             sigaction(SIGPIPE, &sig_ign, null) < 0)
