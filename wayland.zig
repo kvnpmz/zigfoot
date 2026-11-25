@@ -1341,6 +1341,29 @@ extern fn xmalloc(size: usize) callconv(.c) ?*anyopaque;
 
 const INT32_MAX: i32 = 0x7fffffff;
 
+export fn wayland_shim_set_opaque_region(
+    compositor: ?*anyopaque,
+    surf: ?*anyopaque,
+    width: i32,
+    height: i32,
+    is_opaque: bool,
+) callconv(.c) void {
+    const surface = surf orelse return;
+
+    if (!is_opaque) {
+        wayland_shim_surface_set_opaque_region(surface, null);
+        return;
+    }
+
+    const comp = compositor orelse return;
+    const region = wayland_shim_compositor_create_region(comp);
+    if (region) |r| {
+        wayland_shim_region_add(r, 0, 0, width, height);
+        wayland_shim_surface_set_opaque_region(surface, r);
+        wayland_shim_region_destroy(r);
+    }
+}
+
 /// Opaque-region lifecycle, with C's early-outs and request order preserved.
 export fn wayland_shim_set_opaque_region_rect(
     compositor: ?*anyopaque,

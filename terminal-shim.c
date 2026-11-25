@@ -104,70 +104,35 @@ void terminal_shim_term_reset_grapheme_state(struct terminal *term) {
 
 #include "emoji-variation-sequences.h"
 
-uint32_t
-terminal_shim_precompose(struct terminal *term, uint32_t base, uint32_t wc,
-                         bool *base_from_primary,
-                         bool *comb_from_primary,
-                         bool *pre_from_primary)
-{
-    if (term->fonts[0] == NULL) {
-        *base_from_primary = false;
-        *comb_from_primary = false;
-        *pre_from_primary = false;
-        return (uint32_t)-1;
-    }
-
-    return fcft_precompose(
-        term->fonts[0], base, wc,
-        base_from_primary, comb_from_primary, pre_from_primary);
-}
-
-#if defined(FOOT_GRAPHEME_CLUSTERING)
-static int
-emoji_vs_compare(const void *_key, const void *_entry)
-{
-    const struct emoji_vs *key = _key;
-    const struct emoji_vs *entry = _entry;
-
-    uint32_t cp = key->start;
-
-    if (cp < entry->start)
-        return -1;
-    else if (cp > entry->end)
-        return 1;
-    else
-        return 0;
-}
-#endif
-
-/*
- * Returns the forced grapheme width for a VS-15 (1) / VS-16 (2)
- * variation selector sequence, or -1 if the base character isn't in the
- * table (or isn't followed by a supported variation selector).
- */
-int
-terminal_shim_emoji_vs_width(uint32_t cp, uint32_t wc)
+/* The generated packed table is C data; terminal.zig owns the bsearch logic.
+ * Scalar accessors avoid making Zig reproduce C bit-field allocation. */
+size_t
+terminal_shim_emoji_vs_count(void)
 {
 #if defined(FOOT_GRAPHEME_CLUSTERING)
-    const struct emoji_vs *vs =
-        bsearch(
-            &(struct emoji_vs){.start = cp},
-            emoji_vs, sizeof(emoji_vs) / sizeof(emoji_vs[0]),
-            sizeof(struct emoji_vs),
-            &emoji_vs_compare);
-
-    if (vs != NULL) {
-        if (wc == 0xfe0e && vs->vs15)
-            return 1;
-        if (wc == 0xfe0f && vs->vs16)
-            return 2;
-    }
+    return sizeof(emoji_vs) / sizeof(emoji_vs[0]);
 #else
-    (void)cp;
-    (void)wc;
+    return 0;
 #endif
+}
 
-    return -1;
+void
+terminal_shim_emoji_vs_get(size_t index, uint32_t *start, uint32_t *end,
+                           bool *vs15, bool *vs16)
+{
+#if defined(FOOT_GRAPHEME_CLUSTERING)
+    const struct emoji_vs *vs = &emoji_vs[index];
+    *start = vs->start;
+    *end = vs->end;
+    *vs15 = vs->vs15;
+    *vs16 = vs->vs16;
+#else
+    (void)index;
+    (void)start;
+    (void)end;
+    (void)vs15;
+    (void)vs16;
+#endif
 }
 
 
@@ -290,32 +255,6 @@ void render_shim_fcft_text_run_destroy(void *run)
 {
     fcft_text_run_destroy(run);
 }
-
-/* wl_compositor_create_region()/wl_region_*()/wl_surface_set_opaque_region()
- * are generated static inlines (and the headless harness has no compositor). */
-void wayland_shim_set_opaque_region(
-    struct wl_compositor *compositor, struct wl_surface *surf,
-    int width, int height, bool opaque)
-{
-    if (surf == NULL)
-        return;
-
-    if (!opaque) {
-        wl_surface_set_opaque_region(surf, NULL);
-        return;
-    }
-
-    if (compositor == NULL)
-        return;
-
-    struct wl_region *region = wl_compositor_create_region(compositor);
-    if (region != NULL) {
-        wl_region_add(region, 0, 0, width, height);
-        wl_surface_set_opaque_region(surf, region);
-        wl_region_destroy(region);
-    }
-}
-
 
 void render_shim_clip_clear(pixman_image_t *pix)
 {
@@ -450,45 +389,6 @@ void render_shim_image_unref(pixman_image_t *pix)
     pixman_image_unref(pix);
 }
 
-/* The CSD close button is a pair of crossed X shapes, composited as four
- * pixman triangles -- a library type we would rather not mirror. */
-void render_shim_close_button(
-    pixman_image_t *pix, const pixman_color_t *color,
-    int x_margin, int y_margin, int width, int thick)
-{
-#define I(x) pixman_int_to_fixed(x)
-
-    pixman_triangle_t tri[4] = {
-        {
-            .p1 = {.x = I(x_margin), .y = I(y_margin + thick)},
-            .p2 = {.x = I(x_margin + width - thick), .y = I(y_margin + width)},
-            .p3 = {.x = I(x_margin + thick), .y = I(y_margin)},
-        },
-        {
-            .p1 = {.x = I(x_margin + width), .y = I(y_margin + width - thick)},
-            .p2 = {.x = I(x_margin + thick), .y = I(y_margin)},
-            .p3 = {.x = I(x_margin + width - thick), .y = I(y_margin + width)},
-        },
-        {
-            .p1 = {.x = I(x_margin), .y = I(y_margin + width - thick)},
-            .p2 = {.x = I(x_margin + width), .y = I(y_margin + thick)},
-            .p3 = {.x = I(x_margin + thick), .y = I(y_margin + width)},
-        },
-        {
-            .p1 = {.x = I(x_margin + width), .y = I(y_margin + thick)},
-            .p2 = {.x = I(x_margin), .y = I(y_margin + width - thick)},
-            .p3 = {.x = I(x_margin + width - thick), .y = I(y_margin)},
-        },
-    };
-
-#undef I
-
-    pixman_image_t *src = pixman_image_create_solid_fill(color);
-    pixman_composite_triangles(
-        PIXMAN_OP_OVER, src, pix, PIXMAN_a1, 0, 0, 0, 0, 4, tri);
-    pixman_image_unref(src);
-}
-
 /* Sixel compositing needs an explicit operator and a source rect offset. */
 void render_shim_composite_op(
     int op,
@@ -554,34 +454,6 @@ void render_shim_curly_underline(
 }
 
 /* ── font loading (terminal.zig) ─────────────────────────────────── */
-
-/* struct fcft_font_options is fcft's business; set only the three fields
- * reload_fonts() needs. The high-res format choice keeps the
- * HAVE_PIXMAN_RGBA_16 build option on the C side. */
-void
-terminal_shim_fcft_font_options_configure(
-    struct fcft_font_options *options,
-    enum fcft_scaling_filter scaling_filter,
-    bool srgb_decode,
-    bool high_res_color)
-{
-    options->scaling_filter = scaling_filter;
-    options->color_glyphs.format = PIXMAN_a8r8g8b8;
-    options->color_glyphs.srgb_decode = srgb_decode;
-
-    if (high_res_color) {
-        /*
-         * Use a high-res buffer type for emojis. We don't want to use
-         * an a2r10g0b10 type of surface, since we need more than 2
-         * bits for alpha.
-         */
-#if defined(HAVE_PIXMAN_RGBA_16)
-        options->color_glyphs.format = PIXMAN_a16b16g16r16;
-#else
-        options->color_glyphs.format = PIXMAN_rgba_float;
-#endif
-    }
-}
 
 /* util.h's thrd_err_as_string() is a static inline switch, which Zig cannot
  * call; the render-worker error paths log through this. */

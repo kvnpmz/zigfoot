@@ -1775,14 +1775,66 @@ export fn render_sixel_images(
 
 const SeatList = tll.Tll(types.Seat);
 
-extern fn render_shim_close_button(
+const PIXMAN_OP_OVER: c_int = 3;
+const PIXMAN_a1: u32 = 0x01011000;
+
+extern fn pixman_image_create_solid_fill(color: *const PixmanColor) callconv(.c) ?*PixmanImage;
+extern fn pixman_image_unref(image: ?*PixmanImage) callconv(.c) void;
+extern fn pixman_composite_triangles(
+    op: c_int,
+    src: ?*PixmanImage,
+    dst: *PixmanImage,
+    mask_format: u32,
+    x_src: c_int,
+    y_src: c_int,
+    x_dst: c_int,
+    y_dst: c_int,
+    n_tris: c_int,
+    tris: [*]const types.PixmanTriangle,
+) callconv(.c) void;
+
+fn pixmanIntToFixed(x: c_int) i32 {
+    // pixman_int_to_fixed() is a C multiply that can overflow; wrapping
+    // retains the machine result for that UB case and is exact in range.
+    return x *% 65536;
+}
+
+fn closeButton(
     pix: *PixmanImage,
     color: *const PixmanColor,
     x_margin: c_int,
     y_margin: c_int,
     width: c_int,
     thick: c_int,
-) callconv(.c) void;
+) void {
+    const I = pixmanIntToFixed;
+    const tri = [4]types.PixmanTriangle{
+        .{
+            .p1 = .{ .x = I(x_margin), .y = I(y_margin + thick) },
+            .p2 = .{ .x = I(x_margin + width - thick), .y = I(y_margin + width) },
+            .p3 = .{ .x = I(x_margin + thick), .y = I(y_margin) },
+        },
+        .{
+            .p1 = .{ .x = I(x_margin + width), .y = I(y_margin + width - thick) },
+            .p2 = .{ .x = I(x_margin + thick), .y = I(y_margin) },
+            .p3 = .{ .x = I(x_margin + width - thick), .y = I(y_margin + width) },
+        },
+        .{
+            .p1 = .{ .x = I(x_margin), .y = I(y_margin + width - thick) },
+            .p2 = .{ .x = I(x_margin + width), .y = I(y_margin + thick) },
+            .p3 = .{ .x = I(x_margin + thick), .y = I(y_margin + width) },
+        },
+        .{
+            .p1 = .{ .x = I(x_margin + width), .y = I(y_margin + thick) },
+            .p2 = .{ .x = I(x_margin), .y = I(y_margin + width - thick) },
+            .p3 = .{ .x = I(x_margin + width - thick), .y = I(y_margin) },
+        },
+    };
+
+    const src = pixman_image_create_solid_fill(color);
+    pixman_composite_triangles(PIXMAN_OP_OVER, src, pix, PIXMAN_a1, 0, 0, 0, 0, 4, &tri);
+    pixman_image_unref(src);
+}
 
 fn getCsdButtonFgColor(term: *const Terminal) PixmanColor {
     const conf = term.conf.?;
@@ -1888,7 +1940,7 @@ export fn render_csd_button_close(term: *Terminal, buf: *Buffer) callconv(.c) vo
     const color = getCsdButtonFgColor(term);
     const g = buttonGeom(term, buf);
 
-    render_shim_close_button(bufferPix(buf), &color, g.x_margin, g.y_margin, g.width, g.thick);
+    closeButton(bufferPix(buf), &color, g.x_margin, g.y_margin, g.width, g.thick);
 }
 
 export fn any_pointer_is_on_button(term: *const Terminal, csd_surface: types.CsdSurface) callconv(.c) bool {

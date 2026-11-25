@@ -231,15 +231,33 @@ extern fn fcft_from_name2(
 ) callconv(.c) ?*anyopaque;
 extern fn fcft_font_options_create() callconv(.c) ?*anyopaque;
 extern fn fcft_font_options_destroy(options: *anyopaque) callconv(.c) void;
-extern fn terminal_shim_fcft_font_options_configure(
-    options: *anyopaque,
-    scaling_filter: c_int,
-    srgb_decode: bool,
-    high_res_color: bool,
-) callconv(.c) void;
+extern fn shm_shim_format_constants() callconv(.c) *const types.ShmFormatConstants;
+
 extern fn shm_chain_bit_depth(chain: *const types.ShmBufferChain) callconv(.c) c_int;
 
 const SHM_BITS_10: c_int = 2;
+
+// pixman.h's PIXMAN_rgba_float enum value. The 16-bit choice is the same
+// Meson capability test that defines HAVE_PIXMAN_RGBA_16 for C.
+const PIXMAN_rgba_float: u32 = 0x10cb4444;
+
+fn configureFontOptions(
+    options: *types.FcftFontOptions,
+    scaling_filter: c_int,
+    srgb_decode: bool,
+    high_res_color: bool,
+) void {
+    options.scaling_filter = scaling_filter;
+    options.color_glyphs.format = shm_shim_format_constants().*.pixman_a8r8g8b8;
+    options.color_glyphs.srgb_decode = srgb_decode;
+
+    if (high_res_color) {
+        options.color_glyphs.format = if (build_options.pixman_rgba_16)
+            shm_shim_format_constants().*.pixman_a16b16g16r16
+        else
+            PIXMAN_rgba_float;
+    }
+}
 
 export fn terminal_shim_linear_blending(term: *const types.Terminal) callconv(.c) bool {
     const wl = term.wl orelse return false;
@@ -335,9 +353,11 @@ export fn reload_fonts(term: *types.Terminal, resize_grid: bool) callconv(.c) bo
     _ = asprintf(&attrs[2], "%s%s", &dpi_buf, italic_suffix);
     _ = asprintf(&attrs[3], "%s%s", &dpi_buf, bi_suffix);
 
-    const options = fcft_font_options_create() orelse
-        @panic("fcft_font_options_create failed");
-    terminal_shim_fcft_font_options_configure(
+    const options: *types.FcftFontOptions = @ptrCast(@alignCast(
+        fcft_font_options_create() orelse
+            @panic("fcft_font_options_create failed"),
+    ));
+    configureFontOptions(
         options,
         conf.tweak.fcft_filter,
         terminal_shim_linear_blending(term),
@@ -1728,9 +1748,8 @@ export fn term_single_shift(
 // Ported from terminal.c: term_process_and_print_non_ascii().
 //
 // C machinery still required, and thus shimmed:
-//   - fcft_precompose()                 (term->fonts is opaque here)
 //   - conf->tweak.grapheme_width_method (struct config isn't mirrored)
-//   - emoji_vs[] VS-15/VS-16 table      (generated at build time)
+// The generated emoji variation table stays in C; its lookup is here.
 
 const CELL_COMB_CHARS_LO: u32 = 0x0020_0000;
 const CELL_COMB_CHARS_HI: u32 = CELL_COMB_CHARS_LO + 0x3fff_ffff;
@@ -1756,15 +1775,81 @@ extern fn composed_insert(root: *?*types.Composed, node: ?*types.Composed) void;
 extern fn xmalloc(size: usize) ?*anyopaque;
 extern fn log_msg(class: c_int, module: [*:0]const u8, file: [*:0]const u8, lineno: c_int, fmt: [*:0]const u8, ...) void;
 
-extern fn terminal_shim_precompose(
+extern fn fcft_precompose(
+    font: *const anyopaque,
+    base: u32,
+    wc: u32,
+    base_from_primary: *bool,
+    comb_from_primary: *bool,
+    pre_from_primary: *bool,
+) callconv(.c) u32;
+extern fn terminal_shim_emoji_vs_count() callconv(.c) usize;
+extern fn terminal_shim_emoji_vs_get(
+    index: usize,
+    start: *u32,
+    end: *u32,
+    vs15: *bool,
+    vs16: *bool,
+) callconv(.c) void;
+
+fn precompose(
     term: *types.Terminal,
     base: u32,
     wc: u32,
     base_from_primary: *bool,
     comb_from_primary: *bool,
     pre_from_primary: *bool,
-) u32;
-extern fn terminal_shim_emoji_vs_width(cp: u32, wc: u32) c_int;
+) u32 {
+    const font = term.fonts[0] orelse {
+        base_from_primary.* = false;
+        comb_from_primary.* = false;
+        pre_from_primary.* = false;
+        return 0xffff_ffff;
+    };
+
+    return fcft_precompose(
+        font,
+        base,
+        wc,
+        base_from_primary,
+        comb_from_primary,
+        pre_from_primary,
+    );
+}
+
+fn emojiVsWidth(cp: u32, wc: u32) c_int {
+    if (comptime !build_options.grapheme_clustering)
+        return -1;
+
+    const count = terminal_shim_emoji_vs_count();
+
+    // This is C bsearch() with emoji_vs_compare(): compare against start
+    // first, then end, and accept any code point in the inclusive range.
+    var lo: usize = 0;
+    var hi: usize = count;
+    while (lo < hi) {
+        const mid = lo + (hi - lo) / 2;
+        var start: u32 = undefined;
+        var end: u32 = undefined;
+        var vs15: bool = undefined;
+        var vs16: bool = undefined;
+        terminal_shim_emoji_vs_get(mid, &start, &end, &vs15, &vs16);
+
+        if (cp < start) {
+            hi = mid;
+        } else if (cp > end) {
+            lo = mid + 1;
+        } else {
+            if (wc == 0xfe0e and vs15)
+                return 1;
+            if (wc == 0xfe0f and vs16)
+                return 2;
+            return -1;
+        }
+    }
+
+    return -1;
+}
 
 export fn term_process_and_print_non_ascii(
     term: *types.Terminal,
@@ -1850,7 +1935,7 @@ export fn term_process_and_print_non_ascii(
             var comb_from_primary: bool = undefined;
             var pre_from_primary: bool = undefined;
 
-            const precomposed = terminal_shim_precompose(
+            const precomposed = precompose(
                 term,
                 base,
                 wc,
@@ -1949,7 +2034,7 @@ export fn term_process_and_print_non_ascii(
                         (wc == 0xfe0e or wc == 0xfe0f) and
                         new_cc.count == 2)
                     {
-                        const forced = terminal_shim_emoji_vs_width(chars[0], wc);
+                        const forced = emojiVsWidth(chars[0], wc);
                         if (forced >= 0)
                             new_cc.width = @intCast(forced);
                     }

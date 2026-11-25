@@ -42,9 +42,7 @@ fn expectAbi(comptime T: type, comptime key_prefix: []const u8) void {
                 " — run scripts/gen_abi_probe.py");
         }
         if (@sizeOf(T) != @field(abi, size_key)) {
-            @compileError(std.fmt.comptimePrint(
-                "ABI size mismatch: {s}: C={d} zig={d}",
-                .{ size_key, @field(abi, size_key), @sizeOf(T) }));
+            @compileError(std.fmt.comptimePrint("ABI size mismatch: {s}: C={d} zig={d}", .{ size_key, @field(abi, size_key), @sizeOf(T) }));
         }
 
         // Unions and packed structs (bit-fields) only get a size check.
@@ -63,18 +61,14 @@ fn expectAbi(comptime T: type, comptime key_prefix: []const u8) void {
                     " — run scripts/gen_abi_probe.py");
             }
             if (@offsetOf(T, f.name) != @field(abi, key)) {
-                @compileError(std.fmt.comptimePrint(
-                    "ABI offset mismatch: {s}: C={d} zig={d}",
-                    .{ key, @field(abi, key), @offsetOf(T, f.name) }));
+                @compileError(std.fmt.comptimePrint("ABI offset mismatch: {s}: C={d} zig={d}", .{ key, @field(abi, key), @offsetOf(T, f.name) }));
             }
 
             const field_size_key = key ++ "__size";
             if (@hasDecl(abi, field_size_key) and
                 @sizeOf(f.type) != @field(abi, field_size_key))
             {
-                @compileError(std.fmt.comptimePrint(
-                    "ABI field size mismatch: {s}: C={d} zig={d}",
-                    .{ field_size_key, @field(abi, field_size_key), @sizeOf(f.type) }));
+                @compileError(std.fmt.comptimePrint("ABI field size mismatch: {s}: C={d} zig={d}", .{ field_size_key, @field(abi, field_size_key), @sizeOf(f.type) }));
             }
 
             // Recurse into value-typed structs the probe also looked inside.
@@ -1111,7 +1105,6 @@ pub const TllNotification = extern struct {
     length: usize,
 };
 
-
 // Sixel bit-field accessors (C: bool scrolling:1; bool use_private_palette:1; bool cursor_right_of_graphics:1)
 pub inline fn sixelGetScrolling(t: *const Terminal) bool {
     return (t.sixel._sixel_flags & 0x01) != 0;
@@ -1137,7 +1130,6 @@ comptime {
         @compileError("Terminal: render offset drift");
 }
 
-
 pub const Timespec = extern struct {
     tv_sec: i64,
     tv_nsec: i64,
@@ -1152,6 +1144,16 @@ pub const Itimerspec = extern struct {
 pub const FcftGlyphAdvance = extern struct {
     x: c_int,
     y: c_int,
+};
+
+/// `struct fcft_font_options` from fcft.h, in C declaration order.
+pub const FcftFontOptions = extern struct {
+    emoji_presentation: c_int,
+    color_glyphs: extern struct {
+        srgb_decode: bool,
+        format: u32,
+    },
+    scaling_filter: c_int,
 };
 
 /// `struct fcft_glyph` from fcft.h. foot allocates these itself for the
@@ -2483,7 +2485,6 @@ test "line height update" {
     try std.testing.expectEqual(@as(f32, 0), term.font_line_height.pt);
 }
 
-
 // ── server.c internals (shared with server.zig) ─────────────────────
 
 pub const ServerClient = extern struct {
@@ -2567,7 +2568,6 @@ test "server layout matches C probe" {
     expectAbi(SockaddrUn, "SockaddrUn");
 }
 
-
 // ── shm.c internals (shared with shm.zig) ─────────────────────────
 
 /// Mirrors `struct buf` in box-drawing.h (the box-drawing rendering buffer).
@@ -2595,6 +2595,17 @@ pub const PixmanBox32 = extern struct {
     y1: i32,
     x2: i32,
     y2: i32,
+};
+
+pub const PixmanPointFixed = extern struct {
+    x: i32,
+    y: i32,
+};
+
+pub const PixmanTriangle = extern struct {
+    p1: PixmanPointFixed,
+    p2: PixmanPointFixed,
+    p3: PixmanPointFixed,
 };
 
 pub const PixmanRegion32 = extern struct {
@@ -2681,10 +2692,13 @@ test "box-drawing buffer layout matches C probe" {
 
 test "fcft glyph layout matches C probe" {
     expectAbi(FcftGlyph, "FcftGlyph");
+    expectAbi(FcftFontOptions, "FcftFontOptions");
 }
 
 test "shm layout matches C probe" {
     expectAbi(PixmanBox32, "PixmanBox32");
+    expectAbi(PixmanPointFixed, "PixmanPointFixed");
+    expectAbi(PixmanTriangle, "PixmanTriangle");
     expectAbi(PixmanRegion32, "PixmanRegion32");
     expectAbi(Buffer, "Buffer");
     expectAbi(ShmBufferPool, "ShmBufferPool");
