@@ -49,29 +49,11 @@ void sixel_set_cursor_right_of_graphics(struct terminal *t, bool v) {
     t->sixel.cursor_right_of_graphics = v;
 }
 
-unsigned sixel_get_palette_size(struct terminal *t) {
-    return t->sixel.palette_size;
-}
 
-void sixel_set_palette_size(struct terminal *t, unsigned v) {
-    t->sixel.palette_size = v;
-}
 
-unsigned sixel_get_max_width(struct terminal *t) {
-    return t->sixel.max_width;
-}
 
-void sixel_set_max_width(struct terminal *t, unsigned v) {
-    t->sixel.max_width = v;
-}
 
-unsigned sixel_get_max_height(struct terminal *t) {
-    return t->sixel.max_height;
-}
 
-void sixel_set_max_height(struct terminal *t, unsigned v) {
-    t->sixel.max_height = v;
-}
 
 /* Palette pointers. The C code does:
  *     free(term->sixel.palette);
@@ -79,29 +61,11 @@ void sixel_set_max_height(struct terminal *t, unsigned v) {
  * so we expose both a getter (returning the raw pointer, which Zig
  * passes to libc free) and a setter (usually called with NULL). */
 
-uint32_t *sixel_get_palette(struct terminal *t) {
-    return t->sixel.palette;
-}
 
-void sixel_set_palette(struct terminal *t, uint32_t *p) {
-    t->sixel.palette = p;
-}
 
-uint32_t *sixel_get_private_palette(struct terminal *t) {
-    return t->sixel.private_palette;
-}
 
-void sixel_set_private_palette(struct terminal *t, uint32_t *p) {
-    t->sixel.private_palette = p;
-}
 
-uint32_t *sixel_get_shared_palette(struct terminal *t) {
-    return t->sixel.shared_palette;
-}
 
-void sixel_set_shared_palette(struct terminal *t, uint32_t *p) {
-    t->sixel.shared_palette = p;
-}
 
 /* ── Shims for sixel_init / color_decode_srgb / later chunks ──── */
 /* These wrap fields of struct wayland, struct config, struct
@@ -120,23 +84,14 @@ int sixel_shm_chain_bit_depth(struct terminal *t) {
     return (int)shm_chain_bit_depth(t->render.chains.grid);
 }
 
-bool sixel_wl_have_argb2101010(struct terminal *t) {
-    return t->wl->shm_have_argb2101010;
-}
 
-bool sixel_wl_have_abgr2101010(struct terminal *t) {
-    return t->wl->shm_have_abgr2101010;
-}
 
 /* Number of entries in the default sixel palette config
  * (ALEN(term->conf->colors_dark.sixel)). */
-size_t sixel_conf_sixel_palette_entries(struct terminal *t) {
-    return sizeof(t->conf->colors_dark.sixel) / sizeof(t->conf->colors_dark.sixel[0]);
-}
 
 /* Copy up to `max` entries of the configured sixel palette to dst. */
 void sixel_conf_sixel_palette_copy(struct terminal *t, uint32_t *dst, size_t max) {
-    const size_t n = sixel_conf_sixel_palette_entries(t);
+    const size_t n = sizeof(t->conf->colors_dark.sixel) / sizeof(t->conf->colors_dark.sixel[0]);
     const size_t cnt = n < max ? n : max;
     for (size_t i = 0; i < cnt; i++)
         dst[i] = t->conf->colors_dark.sixel[i];

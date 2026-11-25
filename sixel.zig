@@ -16,47 +16,35 @@ extern fn xsnprintf(buf: [*]u8, n: usize, fmt: [*:0]const u8, ...) callconv(.c) 
 extern fn sixel_get_scrolling(term: *types.Terminal) callconv(.c) bool;
 extern fn sixel_get_use_private_palette(term: *types.Terminal) callconv(.c) bool;
 extern fn sixel_get_cursor_right_of_graphics(term: *types.Terminal) callconv(.c) bool;
-extern fn sixel_get_palette_size(term: *types.Terminal) callconv(.c) c_uint;
-extern fn sixel_set_palette_size(term: *types.Terminal, v: c_uint) callconv(.c) void;
-extern fn sixel_get_max_width(term: *types.Terminal) callconv(.c) c_uint;
-extern fn sixel_set_max_width(term: *types.Terminal, v: c_uint) callconv(.c) void;
-extern fn sixel_get_max_height(term: *types.Terminal) callconv(.c) c_uint;
-extern fn sixel_set_max_height(term: *types.Terminal, v: c_uint) callconv(.c) void;
-extern fn sixel_get_palette(term: *types.Terminal) callconv(.c) ?[*]u32;
-extern fn sixel_set_palette(term: *types.Terminal, p: ?[*]u32) callconv(.c) void;
-extern fn sixel_get_private_palette(term: *types.Terminal) callconv(.c) ?[*]u32;
-extern fn sixel_set_private_palette(term: *types.Terminal, p: ?[*]u32) callconv(.c) void;
-extern fn sixel_get_shared_palette(term: *types.Terminal) callconv(.c) ?[*]u32;
-extern fn sixel_set_shared_palette(term: *types.Terminal, p: ?[*]u32) callconv(.c) void;
 
 // ── Chunk A: colors/geometry report functions ────────────────────
 
 export fn sixel_colors_report_current(term: *types.Terminal) callconv(.c) void {
     var reply: [24]u8 = undefined;
-    const n = xsnprintf(&reply, reply.len, "\x1b[?1;0;%uS", sixel_get_palette_size(term));
+    const n = xsnprintf(&reply, reply.len, "\x1b[?1;0;%uS", term.sixel.palette_size);
     term_to_slave(term, &reply, n);
 }
 
 export fn sixel_colors_reset(term: *types.Terminal) callconv(.c) void {
-    const old = sixel_get_palette(term);
+    const old = term.sixel.palette;
     free(if (old) |p| @ptrCast(p) else null);
-    sixel_set_palette(term, null);
+    term.sixel.palette = null;
 
-    sixel_set_palette_size(term, SIXEL_MAX_COLORS);
+    term.sixel.palette_size = SIXEL_MAX_COLORS;
     sixel_colors_report_current(term);
 }
 
 export fn sixel_colors_set(term: *types.Terminal, count_in: c_uint) callconv(.c) void {
     const new_size: u32 = @min(@max(@as(u32, 2), count_in), SIXEL_MAX_COLORS);
 
-    const priv = sixel_get_private_palette(term);
+    const priv = term.sixel.private_palette;
     free(if (priv) |p| @ptrCast(p) else null);
-    const shared = sixel_get_shared_palette(term);
+    const shared = term.sixel.shared_palette;
     free(if (shared) |p| @ptrCast(p) else null);
-    sixel_set_private_palette(term, null);
-    sixel_set_shared_palette(term, null);
+    term.sixel.private_palette = null;
+    term.sixel.shared_palette = null;
 
-    sixel_set_palette_size(term, new_size);
+    term.sixel.palette_size = new_size;
     sixel_colors_report_current(term);
 }
 
@@ -69,11 +57,11 @@ export fn sixel_colors_report_max(term: *types.Terminal) callconv(.c) void {
 export fn sixel_geometry_report_current(term: *types.Terminal) callconv(.c) void {
     const w: u32 = @min(
         @as(u32, @intCast(term.cols * term.cell_width)),
-        sixel_get_max_width(term),
+        term.sixel.max_width,
     );
     const h: u32 = @min(
         @as(u32, @intCast(term.rows * term.cell_height)),
-        sixel_get_max_height(term),
+        term.sixel.max_height,
     );
 
     var reply: [64]u8 = undefined;
@@ -82,20 +70,20 @@ export fn sixel_geometry_report_current(term: *types.Terminal) callconv(.c) void
 }
 
 export fn sixel_geometry_reset(term: *types.Terminal) callconv(.c) void {
-    sixel_set_max_width(term, SIXEL_MAX_WIDTH);
-    sixel_set_max_height(term, SIXEL_MAX_HEIGHT);
+    term.sixel.max_width = SIXEL_MAX_WIDTH;
+    term.sixel.max_height = SIXEL_MAX_HEIGHT;
     sixel_geometry_report_current(term);
 }
 
 export fn sixel_geometry_set(term: *types.Terminal, width: c_uint, height: c_uint) callconv(.c) void {
-    sixel_set_max_width(term, width);
-    sixel_set_max_height(term, height);
+    term.sixel.max_width = width;
+    term.sixel.max_height = height;
     sixel_geometry_report_current(term);
 }
 
 export fn sixel_geometry_report_max(term: *types.Terminal) callconv(.c) void {
-    const w = sixel_get_max_width(term);
-    const h = sixel_get_max_height(term);
+    const w = term.sixel.max_width;
+    const h = term.sixel.max_height;
 
     var reply: [64]u8 = undefined;
     const n = xsnprintf(&reply, reply.len, "\x1b[?2;0;%u;%uS", w, h);
@@ -112,9 +100,6 @@ extern const srgb_decode_8_to_8_table: [256]u8;
 
 extern fn sixel_wayl_do_linear_blending(term: *types.Terminal) callconv(.c) bool;
 extern fn sixel_shm_chain_bit_depth(term: *types.Terminal) callconv(.c) c_int;
-extern fn sixel_wl_have_argb2101010(term: *types.Terminal) callconv(.c) bool;
-extern fn sixel_wl_have_abgr2101010(term: *types.Terminal) callconv(.c) bool;
-extern fn sixel_conf_sixel_palette_entries(term: *types.Terminal) callconv(.c) usize;
 extern fn sixel_conf_sixel_palette_copy(term: *types.Terminal, dst: [*]u32, max: usize) callconv(.c) void;
 extern fn sixel_pixman_fmt_a8r8g8b8() callconv(.c) c_uint;
 extern fn sixel_pixman_fmt_a2r10g10b10() callconv(.c) c_uint;
@@ -739,6 +724,16 @@ fn decgci(term: *types.Terminal, c: u8) void {
     }
 }
 
+fn wlHaveArgb2101010(term: *types.Terminal) bool {
+    const wl = term.wl orelse return false;
+    return wl._shm_format_bits.argb2101010;
+}
+
+fn wlHaveAbgr2101010(term: *types.Terminal) bool {
+    const wl = term.wl orelse return false;
+    return wl._shm_format_bits.abgr2101010;
+}
+
 export fn sixel_put_generic(term_opaque: ?*anyopaque, c: u8) callconv(.c) void {
     const term: *types.Terminal = @ptrCast(@alignCast(term_opaque orelse unreachable));
     switch (term.sixel.state) {
@@ -999,16 +994,16 @@ export fn sixel_init(term: *types.Terminal, p1: c_int, p2: c_int, p3: c_int) cal
 
     // SHM_BITS_10 = 1 in shm.h enum
     if (sixel_shm_chain_bit_depth(term) >= 1) {
-        if (sixel_wl_have_argb2101010(term)) {
+        if (wlHaveArgb2101010(term)) {
             term.sixel.use_10bit = true;
             term.sixel.pixman_fmt = @intCast(sixel_pixman_fmt_a2r10g10b10());
-        } else if (sixel_wl_have_abgr2101010(term)) {
+        } else if (wlHaveAbgr2101010(term)) {
             term.sixel.use_10bit = true;
             term.sixel.pixman_fmt = @intCast(sixel_pixman_fmt_a2b10g10r10());
         }
     }
 
-    const conf_entries = sixel_conf_sixel_palette_entries(term);
+    const conf_entries = term.conf.?.colors_dark.sixel.len;
     const palette_size: usize = term.sixel.palette_size;
     const active_palette_entries: usize = @min(conf_entries, palette_size);
 
