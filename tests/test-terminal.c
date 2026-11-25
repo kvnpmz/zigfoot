@@ -4685,6 +4685,127 @@ test_render_sixel(void)
     pixman_image_unref(pix);
 }
 
+/* D3h: CSD button painters */
+static void
+test_csd_buttons(void)
+{
+    enum { BW = 36, BH = 36 };
+    uint32_t pixels[BW * BH];
+    pixman_image_t *pix = pixman_image_create_bits(PIXMAN_a8r8g8b8, BW, BH, pixels, BW * 4);
+    if (pix == NULL) {
+        printf("skip: pixman_image_create_bits() failed\n");
+        return;
+    }
+
+    pixman_image_t *pix_arr[1] = {pix};
+    struct buffer buf = {0};
+    buf.width = BW;
+    buf.height = BH;
+    buf.pix = pix_arr;
+    buf.pix_instances = 1;
+
+    struct terminal term = {0};
+    struct config conf = {0};
+    struct wl_window win = {0};
+    struct wayland wl = {0};
+    term.conf = &conf;
+    term.window = &win;
+    term.wl = &wl;
+    term.scale = 1.0f;
+    conf.colors_dark.bg = 0x00ffffff;
+    conf.csd.color.buttons_set = 0;
+
+    const uint32_t fg =
+        pixman_color_to_argb(color_hex_to_pixman(conf.colors_dark.bg, false));
+
+    /* minimize: a single horizontal bar in the lower half */
+    memset(pixels, 0, sizeof(pixels));
+    render_csd_button_minimize(&term, &buf);
+    check(count_argb(pix, BW, BH, fg) > 0,
+          "the minimize button paints a bar");
+
+    int bar_rows = 0, bar_top = -1;
+    for (int y = 0; y < BH; y++) {
+        bool row_has_ink = false;
+        for (int x = 0; x < BW; x++)
+            row_has_ink |= pix_pixel(pix, x, y) == fg;
+        if (row_has_ink) {
+            if (bar_top < 0)
+                bar_top = y;
+            bar_rows++;
+        }
+    }
+    check(bar_rows == 1 && bar_top > BH / 2,
+          "the minimize glyph is a single row below the center");
+
+    /* maximize window: a hollow square */
+    memset(pixels, 0, sizeof(pixels));
+    win.is_maximized = false;
+    render_csd_button_maximize(&term, &buf);
+    size_t window_px = count_argb(pix, BW, BH, fg);
+    check(pix_pixel(pix, BW / 2, BH / 3) == fg,
+          "the maximize button draws the top edge of the square");
+    check(pix_pixel(pix, BW / 2, BH / 2) != fg,
+          "the maximize square is hollow");
+
+    /* maximize maximized: two nested squares, so more ink */
+    memset(pixels, 0, sizeof(pixels));
+    win.is_maximized = true;
+    render_csd_button_maximize(&term, &buf);
+    size_t maximized_px = count_argb(pix, BW, BH, fg);
+    check(maximized_px != window_px &&
+          pix_pixel(pix, BW / 3, BH / 3) != fg,
+          "the maximized variant insets the square by one pixel");
+    win.is_maximized = false;
+
+    /* close: an X, i.e. ink in both diagonals' corners but not the centre */
+    memset(pixels, 0, sizeof(pixels));
+    render_csd_button_close(&term, &buf);
+    size_t close_px = count_argb(pix, BW, BH, fg);
+    check(close_px > 0, "the close button paints something");
+    check(close_px < window_px,
+          "the close X is thinner than the maximise square outline");
+    check(pix_pixel(pix, 1, 1) == 0,
+          "the close button stays inside its square");
+
+    /* configured button color wins over the background */
+    conf.csd.color.buttons_set = 1;
+    conf.csd.color.buttons = 0xff00ff00; /* green, alpha in the top byte */
+    memset(pixels, 0, sizeof(pixels));
+    render_csd_button_minimize(&term, &buf);
+    check(count_argb(pix, BW, BH, 0xff00ff00) > 0,
+          "a configured button color is used");
+    conf.csd.color.buttons_set = 0;
+
+    /* any_pointer_is_on_button() */
+    term.cols = 4;
+    term.rows = 2;
+    term.cell_width = 10;
+    term.cell_height = 10;
+    term.width = 100;
+    term.height = 50;
+    win.csd_mode = CSD_YES;
+    win.term = &term;
+    conf.csd.border_width = 0;
+    conf.csd.title_height = 20;
+    conf.csd.button_width = 10;
+
+    struct seat seat = {0};
+    seat.wayl = &wl;
+    seat.mouse.x = 5;
+    seat.mouse.y = 5;
+    tll_push_back(wl.seats, seat);
+
+    check(any_pointer_is_on_button(&term, CSD_SURF_CLOSE),
+          "the pointer is on the close button");
+    wl.seats.head->item.mouse.x = -1;
+    check(!any_pointer_is_on_button(&term, CSD_SURF_CLOSE),
+          "a pointer outside the window is not on any button");
+    tll_free(wl.seats);
+
+    pixman_image_unref(pix);
+}
+
 int
 main(void)
 {
@@ -4714,6 +4835,7 @@ main(void)
     test_render_cell();
     test_grid_render_scroll();
     test_render_sixel();
+    test_csd_buttons();
     test_csd_data();
     test_render_csd_part();
     test_configure();

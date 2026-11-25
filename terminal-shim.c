@@ -273,6 +273,45 @@ void render_shim_image_unref(pixman_image_t *pix)
     pixman_image_unref(pix);
 }
 
+/* The CSD close button is a pair of crossed X shapes, composited as four
+ * pixman triangles -- a library type we would rather not mirror. */
+void render_shim_close_button(
+    pixman_image_t *pix, const pixman_color_t *color,
+    int x_margin, int y_margin, int width, int thick)
+{
+#define I(x) pixman_int_to_fixed(x)
+
+    pixman_triangle_t tri[4] = {
+        {
+            .p1 = {.x = I(x_margin), .y = I(y_margin + thick)},
+            .p2 = {.x = I(x_margin + width - thick), .y = I(y_margin + width)},
+            .p3 = {.x = I(x_margin + thick), .y = I(y_margin)},
+        },
+        {
+            .p1 = {.x = I(x_margin + width), .y = I(y_margin + width - thick)},
+            .p2 = {.x = I(x_margin + thick), .y = I(y_margin)},
+            .p3 = {.x = I(x_margin + width - thick), .y = I(y_margin + width)},
+        },
+        {
+            .p1 = {.x = I(x_margin), .y = I(y_margin + width - thick)},
+            .p2 = {.x = I(x_margin + width), .y = I(y_margin + thick)},
+            .p3 = {.x = I(x_margin + thick), .y = I(y_margin + width)},
+        },
+        {
+            .p1 = {.x = I(x_margin + width), .y = I(y_margin + thick)},
+            .p2 = {.x = I(x_margin), .y = I(y_margin + width - thick)},
+            .p3 = {.x = I(x_margin + width - thick), .y = I(y_margin)},
+        },
+    };
+
+#undef I
+
+    pixman_image_t *src = pixman_image_create_solid_fill(color);
+    pixman_composite_triangles(
+        PIXMAN_OP_OVER, src, pix, PIXMAN_a1, 0, 0, 0, 0, 4, tri);
+    pixman_image_unref(src);
+}
+
 /* Sixel compositing needs an explicit operator and a source rect offset. */
 void render_shim_composite_op(
     int op,

@@ -650,9 +650,9 @@ utmp backends where available.
 
 ## 13. Sequenced backlog (refreshed 2026-11-24)
 
-State: **35,538 of 48,830 C lines gone (72.8%)**, ~58% by effort, 35 modules
-ported, 581 harness assertions, `meson test` 5/5 in three build dirs.
-Remaining module C: 13,292 lines, plus 2,425 lines of `*-shim.c` accessors.
+State: **35,767 of 48,830 C lines gone (73.3%)**, ~58% by effort, 35 modules
+ported, 592 harness assertions, `meson test` 5/5 in three build dirs.
+Remaining module C: 13,063 lines, plus 2,465 lines of `*-shim.c` accessors.
 
 **`wayland` is done.** `wayland.c` is down from 2,884 lines to **359**, and what
 is left is glue rather than logic: the fourteen generated-protocol listener
@@ -798,9 +798,11 @@ Order matters: `search` and `wayland` first (they unblock the rest), then
 | **D3e** done | `render`: **`render_cell()`** — the 510-line heart of the renderer. Colour-source resolution for fg/bg (default/base16/base256/RGB), selection colours with the invert-on-collision rule, reverse and the three alpha modes (with the fullscreen assertion), dim/bold-in-bright/blink, glyph selection through the four custom-glyph caches (box drawing, braille, octants, legacy — allocated lazily under the worker lock), composed characters with grapheme shaping and forced widths, spacers, the overflowing-glyph bleed bookkeeping, clip + damage, background, the early blink-timer arming, colour-emoji vs mask compositing, combining-character pen arithmetic, styled underlines from `row->extra->underline_ranges`, strikeout, url underlines and both cursor paths. Six new `render_shim_*` helpers keep `pixman_region32_t` and the `mtx_t` worker lock in C. 13 new harness checks render real cells onto a pixman image | D3d | 1.5d |
 | **D3f** done | `render`: `grid_render_scroll()` and `grid_render_scroll_reverse()` — the "SHM scroll or memmove" heuristic (`lines + region.start + (rows - region.end) < rows/2`, guarded by `shm_can_scroll()`), the margin restore after a successful SHM scroll, the memmove fallback (`copyForwards` for up, `copyBackwards` for down, matching `memmove()`'s overlap semantics), and the surface damage + buffer damage that follow. 6 new harness checks scroll a real byte buffer and read it back | D3e | 0.5d |
 | **D3g** done | `render`: the sixel path — `render_sixel_images()` (viewport-relative start/end with wrap-around, sorted-list early exits, `sixel_sync_cache()`), `render_sixel()` (chunking consecutive visible *dirty* rows to avoid recompositing, the opaque path that only marks cells clean unless the last row/column is partially covered, the transparent path that renders the cells underneath via `render_row()`), and the chunk compositor with its margin clamping. One new shim for a composite with an explicit operator and source offset. 8 new harness checks composite a real sixel image and check the clean/dirty bookkeeping | D3f | 1d |
-| **D3h** | `render`: OSD/CSD-button/overlay/IME-preedit painting | D3g | 2–3d |
-| **D3i** | `render`: search-box and url painting | D3h | 2d |
-| **D3j** | `render`: the worker thread, damage tracking, `grid_render()`, `render_resize()` and the remaining xcursor/tiocswinsz glue | D3i | 3–4d |
+| **D3h** done | `render`: the CSD button painters — `get_csd_button_fg_color()`, the shared button geometry (a square of a third of the buffer, `min(width/2, scale)` thick), `render_csd_button_minimize()`, `_maximize_window()`, `_maximize_maximized()`, `_maximize()` and `_close()` (four pixman triangles, kept in C as `render_shim_close_button()`), plus `any_pointer_is_on_button()`. 11 new harness checks paint the buttons on a real 36×36 buffer and verify each glyph's shape | D3g | 0.5d |
+| **D3i** | `render`: `render_csd_title()`/`render_csd_border()`/`render_csd()` and the OSD text painter | D3h | 1–2d |
+| **D3j** | `render`: overlay, IME-preedit and scrollback-position painting | D3i | 2d |
+| **D3k** | `render`: search-box and url painting | D3j | 2d |
+| **D3l** | `render`: the worker thread, damage tracking, `grid_render()`, `render_resize()` and the remaining xcursor/tiocswinsz glue | D3k | 3–4d |
 | **D4** | `input` (3,687) — split into D4a keyboard/legacy+kitty protocols, D4b pointer/mouse/touch, D4c compose/IME plumbing | after B2 + key-binding | 1–1.5w |
 | **D5** | `key-binding` (661), `ime` (540), `url-mode` (833), `selection` S1+S3 (~600) | after B2/D4 | 4–5d |
 | **D6** | `main` (770), `server` (707), `client` (679) | last; they tie everything together and are only fully testable once a window opens | 4–5d |

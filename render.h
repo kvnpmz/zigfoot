@@ -42,6 +42,16 @@ void render_row(
     struct terminal *term, pixman_image_t *pix, pixman_region32_t *damage,
     struct row *row, int row_no, int cursor_col);
 void render_urgency(struct terminal *term, struct buffer *buf);
+pixman_color_t get_csd_button_fg_color(const struct terminal *term);
+void render_csd_button_minimize(struct terminal *term, struct buffer *buf);
+void render_csd_button_maximize_maximized(
+    struct terminal *term, struct buffer *buf);
+void render_csd_button_maximize_window(
+    struct terminal *term, struct buffer *buf);
+void render_csd_button_maximize(struct terminal *term, struct buffer *buf);
+void render_csd_button_close(struct terminal *term, struct buffer *buf);
+bool any_pointer_is_on_button(
+    const struct terminal *term, enum csd_surface csd_surface);
 void render_margin(
     struct terminal *term, struct buffer *buf,
     int start_line, int end_line, bool apply_damage);

@@ -1790,3 +1790,152 @@ export fn render_sixel_images(
         renderSixel(term, pix, damage, cursor, &node.item);
     }
 }
+
+// ─────────────────────────────────────────────────────────────────────────
+// CSD buttons (D3h)
+// ─────────────────────────────────────────────────────────────────────────
+
+const SeatList = tll.Tll(types.Seat);
+
+extern fn render_shim_close_button(
+    pix: *PixmanImage,
+    color: *const PixmanColor,
+    x_margin: c_int,
+    y_margin: c_int,
+    width: c_int,
+    thick: c_int,
+) callconv(.c) void;
+
+fn getCsdButtonFgColor(term: *const Terminal) PixmanColor {
+    const conf = term.conf.?;
+    var _color = conf.colors_dark.bg;
+    var alpha: u16 = 0xffff;
+
+    if (conf.csd.color._flags.buttons_set) {
+        _color = conf.csd.color.buttons;
+        alpha = @truncate((_color >> 24) | (_color >> 24 << 8));
+    }
+
+    return color_hex_to_pixman_with_alpha(_color, alpha, wayl_do_linear_blending(term.wl, conf));
+}
+
+/// Shared geometry: the button glyph is a square of at most a third of the
+/// buffer, inset by `width/2` (or one scaled pixel) thickness.
+const ButtonGeom = struct {
+    width: c_int,
+    thick: c_int,
+    x_margin: c_int,
+    y_margin: c_int,
+};
+
+fn buttonGeom(term: *const Terminal, buf: *const Buffer) ButtonGeom {
+    const max_height = @divTrunc(buf.height, 3);
+    const max_width = @divTrunc(buf.width, 3);
+
+    const width = @min(max_height, max_width);
+    const thick: c_int = @intFromFloat(@min(
+        @as(f32, @floatFromInt(@divTrunc(width, 2))),
+        1 * term.scale,
+    ));
+
+    const x_margin = @divTrunc(buf.width - width, 2);
+    const y_margin = @divTrunc(buf.height - width, 2);
+
+    std.debug.assert(x_margin + width - thick >= 0);
+    std.debug.assert(width - 2 * thick >= 0);
+    std.debug.assert(y_margin + width - thick >= 0);
+
+    return .{ .width = width, .thick = thick, .x_margin = x_margin, .y_margin = y_margin };
+}
+
+export fn render_csd_button_minimize(term: *Terminal, buf: *Buffer) callconv(.c) void {
+    const color = getCsdButtonFgColor(term);
+    const g = buttonGeom(term, buf);
+    const x = g.x_margin;
+    const y = g.y_margin + g.width - g.thick;
+
+    fillRect(bufferPix(buf), &color, &.{.{
+        .x = @intCast(x),
+        .y = @intCast(y),
+        .width = @intCast(g.width),
+        .height = @intCast(g.thick),
+    }});
+}
+
+export fn render_csd_button_maximize_maximized(term: *Terminal, buf: *Buffer) callconv(.c) void {
+    const color = getCsdButtonFgColor(term);
+    const g = buttonGeom(term, buf);
+    const shrink: c_int = 1;
+    const x = g.x_margin;
+    const y = g.y_margin;
+    const w = g.width;
+    const t = g.thick;
+
+    const inner: u16 = @intCast(w - 2 * t - shrink);
+
+    fillRect(bufferPix(buf), &color, &.{
+        .{ .x = @intCast(x + shrink), .y = @intCast(y + shrink), .width = @intCast(w - 2 * shrink), .height = @intCast(t) },
+        .{ .x = @intCast(x + shrink), .y = @intCast(y + t), .width = @intCast(t), .height = inner },
+        .{ .x = @intCast(x + w - t - shrink), .y = @intCast(y + t), .width = @intCast(t), .height = inner },
+        .{ .x = @intCast(x + shrink), .y = @intCast(y + w - t - shrink), .width = @intCast(w - 2 * shrink), .height = @intCast(t) },
+    });
+}
+
+export fn render_csd_button_maximize_window(term: *Terminal, buf: *Buffer) callconv(.c) void {
+    const color = getCsdButtonFgColor(term);
+    const g = buttonGeom(term, buf);
+    const x = g.x_margin;
+    const y = g.y_margin;
+    const w = g.width;
+    const t = g.thick;
+
+    const inner: u16 = @intCast(w - 2 * t);
+
+    fillRect(bufferPix(buf), &color, &.{
+        .{ .x = @intCast(x), .y = @intCast(y), .width = @intCast(w), .height = @intCast(t) },
+        .{ .x = @intCast(x), .y = @intCast(y + t), .width = @intCast(t), .height = inner },
+        .{ .x = @intCast(x + w - t), .y = @intCast(y + t), .width = @intCast(t), .height = inner },
+        .{ .x = @intCast(x), .y = @intCast(y + w - t), .width = @intCast(w), .height = @intCast(t) },
+    });
+}
+
+export fn render_csd_button_maximize(term: *Terminal, buf: *Buffer) callconv(.c) void {
+    if (term.window.?.is_maximized)
+        render_csd_button_maximize_maximized(term, buf)
+    else
+        render_csd_button_maximize_window(term, buf);
+}
+
+export fn render_csd_button_close(term: *Terminal, buf: *Buffer) callconv(.c) void {
+    const color = getCsdButtonFgColor(term);
+    const g = buttonGeom(term, buf);
+
+    render_shim_close_button(bufferPix(buf), &color, g.x_margin, g.y_margin, g.width, g.thick);
+}
+
+export fn any_pointer_is_on_button(term: *const Terminal, csd_surface: types.CsdSurface) callconv(.c) bool {
+    const seats: *SeatList = @ptrCast(&term.wl.?.seats);
+
+    if (seats.len() == 0)
+        return false;
+
+    var it = seats.foreach();
+    while (it.next()) |node| {
+        const seat = &node.item;
+
+        if (seat.mouse.x < 0)
+            continue;
+        if (seat.mouse.y < 0)
+            continue;
+
+        const info = get_csd_data(term, csd_surface);
+        if (seat.mouse.x > info.width)
+            continue;
+
+        if (seat.mouse.y > info.height)
+            continue;
+        return true;
+    }
+
+    return false;
+}
