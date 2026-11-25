@@ -83,26 +83,7 @@ void shm_shim_wl_buffer_add_listener(struct wl_buffer *buffer, void *data) {
     wl_buffer_add_listener(buffer, &buffer_listener, data);
 }
 
-static size_t
-page_size(void)
-{
-    static size_t size = 0;
-    if (size == 0) {
-        long n = sysconf(_SC_PAGE_SIZE);
-        if (n <= 0) {
-            LOG_ERRNO("failed to get page size");
-            size = 4096;
-        } else {
-            size = (size_t)n;
-        }
-    }
-    xassert(size > 0);
-    return size;
-}
-
-size_t shm_shim_page_size(void) {
-    return page_size();
-}
+/* ── page_size() / shm_shim_page_size(): ported to shm.zig ──────── */
 
 int shm_shim_stride_for_format(pixman_format_code_t fmt, int width) {
     return stride_for_format_and_width(fmt, width);
