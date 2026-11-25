@@ -108,3 +108,20 @@ gdb -batch -ex run -ex bt --args \
 
 The driver stops at the first failed seed, prints the stderr tail, saves
 `/tmp/fuzz-vt/fail-<seed>`, and exits 1. A passing run prints one summary line.
+
+## Agent B extended campaign — 2026-11-25
+
+Command:
+
+```sh
+cd /workspace-b
+export ZIG_GLOBAL_CACHE_DIR=/tmp/agent-b/zig-cache
+bash scripts/fuzz-vt.sh 120
+```
+
+Result: **PASS**, 120 seeds, 24,000 iterations, no product crashes or panics.
+
+The first attempt stopped at seed 71 because the harness evaluated
+`current_input[next_random() % current_len]` after mutation produced an empty
+input. This was a divide-by-zero in the fuzz driver, not in foot. The empty-input IME path now
+leaves the text buffer empty. The repeated campaign passed all 120 seeds.

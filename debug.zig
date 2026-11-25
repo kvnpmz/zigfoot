@@ -1,9 +1,10 @@
 const std = @import("std");
+const build_options = @import("build_options");
 
 //
-// debug.c ported to Zig: fatal_error() and the variadic bug() used by the
-// xassert()/BUG() macros. The AddressSanitizer stack-trace hook stays in C
-// (it is only compiled in when the sanitizer is enabled).
+// fatal_error() and the variadic bug() used by the xassert()/BUG() macros.
+// Meson mirrors b_sanitize so the AddressSanitizer hook is compiled only
+// when the C runtime is linked with AddressSanitizer.
 //
 
 const LOG_CLASS_ERROR: c_int = 1;
@@ -25,8 +26,15 @@ extern fn vsnprintf(
 extern fn strerror(errnum: c_int) [*:0]u8;
 extern var stderr: *std.c.FILE;
 extern fn fflush(stream: ?*std.c.FILE) c_int;
+extern fn fputs(str: [*:0]const u8, stream: ?*std.c.FILE) c_int;
+extern fn __sanitizer_print_stack_trace() void;
 
-extern fn debug_shim_print_stack_trace() callconv(.c) void;
+export fn debug_shim_print_stack_trace() callconv(.c) void {
+    if (comptime build_options.asan_enabled) {
+        _ = fputs("\nStack trace:\n", stderr);
+        __sanitizer_print_stack_trace();
+    }
+}
 
 export fn fatal_error(
     file: [*:0]const u8,

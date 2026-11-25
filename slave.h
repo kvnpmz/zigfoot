@@ -27,6 +27,10 @@ struct slave_constants {
 
 const struct slave_constants *slave_shim_constants(void);
 int slave_shim_set_iutf8(int pts);
+const char *slave_shim_terminfo_path(void);
+bool slave_shim_reset_signals(void);
+int slave_shim_execvpe(
+    const char *file, char *const argv[], char *const envp[]);
 
 pid_t slave_spawn(
     int ptmx, int argc, const char *cwd, char *const *argv, const char *const *envp,

@@ -1,15 +1,16 @@
 const std = @import("std");
 const types = @import("terminal_types.zig");
+const build_options = @import("build_options");
 
 //
 // slave.c ported to Zig: the fork/exec of the child process that becomes the
 // shell running inside foot, its environment setup, shell validation and the
 // user-notification banner written to the pty.
 //
-// What stays in slave.c is platform glue only: the O_*/F_*/TIOCSCTTY/_CS_PATH
-// constants (macros in C), the IUTF8 termios adjustment, signal-mask/handler
-// restoration, and execvpe() (EXECVPE is a configure-time feature and the
-// fallback needs execve() on a resolved path). See slave.c for the list.
+// Signal-mask/handler restoration is Zig now. The configured terminfo path
+// arrives through build_options. Only execvpe() stays in C because Zig 0.16
+// has no execvpeZ(), and its portable PATH-search fallback must use the
+// caller-provided environment.
 //
 
 const LOG_CLASS_ERROR: c_int = 1;
@@ -121,8 +122,29 @@ export fn slave_shim_set_iutf8(pts: c_int) c_int {
     return 0;
 }
 
-extern fn slave_shim_reset_signals() bool;
-extern fn slave_shim_terminfo_path() ?[*:0]const u8;
+/// Restore the child signal mask and the SIGHUP/SIGPIPE handlers. All
+/// arguments are valid, so the std.posix calls cannot fail.
+export fn slave_shim_reset_signals() bool {
+    const dfl: std.posix.Sigaction = .{
+        .handler = .{ .handler = std.posix.SIG.DFL },
+        .mask = std.posix.sigemptyset(),
+        .flags = 0,
+    };
+    const mask = std.posix.sigemptyset();
+
+    std.posix.sigprocmask(std.posix.SIG.SETMASK, &mask, null);
+    std.posix.sigaction(.HUP, &dfl, null);
+    std.posix.sigaction(.PIPE, &dfl, null);
+    return true;
+}
+
+export fn slave_shim_terminfo_path() ?[*:0]const u8 {
+    const path = build_options.foot_terminfo_path;
+    if (path.len == 0)
+        return null;
+    return path.ptr;
+}
+
 extern fn slave_shim_execvpe(
     file: [*:0]const u8,
     argv: [*]?[*:0]u8,

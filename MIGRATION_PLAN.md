@@ -24,7 +24,7 @@ foot-owned C lines are gone (44.7%)**, replaced by ~22.7k lines of Zig
 | State | Modules |
 |---|---|
 | **Ported, C deleted** (28) | `async`, `base64`, `char32`, `commands`, `composed`, `csi`, `cursor-shape`, `dcs`, `extract`, `fdm`, `grid`, `hsl`, `misc`, `notify`, `osc`, `reaper`, `sixel`, `spawn`, `spawn_template`, `tokenize`, `uri`, `log`, `user-notification`, `unicode-mode`, `vt`, `xmalloc`, `xsnprintf`, and **`config`** (the parser, the logger tail and the fcft accessors are Zig; the 35 surviving C lines are `config_regex_compile()` only — see §6.3) |
-| **In progress** (Zig + remaining C + shims) | `terminal.c` (1,780 left), `selection.c` (844 left), `shm.c` (329 left — globals, 32-bit/punch-hole `#ifdef` shims, the `wl_buffer_listener` and the `wl_shm` protocol stubs; `shm.zig` is 1,014 lines), `debug.c` (22 left — the ASAN stack-trace hook), `config.c` (35 left — the regex_t shim), `slave.c` (158 left — O_*/F_*/TIOCSCTTY/_CS_PATH constants, the IUTF8 termios block, signal-mask restoration and the execvpe shim; `slave.zig` is 663 lines) |
+| **In progress** (Zig + remaining C + shims) | `terminal.c` (1,780 left), `selection.c` (844 left), `shm.c` (329 left — globals, 32-bit/punch-hole `#ifdef` shims, the `wl_buffer_listener` and the `wl_shm` protocol stubs; `shm.zig` is 1,014 lines), `config.c` (35 left — the regex_t shim), `slave.c` (64 left — only the execvpe fallback; `slave.zig` has signals and terminfo) |
 | **Untouched** (13 modules, ~21.2k lines) | `box-drawing` (3,450), `render` (5,479), `input` (3,690), `wayland` (2,881), `search` (1,512), `url-mode` (833), `main` (751), `server` (688), `key-binding` (661), `client` (629), `ime` (532), `quirks` (86), `foot-features` (42) |
 
 **Progress read two ways:** 45% by C volume, but roughly **35% by effort**,
@@ -893,9 +893,9 @@ Per-module burn-down (share of that module's original C that is gone):
 | `config` | 35 / 4,374 | 99% | only `config_regex_compile()` (§6.3) |
 | `wayland` | 359 / 2,884 | 88% | 27 listener tables + forwarders + 3 FDM callbacks |
 | `selection` | 687 / 2,967 | **77%** | receive path, data-device/DND listeners, `selection-shim.c` |
-| `slave` | 106 / 573 | **81%** | signal reset, terminfo path and execvpe left |
+| `slave` | 64 / 573 | **89%** | only `execvpe()`; Zig 0.16 has no `execvpeZ()` |
 | `shm` | 329 / 1,110 | 70% | globals, `wl_shm`/`wl_buffer` stubs, punch-hole `#ifdef`s |
-| `debug` | 22 / 47 | 53% | ASAN stack-trace hook |
+| `debug` | 0 / 47 | **100%** | ASAN hook is Zig, gated by the Meson `b_sanitize` option |
 | `render` | 0 / 5,479 | **100%** | `render.c` deleted in D3l4; `render.zig` is the module |
 | `input` | 0 / 3,687 | **100%** | `input.c` deleted in D4e; listener tables now live in `terminal-shim.c` |
 | `url-mode` | 0 / 833 | **100%** | `url-mode.c` deleted in D5c; `url-mode.zig` is the module |
@@ -952,6 +952,16 @@ stayed in C (`url_shim_regex_match()`, since `regex_t`'s `re_nsub` and
 `regmatch_t` are libc-specific); `toc32lower()` was added to `char32.zig`.
 8 new harness checks: detection over a real POSIX regex (two rows), the
 match range/action, the first label letter, duplicate-URL reuse, and reset.
+
+**Post-E1b:** `slave.c` is down to **64** lines and contains only
+`slave_shim_execvpe()`: Zig 0.16 has no `execvpeZ()`, and the portable
+PATH-search fallback must honor the caller-provided `envp`. Signal reset uses
+`std.posix.sigaction()`/`sigprocmask()` with `SIG.DFL`; the configured terminfo
+path is the `foot_terminfo_path` build option. `debug.c` is deleted: the ASAN
+stack-trace hook is in `debug.zig`, selected by the `asan_enabled` build option
+from Meson `b_sanitize`. Three harness checks cover the terminfo value, signal
+reset, and an execvpe `ENOENT` path. Debug, ASAN-foot, custom-terminfo, test,
+smoke, valgrind, and 120-seed fuzz verification passed.
 
 **Post-E1a:** the `slave` platform glue shrank from 158 to **106** lines
 (slave now 81% ported). `slave_shim_constants()` and
@@ -1130,9 +1140,9 @@ shared `types.KeyBindingSet`. The `selection` tail deletes
 and `client` (679), which share `main`'s setup. After D6 the process entry
 point is Zig.
 
-**Track E — endgame (≈3–4 dev-days).** E1a done (slave's constants +IUTF8). `wayland`'s 359 glue lines, `shm`'s 329
+**Track E — endgame (≈3–4 dev-days).** E1a/E1b done (slave constants, IUTF8, signals, terminfo, and the debug ASAN hook). `wayland`'s 359 glue lines, `shm`'s 329
 (pull the `wl_shm` stubs behind a mirrored `struct shm_wayland_caps`), `slave`'s
-158 constants/execvpe, `config`'s 35-line regex shim, `debug`'s 22-line ASAN
+64-line execvpe fallback, `config`'s 35-line regex shim
 hook; then delete every struct-mirror shim. Note the shim count has *grown*
 during D2/D3 (2,465 → 2,524) because generated protocol inlines need
 forwarders — E1 must keep those and delete only the mirrors (§12.9).

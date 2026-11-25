@@ -104,11 +104,12 @@ add_project_arguments(
 )
 
 terminfo_install_location = get_option('custom-terminfo-install-location')
+terminfo_path = ''
 
 if terminfo_install_location != ''
+  terminfo_path = join_paths(get_option('prefix'), terminfo_install_location)
   add_project_arguments(
-    ['-DFOOT_TERMINFO_PATH="@0@"'.format(
-      join_paths(get_option('prefix'), terminfo_install_location))],
+    ['-DFOOT_TERMINFO_PATH="@0@"'.format(terminfo_path)],
     language: 'c')
 else
   terminfo_install_location = join_paths(get_option('datadir'), 'terminfo')
@@ -162,6 +163,7 @@ endif
 # Passed to compile_zig.py for Zig modules that mirror a clustering-gated
 # C code path (char32.zig's c32width()).
 grapheme_clustering_zig = utf8proc.found() ? 'true' : 'false'
+asan_enabled_zig = get_option('b_sanitize').contains('address') ? 'true' : 'false'
 
 pixman_rgba_16 = pixman.version().version_compare('>=0.46.0')
 if pixman_rgba_16
@@ -630,7 +632,7 @@ debug_obj = custom_target(
   depends: c_layout,
   command: [
     python, files('compile_zig.py'), '@INPUT@', '@OUTPUT@',
-    grapheme_clustering_zig,
+    grapheme_clustering_zig, 'asan_enabled=' + asan_enabled_zig,
   ]
 )
 
@@ -737,7 +739,7 @@ slave_obj = custom_target(
   depends: c_layout,
   command: [
     python, files('compile_zig.py'), '@INPUT@', '@OUTPUT@',
-    grapheme_clustering_zig,
+    grapheme_clustering_zig, 'foot_terminfo_path="@0@"'.format(terminfo_path),
   ]
 )
 
@@ -789,7 +791,7 @@ common = static_library(
   'common',
   log_obj, 'log.h',
   char32_obj, 'char32.h',
-  debug_obj, 'debug.c', 'debug.h',
+  debug_obj, 'debug.h',
   'macros.h',
   'xmalloc-shim.c',
     xmalloc_obj, 'xmalloc.h',
