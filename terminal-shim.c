@@ -252,3 +252,23 @@ const char *terminal_shim_thrd_err_as_string(int thrd_err)
 {
     return thrd_err_as_string(thrd_err);
 }
+
+/* sys/wait.h's status macros cannot be expressed in Zig; keep the platform's
+ * own encoding instead of hard-coding the Linux one. */
+#include <sys/wait.h>
+int terminal_shim_wifexited(int status)
+{
+    return WIFEXITED(status);
+}
+int terminal_shim_wexitstatus(int status)
+{
+    return WEXITSTATUS(status);
+}
+int terminal_shim_wifsignaled(int status)
+{
+    return WIFSIGNALED(status);
+}
+int terminal_shim_wtermsig(int status)
+{
+    return WTERMSIG(status);
+}

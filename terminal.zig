@@ -1150,12 +1150,12 @@ export fn term_arm_blink_timer(term: *types.Terminal) callconv(.c) void {
         return;
     }
 
-    const alarm: types.Itimerspec = .{
+    const timer: types.Itimerspec = .{
         .it_value = .{ .tv_sec = 0, .tv_nsec = 500 * 1_000_000 },
         .it_interval = .{ .tv_sec = 0, .tv_nsec = 500 * 1_000_000 },
     };
 
-    if (timerfd_settime(fd, 0, &alarm, null) < 0) {
+    if (timerfd_settime(fd, 0, &timer, null) < 0) {
         _ = fdm_del(term.fdm orelse return, fd);
     }
 
@@ -2740,12 +2740,12 @@ const zero_itimerspec = types.Itimerspec{
 };
 
 export fn term_flash(term: *types.Terminal, duration_ms: c_uint) void {
-    const alarm = types.Itimerspec{
+    const timer = types.Itimerspec{
         .it_value = .{ .tv_sec = 0, .tv_nsec = @intCast(duration_ms * 1_000_000) },
         .it_interval = .{ .tv_sec = 0, .tv_nsec = 0 },
     };
 
-    if (timerfd_settime(term.flash.fd, 0, &alarm, null) < 0) {
+    if (timerfd_settime(term.flash.fd, 0, &timer, null) < 0) {
         logErrno("failed to arm flash timer");
     } else {
         term.flash.active = true;
@@ -3957,13 +3957,21 @@ extern fn sem_init(sem: *anyopaque, pshared: c_int, value: c_uint) callconv(.c) 
 extern fn sem_destroy(sem: *anyopaque) callconv(.c) c_int;
 extern fn mtx_init(mtx: *anyopaque, mtx_type: c_int) callconv(.c) c_int;
 extern fn cnd_init(cond: *anyopaque) callconv(.c) c_int;
-extern fn thrd_create(
+// C11 thrd_create()/thrd_join() are broken when called from a Zig object in
+// this environment (thrd_create returns thrd_success, then thrd_join fails
+// with thrd_error and the thread is never reaped - reproduced in a 20-line
+// standalone program, while the same calls from C work). glibc's thrd_* are
+// thin wrappers around pthread_* and thrd_t IS pthread_t, so the pthread
+// entry points are used directly; only the error codes differ (errno instead
+// of thrd_*), which shows up in a log message on a failure path only.
+extern fn pthread_create(
     thr: *anyopaque,
-    func: *const fn (?*anyopaque) callconv(.c) c_int,
+    attr: ?*const anyopaque,
+    func: *const fn (?*anyopaque) callconv(.c) ?*anyopaque,
     arg: ?*anyopaque,
 ) callconv(.c) c_int;
 extern fn terminal_shim_thrd_err_as_string(err: c_int) callconv(.c) [*:0]const u8;
-extern fn render_worker_thread(ctx: ?*anyopaque) callconv(.c) c_int;
+extern fn render_worker_thread(ctx: ?*anyopaque) callconv(.c) ?*anyopaque;
 extern fn xcalloc(nmemb: usize, size: usize) callconv(.c) ?*anyopaque;
 
 const THRD_SUCCESS: c_int = 0;
@@ -4023,7 +4031,7 @@ export fn initialize_render_workers(term: *types.Terminal) callconv(.c) bool {
         const ctx: *RenderWorkerContext = @ptrCast(@alignCast(xmalloc(@sizeOf(RenderWorkerContext)).?));
         ctx.* = .{ .my_id = @intCast(1 + i), .term = term };
 
-        const ret = thrd_create(@ptrCast(&threads[i]), &render_worker_thread, ctx);
+        const ret = pthread_create(@ptrCast(&threads[i]), null, &render_worker_thread, ctx);
         if (ret != THRD_SUCCESS) {
             log_msg(
                 LOG_CLASS_ERROR,
@@ -4162,7 +4170,6 @@ export fn term_surface_kind(
 // (C5), so it stays an extern; everything else reads the mirrors.
 //
 
-extern fn term_destroy(term: *types.Terminal) callconv(.c) c_int;
 extern fn wayl_win_destroy(win: ?*types.WlWindow) callconv(.c) void;
 extern fn kill(pid: c_int, sig: c_int) callconv(.c) c_int;
 extern fn eventfd(initval: c_uint, flags: c_int) callconv(.c) c_int;
@@ -4434,4 +4441,374 @@ export fn term_shutdown(term: *types.Terminal) callconv(.c) bool {
     }
 
     return true;
+}
+//
+// Chunk C5 — term_destroy(). The teardown order is load-bearing (workers are
+// woken and joined before their queues and locks go away, the slave is reaped
+// last), so this is a straight transcription of the C, with the two C-only
+// pieces kept in C: the waitpid status macros (terminal-shim.c) and struct
+// sigaction (the KSigaction/SigSet pattern fdm.zig already uses).
+//
+
+extern fn urls_reset(term: *types.Terminal) callconv(.c) void;
+extern fn composed_free(node: ?*types.Composed) callconv(.c) void;
+extern fn shm_unref(buf: ?*anyopaque) callconv(.c) void;
+extern fn shm_chain_free(chain: ?*anyopaque) callconv(.c) void;
+extern fn pixman_region32_fini(region: *anyopaque) callconv(.c) void;
+extern fn notify_free(term: *types.Terminal, notification: *types.Notification) callconv(.c) void;
+extern fn notify_icon_free(icon: *types.NotificationIcon) callconv(.c) void;
+extern fn sixel_fini(term: *types.Terminal) callconv(.c) void;
+extern fn grid_free(grid: *types.Grid) callconv(.c) void;
+extern fn reaper_del(reaper: ?*anyopaque, pid: c_int) callconv(.c) void;
+extern fn key_binding_unref(mgr: ?*anyopaque, conf: ?*const types.Config) callconv(.c) void;
+extern fn pthread_join(thr: u64, res: ?*?*anyopaque) callconv(.c) c_int;
+extern fn mtx_destroy(mtx: *anyopaque) callconv(.c) void;
+extern fn cnd_destroy(cond: *anyopaque) callconv(.c) void;
+extern fn sem_post(sem: *anyopaque) callconv(.c) c_int;
+extern fn mtx_lock(mtx: *anyopaque) callconv(.c) c_int;
+extern fn mtx_unlock(mtx: *anyopaque) callconv(.c) c_int;
+extern fn malloc_trim(pad: usize) callconv(.c) c_int;
+extern fn strsignal(sig: c_int) callconv(.c) [*:0]u8;
+extern fn waitpid(pid: c_int, status: *c_int, options: c_int) callconv(.c) c_int;
+extern fn alarm(seconds: c_uint) callconv(.c) c_uint;
+
+// sys/wait.h's status macros are C-only; the shim keeps the platform's exact
+// encoding instead of hard-coding the Linux one.
+extern fn terminal_shim_wifexited(status: c_int) callconv(.c) c_int;
+extern fn terminal_shim_wexitstatus(status: c_int) callconv(.c) c_int;
+extern fn terminal_shim_wifsignaled(status: c_int) callconv(.c) c_int;
+extern fn terminal_shim_wtermsig(status: c_int) callconv(.c) c_int;
+
+// struct sigaction, exactly as fdm.zig declares it (glibc/musl, 64-bit).
+const SigSet = extern struct { bits: [16]u64 };
+const KSigaction = extern struct { handler: usize, mask: SigSet, flags: c_int, restorer: ?*anyopaque };
+extern fn sigemptyset(set: *SigSet) callconv(.c) c_int;
+extern fn sigaction(sig: c_int, act: ?*const KSigaction, old: ?*KSigaction) callconv(.c) c_int;
+
+const SIGALRM: c_int = 14;
+const SIG_DFL_HANDLER: usize = 0;
+const EINTR: c_int = 4;
+
+var alarm_raised: c_int = 0;
+
+fn sigAlarm(signo: c_int) callconv(.c) void {
+    _ = signo;
+    log_msg(LOG_CLASS_DEBUG, "terminal", "terminal.zig", @intCast(@src().line), "SIGALRM");
+    alarm_raised = 1;
+}
+
+fn zeroSigSet() SigSet {
+    var set: SigSet = undefined;
+    @memset(std.mem.asBytes(&set), 0);
+    return set;
+}
+
+fn installAlarmHandler(handler: usize) void {
+    var action = KSigaction{
+        .handler = handler,
+        .mask = zeroSigSet(),
+        .flags = 0,
+        .restorer = null,
+    };
+    _ = sigemptyset(&action.mask);
+    _ = sigaction(SIGALRM, &action, null);
+}
+
+/// tll_remove() from the middle of wayland'sterms list (tll(struct terminal *)).
+fn removeTerm(wayl: *types.Wayland, term: *types.Terminal) void {
+    const list: *tll.Tll(?*anyopaque) = @ptrCast(@alignCast(&wayl.terms));
+    var node_ptr = list.head;
+    while (node_ptr) |node| {
+        if (node.item) |item| {
+            if (item == @as(?*anyopaque, @ptrCast(term))) {
+                list.removeNode(node);
+                return;
+            }
+        }
+        node_ptr = node.next;
+    }
+}
+
+fn freeString(item: ?[*:0]u8) callconv(.c) void {
+    std.c.free(item);
+}
+
+fn freePtmxBuffer(buf: types.PtmxBuffer) callconv(.c) void {
+    std.c.free(buf.data);
+}
+
+export fn term_destroy(term_arg: ?*types.Terminal) callconv(.c) c_int {
+    const term = term_arg orelse return 0;
+
+    if (term.wl) |wayl|
+        removeTerm(wayl, term);
+
+    _ = del_utmp_record(term.conf, term.reaper, term.ptmx);
+
+    if (term.fdm) |fdm_ptr| {
+        _ = fdm_del(fdm_ptr, term.selection.auto_scroll.fd);
+        _ = fdm_del(fdm_ptr, term.render.app_sync_updates.timer_fd);
+        _ = fdm_del(fdm_ptr, term.render.app_id.timer_fd);
+        _ = fdm_del(fdm_ptr, term.render.icon.timer_fd);
+        _ = fdm_del(fdm_ptr, term.render.title.timer_fd);
+        _ = fdm_del(fdm_ptr, term.delayed_render_timer.lower_fd);
+        _ = fdm_del(fdm_ptr, term.delayed_render_timer.upper_fd);
+        _ = fdm_del(fdm_ptr, term.cursor_blink.fd);
+        _ = fdm_del(fdm_ptr, term.blink.fd);
+        _ = fdm_del(fdm_ptr, term.flash.fd);
+        _ = fdm_del(fdm_ptr, term.ptmx);
+        if (term.shutdown.terminate_timeout_fd >= 0)
+            _ = fdm_del(fdm_ptr, term.shutdown.terminate_timeout_fd);
+    }
+
+    if (term.window != null) {
+        wayl_win_destroy(term.window);
+        term.window = null;
+    }
+
+    const workers_lock: *anyopaque = @ptrCast(@alignCast(&term.render.workers.lock));
+    _ = mtx_lock(workers_lock);
+    if (term.render.workers.queue.length != 0)
+        bug(@src().file, @intCast(@src().line), "term_destroy", "assertion failed: 'tll_length(term->render.workers.queue) == 0'");
+
+    // Count living threads - we may get here when only some of the threads
+    // have been successfully started
+    var worker_count: usize = 0;
+    const worker_threads: ?[*]u64 = if (term.render.workers.threads) |raw|
+        @ptrCast(@alignCast(raw))
+    else
+        null;
+
+    if (worker_threads) |threads| {
+        var i: usize = 0;
+        while (i < term.render.workers.count) : (i += 1) {
+            if (threads[i] == 0)
+                break;
+            worker_count += 1;
+        }
+
+        const queue: *tll.Tll(c_int) = @ptrCast(@alignCast(&term.render.workers.queue));
+        const start: *anyopaque = @ptrCast(@alignCast(&term.render.workers.start));
+        var j: usize = 0;
+        while (j < worker_count) : (j += 1) {
+            _ = sem_post(start);
+            queue.pushBack(-2);
+        }
+    }
+    _ = mtx_unlock(workers_lock);
+
+    if (term.wl) |wayl|
+        key_binding_unref(wayl.key_binding_manager, term.conf);
+
+    urls_reset(term);
+
+    std.c.free(term.vt.osc.data);
+    std.c.free(term.vt.osc8.uri);
+
+    composed_free(term.composed);
+
+    std.c.free(term.app_id);
+    std.c.free(term.window_title);
+    {
+        const stack: *tll.Tll(?[*:0]u8) = @ptrCast(@alignCast(&term.window_title_stack));
+        stack.freeListAndFree(&freeString);
+    }
+
+    for (term.fonts) |font|
+        fcft_destroy(font);
+    for (term.font_sizes) |size|
+        std.c.free(size);
+
+    term_free_custom_glyphs(term);
+
+    std.c.free(term.search.buf);
+    std.c.free(term.search.last.buf);
+
+    if (worker_threads) |threads| {
+        var i: usize = 0;
+        while (i < term.render.workers.count) : (i += 1) {
+            if (threads[i] != 0)
+                _ = pthread_join(threads[i], null);
+        }
+    }
+    std.c.free(term.render.workers.threads);
+    _ = mtx_destroy(@ptrCast(@alignCast(&term.render.workers.preapplied_damage.lock)));
+    _ = cnd_destroy(@ptrCast(@alignCast(&term.render.workers.preapplied_damage.cond)));
+    _ = mtx_destroy(workers_lock);
+    _ = sem_destroy(@ptrCast(@alignCast(&term.render.workers.start)));
+    _ = sem_destroy(@ptrCast(@alignCast(&term.render.workers.done)));
+
+    {
+        const queue: *tll.Tll(c_int) = @ptrCast(@alignCast(&term.render.workers.queue));
+        if (queue.length != 0)
+            bug(@src().file, @intCast(@src().line), "term_destroy", "assertion failed: 'tll_length(term->render.workers.queue) == 0'");
+        queue.freeList();
+    }
+
+    shm_unref(term.render.last_buf);
+    shm_chain_free(term.render.chains.grid);
+    shm_chain_free(term.render.chains.search);
+    shm_chain_free(term.render.chains.scrollback_indicator);
+    shm_chain_free(term.render.chains.render_timer);
+    shm_chain_free(term.render.chains.url);
+    shm_chain_free(term.render.chains.csd);
+    shm_chain_free(term.render.chains.overlay);
+    pixman_region32_fini(@ptrCast(&term.render.last_overlay_clip));
+
+    {
+        const tab_stops: *tll.Tll(c_int) = @ptrCast(@alignCast(&term.tab_stops));
+        tab_stops.freeList();
+    }
+
+    {
+        const buffers: *tll.Tll(types.PtmxBuffer) = @ptrCast(@alignCast(&term.ptmx_buffers));
+        buffers.freeListAndFree(&freePtmxBuffer);
+    }
+    {
+        const buffers: *tll.Tll(types.PtmxBuffer) = @ptrCast(@alignCast(&term.ptmx_paste_buffers));
+        buffers.freeListAndFree(&freePtmxBuffer);
+    }
+
+    notify_free(term, &term.kitty_notification);
+    {
+        const notifications: *tll.Tll(types.Notification) = @ptrCast(@alignCast(&term.active_notifications));
+        var it = notifications.foreach();
+        while (it.next()) |node| {
+            notify_free(term, &node.item);
+            notifications.removeNode(node);
+        }
+    }
+
+    for (&term.notification_icons) |*icon|
+        notify_icon_free(icon);
+
+    sixel_fini(term);
+
+    _ = term_ime_reset(term);
+
+    grid_free(&term.normal);
+    grid_free(&term.alt);
+    if (term.interactive_resizing.grid) |grid| {
+        grid_free(grid);
+        std.c.free(grid);
+    }
+
+    std.c.free(term.foot_exe);
+    std.c.free(term.cwd);
+    std.c.free(term.mouse_user_cursor);
+    std.c.free(term.color_stack.stack);
+
+    if (term.argv) |argv| {
+        var i: usize = 0;
+        while (i < term.argc) : (i += 1)
+            std.c.free(argv[i]);
+        std.c.free(@as(?*anyopaque, @ptrCast(argv)));
+    }
+
+    var ret: c_int = 0; // EXIT_SUCCESS
+
+    if (term.slave > 0) {
+        // We'll deal with this explicitly
+        reaper_del(term.reaper, term.slave);
+
+        var exit_status: c_int = 0;
+
+        if (term.shutdown.client_has_terminated) {
+            exit_status = term.shutdown.exit_status;
+        } else {
+            log_msg(
+                LOG_CLASS_DEBUG,
+                "terminal",
+                "terminal.zig",
+                @intCast(@src().line),
+                "initiating blocking terminate of slave; sending SIGHUP to PID=%u",
+                term.slave,
+            );
+
+            _ = kill(-term.slave, SIGHUP);
+
+            // We've closed the ptmx and sent SIGTERM to the client. It
+            // *should* exit... but it is possible to write clients that ignore
+            // this, so register a SIGALRM handler and configure a 30 second
+            // alarm: if the slave hasn't died after this time, send SIGKILL.
+            //
+            // This is *not* asynchronous; other events are ignored during this
+            // time. That only applies to a 'foot --server' instance, where
+            // there may be other terminals running.
+            installAlarmHandler(@intFromPtr(&sigAlarm));
+
+            var next_signal: c_int = SIGTERM;
+
+            alarm_raised = 0;
+            _ = alarm(30);
+
+            while (true) {
+                const r = waitpid(term.slave, &exit_status, 0);
+
+                if (r == term.slave)
+                    break;
+
+                if (r == -1) {
+                    if (__errno_location().* != EINTR)
+                        bug(@src().file, @intCast(@src().line), "term_destroy", "assertion failed: 'errno == EINTR'");
+
+                    if (alarm_raised != 0) {
+                        log_msg(
+                            LOG_CLASS_DEBUG,
+                            "terminal",
+                            "terminal.zig",
+                            @intCast(@src().line),
+                            "slave (PID=%u) has not terminated yet, sending: %s (%d)",
+                            term.slave,
+                            @as([*:0]const u8, if (next_signal == SIGTERM) "SIGTERM" else "SIGKILL"),
+                            next_signal,
+                        );
+
+                        _ = kill(-term.slave, next_signal);
+                        next_signal = SIGKILL;
+
+                        alarm_raised = 0;
+                        _ = alarm(30);
+                    }
+                }
+            }
+
+            // Cancel the alarm
+            _ = alarm(0);
+            installAlarmHandler(SIG_DFL_HANDLER);
+        }
+
+        ret = 1; // EXIT_FAILURE
+        if (terminal_shim_wifexited(exit_status) != 0) {
+            ret = terminal_shim_wexitstatus(exit_status);
+            log_msg(LOG_CLASS_DEBUG, "terminal", "terminal.zig", @intCast(@src().line), "slave exited with code %d", ret);
+        } else if (terminal_shim_wifsignaled(exit_status) != 0) {
+            ret = terminal_shim_wtermsig(exit_status);
+            log_msg(
+                LOG_CLASS_WARNING,
+                "terminal",
+                "terminal.zig",
+                @intCast(@src().line),
+                "slave exited with signal %d (%s)",
+                ret,
+                strsignal(ret),
+            );
+        } else {
+            log_msg(
+                LOG_CLASS_WARNING,
+                "terminal",
+                "terminal.zig",
+                @intCast(@src().line),
+                "slave exited for unknown reason (status = 0x%08x)",
+                exit_status,
+            );
+        }
+    }
+
+    std.c.free(term);
+
+    if (malloc_trim(0) == 0)
+        log_msg(LOG_CLASS_WARNING, "terminal", "terminal.zig", @intCast(@src().line), "failed to trim memory");
+
+    return ret;
 }

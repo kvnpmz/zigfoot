@@ -2184,9 +2184,9 @@ test_render_workers(void)
     check(sem_trywait(&term->render.workers.start) == -1 && errno == EAGAIN,
           "the render worker is waiting for work");
 
-    /* The thread is left blocked; the process exits right after the tests. */
-    term->render.workers.count = 0;
-    term_free(term);
+    /* term_destroy() posts -2 to the queue, which makes the worker return,
+     * and then joins it. */
+    check(term_destroy(term) == 0, "destroying the terminal joins the worker");
 }
 
 static void
@@ -2331,6 +2331,17 @@ test_shutdown(void)
     term_free(term2);
     fdm_destroy(fdm);
     term_free(term);
+}
+
+static void
+test_destroy(void)
+{
+    /* A bare terminal (no window, no wayland client, no slave) tears itself
+     * down. */
+    struct terminal *term = term_new();
+    check(term_destroy(term) == 0, "destroying a bare terminal succeeds");
+
+    check(term_destroy(NULL) == 0, "destroying NULL is a no-op");
 }
 
 static void
@@ -3146,6 +3157,7 @@ main(void)
     test_kbd_focus_out();
     test_surface_kind();
     test_shutdown();
+    test_destroy();
     test_quirks();
     test_version_and_features();
     test_log();

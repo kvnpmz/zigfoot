@@ -650,9 +650,9 @@ utmp backends where available.
 
 ## 13. Sequenced backlog (refreshed 2026-11-24)
 
-State: **28,611 of 48,830 C lines gone (58.6%)**, ~43% by effort, 31 modules
-ported, 366 harness assertions, `meson test` 5/5 in three build dirs.
-Remaining C: 20,219 lines, 1,392 of which are `*-shim.c` accessors.
+State: **28,852 of 48,830 C lines gone (59.1%)**, ~43% by effort, 31 modules
+ported, 369 harness assertions, `meson test` 5/5 in three build dirs.
+Remaining C: 19,978 lines, 1,411 of which are `*-shim.c` accessors.
 
 Track C is underway: C1 (the IME wrappers) is in (`1515fd13`), C2 (mouse grab
 and CSD cursor shapes) is in. The build loop was also measured and fixed - see
@@ -733,7 +733,18 @@ fabricates `struct terminal` today).
 | **C4a** done | T11b part 0: `term_kbd_focus_out()` and `term_surface_kind()` (~90 lines), the last two read-only leftovers. 8 new harness checks (focus-out with a real pty, and every CSD surface) | C3b | 0.5d |
 | **C4b** | T11b part 1: `term_init` (~408 lines incl. its error paths) | C3, wayland, render | 1–2d |
 | **C4b** done | T11c: `term_shutdown`, `shutdown_maybe_done`, `fdm_shutdown`, `fdm_terminate_timeout`, `fdm_client_terminated` (~218 lines). Only `term_destroy` and `wayl_win_destroy` remain externs. 8 new harness checks run the real shutdown against a real `fdm` | C4a | 1d |
-| **C6** | T11d: `term_destroy`, `term_reset` (~600 lines) | C4 | 1d |
+| **C5** done | T11d part 1: `term_destroy()` + `sig_alarm()` (~240 lines) — the whole teardown, including the worker-pool wake/join and the blocking SIGALRM/waitpid slave reap. 3 new harness checks (a bare terminal, NULL, and a terminal with a live render worker that must be joined) | C4b | 1d |
+| **C6** | T11d part 2: `term_reset` (~311 lines) | C5 | 1d |
+
+**C5 found a real toolchain trap:** C11 `thrd_create()`/`thrd_join()` are
+broken when called *from a Zig object* here — `thrd_create()` returns
+`thrd_success`, the thread runs, and then `thrd_join()` returns
+`thrd_error` without reaping it (reproduced in a 20-line standalone program;
+the identical calls from C work). `terminal.zig` therefore calls
+`pthread_create()`/`pthread_join()` directly — the same functions glibc's
+C11 wrappers call, and `thrd_t` is `pthread_t` — with a comment recording
+the experiment. The only visible difference is the error code logged on
+failure (`errno` instead of `thrd_*`).
 
 ### Track D — the core (~3–4 weeks)
 
