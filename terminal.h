@@ -1008,3 +1008,56 @@ static inline void term_reset_grapheme_state(struct terminal *term)
     term->vt.codepoint_merging_ok = false;
 #endif
 }
+/* ── Ported to terminal.zig ──────────────────────────────────────────
+ *
+ * These live in terminal.zig now but are still called from C, so their
+ * prototypes live here (this used to be terminal.c's extern block). */
+void term_free_custom_glyphs(struct terminal *term);
+void term_line_height_update(struct terminal *term);
+bool term_set_fonts(
+    struct terminal *term, struct fcft_font *fonts[static 4], bool resize_grid);
+bool reload_fonts(struct terminal *term, bool resize_grid);
+bool load_fonts_from_conf(struct terminal *term);
+enum fcft_subpixel get_font_subpixel(const struct terminal *term);
+void term_update_ascii_printer(struct terminal *term);
+void term_single_shift(struct terminal *term, enum charset_designator idx);
+
+void term_erase(struct terminal *term, int start_row, int start_col, int end_row, int end_col);
+void term_fill(struct terminal *term, int r, int c, uint8_t data, size_t count, bool use_sgr_attrs);
+void term_print(struct terminal *term, char32_t wc, int width, bool insert_mode_disable);
+void term_process_and_print_non_ascii(struct terminal *term, char32_t wc);
+void print_spacer(struct terminal *term, int col, int remaining);
+
+void term_scroll_partial(struct terminal *term, struct scroll_region region, int rows);
+void term_scroll(struct terminal *term, int rows);
+void term_scroll_reverse_partial(struct terminal *term, struct scroll_region region, int rows);
+void term_scroll_reverse(struct terminal *term, int rows);
+void term_linefeed(struct terminal *term);
+void term_reverse_index(struct terminal *term);
+
+bool fdm_flash(struct fdm *fdm, int fd, int events, void *data);
+void cursor_refresh(struct terminal *term);
+bool cursor_blink_rearm_timer(struct terminal *term);
+bool cursor_blink_disarm_timer(struct terminal *term);
+void term_arm_blink_timer(struct terminal *term);
+void term_cursor_blink_update(struct terminal *term);
+int term_row_rel_to_abs(const struct terminal *term, int row);
+
+bool term_to_slave(struct terminal *term, const void *data, size_t len);
+bool term_paste_data_to_slave(struct terminal *term, const void *data, size_t len);
+bool term_ptmx_pause(struct terminal *term);
+bool term_ptmx_resume(struct terminal *term);
+bool fdm_ptmx_out(struct fdm *fdm, int fd, int events, void *data);
+bool fdm_ptmx(struct fdm *fdm, int fd, int events, void *data);
+bool fdm_delayed_render(struct fdm *fdm, int fd, int events, void *data);
+bool add_utmp_record(const struct config *conf, struct reaper *reaper, int ptmx);
+bool del_utmp_record(const struct config *conf, struct reaper *reaper, int ptmx);
+bool initialize_render_workers(struct terminal *term);
+void fdm_client_terminated(struct reaper *reaper, pid_t pid, int status, void *data);
+bool fdm_app_sync_updates_timeout(struct fdm *fdm, int fd, int events, void *data);
+bool fdm_title_update_timeout(struct fdm *fdm, int fd, int events, void *data);
+bool fdm_icon_update_timeout(struct fdm *fdm, int fd, int events, void *data);
+bool fdm_app_id_update_timeout(struct fdm *fdm, int fd, int events, void *data);
+
+/* term_kbd_focus_out(), term_surface_kind() and friends are already declared
+ * further up this header. */

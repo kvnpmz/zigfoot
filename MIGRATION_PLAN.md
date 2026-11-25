@@ -650,14 +650,14 @@ utmp backends where available.
 
 ## 13. Sequenced backlog (refreshed 2026-11-24)
 
-State: **29,346 of 48,830 C lines gone (60.1%)**, ~43% by effort, 31 modules
-ported, 385 harness assertions, `meson test` 5/5 in three build dirs.
-Remaining C: 19,484 lines, 1,422 of which are `*-shim.c` accessors.
+State: **29,768 of 48,830 C lines gone (61.0%)**, ~44% by effort, 32 modules
+ported, 390 harness assertions, `meson test` 5/5 in three build dirs.
+Remaining C: 19,062 lines, 1,422 of which are `*-shim.c` accessors.
 
-`terminal.c` has **no functions left**: 475 lines of includes, the extern
-declarations other C files still need, and the two `UNITTEST` blocks
-(`term_erase_scrollback()` and the emoji-vs table check), which are live
-constructors in Debug builds. Track C is done.
+**`terminal.c` is deleted.** Its prototypes moved into `terminal.h` and its
+two `UNITTEST` constructors moved into the harness (`term_erase_scrollback()`'s
+selection/sixel cases and the emoji variation-sequence table check), so the
+Debug-build assertions they ran are not lost. Track C is done.
 
 Track C is underway: C1 (the IME wrappers) is in (`1515fd13`), C2 (mouse grab
 and CSD cursor shapes) is in. The build loop was also measured and fixed - see
@@ -741,7 +741,7 @@ fabricates `struct terminal` today).
 | **C5** done | T11d part 1: `term_destroy()` + `sig_alarm()` (~240 lines) — the whole teardown, including the worker-pool wake/join and the blocking SIGALRM/waitpid slave reap. 3 new harness checks (a bare terminal, NULL, and a terminal with a live render worker that must be joined) | C4b | 1d |
 | **C6** done | T11d part 2: `term_reset()` (~150 lines). 16 new harness checks cover the soft path (modes, charsets, VT state, `OSC 8` buffer, theme left alone) and the hard path (grid switch, theme reapplied, cursors/scroll region, rows re-allocated and the scrollback freed) | C5 | 1d |
 | **C7** done | T11b: `term_init()` (~350 lines of Zig). Opens the pty + seven timer FDs, registers the fdm callbacks, builds the terminal from the config, spawns the slave, creates the window, loads fonts and starts the workers - the C's two `goto` cleanups became `closeFds()`/`termInitFail()` helpers. 1 new harness check (the pty-open failure path). **No functions are left in `terminal.c`** | C6, wayland, render | 2d |
-| **C8** | finish off `terminal.c`: move the extern block to `terminal.h`, move the two `UNITTEST` blocks into `tests/test-terminal.c`, delete the file | C7 | 0.5d |
+| **C8** done | `terminal.c` retired: prototypes moved to `terminal.h`, both `UNITTEST` constructors moved into the harness, file deleted from `meson.build`. 5 new harness checks | C7 | 0.5d |
 
 **C5 found a real toolchain trap:** C11 `thrd_create()`/`thrd_join()` are
 broken when called *from a Zig object* here — `thrd_create()` returns

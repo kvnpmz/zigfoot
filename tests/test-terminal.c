@@ -394,7 +394,70 @@ test_erase_scrollback(void)
     check(term_scrollback_to_text(term, &text, &len), "text after erase returns true");
     check_text(text, "11\n12\n13\n14\n15", "text after erase is the screen only");
     free(text);
+
+    /* A selection that reaches into the history is cancelled... */
+    term->normal.offset = 14; /* screen covers rows 14,15,0,1,2 */
+    term->selection.coords.start = (struct coord){.row = 15};
+    term->selection.coords.end = (struct coord){.row = 19};
+    term->selection.kind = SELECTION_CHAR_WISE;
+    populate(term);
+    term_erase_scrollback(term);
+    check(term->selection.coords.start.row < 0 &&
+          term->selection.coords.end.row < 0 &&
+          term->selection.kind == SELECTION_NONE,
+          "erase_scrollback cancels a selection that touches the history");
+
+    /* ...one that stays on screen is not. */
+    term->selection.coords.start = (struct coord){.row = 15};
+    term->selection.coords.end = (struct coord){.row = 16};
+    term->selection.kind = SELECTION_CHAR_WISE;
+    populate(term);
+    term_erase_scrollback(term);
+    check(term->selection.coords.start.row == 15 &&
+          term->selection.coords.end.row == 16 &&
+          term->selection.kind == SELECTION_CHAR_WISE,
+          "erase_scrollback keeps a selection that is fully on screen");
+    term->selection.coords.start = (struct coord){-1, -1};
+    term->selection.coords.end = (struct coord){-1, -1};
+    term->selection.kind = SELECTION_NONE;
+
+    /* Sixels in the history are destroyed, sixels on screen are kept. */
+    struct sixel six = {.rows = 5, .pos = {.row = 15}};
+    tll_push_back(term->normal.sixel_images, six);
+    populate(term);
+    term_erase_scrollback(term);
+    check(tll_length(term->normal.sixel_images) == 0,
+          "erase_scrollback destroys sixels in the history");
+
+    six.rows = 3;
+    tll_push_back(term->normal.sixel_images, six);
+    populate(term);
+    term_erase_scrollback(term);
+    check(tll_length(term->normal.sixel_images) == 1,
+          "erase_scrollback keeps sixels that are on screen");
+    tll_free(term->normal.sixel_images);
+
     term_free(term);
+}
+
+/* The generated emoji variation-sequence table is a static array in a header,
+ * so this check lives here now that terminal.c (which included it) is gone. */
+static void
+test_emoji_vs_table(void)
+{
+#include "emoji-variation-sequences.h"
+#if defined(FOOT_GRAPHEME_CLUSTERING)
+    int64_t last_end = -1;
+    bool ok = true;
+    for (size_t i = 0; i < sizeof(emoji_vs) / sizeof(emoji_vs[0]); i++) {
+        const struct emoji_vs *vs = &emoji_vs[i];
+        if (!(vs->start <= vs->end && vs->start > last_end &&
+              (vs->vs15 || vs->vs16)))
+            ok = false;
+        last_end = vs->end;
+    }
+    check(ok, "the emoji variation-sequence table is sorted and well-formed");
+#endif
 }
 
 /* term_theme_apply(): copies the theme into the terminal's colour table */
@@ -3208,6 +3271,7 @@ main(void)
     test_command_output_whole_line();
     test_command_output_absent();
     test_erase_scrollback();
+    test_emoji_vs_table();
     test_osc8();
     test_size_notifications();
     test_flash();
