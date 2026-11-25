@@ -163,3 +163,35 @@ export fn c32swidth(s: [*]const u32, n: usize) callconv(.c) c_int {
     }
     return width;
 }
+
+// ─────────────────────────────────────────────────────────────────────────
+// Wide-string helpers (char32.h's wcs* wrappers), needed by the search box
+// ─────────────────────────────────────────────────────────────────────────
+
+/// `wcsncpy()`: copy at most `n` characters, zero-padding the remainder.
+export fn c32ncpy(dst: [*]u32, src: [*]const u32, n: usize) callconv(.c) [*]u32 {
+    var i: usize = 0;
+    while (i < n and src[i] != 0) : (i += 1)
+        dst[i] = src[i];
+    while (i < n) : (i += 1)
+        dst[i] = 0;
+    return dst;
+}
+
+/// `wcsncat()`: append at most `n` characters, then NUL-terminate.
+export fn c32ncat(dst: [*]u32, src: [*]const u32, n: usize) callconv(.c) [*]u32 {
+    var d: usize = 0;
+    while (dst[d] != 0) : (d += 1) {}
+
+    var i: usize = 0;
+    while (i < n and src[i] != 0) : (i += 1)
+        dst[d + i] = src[i];
+    dst[d + i] = 0;
+    return dst;
+}
+
+/// `wcscat()`.
+export fn c32cat(dst: [*]u32, src: [*]const u32) callconv(.c) [*]u32 {
+    return c32ncat(dst, src, std.math.maxInt(usize));
+}
+

@@ -3400,3 +3400,419 @@ export fn render_render_timer(term: *Terminal, render_time: Timespec) callconv(.
     );
 }
 
+
+
+// ─────────────────────────────────────────────────────────────────────────
+// The search box (D3k3)
+// ─────────────────────────────────────────────────────────────────────────
+
+extern fn c32ncpy(dst: [*]u32, src: [*]const u32, n: usize) callconv(.c) [*]u32;
+extern fn c32ncat(dst: [*]u32, src: [*]const u32, n: usize) callconv(.c) [*]u32;
+extern fn c32cat(dst: [*]u32, src: [*]const u32) callconv(.c) [*]u32;
+extern fn c32swidth(s: [*]const u32, n: usize) callconv(.c) c_int;
+extern fn wayland_shim_set_opaque_region_rect(
+    compositor: ?*anyopaque, surf: ?*anyopaque,
+    x: c_int, y: c_int, width: c_int, height: c_int,
+) callconv(.c) void;
+
+/// The window-relative position of a search-box coordinate (C's WINDOW_X/Y).
+fn windowX(margin: usize, x: c_int) c_int {
+    return @as(c_int, @intCast(margin)) + x;
+}
+
+fn windowY(term: *const Terminal, margin: usize, height: usize, y: c_int) c_int {
+    return term.height - @as(c_int, @intCast(margin)) -
+        @as(c_int, @intCast(height)) + y;
+}
+
+/// The three-way adjustment of `term.render.search_glyph_offset`: keep the
+/// cursor visible, then pull the offset back when free space is left. Kept
+/// separate so the harness can pin the arithmetic without a compositor.
+fn searchBoxGlyphOffset(
+    glyph_offset_in: usize,
+    visible_cells: usize,
+    total_cells: usize,
+    cursor_cell_idx: usize,
+) usize {
+    var glyph_offset = glyph_offset_in;
+
+    if (cursor_cell_idx < glyph_offset) {
+        // Shift to the *left*, making *this* character the first visible one
+        glyph_offset = cursor_cell_idx;
+    } else if (cursor_cell_idx > glyph_offset +| visible_cells) {
+        // Shift to the *right*, making *this* character the last visible one
+        glyph_offset = cursor_cell_idx - @min(cursor_cell_idx, visible_cells);
+    }
+
+    // Adjust the offset if there is free space available
+    if (total_cells -| glyph_offset < visible_cells) {
+        glyph_offset = total_cells -| @min(total_cells, visible_cells);
+    }
+
+    return glyph_offset;
+}
+
+export fn render_search_box_glyph_offset(
+    glyph_offset: usize,
+    visible_cells: usize,
+    total_cells: usize,
+    cursor_cell_idx: usize,
+) callconv(.c) usize {
+    return searchBoxGlyphOffset(glyph_offset, visible_cells, total_cells, cursor_cell_idx);
+}
+
+export fn render_search_box(term: *Terminal) callconv(.c) void {
+    const win = term.window.?;
+    std.debug.assert(win.search.sub != null);
+
+    // The IME pre-edit text is merged into the search string at the cursor.
+    // (C's TODO: multi-seat is not handled.)
+    var ime_seat: ?*types.Seat = null;
+    {
+        const seats: *SeatList = @ptrCast(&term.wl.?.seats);
+        var it = seats.foreach();
+        while (it.next()) |node| {
+            if (node.item.kbd_focus == term) {
+                ime_seat = &node.item;
+                break;
+            }
+        }
+    }
+
+    const search = &term.search;
+    const preedit_text: ?[*]u32 = if (ime_seat) |s| s.ime.preedit.text else null;
+
+    var text_len: usize = search.len;
+    if (preedit_text) |pt| text_len += c32Len(pt);
+
+    const text_raw = xmalloc((text_len + 1) * @sizeOf(u32)) orelse unreachable;
+    const text: [*]u32 = @ptrCast(@alignCast(text_raw));
+    text[0] = 0;
+
+    const sbuf: [*]const u32 = search.buf orelse &empty_wtext;
+
+    // Everything up to the cursor
+    _ = c32ncpy(text, sbuf, search.cursor);
+    text[search.cursor] = 0;
+
+    // The pre-edit text goes in at the cursor ...
+    if (preedit_text) |pt| _ = c32cat(text, pt);
+
+    // ... and everything after it follows
+    _ = c32ncat(text, sbuf + search.cursor, search.len - search.cursor);
+
+    // The width of each character, in cells
+    const widths_raw = xmalloc((text_len + 1) * @sizeOf(c_int)) orelse unreachable;
+    const widths: [*]c_int = @ptrCast(@alignCast(widths_raw));
+    for (0..text_len) |i| widths[i] = @max(0, c32width(text[i]));
+    widths[text_len] = 0;
+
+    const total_cells: usize = @intCast(c32swidth(text, text_len));
+    const wanted_visible_cells: usize = @max(20, total_cells);
+
+    const scale = term.scale;
+    std.debug.assert(scale >= 1.0);
+    const margin: usize = @intFromFloat(@round(3.0 * @as(f64, scale)));
+
+    const term_width: usize = @intCast(@max(term.width, 0));
+    const term_height: usize = @intCast(@max(term.height, 0));
+    const cell_width: usize = @intCast(@max(term.cell_width, 1));
+    const cell_height: usize = @intCast(@max(term.cell_height, 1));
+
+    var width: usize = term_width -| 2 * margin;
+    var height: usize = @min(
+        term_height -| 2 * margin,
+        margin + cell_height + margin,
+    );
+
+    width = @intCast(snapToScale(@intCast(width), scale));
+    height = @intCast(snapToScale(@intCast(height), scale));
+
+    const visible_width: usize = @min(
+        term_width -| 2 * margin,
+        margin + wanted_visible_cells * cell_width + margin,
+    );
+
+    const visible_cells: usize = (visible_width -| 2 * margin) / cell_width;
+    var glyph_offset: usize = term.render.search_glyph_offset;
+
+    const chain: *types.ShmBufferChain = @ptrCast(@alignCast(term.render.chains.search.?));
+    const buf = shm_get_buffer(chain, @intCast(width), @intCast(height)) orelse return;
+    const pix = bufferPix(buf);
+
+    render_shim_clip_rect(pix, 0, 0, @intCast(width), @intCast(height));
+
+    const is_match = search.match_len == text_len;
+    const custom_colors = if (is_match)
+        term.conf.?.colors_dark.use_custom.search_box_match
+    else
+        term.conf.?.colors_dark.use_custom.search_box_no_match;
+
+    // Background - yellow on empty/match, red on mismatch (by default)
+    const gamma_correct = wayl_do_linear_blending(term.wl, term.conf.?);
+    const color = color_hex_to_pixman(
+        if (is_match)
+            (if (custom_colors) term.conf.?.colors_dark.search_box.match.bg else term.colors.table[3])
+        else
+            (if (custom_colors) term.conf.?.colors_dark.search_box.no_match.bg else term.colors.table[1]),
+        gamma_correct,
+    );
+
+    fillRect(pix, &color, &.{.{
+        .x = @intCast(width - visible_width),
+        .y = 0,
+        .width = @intCast(visible_width),
+        .height = @intCast(height),
+    }});
+
+    const transparent = color_hex_to_pixman_with_alpha(0, 0, gamma_correct);
+    fillRect(pix, &transparent, &.{.{
+        .x = 0,
+        .y = 0,
+        .width = @intCast(width - visible_width),
+        .height = @intCast(height),
+    }});
+
+    const font: ?*FcftFont = @ptrCast(term.fonts[0]);
+    const x_left: c_int = @intCast(width - visible_width + margin);
+    const x_ofs: c_int = term.font_x_ofs;
+    var x: c_int = x_left;
+    const y: c_int = @intCast(margin);
+
+    const fg = color_hex_to_pixman(
+        if (custom_colors)
+            (if (is_match) term.conf.?.colors_dark.search_box.match.fg else term.conf.?.colors_dark.search_box.no_match.fg)
+        else
+            term.colors.table[0],
+        gamma_correct,
+    );
+
+    // Move the offset we start rendering at, to ensure the cursor is visible
+    {
+        var i: usize = 0;
+        var cell_idx: usize = 0;
+        while (i <= search.cursor) : (i += 1) {
+            if (i == search.cursor) {
+                if (ime_seat) |s| {
+                    if (s.ime.preedit.cells != null) {
+                        if (s.ime.preedit.cursor.start == s.ime.preedit.cursor.end) {
+                            // All IMEs seen so far keep the cursor at index 0,
+                            // so ensure the *end* of the pre-edit is visible
+                            cell_idx += @intCast(@max(s.ime.preedit.count, 0));
+                        } else if (cell_idx +
+                            @as(usize, @intCast(@max(s.ime.preedit.cursor.start, 0))) > glyph_offset)
+                        {
+                            // Predict which way the text will shift
+                            cell_idx += @intCast(@max(s.ime.preedit.cursor.end, 0));
+                        } else {
+                            cell_idx += @intCast(@max(s.ime.preedit.cursor.start, 0));
+                        }
+                    }
+                }
+
+                glyph_offset = searchBoxGlyphOffset(
+                    glyph_offset, visible_cells, total_cells, cell_idx);
+                term.render.search_glyph_offset = glyph_offset;
+
+                break;
+            }
+
+            cell_idx += @intCast(widths[i]);
+        }
+    }
+
+    // Ensure the offset is at a character boundary
+    {
+        var i: usize = 0;
+        var cell_idx: usize = 0;
+        while (i <= text_len) : (i += 1) {
+            if (cell_idx >= glyph_offset) {
+                glyph_offset = cell_idx;
+                term.render.search_glyph_offset = glyph_offset;
+                break;
+            }
+            cell_idx += @intCast(widths[i]);
+        }
+    }
+
+    // Render the search string, starting at 'glyph_offset' (in cells)
+    var i: usize = 0;
+    var cell_idx: usize = 0;
+    var ch_width: c_int = widths[0];
+    var next_cell_idx: usize = @intCast(@max(ch_width, 0));
+
+    while (i < text_len) : ({
+        i += 1;
+        cell_idx = next_cell_idx;
+        ch_width = widths[i];
+        next_cell_idx += @intCast(@max(ch_width, 0));
+    }) {
+        // Render the cursor
+        if (i == search.cursor) {
+            const have_preedit = if (ime_seat) |s| s.ime.preedit.cells != null else false;
+            const hidden = if (ime_seat) |s| s.ime.preedit.cursor.hidden else false;
+
+            if (have_preedit and !hidden) {
+                const s = ime_seat.?;
+
+                // The cursor may be outside the visible area:
+                // cell_idx - glyph_offset can be negative
+                const diff: i64 =
+                    @as(i64, @intCast(cell_idx)) - @as(i64, @intCast(glyph_offset));
+                const cells_left: c_int = @intCast(
+                    @as(i64, @intCast(visible_cells)) - @max(diff, 0),
+                );
+
+                const start: c_int = s.ime.preedit.cursor.start +
+                    @as(c_int, @intCast(@min(diff, 0)));
+                const end: c_int = s.ime.preedit.cursor.end +
+                    @as(c_int, @intCast(@min(diff, 0)));
+
+                if (start == end) {
+                    const count: c_int = @min(s.ime.preedit.count, cells_left);
+
+                    // Underline the entire visible part of the pre-edit text
+                    draw_underline(term, pix, font.?, &fg, x, y, count);
+
+                    // Bar-styled cursor, if in the visible area
+                    if (start >= 0 and start <= @as(c_int, @intCast(visible_cells))) {
+                        draw_beam_cursor(
+                            term, pix, font.?, &fg,
+                            x + start * term.cell_width, y);
+                    }
+
+                    term_ime_set_cursor_rect(
+                        term,
+                        windowX(margin, x + start * term.cell_width),
+                        windowY(term, margin, height, y),
+                        1,
+                        term.cell_height,
+                    );
+                } else {
+                    // Underline everything before and after the cursor
+                    const count1: c_int = @min(start, cells_left);
+                    const count2: c_int = @max(@min(
+                        s.ime.preedit.count - s.ime.preedit.cursor.end,
+                        cells_left - end,
+                    ), 0);
+
+                    draw_underline(term, pix, font.?, &fg, x, y, count1);
+                    draw_underline(
+                        term, pix, font.?, &fg,
+                        x + end * term.cell_width, y, count2);
+
+                    // TODO: partially hidden rectangles
+                    if (start >= 0 and end <= @as(c_int, @intCast(visible_cells))) {
+                        draw_hollow_block(
+                            term, pix, &fg,
+                            x + start * term.cell_width, y, end - start);
+                    }
+
+                    term_ime_set_cursor_rect(
+                        term,
+                        windowX(margin, x + start * term.cell_width),
+                        windowY(term, margin, height, y),
+                        term.cell_width * (end - start),
+                        term.cell_height,
+                    );
+                }
+            } else if (!have_preedit) {
+                // The cursor *should* be in the visible area
+                std.debug.assert(cell_idx >= glyph_offset);
+                std.debug.assert(cell_idx <= glyph_offset + visible_cells);
+
+                draw_beam_cursor(term, pix, font.?, &fg, x, y);
+                term_ime_set_cursor_rect(
+                    term, windowX(margin, x), windowY(term, margin, height, y),
+                    1, term.cell_height);
+            }
+        }
+
+        if (next_cell_idx >= glyph_offset and
+            next_cell_idx - glyph_offset > visible_cells)
+        {
+            // Beyond the visible area - nothing more to render
+            break;
+        }
+
+        if (cell_idx < glyph_offset) {
+            // Not yet at the visible part of the string
+            continue;
+        }
+
+        const glyph = fcft_rasterize_char_utf32(
+            font.?, text[i], term.font_subpixel) orelse continue;
+
+        if (glyph.is_color_glyph) {
+            render_shim_composite(
+                optPix(glyph.pix), null, pix,
+                x + x_ofs + glyph.x,
+                y + @as(c_int, term.font_baseline) - glyph.y,
+                glyph.width, glyph.height,
+            );
+        } else {
+            // Zero-width characters need an extra offset
+            const combining_ofs: c_int = if (ch_width == 0)
+                (if (glyph.x < 0)
+                    ch_width * term.cell_width
+                else
+                    (ch_width - 1) * term.cell_width)
+            else
+                0;
+
+            const src = render_shim_solid_fill(&fg).?;
+            render_shim_composite(
+                src, optPix(glyph.pix), pix,
+                x + x_ofs + combining_ofs + glyph.x,
+                y + @as(c_int, term.font_baseline) - glyph.y,
+                glyph.width, glyph.height,
+            );
+            render_shim_image_unref(src);
+        }
+
+        x += ch_width * term.cell_width;
+    }
+
+    const have_preedit_cells =
+        if (ime_seat) |s| s.ime.preedit.cells != null else false;
+
+    if (!have_preedit_cells and search.cursor >= search.len) {
+        draw_beam_cursor(term, pix, font.?, &fg, x, y);
+        term_ime_set_cursor_rect(
+            term, windowX(margin, x), windowY(term, margin, height, y),
+            1, term.cell_height);
+    }
+
+    quirk_weston_subsurface_desync_on(win.search.sub);
+
+    // TODO: this is only necessary on a window resize
+    wayland_shim_subsurface_set_position(
+        win.search.sub,
+        roundfDiv(@intCast(margin), scale),
+        roundfDiv(@max(
+            term.height - @as(c_int, @intCast(height)) - @as(c_int, @intCast(margin)),
+            0,
+        ), scale),
+    );
+
+    wayl_surface_scale(win, &win.search.surface, buf, scale);
+    wayland_shim_surface_attach(win.search.surface.surf, buf.wl_buf, 0, 0);
+    wayland_shim_surface_damage_buffer(
+        win.search.surface.surf, 0, 0, @intCast(width), @intCast(height));
+
+    wayland_shim_set_opaque_region_rect(
+        term.wl.?.compositor,
+        win.search.surface.surf,
+        @intCast(width - visible_width),
+        0,
+        @intCast(visible_width),
+        @intCast(height),
+    );
+
+    wayland_shim_surface_commit(win.search.surface.surf);
+    quirk_weston_subsurface_desync_off(win.search.sub);
+
+    free(text_raw);
+    free(widths_raw);
+}
+

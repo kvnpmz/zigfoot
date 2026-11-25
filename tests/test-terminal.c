@@ -55,6 +55,9 @@
 
 /* Ported to render.zig; exposed for the harness only. */
 unsigned render_presentation_frame_count(int64_t total_us, float refresh);
+size_t render_search_box_glyph_offset(
+    size_t glyph_offset, size_t visible_cells, size_t total_cells,
+    size_t cursor_cell_idx);
 void presented(void *data, struct wp_presentation_feedback *feedback,
                uint32_t tv_sec_hi, uint32_t tv_sec_lo, uint32_t tv_nsec,
                uint32_t refresh, uint32_t seq_hi, uint32_t seq_lo,
@@ -5353,6 +5356,28 @@ test_scrollback_indicator(void)
 }
 
 
+/* D3k3: the search box's horizontal windowing (the paint path needs a
+ * compositor; this is the arithmetic that decides what is visible). */
+static void
+test_search_box_offset(void)
+{
+    check(render_search_box_glyph_offset(10, 20, 100, 15) == 10,
+          "a cursor inside the visible window keeps the offset");
+
+    check(render_search_box_glyph_offset(10, 20, 100, 5) == 5,
+          "a cursor left of the window pulls the offset back");
+
+    check(render_search_box_glyph_offset(0, 20, 100, 30) == 10,
+          "a cursor right of the window pushes the offset forward");
+
+    check(render_search_box_glyph_offset(90, 20, 100, 95) == 80,
+          "free space at the end pulls the offset back");
+
+    check(render_search_box_glyph_offset(0, 20, 5, 3) == 0,
+          "a string shorter than the window keeps offset 0");
+}
+
+
 int
 main(void)
 {
@@ -5386,6 +5411,7 @@ main(void)
     test_presentation_feedback();
     test_reapply_old_damage();
     test_scrollback_indicator();
+    test_search_box_offset();
     test_grid_render_scroll();
     test_render_sixel();
     test_csd_buttons();

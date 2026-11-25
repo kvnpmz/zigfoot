@@ -323,6 +323,24 @@ void wayland_shim_set_opaque_region(
     }
 }
 
+
+/* The search box's opaque region only covers the visible part of the
+ * sub-surface, so it cannot use wayland_shim_set_opaque_region(). */
+void wayland_shim_set_opaque_region_rect(
+    struct wl_compositor *compositor, struct wl_surface *surf,
+    int x, int y, int width, int height)
+{
+    if (surf == NULL || compositor == NULL)
+        return;
+
+    struct wl_region *region = wl_compositor_create_region(compositor);
+    if (region != NULL) {
+        wl_region_add(region, x, y, width, height);
+        wl_surface_set_opaque_region(surf, region);
+        wl_region_destroy(region);
+    }
+}
+
 /* pixman region/image helpers for render_cell(). The clip is always
  * "this rect", so init+set+fini collapse into one call. */
 void render_shim_clip_rect(
