@@ -95,9 +95,33 @@ export fn sixel_geometry_report_max(term: *types.Terminal) callconv(.c) void {
 extern const srgb_decode_8_to_16_table: [256]u16;
 extern const srgb_decode_8_to_8_table: [256]u8;
 
-extern fn sixel_wayl_do_linear_blending(term: *types.Terminal) callconv(.c) bool;
-extern fn sixel_shm_chain_bit_depth(term: *types.Terminal) callconv(.c) c_int;
-extern fn sixel_conf_sixel_palette_copy(term: *types.Terminal, dst: [*]u32, max: usize) callconv(.c) void;
+// ── sixel-shim.c: wayland/shm/config helpers ──────────────────────
+// The bodies used to live in sixel-shim.c. Calls that had no C callers
+// now go straight through these exports; C still reaches the same ABI.
+extern fn wayl_do_linear_blending(wayl: ?*const types.Wayland, conf: ?*const types.Config) callconv(.c) bool;
+extern fn shm_chain_bit_depth(chain: *const types.ShmBufferChain) callconv(.c) c_int;
+
+export fn sixel_wayl_do_linear_blending(term: *types.Terminal) callconv(.c) bool {
+    return wayl_do_linear_blending(term.wl, term.conf);
+}
+
+export fn sixel_shm_chain_bit_depth(term: *types.Terminal) callconv(.c) c_int {
+    // C assumed the grid chain exists; do not unwrap a NULL mirror field.
+    const chain: *const types.ShmBufferChain =
+        @ptrCast(@alignCast(term.render.chains.grid orelse return 0));
+    return shm_chain_bit_depth(chain);
+}
+
+export fn sixel_conf_sixel_palette_copy(
+    term: *types.Terminal,
+    dst: [*]u32,
+    max: usize,
+) callconv(.c) void {
+    const conf = term.conf orelse return;
+    const src = &conf.colors_dark.sixel;
+    const cnt = @min(src.len, max);
+    for (0..cnt) |i| dst[i] = src[i];
+}
 extern fn sixel_pixman_fmt_a8r8g8b8() callconv(.c) c_uint;
 extern fn sixel_pixman_fmt_a2r10g10b10() callconv(.c) c_uint;
 extern fn sixel_pixman_fmt_a2b10g10r10() callconv(.c) c_uint;
@@ -109,11 +133,9 @@ export fn sixel_fini(term: *types.Terminal) callconv(.c) void {
     if (term.sixel.shared_palette) |p| free(@ptrCast(p));
 }
 
-
 // ── color_decode_srgb (was sixel.c line ~22) ─────────────────────
 // Uses srgb_decode_8_to_8_table / srgb_decode_8_to_16_table (extern from
 // build/srgb.h), and the pixman format code stored in term.sixel.pixman_fmt.
-
 
 export fn color_decode_srgb(term: *types.Terminal, r_in: u16, g_in: u16, b_in: u16) callconv(.c) u32 {
     var r: u32 = r_in;
@@ -304,7 +326,6 @@ fn sixel_add_many_ar_11(term: *types.Terminal, c: u8, count_in: c_uint) void {
     }
 }
 
-
 // ── Chunk B2 (sub-chunk b): resize_* functions ──────────────────
 
 fn resize_horizontally(term: *types.Terminal, new_width_mutable: c_int) void {
@@ -335,8 +356,8 @@ fn resize_horizontally(term: *types.Terminal, new_width_mutable: c_int) void {
 
     const new_data_ptr: [*]u32 = @ptrCast(@alignCast(xmalloc(
         @as(usize, @intCast(new_width_actual)) *
-        @as(usize, @intCast(alloc_height)) *
-        @sizeOf(u32),
+            @as(usize, @intCast(alloc_height)) *
+            @sizeOf(u32),
     )));
 
     const bg: u32 = if (term.sixel.transparent_bg) 0 else term.sixel.palette.?[0];
@@ -388,8 +409,8 @@ fn resize_vertically(term: *types.Terminal, new_height: c_int) bool {
     }
 
     const new_size: usize = @as(usize, @intCast(width)) *
-                            @as(usize, @intCast(alloc_height)) *
-                            @sizeOf(u32);
+        @as(usize, @intCast(alloc_height)) *
+        @sizeOf(u32);
     const r = realloc(if (old_data) |p| @ptrCast(p) else null, new_size);
     if (r == null) return false;
     const new_data: [*]u32 = @ptrCast(@alignCast(r.?));
@@ -538,12 +559,7 @@ fn decsixel_generic(term: *types.Terminal, c: u8) void {
                 }
             }
         },
-        '?', 'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M',
-        'N', 'O', 'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z',
-        '[', '\\', ']', '^', '_', '`',
-        'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm',
-        'n', 'o', 'p', 'q', 'r', 's', 't', 'u', 'v', 'w', 'x', 'y', 'z',
-        '{', '|', '}', '~' => {
+        '?', 'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N', 'O', 'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z', '[', '\\', ']', '^', '_', '`', 'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm', 'n', 'o', 'p', 'q', 'r', 's', 't', 'u', 'v', 'w', 'x', 'y', 'z', '{', '|', '}', '~' => {
             sixel_add_many_generic(term, c - 63, 1);
         },
         ' ', '\n', '\r' => {},
@@ -654,7 +670,6 @@ fn decgri_ar_11(term: *types.Terminal, c: u8) void {
         decgri_generic(term, c);
     }
 }
-
 
 fn decgci(term: *types.Terminal, c: u8) void {
     if (c >= '0' and c <= '9') {
@@ -995,19 +1010,14 @@ export fn sixel_scroll_down(term: *types.Terminal, rows: c_int) callconv(.c) voi
 // ── sixel_init ───────────────────────────────────────────────────
 // Returns a put-handler fn ptr chosen by pan/pad.
 // ABI: `sixel_put` = void (*)(struct terminal *, uint8_t).
-export fn sixel_init(term: *types.Terminal, p1: c_int, p2: c_int, p3: c_int) callconv(.c)
-    ?*const fn (?*anyopaque, u8) callconv(.c) void
-{
+export fn sixel_init(term: *types.Terminal, p1: c_int, p2: c_int, p3: c_int) callconv(.c) ?*const fn (?*anyopaque, u8) callconv(.c) void {
     _ = p3;
 
     // C: xassert(term->sixel.image.data == NULL);
     // C: xassert(term->sixel.palette_size <= SIXEL_MAX_COLORS);
 
     const pad: c_int = 1;
-    const pan: c_int = if (p1 == 2) 5
-        else if (p1 == 3 or p1 == 4) 3
-        else if (p1 == 7 or p1 == 8 or p1 == 9) 1
-        else 2;
+    const pan: c_int = if (p1 == 2) 5 else if (p1 == 3 or p1 == 4) 3 else if (p1 == 7 or p1 == 8 or p1 == 9) 1 else 2;
 
     term.sixel.state = .DECSIXEL;
     term.sixel.pos = .{ .col = 0, .row = 0 };
@@ -1280,7 +1290,12 @@ fn blend_new_image_over_old(
         pix.*,
         null,
         pix2,
-        0, 0, 0, 0, 0, 0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
         img_width,
         img_height,
     );
@@ -1292,7 +1307,8 @@ fn blend_new_image_over_old(
         pix2,
         box.x1 - six_ofs_x,
         box.y2 - six_ofs_y,
-        0, 0,
+        0,
+        0,
         box.x1 - img_ofs_x,
         box.y2 - img_ofs_y,
         bounding_x - box.x1,
@@ -1306,7 +1322,8 @@ fn blend_new_image_over_old(
         pix2,
         box.x2 - six_ofs_x,
         box.y1 - six_ofs_y,
-        0, 0,
+        0,
+        0,
         box.x2 - img_ofs_x,
         box.y1 - img_ofs_y,
         bounding_x - box.x2,
@@ -1350,7 +1367,10 @@ fn blend_new_image_over_old(
                 src,
                 null,
                 pix2,
-                0, 0, 0, 0,
+                0,
+                0,
+                0,
+                0,
                 r.x1 - img_ofs_x,
                 r.y1 - img_ofs_y,
                 r.x2 - r.x1,
@@ -1436,8 +1456,8 @@ fn sixel_overwrite_internal(
 
         const new_data: [*]u32 = @ptrCast(@alignCast(xmalloc(
             @as(usize, @intCast(new_width)) *
-            @as(usize, @intCast(new_height)) *
-            @sizeOf(u32),
+                @as(usize, @intCast(new_height)) *
+                @sizeOf(u32),
         )));
         const old_data: [*]const u32 = @ptrCast(@alignCast(six.original.data));
 
@@ -1449,7 +1469,7 @@ fn sixel_overwrite_internal(
             const dst_off: usize = j * @as(usize, @intCast(new_width));
             const src_off: usize =
                 (@as(usize, @intCast(y_ofs)) + j) *
-                    @as(usize, @intCast(six.original.width)) +
+                @as(usize, @intCast(six.original.width)) +
                 @as(usize, @intCast(x_ofs));
             @memcpy(
                 new_data[dst_off .. dst_off + @as(usize, @intCast(new_width))],
@@ -1727,7 +1747,7 @@ export fn sixel_sync_cache(term: *const types.Terminal, six: *types.Sixel) callc
 
         const scaled_data: [*]u8 = @ptrCast(@alignCast(xmalloc(
             @as(usize, @intCast(scaled_height)) *
-            @as(usize, @intCast(scaled_stride)),
+                @as(usize, @intCast(scaled_stride)),
         )));
         const scaled_pix: ?*PixmanImage = pixman_image_create_bits_no_clear(
             @intCast(term.sixel.pixman_fmt),
@@ -1742,8 +1762,12 @@ export fn sixel_sync_cache(term: *const types.Terminal, six: *types.Sixel) callc
             @ptrCast(six.original.pix),
             null,
             scaled_pix,
-            0, 0, 0, 0,
-            0, 0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
             scaled_width,
             scaled_height,
         );
