@@ -650,9 +650,9 @@ utmp backends where available.
 
 ## 13. Sequenced backlog (refreshed 2026-11-24)
 
-State: **31,546 of 48,830 C lines gone (64.6%)**, ~47% by effort, 34 modules
-ported, 437 harness assertions, `meson test` 5/5 in three build dirs.
-Remaining C: 17,284 lines, 1,476 of which are `*-shim.c` accessors.
+State: **31,600 of 48,830 C lines gone (64.7%)**, ~47% by effort, 34 modules
+ported, 442 harness assertions, `meson test` 5/5 in three build dirs.
+Remaining C: 17,230 lines, 1,492 of which are `*-shim.c` accessors.
 
 `smoke.sh` now launches **real windows**: weston's headless backend creates no
 `wl_seat`, so foot refused to start ("no seats available"). When `Xvfb` is
@@ -768,7 +768,8 @@ Order matters: `search` and `wayland` first (they unblock the rest), then
 | **D1** done | `search` (1,512): the matching core (`matches_cell`, `find_next`, the match iterator, the query buffer), the lifecycle (`search_begin`/`search_cancel`), the coord/extend/word/line selectors, `execute_binding()` and `search_input()` — 1,704 lines of Zig, `search.c` deleted. `struct key_binding`/`key_binding_set` are mirrored locally (56/104 bytes, pinned at compile time), and `char32.h`'s c32 comparisons plus `grid_row_absolute_in_view()` got shims. 15 new harness checks drive the buffer edits through `search_input()` with a synthetic binding list | 2–3d |
 | **D2a** done | `wayland`'s monitor/output layer: `output_update_ppi()`, the six `wl_output` callbacks, the four `zxdg_output_v1` callbacks and `clock_id()` (~160 lines) into a new `wayland.zig`. The generated-protocol listener *tables* stay in C (they are generated types; C pins their layout for free) and point at the Zig exports. 21 new harness checks: DPI/PPI maths from geometry + mode + logical size + scale, name/description replacement, and the presentation clock | B1 | 1d |
 | **D2b** done | `wayland`: surface scaling (`surface_scale_explicit_width_height()` in both the fractional/viewport and the integer `set_buffer_scale` arms, plus its three wrappers) and the two CSD-visibility predicates. `wl_surface_set_buffer_scale()`/`wp_viewport_set_destination()` are generated static inlines, so they got shims. The scaling path is exercised end-to-end by the five smoke launches; 11 new harness checks cover the CSD predicates | D2a | 1d |
-| **D2c** | `wayland`: the remaining `wayl_*` window/subsurface plumbing, activation, reload, flush/roundtrip | D2b | 2–3d |
+| **D2c** done | `wayland`: urgency/activation (`wayl_win_set_urgent()` and its token callback), `wayl_win_ring_bell()` and `wayl_do_linear_blending()`. `xdg_system_bell_v1_ring()`/`xdg_activation_v1_activate()` are generated static inlines, so two more shims. 5 new harness checks | D2b | 0.5d |
+| **D2c2** | `wayland`: window/subsurface plumbing, `wayl_reload_xcursor_theme()`, `wayl_flush()`/`wayl_roundtrip()` — needs a shim for every generated `wl_surface_*` inline (~40 one-liners) | D2c | 2–3d |
 | **D2d** | `wayland`: `handle_global`/`handle_global_remove`, `wayl_init`/`wayl_destroy`, seat capabilities and data devices | D2c | 3–4d |
 | **D3** | `render` (5,479) — split into D3a chains/damage/cursor, D3b grid/csd/box-drawing glyph cache, D3c sixel/notifications/search-highlight | biggest module; do it after `wayland` so the surface/scale paths are Zig | 1.5–2w |
 | **D4** | `input` (3,687) — split into D4a keyboard/legacy+kitty protocols, D4b pointer/mouse/touch, D4c compose/IME plumbing | after B2 + key-binding | 1–1.5w |

@@ -347,3 +347,79 @@ export fn wayl_win_csd_borders_visible(win: *const types.WlWindow) callconv(.c) 
         !win.is_fullscreen and
         !win.is_maximized;
 }
+
+// ─────────────────────────────────────────────────────────────────────────
+// Urgency, activation and the system bell
+// ─────────────────────────────────────────────────────────────────────────
+
+extern fn wayl_get_activation_token(
+    wayl: *types.Wayland,
+    seat: ?*types.Seat,
+    serial: u32,
+    win: *types.WlWindow,
+    cb: types.ActivationTokenCb,
+    cb_data: ?*anyopaque,
+) callconv(.c) bool;
+extern fn wayland_shim_xdg_system_bell_ring(bell: ?*anyopaque, surface: ?*anyopaque) callconv(.c) void;
+extern fn wayland_shim_xdg_activation_activate(activation: ?*anyopaque, token: [*:0]const u8, surface: ?*anyopaque) callconv(.c) void;
+
+fn waylandOf(win: anytype) *types.Wayland {
+    const term: *types.Terminal = @ptrCast(@alignCast(win.term.?));
+    return @ptrCast(@alignCast(term.wl.?));
+}
+
+fn activationTokenForUrgencyDone(token: [*:0]const u8, data: ?*anyopaque) callconv(.c) void {
+    const win: *types.WlWindow = @ptrCast(@alignCast(data.?));
+    const wayl = waylandOf(win);
+
+    win.urgency_token_is_pending = false;
+    wayland_shim_xdg_activation_activate(wayl.xdg_activation, token, win.surface.surf);
+}
+
+export fn wayl_win_set_urgent(win: *types.WlWindow) callconv(.c) bool {
+    if (win.urgency_token_is_pending) {
+        // We already have a pending token. Don't request another one,
+        // to avoid flooding the Wayland socket
+        return true;
+    }
+
+    const success = wayl_get_activation_token(
+        waylandOf(win),
+        null,
+        0,
+        win,
+        &activationTokenForUrgencyDone,
+        win,
+    );
+
+    if (success) {
+        win.urgency_token_is_pending = true;
+        return true;
+    }
+
+    return false;
+}
+
+export fn wayl_win_ring_bell(win: *const types.WlWindow) callconv(.c) bool {
+    const wayl = waylandOf(win);
+
+    if (wayl.system_bell == null) {
+        const S = struct {
+            var have_warned: bool = false;
+        };
+
+        if (!S.have_warned) {
+            log_msg(LOG_CLASS_WARNING, "wayland", "wayland.zig", @intCast(@src().line), "compositor does not implement the XDG system bell protocol");
+            S.have_warned = true;
+        }
+
+        return false;
+    }
+
+    wayland_shim_xdg_system_bell_ring(wayl.system_bell, win.surface.surf);
+    return true;
+}
+
+export fn wayl_do_linear_blending(wayl: *const types.Wayland, conf: *const types.Config) callconv(.c) bool {
+    return conf.gamma_correct and wayl.color_management.img_description != null;
+}

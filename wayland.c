@@ -2373,54 +2373,6 @@ wayl_win_alpha_changed(struct wl_window *win)
 #endif /* HAVE_EXT_BACKGROUND_EFFECT */
 }
 
-static void
-activation_token_for_urgency_done(const char *token, void *data)
-{
-    struct wl_window *win = data;
-    struct wayland *wayl = win->term->wl;
-
-    win->urgency_token_is_pending = false;
-    xdg_activation_v1_activate(wayl->xdg_activation, token, win->surface.surf);
-}
-
-bool
-wayl_win_set_urgent(struct wl_window *win)
-{
-    if (win->urgency_token_is_pending) {
-        /* We already have a pending token. Don't request another one,
-         * to avoid flooding the Wayland socket */
-        return true;
-    }
-
-    bool success = wayl_get_activation_token(
-        win->term->wl, NULL, 0, win, &activation_token_for_urgency_done, win);
-
-    if (success) {
-        win->urgency_token_is_pending = true;
-        return true;
-    }
-
-    return false;
-}
-
-bool
-wayl_win_ring_bell(const struct wl_window *win)
-{
-    if (win->term->wl->system_bell == NULL) {
-        static bool have_warned = false;
-
-        if (!have_warned) {
-            LOG_WARN("compositor does not implement the XDG system bell protocol");
-            have_warned = true;
-        }
-
-        return false;
-    }
-
-    xdg_system_bell_v1_ring(win->term->wl->system_bell, win->surface.surf);
-    return true;
-}
-
 bool
 wayl_win_subsurface_new_with_custom_parent(
     struct wl_window *win, struct wl_surface *parent,
@@ -2601,11 +2553,4 @@ wayl_activate(struct wayland *wayl, struct wl_window *win, const char *token)
         return;
 
     xdg_activation_v1_activate(wayl->xdg_activation, token, win->surface.surf);
-}
-
-bool
-wayl_do_linear_blending(const struct wayland *wayl, const struct config *conf)
-{
-    return conf->gamma_correct &&
-           wayl->color_management.img_description != NULL;
 }

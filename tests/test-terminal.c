@@ -3464,6 +3464,41 @@ test_csd_visibility(void)
     check(!wayl_win_csd_titlebar_visible(&win), "an unknown CSD mode hides the titlebar");
 }
 
+
+static void
+test_wayland_misc(void)
+{
+    struct wayland wayl = {0};
+    struct config conf = {0};
+    struct terminal term = {0};
+    struct wl_window win = {0};
+
+    term.wl = &wayl;
+    term.conf = &conf;
+    win.term = &term;
+
+    conf.gamma_correct = false;
+    check(!wayl_do_linear_blending(&wayl, &conf),
+          "linear blending needs gamma-correct");
+
+    conf.gamma_correct = true;
+    check(!wayl_do_linear_blending(&wayl, &conf),
+          "linear blending needs an image description");
+
+    wayl.color_management.img_description = (struct wp_image_description_v1 *)&wayl;
+    check(wayl_do_linear_blending(&wayl, &conf),
+          "linear blending is on with both prerequisites");
+
+    /* A pending urgency token short-circuits before talking to the compositor */
+    win.urgency_token_is_pending = true;
+    check(wayl_win_set_urgent(&win), "a pending urgency token is not requested twice");
+    check(win.urgency_token_is_pending, "the pending flag stays set");
+    win.urgency_token_is_pending = false;
+
+    wayl.system_bell = NULL;
+    check(!wayl_win_ring_bell(&win), "no system bell protocol means no bell");
+}
+
 int
 main(void)
 {
@@ -3487,6 +3522,7 @@ main(void)
     test_search();
     test_output();
     test_csd_visibility();
+    test_wayland_misc();
     test_osc8();
     test_size_notifications();
     test_flash();
