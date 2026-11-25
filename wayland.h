@@ -568,3 +568,31 @@ bool wayl_get_activation_token(
 void wayl_activate(struct wayland *wayl, struct wl_window *win, const char *token);
 
 bool wayl_do_linear_blending(const struct wayland *wayl, const struct config *conf);
+
+/* ── Ported to wayland.zig ─────────────────────────────────────────────
+ * Generated-protocol listener callbacks; the listener tables in wayland.c
+ * still point at these, so their prototypes live here. */
+
+void output_geometry(
+    void *data, struct wl_output *wl_output, int32_t x, int32_t y,
+    int32_t physical_width, int32_t physical_height, int32_t subpixel,
+    const char *make, const char *model, int32_t transform);
+void output_mode(
+    void *data, struct wl_output *wl_output, uint32_t flags,
+    int32_t width, int32_t height, int32_t refresh);
+void output_scale(void *data, struct wl_output *wl_output, int32_t factor);
+void output_name(void *data, struct wl_output *wl_output, const char *name);
+void output_description(
+    void *data, struct wl_output *wl_output, const char *description);
+
+void xdg_output_handle_logical_position(
+    void *data, struct zxdg_output_v1 *xdg_output, int32_t x, int32_t y);
+void xdg_output_handle_logical_size(
+    void *data, struct zxdg_output_v1 *xdg_output, int32_t width, int32_t height);
+void xdg_output_handle_name(
+    void *data, struct zxdg_output_v1 *xdg_output, const char *name);
+void xdg_output_handle_description(
+    void *data, struct zxdg_output_v1 *xdg_output, const char *description);
+
+void clock_id(
+    void *data, struct wp_presentation *wp_presentation, uint32_t clk_id);

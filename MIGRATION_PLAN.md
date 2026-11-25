@@ -650,9 +650,9 @@ utmp backends where available.
 
 ## 13. Sequenced backlog (refreshed 2026-11-24)
 
-State: **31,280 of 48,830 C lines gone (64.1%)**, ~46% by effort, 33 modules
-ported, 405 harness assertions, `meson test` 5/5 in three build dirs.
-Remaining C: 17,550 lines, 1,460 of which are `*-shim.c` accessors.
+State: **31,440 of 48,830 C lines gone (64.4%)**, ~46% by effort, 34 modules
+ported, 426 harness assertions, `meson test` 5/5 in three build dirs.
+Remaining C: 17,390 lines, 1,460 of which are `*-shim.c` accessors.
 
 `smoke.sh` now launches **real windows**: weston's headless backend creates no
 `wl_seat`, so foot refused to start ("no seats available"). When `Xvfb` is
@@ -766,7 +766,9 @@ Order matters: `search` and `wayland` first (they unblock the rest), then
 | Chunk | Module | Why this order | Est. |
 |---|---|---|---|
 | **D1** done | `search` (1,512): the matching core (`matches_cell`, `find_next`, the match iterator, the query buffer), the lifecycle (`search_begin`/`search_cancel`), the coord/extend/word/line selectors, `execute_binding()` and `search_input()` — 1,704 lines of Zig, `search.c` deleted. `struct key_binding`/`key_binding_set` are mirrored locally (56/104 bytes, pinned at compile time), and `char32.h`'s c32 comparisons plus `grid_row_absolute_in_view()` got shims. 15 new harness checks drive the buffer edits through `search_input()` with a synthetic binding list | 2–3d |
-| **D2** | `wayland` (2,884) | B1 unblocks it; porting it deletes the monitor/output accessors and makes `render` portable | 1w |
+| **D2a** done | `wayland`'s monitor/output layer: `output_update_ppi()`, the six `wl_output` callbacks, the four `zxdg_output_v1` callbacks and `clock_id()` (~160 lines) into a new `wayland.zig`. The generated-protocol listener *tables* stay in C (they are generated types; C pins their layout for free) and point at the Zig exports. 21 new harness checks: DPI/PPI maths from geometry + mode + logical size + scale, name/description replacement, and the presentation clock | B1 | 1d |
+| **D2b** | `wayland`: the remaining `wayl_*` surface/window/subsurface plumbing, CSD, activation, reload, flush/roundtrip | D2a | 3–4d |
+| **D2c** | `wayland`: `handle_global`/`handle_global_remove`, `wayl_init`/`wayl_destroy`, seat capabilities and data devices | D2b | 3–4d |
 | **D3** | `render` (5,479) — split into D3a chains/damage/cursor, D3b grid/csd/box-drawing glyph cache, D3c sixel/notifications/search-highlight | biggest module; do it after `wayland` so the surface/scale paths are Zig | 1.5–2w |
 | **D4** | `input` (3,687) — split into D4a keyboard/legacy+kitty protocols, D4b pointer/mouse/touch, D4c compose/IME plumbing | after B2 + key-binding | 1–1.5w |
 | **D5** | `key-binding` (661), `ime` (540), `url-mode` (833), `selection` S1+S3 (~600) | after B2/D4 | 4–5d |

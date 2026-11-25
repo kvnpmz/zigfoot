@@ -485,6 +485,18 @@ selection_obj = custom_target(
 )
 
 
+wayland_obj = custom_target(
+  'wayland_obj',
+  input: 'wayland.zig',
+  depend_files: files('terminal_types.zig'),
+  output: 'wayland.o',
+  depends: c_layout,
+  command: [
+    python, files('compile_zig.py'), '@INPUT@', '@OUTPUT@',
+    grapheme_clustering_zig,
+  ]
+)
+
 search_obj = custom_target(
   'search_obj',
   input: 'search.zig',
@@ -817,7 +829,7 @@ footlib = static_library(
   unicode_mode_obj, 'unicode-mode.h',
   'url-mode.c', 'url-mode.h',
   user_notification_obj, 'user-notification.h',
-  'wayland.c', 'wayland.h', 'shm-formats.h',
+  'wayland.c', wayland_obj, 'wayland.h', 'shm-formats.h',
   'xkbcommon-vmod.h',
   srgb_funcs, wl_proto_src + wl_proto_headers, version,
   dependencies: foot_deps,

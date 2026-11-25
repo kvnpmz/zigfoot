@@ -48,6 +48,7 @@
 #include <unistd.h>
 #include <stdlib.h>
 #include <string.h>
+#include <math.h>
 
 /* Ported to terminal.zig; internal helpers, not part of terminal.h. */
 void print_insert(struct terminal *term, int width);
@@ -3359,6 +3360,72 @@ test_search(void)
     term_free(term);
 }
 
+
+static void
+test_output(void)
+{
+    struct wayland wayl = {0};
+    struct monitor mon = {0};
+    mon.wayl = &wayl;
+    mon.scale = 1;
+
+    /* 300mm x 200mm: 11.81" x 7.87", diagonal 14.19" */
+    output_geometry(&mon, NULL, 0, 0, 300, 200,
+                    WL_OUTPUT_SUBPIXEL_HORIZONTAL_RGB, "make", "model",
+                    WL_OUTPUT_TRANSFORM_NORMAL);
+    check_text(mon.make, "make", "output_geometry() stores make");
+    check_text(mon.model, "model", "output_geometry() stores model");
+    check(mon.subpixel == WL_OUTPUT_SUBPIXEL_HORIZONTAL_RGB,
+          "output_geometry() stores the subpixel order");
+    check(fabsf(mon.inch - 14.1f) < 0.2f, "output_geometry() computes the diagonal");
+
+    output_mode(&mon, NULL, WL_OUTPUT_MODE_CURRENT, 2880, 1800, 60000);
+    check(mon.dim.px_real.width == 2880 && mon.dim.px_real.height == 1800,
+          "output_mode() stores the current mode");
+    check(mon.refresh == 60.0f, "output_mode() converts refresh to Hz");
+    check(mon.ppi.real.x >= 240 && mon.ppi.real.x <= 248,
+          "output_mode() yields ~244 PPI");
+
+    /* A non-current mode is ignored */
+    output_mode(&mon, NULL, 0, 800, 600, 0);
+    check(mon.dim.px_real.width == 2880, "output_mode() ignores non-current modes");
+
+    output_scale(&mon, NULL, 2);
+    check(mon.scale == 2, "output_scale() stores the scale");
+
+    xdg_output_handle_logical_position(&mon, NULL, 10, 20);
+    check(mon.x == 10 && mon.y == 20, "logical_position() stores the position");
+
+    xdg_output_handle_logical_size(&mon, NULL, 1440, 900);
+    check(mon.dim.px_scaled.width == 1440 && mon.dim.px_scaled.height == 900,
+          "logical_size() stores the scaled size");
+    check(mon.ppi.scaled.x >= 120 && mon.ppi.scaled.x <= 124,
+          "logical_size() yields ~122 logical PPI");
+    check(mon.dpi.physical >= 238 && mon.dpi.physical <= 242,
+          "dpi.physical follows the diagonal");
+    check(mon.dpi.scaled >= 236 && mon.dpi.scaled <= 244,
+          "dpi.scaled applies the output scale");
+
+    xdg_output_handle_name(&mon, NULL, "DP-1");
+    check_text(mon.name, "DP-1", "xdg_output name is stored");
+    output_name(&mon, NULL, "DP-2");
+    check_text(mon.name, "DP-2", "wl_output name replaces the xdg one");
+    output_name(&mon, NULL, NULL);
+    check(mon.name == NULL, "a NULL name clears it");
+
+    xdg_output_handle_description(&mon, NULL, "Dell U2720Q");
+    check_text(mon.description, "Dell U2720Q", "description is stored");
+    xdg_output_handle_description(&mon, NULL, "other");
+    check_text(mon.description, "other", "description is replaced");
+
+    clock_id(&wayl, NULL, 7);
+    check(wayl.presentation_clock_id == 7, "clock_id() stores the clock id");
+
+    free(mon.make);
+    free(mon.model);
+    free(mon.description);
+}
+
 int
 main(void)
 {
@@ -3380,6 +3447,7 @@ main(void)
     test_erase_scrollback();
     test_emoji_vs_table();
     test_search();
+    test_output();
     test_osc8();
     test_size_notifications();
     test_flash();

@@ -478,143 +478,11 @@ update_terms_on_monitor(struct monitor *mon)
 }
 
 static void
-output_update_ppi(struct monitor *mon)
-{
-    if (mon->dim.mm.width <= 0 || mon->dim.mm.height <= 0)
-        return;
-
-    double x_inches = mon->dim.mm.width * 0.03937008;
-    double y_inches = mon->dim.mm.height * 0.03937008;
-
-    const int width = mon->dim.px_real.width;
-    const int height = mon->dim.px_real.height;
-
-    mon->ppi.real.x = mon->dim.px_real.width / x_inches;
-    mon->ppi.real.y = mon->dim.px_real.height / y_inches;
-
-    /* The *logical* size is affected by the transform */
-    switch (mon->transform) {
-    case WL_OUTPUT_TRANSFORM_90:
-    case WL_OUTPUT_TRANSFORM_270:
-    case WL_OUTPUT_TRANSFORM_FLIPPED_90:
-    case WL_OUTPUT_TRANSFORM_FLIPPED_270: {
-        int swap = x_inches;
-        x_inches = y_inches;
-        y_inches = swap;
-        break;
-    }
-
-    case WL_OUTPUT_TRANSFORM_NORMAL:
-    case WL_OUTPUT_TRANSFORM_180:
-    case WL_OUTPUT_TRANSFORM_FLIPPED:
-    case WL_OUTPUT_TRANSFORM_FLIPPED_180:
-        break;
-    }
-
-    const int scaled_width = mon->dim.px_scaled.width;
-    const int scaled_height = mon->dim.px_scaled.height;
-
-    mon->ppi.scaled.x = scaled_width / x_inches;
-    mon->ppi.scaled.y = scaled_height / y_inches;
-
-    const double px_diag_physical = sqrt(pow(width, 2) + pow(height, 2));
-    mon->dpi.physical = width == 0 && height == 0
-        ? 96.
-        : px_diag_physical / mon->inch;
-
-    const double px_diag_scaled = sqrt(pow(scaled_width, 2) + pow(scaled_height, 2));
-    mon->dpi.scaled = scaled_width == 0 && scaled_height == 0
-        ? 96.
-        : px_diag_scaled / mon->inch * mon->scale;
-
-    if (mon->dpi.physical > 1000) {
-        if (mon->name != NULL) {
-            LOG_WARN("%s: DPI=%f (physical) is unreasonable, using 96 instead",
-                     mon->name, mon->dpi.physical);
-        }
-        mon->dpi.physical = 96;
-    }
-
-    if (mon->dpi.scaled > 1000) {
-        if (mon->name != NULL) {
-            LOG_WARN("%s: DPI=%f (logical) is unreasonable, using 96 instead",
-                     mon->name, mon->dpi.scaled);
-        }
-        mon->dpi.scaled = 96;
-    }
-}
-
-static void
-output_geometry(void *data, struct wl_output *wl_output, int32_t x, int32_t y,
-                int32_t physical_width, int32_t physical_height,
-                int32_t subpixel, const char *make, const char *model,
-                int32_t transform)
-{
-    struct monitor *mon = data;
-
-    free(mon->make);
-    free(mon->model);
-
-    mon->dim.mm.width = physical_width;
-    mon->dim.mm.height = physical_height;
-    mon->inch = sqrt(pow(mon->dim.mm.width, 2) + pow(mon->dim.mm.height, 2)) * 0.03937008;
-    mon->make = make != NULL ? xstrdup(make) : NULL;
-    mon->model = model != NULL ? xstrdup(model) : NULL;
-    mon->subpixel = subpixel;
-    mon->transform = transform;
-
-    output_update_ppi(mon);
-}
-
-static void
-output_mode(void *data, struct wl_output *wl_output, uint32_t flags,
-            int32_t width, int32_t height, int32_t refresh)
-{
-    if ((flags & WL_OUTPUT_MODE_CURRENT) == 0)
-        return;
-
-    struct monitor *mon = data;
-    mon->refresh = (float)refresh / 1000;
-    mon->dim.px_real.width = width;
-    mon->dim.px_real.height = height;
-    output_update_ppi(mon);
-}
-
-static void
 output_done(void *data, struct wl_output *wl_output)
 {
     struct monitor *mon = data;
     update_terms_on_monitor(mon);
 }
-
-static void
-output_scale(void *data, struct wl_output *wl_output, int32_t factor)
-{
-    struct monitor *mon = data;
-    mon->scale = factor;
-    output_update_ppi(mon);
-}
-
-#if defined(WL_OUTPUT_NAME_SINCE_VERSION)
-static void
-output_name(void *data, struct wl_output *wl_output, const char *name)
-{
-    struct monitor *mon = data;
-    free(mon->name);
-    mon->name = name != NULL ? xstrdup(name) : NULL;
-}
-#endif
-
-#if defined(WL_OUTPUT_DESCRIPTION_SINCE_VERSION)
-static void
-output_description(void *data, struct wl_output *wl_output,
-                   const char *description)
-{
-    struct monitor *mon = data;
-    free(mon->description);
-    mon->description = description != NULL ? xstrdup(description) : NULL;
-}
-#endif
 
 static const struct wl_output_listener output_listener = {
     .geometry = &output_geometry,
@@ -630,47 +498,10 @@ static const struct wl_output_listener output_listener = {
 };
 
 static void
-xdg_output_handle_logical_position(
-    void *data, struct zxdg_output_v1 *xdg_output, int32_t x, int32_t y)
-{
-    struct monitor *mon = data;
-    mon->x = x;
-    mon->y = y;
-}
-
-static void
-xdg_output_handle_logical_size(void *data, struct zxdg_output_v1 *xdg_output,
-                               int32_t width, int32_t height)
-{
-    struct monitor *mon = data;
-    mon->dim.px_scaled.width = width;
-    mon->dim.px_scaled.height = height;
-    output_update_ppi(mon);
-}
-
-static void
 xdg_output_handle_done(void *data, struct zxdg_output_v1 *xdg_output)
 {
     struct monitor *mon = data;
     update_terms_on_monitor(mon);
-}
-
-static void
-xdg_output_handle_name(void *data, struct zxdg_output_v1 *xdg_output,
-                       const char *name)
-{
-    struct monitor *mon = data;
-    free(mon->name);
-    mon->name = name != NULL ? xstrdup(name) : NULL;
-}
-
-static void
-xdg_output_handle_description(void *data, struct zxdg_output_v1 *xdg_output,
-                              const char *description)
-{
-    struct monitor *mon = data;
-    free(mon->description);
-    mon->description = description != NULL ? xstrdup(description) : NULL;
 }
 
 static const struct zxdg_output_v1_listener xdg_output_listener = {
@@ -680,14 +511,6 @@ static const struct zxdg_output_v1_listener xdg_output_listener = {
     .name = xdg_output_handle_name,
     .description = xdg_output_handle_description,
 };
-
-static void
-clock_id(void *data, struct wp_presentation *wp_presentation, uint32_t clk_id)
-{
-    struct wayland *wayl = data;
-    wayl->presentation_clock_id = clk_id;
-    LOG_DBG("presentation clock ID: %u", clk_id);
-}
 
 static const struct wp_presentation_listener presentation_listener = {
     .clock_id = &clock_id,
