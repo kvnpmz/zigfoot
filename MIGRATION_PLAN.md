@@ -873,14 +873,14 @@ Measured on this checkout, not carried over from §1.
 
 | Metric | 2026-11-24 | 2026-11-25 | Δ |
 |---|---|---|---|
-| Branch | +167 commits | **+176 commits** vs `origin/master` | +9 |
-| Foot-owned module C | 12,960 | **12,709** of 48,924 | −251 |
-| C eliminated | 73.5% | **74.0%** (36,215 lines) | +0.5pt |
-| `*-shim.c` accessors | 2,545 | **2,524** (11 files) | −21 |
-| Zig source | ~37.8k | **39,248** lines / 41 files | +1.4k |
-| Harness assertions | 603 | **600** call sites (548 `check`, 52 `check_text`) + 30 Zig `test` blocks | flat |
+| Branch | +167 commits | **+182 commits** vs `origin/master` | +15 |
+| Foot-owned module C | 12,960 | **11,186** of 48,924 | −1,774 |
+| C eliminated | 73.5% | **77.1%** (37,738 lines) | +3.6pt |
+| `*-shim.c` accessors | 2,545 | **2,642** (11 files) | +97 |
+| Zig source | ~37.8k | **41,246** lines / 41 files | +3.4k |
+| Harness assertions | 603 | **656** call sites (604 `check`, 52 `check_text`) + 30 Zig `test` blocks | +53 |
 | `meson test` | 5/5 × 3 dirs | **5/5 × 3 dirs** (`build`, `build-disabled`, `build-release`) | ✅ |
-| Real window launches | not verified | **5/5 pass** against the live `wayland-1` socket | **new** |
+| Real window launches | not verified | **6/6 pass** against the live `wayland-1` socket | ✅ |
 
 Per-module burn-down (share of that module's original C that is gone):
 
@@ -893,7 +893,7 @@ Per-module burn-down (share of that module's original C that is gone):
 | `slave` | 158 / 573 | 72% | O_*/TIOCSCTTY constants, termios, execvpe shim |
 | `shm` | 329 / 1,110 | 70% | globals, `wl_shm`/`wl_buffer` stubs, punch-hole `#ifdef`s |
 | `debug` | 22 / 47 | 53% | ASAN stack-trace hook |
-| `render` | 3,154 / 5,479 | **42%** | D3a–D3i done; 9 chunks left |
+| `render` | 1,631 / 5,479 | **70%** | D3a–D3l1 done; D3l2–D3l4 left |
 | `input` | 3,618 / 3,687 | **0%** | the single largest untouched module |
 | `url-mode` | 833 / 833 | 0% | |
 | `main` | 770 / 770 | 0% | |
@@ -901,12 +901,12 @@ Per-module burn-down (share of that module's original C that is gone):
 | `key-binding` | 661 / 661 | 0% | |
 | `ime` | 540 / 540 | 0% | |
 
-**Percent complete: 74% by C volume, ~60% by effort (band 58–63%), 31/45
+**Percent complete: 77% by C volume, ~67% by effort (band 64–69%), 31/45
 top-level modules (46 counting `spawn_template`) with zero C left.**
-**Post-D3k4:** `render.c` is 3,154 → **1,763** lines (67.8% of `render` ported),
-module C 12,709 → **11,318** (76.9% of the original C gone), harness 605 →
-**652** checks, and `full-check.sh` now actually launches the five windows
-(§14.5.1). `smoke.sh` also runs a sixth launch with `render-timer=osd` +
+**Post-D3l1:** `render.c` is 3,154 → **1,631** lines (70.2% of `render` ported),
+module C 12,709 → **11,186** (77.1% of the original C gone), harness 605 →
+**659** checks, and `full-check.sh` now actually launches the six windows
+(§14.5.1). `smoke.sh` runs a sixth launch with `render-timer=osd` +
 `scrollback-indicator=percentage`, which exercises the new OSD painter on a real
 compositor. Real presentation feedback is still not delivered to these
 short-lived windows, so `presented()` is covered by the fabricated-context
@@ -950,7 +950,7 @@ high-blast-radius functions land last, after their helpers are already Zig.
 | **D3k2b** done | `render`: `render_scrollback_position()` — the indicator create/destroy lifecycle (`wayl_win_subsurface_new()` on demand, destroy when the viewport returns to the bottom), the scrollback-start scan, the rebased-view percentage, the three formats (percentage text via `snprintf`+`mbstoc32`, line number with `ceilf(log10f(num_rows))` cells, configured text), the fractional-scale snapping of width/height/x/y, the fixed/relative vertical placement (search-box aware) and the off-screen unmap. `render_render_timer()` — the µs string, the same snapping, the sub-surface position and the OSD paint. 5 shared helpers (`snapToScale`, `roundfDiv`, `osdMargin`) keep the float semantics explicit. 2 new harness checks for the early-outs; `smoke.sh` now runs a sixth launch with `render-timer=osd` + `scrollback-indicator=percentage` so the painting paths execute against a real compositor | D3k2a | 1d |
 | **D3k3** done | `render`: **`render_search_box()`** — the IME pre-edit merge into the search string (`c32ncpy`/`c32cat`/`c32ncat`, now exported from `char32.zig` since they were `static inline` wcs* wrappers), the per-character cell widths and `c32swidth()` total, the 20-cell minimum window, the fractional-scale snapped geometry, the match/mismatch background (custom colours or `table[3]`/`table[1]`), the transparent strip left of the visible part, the cursor-visibility offset adjustment (including the three IME shift predictions) and the character-boundary snap, the glyph loop with colour-emoji vs mask compositing and the zero-width combining offset, both IME cursor shapes (bar and hollow, with their underlines and pending rects), the plain cursor, the sub-surface position/scale/attach/damage, and the *partial* opaque region (a new `wayland_shim_set_opaque_region_rect()`). The VLA for `widths[]` becomes a heap array; `searchBoxGlyphOffset()` is factored out so the windowing arithmetic is testable without a compositor. 5 new harness checks for that arithmetic; the paint path has no headless coverage (the search box needs a real sub-surface) | D3k2b | 1.5d |
 | **D3k4** done | `render`: **`render_urls()`** — the scrollback-relative view range, the three hide rules (out of view, key shorter than what was typed, prefix mismatch → unmap), the label position clamped to the window margins, the URL decoded via `mbsntoc32(NULL, …)`, the label assembly (upper-cased key, `": "`, URL, entered keys blanked, ellipsis truncation that never splits a wide glyph), `shm_get_many()` for one shared pool across every label, and the per-label `render_osd()` paint. `char32.zig` gains `c32cpy`, `c32ncasecmp` and `toc32upper` (the last through libc's locale-dependent `towupper`). The VLAs become heap arrays, and the label buffer is stored directly instead of `xc32dup()`'d — C only copied because its label lived on the stack. `buildUrlLabel()` is factored out behind a C-facing `render_url_format_label()`: 7 new harness checks (composition, blanking, width, ellipsis truncation, NUL, zero width). The sub-surface paint itself has no headless coverage | D3k3 | 1d |
-| **D3l1** | `render_worker_thread()`, `render_wait_for_preapply_damage()` (~150) — the thread/lock path, keep the C11 trap from C5 in mind | 1d |
+| **D3l1** done | `render`: **`render_worker_thread()`** — the worker loop: `sigfillset`/`pthread_sigmask` so the threads never take foot's signals, the `foot:render:%d` name, `sem_wait(start)`, the cursor row translated from the offset-relative grid to the view, the queue pop under the shared mutex, then the four codes: `-1` frame-done (`sem_post(done)`), `-2` quit, `-3` the pre-applied-damage composite (age 0 = leave alone, 1 = copy the previous frame's `dirty[0]`, ≥2 = whole buffer; `PIXMAN_OP_SRC` composite, `shm_unref`/`shm_addref` handover, `last_buf` swap, then `pre.buf = NULL` + `cnd_signal` under the pre-apply lock) and the default row case (`terminal_shim_grid_row_in_view`, cursor column, `render_row`). **`render_wait_for_preapply_damage()`** — the two early-outs and the `cnd_wait` loop. `workers.buf` stays *optional*: C reads it unconditionally but the `-1`/`-2` paths never dereference it, and the first wake-up (`term_destroy()`'s quit) really does see NULL — an eager `.?` there panicked in the harness until it was made `?*Buffer`. Two new C11 shims (`render_shim_block_all_signals`, `render_shim_set_thread_name`); `pthread_create`/`pthread_join` rather than `thrd_*`, per the C5 trap. 7 new harness checks: a real pthread driven through `-1` (posts `done`, drains the queue) and `-2` (returns 0), plus the pre-apply waiter's two early-outs and its block/wake-up handshake | D3k4 | 1d |
 | **D3l2** | **`grid_render()`** (391) — damage apply, worker dispatch, frame callback, margins, sixel, cursor, commit | 2d |
 | **D3l3** | `render_resize()` (478) + `set_size_from_grid`, `send_dimensions_to_client`, `tiocswinsz`, `delayed_reflow_of_normal_grid`, `fdm_tiocswinsz` (~200) | 2–3d |
 | **D3l4** | `render_xcursor_is_valid/update/set`, `xcursor_callback`, `fdm_hook_refresh_pending_terminals`, `render_buffer_release_callback` (~270) | 1d |
@@ -1021,6 +1021,19 @@ concurrently with D3 by different workers.
    but D3l3/D4 will add many fields).
 4. **Fuzz the VT core before E2's `ReleaseSafe` vs `ReleaseFast` call** (R3) —
    still open, and `input` is the module most exposed to hostile input.
+5. **Never let two `zig`/`ninja`/`meson` invocations share a build dir or the
+   Zig cache.** This session lost an hour to a "nondeterministic Zig 0.16 DWARF
+   bug" (`DWARF TODO: 'InputOutput' while updating constant`, `bad decl abbrev
+   code: pad_1`, `failed to init dwarf: InputOutput`) that reproduced on
+   *unmodified* modules of any size and looked compiler-fatal. It was not a
+   compiler bug: the tool layer in this container runs every shell command
+   **twice, concurrently**, so each `ninja`/`zig build-obj` was racing itself
+   through `~/.cache/zig` and reading back half-written manifests. Serialised
+   (`flock`, or a single-shot wrapper) the same objects build fine in `Debug`,
+   so `-O Debug` stays the dev default — the earlier workaround that mapped
+   `debug` to `ReleaseSafe` was reverted. Rule: wrap every mutating command in
+   `/tmp/once.sh` (mkdir-lock) and never background two invocations of the same
+   command string.
 
 ### 14.6 Untracked cruft
 

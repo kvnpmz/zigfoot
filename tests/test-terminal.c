@@ -41,6 +41,7 @@
 #include <sys/timerfd.h>
 #include <sys/epoll.h>
 #include <semaphore.h>
+#include <pthread.h>
 #include <sys/mman.h>
 #include <sys/wait.h>
 #include <poll.h>
@@ -5410,6 +5411,135 @@ test_url_label(void)
 }
 
 
+
+/*
+ * The render worker thread (render.zig, D3l1).
+ *
+ * The worker loops on `sem_wait(start)`, pops one queue entry per iteration
+ * and dispatches on it: -1 means "frame done", -2 means "quit", -3 is the
+ * pre-applied-damage composite and anything else is a row to render. Rows
+ * need a real font/pixman buffer, so the harness drives the two control
+ * codes: they cover the loop, the queue, the mutex and the done semaphore
+ * without needing a compositor.
+ */
+static void *
+worker_thunk(void *arg)
+{
+    return (void *)(intptr_t)render_worker_thread(arg);
+}
+
+static void
+test_render_worker_thread(void)
+{
+    struct terminal *term = term_new();
+    struct buffer buf = {0};
+    buf.pix_instances = 1;
+
+    term->render.workers.count = 1;
+    term->render.workers.buf = &buf;
+    /* The queue is already empty: term_new() zeroes the whole struct. */
+
+    xassert(sem_init(&term->render.workers.start, 0, 0) == 0);
+    xassert(sem_init(&term->render.workers.done, 0, 0) == 0);
+    xassert(mtx_init(&term->render.workers.lock, mtx_plain) == thrd_success);
+
+    struct render_worker_context *ctx = xmalloc(sizeof(*ctx));
+    xassert(ctx != NULL);
+    ctx->my_id = 0;
+    ctx->term = term;
+
+    pthread_t thr;
+    xassert(pthread_create(&thr, NULL, &worker_thunk, ctx) == 0);
+
+    /* -1: signal frame-done and keep waiting */
+    xassert(tll_length(term->render.workers.queue) == 0);
+    tll_push_back(term->render.workers.queue, -1);
+    xassert(sem_post(&term->render.workers.start) == 0);
+
+    struct timespec deadline;
+    clock_gettime(CLOCK_REALTIME, &deadline);
+    deadline.tv_sec += 5;
+    bool done = sem_timedwait(&term->render.workers.done, &deadline) == 0;
+    check(done, "the worker posts 'done' for a frame-done request");
+    check(tll_length(term->render.workers.queue) == 0,
+          "the worker drains the queue it was signalled for");
+
+    /* -2: quit */
+    tll_push_back(term->render.workers.queue, -2);
+    xassert(sem_post(&term->render.workers.start) == 0);
+
+    void *ret = (void *)1;
+    xassert(pthread_join(thr, &ret) == 0);
+    check((intptr_t)ret == 0, "the worker returns 0 when asked to quit");
+
+    tll_free(term->render.workers.queue);
+    mtx_destroy(&term->render.workers.lock);
+    sem_destroy(&term->render.workers.start);
+    sem_destroy(&term->render.workers.done);
+    term_free(term);
+}
+
+/* render_wait_for_preapply_damage() (render.zig, D3l1). */
+static int preapply_waiter_returned;
+
+static void *
+preapply_waiter_thunk(void *arg)
+{
+    render_wait_for_preapply_damage(arg);
+    __atomic_store_n(&preapply_waiter_returned, 1, __ATOMIC_SEQ_CST);
+    return NULL;
+}
+
+static void
+test_render_wait_for_preapply_damage(void)
+{
+    struct terminal *term = term_new();
+    struct buffer buf = {0};
+
+    /* Not configured for pre-applied damage: no-op even with a frame. */
+    term->render.preapply_last_frame_damage = false;
+    term->render.workers.preapplied_damage.buf = &buf;
+    render_wait_for_preapply_damage(term);
+    check(term->render.workers.preapplied_damage.buf == &buf,
+          "a disabled pre-apply path does not touch the pending frame");
+
+    /* Enabled, but nothing in flight. */
+    term->render.preapply_last_frame_damage = true;
+    term->render.workers.preapplied_damage.buf = NULL;
+    render_wait_for_preapply_damage(term);
+    check(term->render.workers.preapplied_damage.buf == NULL,
+          "an empty pre-apply slot returns immediately");
+
+    /* Enabled with a frame in flight: blocks until the worker clears it. */
+    xassert(mtx_init(&term->render.workers.preapplied_damage.lock,
+                     mtx_plain) == thrd_success);
+    xassert(cnd_init(&term->render.workers.preapplied_damage.cond) ==
+            thrd_success);
+    term->render.workers.preapplied_damage.buf = &buf;
+
+    preapply_waiter_returned = 0;
+    pthread_t thr;
+    xassert(pthread_create(&thr, NULL, &preapply_waiter_thunk, term) == 0);
+
+    struct timespec delay = {.tv_sec = 0, .tv_nsec = 50 * 1000 * 1000};
+    nanosleep(&delay, NULL);
+    check(!__atomic_load_n(&preapply_waiter_returned, __ATOMIC_SEQ_CST),
+          "waits while a frame is being pre-applied");
+
+    mtx_lock(&term->render.workers.preapplied_damage.lock);
+    term->render.workers.preapplied_damage.buf = NULL;
+    cnd_signal(&term->render.workers.preapplied_damage.cond);
+    mtx_unlock(&term->render.workers.preapplied_damage.lock);
+
+    xassert(pthread_join(thr, NULL) == 0);
+    check(__atomic_load_n(&preapply_waiter_returned, __ATOMIC_SEQ_CST),
+          "wakes up once the worker clears the pre-applied frame");
+
+    cnd_destroy(&term->render.workers.preapplied_damage.cond);
+    mtx_destroy(&term->render.workers.preapplied_damage.lock);
+    term_free(term);
+}
+
 int
 main(void)
 {
@@ -5442,6 +5572,8 @@ main(void)
     test_render_init();
     test_presentation_feedback();
     test_reapply_old_damage();
+    test_render_worker_thread();
+    test_render_wait_for_preapply_damage();
     test_scrollback_indicator();
     test_search_box_offset();
     test_url_label();

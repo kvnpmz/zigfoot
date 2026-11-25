@@ -4095,3 +4095,203 @@ export fn render_urls(term: *Terminal) callconv(.c) void {
     free(bufs_raw);
 }
 
+
+
+// ─────────────────────────────────────────────────────────────────────────
+// Render worker thread (D3l1)
+// ─────────────────────────────────────────────────────────────────────────
+
+// The semaphores/mutex/condition variable are byte blobs in the mirror (their
+// pthread layout is opaque to Zig, but the size is pinned by the ABI probe),
+// so they are passed through by address - same approach as terminal.zig's
+// initialize_render_workers().
+extern fn sem_wait(sem: *anyopaque) callconv(.c) c_int;
+extern fn sem_post(sem: *anyopaque) callconv(.c) c_int;
+extern fn mtx_lock(mtx: *anyopaque) callconv(.c) c_int;
+extern fn mtx_unlock(mtx: *anyopaque) callconv(.c) c_int;
+extern fn cnd_signal(cond: *anyopaque) callconv(.c) c_int;
+extern fn cnd_wait(cond: *anyopaque, mtx: *anyopaque) callconv(.c) c_int;
+extern fn render_shim_block_all_signals() callconv(.c) void;
+extern fn render_shim_set_thread_name(name: [*:0]const u8) callconv(.c) c_int;
+extern fn shm_unref(buf: ?*Buffer) callconv(.c) void;
+extern fn shm_addref(buf: *Buffer) callconv(.c) void;
+
+/// render.h's `struct render_worker_context` (my_id comes first).
+const RenderWorkerContext = extern struct {
+    my_id: c_int,
+    _pad: [4]u8 = undefined,
+    term: *Terminal,
+};
+
+/// `&buf->dirty[idx]`: the dirty-region array the workers write to.
+fn dirtyRegionPtr(buf: *Buffer, idx: usize) *anyopaque {
+    const regions: [*]Region32 = @ptrCast(@alignCast(buf.dirty.?));
+    return regionPtr(&regions[idx]);
+}
+
+fn workersTimespec(field: *[16]u8) *Timespec {
+    return @ptrCast(@alignCast(field));
+}
+
+export fn render_worker_thread(ctx_in: ?*anyopaque) callconv(.c) ?*anyopaque {
+    const ctx: *RenderWorkerContext = @ptrCast(@alignCast(ctx_in orelse return null));
+    const term = ctx.term;
+    const my_id = ctx.my_id;
+    free(ctx);
+
+    render_shim_block_all_signals();
+
+    var title_buf: [16]u8 = undefined;
+    const title = std.fmt.bufPrintZ(
+        &title_buf, "foot:render:{d}", .{my_id}) catch "foot:render";
+    if (render_shim_set_thread_name(title.ptr) < 0) {
+        log_errno(
+            LOG_CLASS_ERROR, "render", "render.zig", @intCast(@src().line),
+            "render worker %d: failed to set process title", my_id);
+    }
+
+    const start: *anyopaque = @ptrCast(&term.render.workers.start);
+    const done: *anyopaque = @ptrCast(&term.render.workers.done);
+    const lock: *anyopaque = @ptrCast(&term.render.workers.lock);
+    const queue: *tll.Tll(c_int) = @ptrCast(&term.render.workers.queue);
+
+    while (true) {
+        _ = sem_wait(start);
+
+        // NULL until grid_render() hands the workers a frame: the -1 and -2
+        // control codes never touch it, so this stays optional (and matching
+        // the C original, which happily reads the NULL).
+        var buf: ?*Buffer = if (term.render.workers.buf) |b|
+            @ptrCast(@alignCast(b))
+        else
+            null;
+
+        var frame_done = false;
+
+        // Translate the offset-relative cursor row to the view
+        var cursor: types.Coord = .{ .col = -1, .row = -1 };
+        if (!term.hide_cursor) {
+            const grid = term.grid.?;
+            cursor = grid.cursor.point;
+            cursor.row += grid.offset;
+            cursor.row -= grid.view;
+            cursor.row &= grid.num_rows - 1;
+        }
+
+        while (!frame_done) {
+            _ = mtx_lock(lock);
+            std.debug.assert(queue.len() > 0);
+
+            const row_no = queue.popFront();
+            _ = mtx_unlock(lock);
+
+            switch (row_no) {
+                -1 => {
+                    frame_done = true;
+                    _ = sem_post(done);
+                },
+
+                -2 => return null,
+
+                -3 => {
+                    const pre = &term.render.workers.preapplied_damage;
+                    const pre_lock: *anyopaque = @ptrCast(@alignCast(&pre.lock));
+                    const pre_cond: *anyopaque = @ptrCast(@alignCast(&pre.cond));
+
+                    if (term.conf.?.tweak.render_timer != .none) {
+                        _ = clock_gettime(CLOCK_MONOTONIC, workersTimespec(&pre.start));
+                    }
+
+                    _ = mtx_lock(pre_lock);
+                    const pre_buf: *Buffer = @ptrCast(@alignCast(pre.buf.?));
+                    buf = pre_buf;
+
+                    if (term.render.last_buf) |last_raw| {
+                        const last_buf: *Buffer = @ptrCast(@alignCast(last_raw));
+                        _ = mtx_unlock(pre_lock);
+
+                        var dmg: Region32 = undefined;
+                        render_shim_region_init(regionPtr(&dmg));
+
+                        if (pre_buf.age == 0) {
+                            // No need to do anything
+                        } else if (pre_buf.age == 1) {
+                            render_shim_region_copy(regionPtr(&dmg), last_buf.dirty.?);
+                        } else {
+                            render_shim_region_init_rect(
+                                regionPtr(&dmg), 0, 0, pre_buf.width, pre_buf.height);
+                        }
+
+                        const pix = bufferPix(pre_buf);
+                        render_shim_set_clip_region(pix, regionPtr(&dmg));
+                        render_shim_composite_op(
+                            PIXMAN_OP_SRC,
+                            optPix(last_buf.pix.?[@intCast(my_id)]),
+                            null,
+                            pix,
+                            0, // src_x
+                            0, // src_y
+                            0, // dest_x
+                            0, // dest_y
+                            pre_buf.width,
+                            pre_buf.height,
+                        );
+                        render_shim_region_fini(regionPtr(&dmg));
+
+                        pre_buf.age = 0;
+                        shm_unref(last_buf);
+                        shm_addref(pre_buf);
+                        term.render.last_buf = pre_buf;
+
+                        _ = mtx_lock(pre_lock);
+                    }
+
+                    pre.buf = null;
+                    _ = cnd_signal(pre_cond);
+                    _ = mtx_unlock(pre_lock);
+
+                    if (term.conf.?.tweak.render_timer != .none) {
+                        _ = clock_gettime(CLOCK_MONOTONIC, workersTimespec(&pre.stop));
+                    }
+
+                    frame_done = true;
+                },
+
+                else => {
+                    const row =
+                        terminal_shim_grid_row_in_view(term.grid.?, row_no) orelse continue;
+                    const cursor_col: c_int =
+                        if (cursor.row == row_no) cursor.col else -1;
+
+                    render_row(
+                        term,
+                        optPix(buf.?.pix.?[@intCast(my_id)]).?,
+                        dirtyRegionPtr(buf.?, @intCast(my_id)),
+                        row,
+                        row_no,
+                        cursor_col,
+                    );
+                },
+            }
+        }
+    }
+}
+
+export fn render_wait_for_preapply_damage(term: *Terminal) callconv(.c) void {
+    if (!term.render.preapply_last_frame_damage)
+        return;
+
+    const pre = &term.render.workers.preapplied_damage;
+    if (pre.buf == null)
+        return;
+
+    const pre_lock: *anyopaque = @ptrCast(@alignCast(&pre.lock));
+    const pre_cond: *anyopaque = @ptrCast(@alignCast(&pre.cond));
+
+    _ = mtx_lock(pre_lock);
+    while (pre.buf != null) {
+        _ = cnd_wait(pre_cond, pre_lock);
+    }
+    _ = mtx_unlock(pre_lock);
+}
+

@@ -18,6 +18,8 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <threads.h>
+#include <signal.h>
+#include <pthread.h>
 #include "terminal.h"
 #include "url-mode.h"
 #include "grid.h"
@@ -360,6 +362,23 @@ void render_shim_clip_clear(pixman_image_t *pix)
 pixman_image_t *render_shim_solid_fill(const pixman_color_t *color)
 {
     return pixman_image_create_solid_fill(color);
+}
+
+
+/* ── render.zig (D3l1: render worker thread) ────────────────────────── */
+
+/* sigset_t and pthread_t are platform types; keep the two calls that need
+ * them together. */
+void render_shim_block_all_signals(void)
+{
+    sigset_t mask;
+    sigfillset(&mask);
+    pthread_sigmask(SIG_SETMASK, &mask, NULL);
+}
+
+int render_shim_set_thread_name(const char *name)
+{
+    return pthread_setname_np(pthread_self(), name);
 }
 
 /* ── render.zig (D3j: overlay / IME preedit) ────────────────────────── */
