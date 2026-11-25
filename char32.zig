@@ -212,9 +212,15 @@ export fn c32ncasecmp(s1: [*]const u32, s2: [*]const u32, n: usize) callconv(.c)
 
 extern fn wcsncasecmp(s1: [*]const u32, s2: [*]const u32, n: usize) callconv(.c) c_int;
 extern fn towupper(wc: c_int) callconv(.c) c_int;
+extern fn towlower(wc: c_int) callconv(.c) c_int;
 
 /// `towupper()` on a char32_t (the locale-dependent libc one).
 export fn toc32upper(c: u32) callconv(.c) u32 {
     return @bitCast(towupper(@bitCast(c)));
+}
+
+/// `towlower()` on a char32_t (URL jump-label matching, D5c).
+export fn toc32lower(c: u32) callconv(.c) u32 {
+    return @bitCast(towlower(@bitCast(c)));
 }
 

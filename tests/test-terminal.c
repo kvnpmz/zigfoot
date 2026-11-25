@@ -38,6 +38,7 @@
 #include "input.h"
 #include "ime.h"
 #include "key-binding.h"
+#include "url-mode.h"
 #include "search.h"
 #include <sys/timerfd.h>
 #include <sys/epoll.h>
@@ -6170,6 +6171,74 @@ test_keymap_lookup(void)
 }
 
 /*
+ * URL mode (url-mode.zig, D5c).
+ *
+ * Detection runs over a real grid with a real POSIX regex; the jump-label
+ * assignment and the duplicate-URL reuse are then checked, and urls_reset()
+ * tears the list down. No compositor is involved (no window, no sub-surfaces).
+ */
+static void
+test_url_mode(void)
+{
+    struct terminal *term = term_new();
+    static struct config conf;
+    memset(&conf, 0, sizeof(conf));
+    term->conf = &conf;
+
+    static char32_t label_letters[] = U"asdf";
+    conf.url.label_letters = label_letters;
+    conf.url.osc8_underline = OSC8_UNDERLINE_URL_MODE;
+
+    /* Two identical short URLs (the grid is 5 columns wide) */
+    const char *text = "http:";
+    for (int r = 0; r < 2; r++) {
+        struct row *row = term->normal.rows[r];
+        for (int c = 0; c < term->cols; c++)
+            row->cells[c].wc = (c < (int)strlen(text)) ? (unsigned char)text[c] : 0;
+    }
+
+    regex_t re;
+    xassert(regcomp(&re, "(http:)", REG_EXTENDED) == 0);
+
+    urls_collect(term, URL_ACTION_COPY, &re, false, &term->url.list);
+
+    check(tll_length(term->url.list) == 2,
+          "urls_collect() finds the URL in both rows");
+    if (tll_length(term->url.list) == 2) {
+        const struct url *u = &tll_front(term->url.list);
+        check(u->url != NULL && strcmp(u->url, "http:") == 0,
+              "the collected URL text is correct");
+        check(u->action == URL_ACTION_COPY && !u->osc8,
+              "the collected URL carries the requested action");
+        check(u->range.start.col == 0 && u->range.start.row == 0 &&
+              u->range.end.col == 4,
+              "the URL range spans the whole match");
+    }
+
+    urls_assign_key_combos(&conf, &term->url.list);
+
+    check(tll_length(term->url.list) == 2 &&
+          tll_front(term->url.list).key != NULL &&
+          tll_front(term->url.list).key[0] == U'a' &&
+          tll_front(term->url.list).key[1] == U'\0',
+          "the first URL gets the first label letter");
+
+    check(tll_length(term->url.list) == 2 &&
+          tll_back(term->url.list).key != NULL &&
+          tll_back(term->url.list).key[0] == U'a',
+          "a duplicate URL reuses the same label letter");
+
+    urls_reset(term);
+    check(tll_length(term->url.list) == 0,
+          "urls_reset() empties the URL list");
+    check(term->url.grid_snapshot == NULL,
+          "urls_reset() leaves no grid snapshot behind");
+
+    regfree(&re);
+    term_free(term);
+}
+
+/*
  * slave.c's platform glue (slave.zig, E1a).
  *
  * The constants are C macros; the Zig copy must match them exactly. IUTF8 is
@@ -7319,6 +7388,7 @@ main(void)
     test_keymap_lookup();
     test_kbd_protocols();
     test_keyboard_layouts();
+    test_url_mode();
     test_slave_shims();
     test_ime_protocol();
     test_key_binding_manager();

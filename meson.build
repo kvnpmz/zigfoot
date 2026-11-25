@@ -497,6 +497,18 @@ input_obj = custom_target(
   ]
 )
 
+url_mode_obj = custom_target(
+  'url_mode_obj',
+  input: 'url-mode.zig',
+  depend_files: files('terminal_types.zig'),
+  output: 'url-mode.o',
+  depends: c_layout,
+  command: [
+    python, files('compile_zig.py'), '@INPUT@', '@OUTPUT@',
+    grapheme_clustering_zig,
+  ]
+)
+
 ime_obj = custom_target(
   'ime_obj',
   input: 'ime.zig',
@@ -875,7 +887,7 @@ footlib = static_library(
   spawn_obj, spawn_template_obj, 'spawn.h',
   tokenize_obj, 'tokenize.h',
   unicode_mode_obj, 'unicode-mode.h',
-  'url-mode.c', 'url-mode.h',
+  url_mode_obj, 'url-mode.h',
   user_notification_obj, 'user-notification.h',
   'wayland.c', wayland_obj, 'wayland.h', 'shm-formats.h',
   'xkbcommon-vmod.h',

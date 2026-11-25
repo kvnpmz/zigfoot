@@ -20,6 +20,7 @@
 #include <threads.h>
 #include <sys/ioctl.h>
 #include <wayland-cursor.h>
+#include <regex.h>
 #include <presentation-time.h>
 #include <cursor-shape.h>
 #include "render.h"
@@ -859,6 +860,27 @@ void wayland_shim_touch_release(struct wl_touch *touch)
 void wayland_shim_text_input_destroy(struct zwp_text_input_v3 *ti)
 {
     zwp_text_input_v3_destroy(ti);
+}
+
+/* url-mode.zig (D5c): regex_t's internals (re_nsub, regmatch_t) are
+ * libc-specific, so extracting one match's spans stays here. Returns false on
+ * REG_NOMATCH (or any regexec() error). */
+bool url_shim_regex_match(const regex_t *preg, const char *str,
+                          size_t *so0, size_t *eo0,
+                          size_t *so1, size_t *eo1)
+{
+    const size_t nmatch = preg->re_nsub + 1;
+    regmatch_t *matches = xmalloc(nmatch * sizeof(matches[0]));
+    int r = regexec(preg, str, nmatch, matches, 0);
+    bool matched = r == 0;
+    if (matched) {
+        *so0 = matches[0].rm_so;
+        *eo0 = matches[0].rm_eo;
+        *so1 = matches[1].rm_so;
+        *eo1 = matches[1].rm_eo;
+    }
+    free(matches);
+    return matched;
 }
 
 /* text-input-v3 requests are generated static inlines (ime.zig, D5b). */
