@@ -32,6 +32,18 @@ extern const struct wl_touch_listener touch_listener;
 
 void input_repeat(struct seat *seat, uint32_t key);
 
+/* Ported to input.zig (D4a). The protocol listeners in input.c still call
+ * these. */
+bool fdm_write_pipe(struct fdm *fdm, int fd, int events, void *data);
+void keyboard_keymap(void *data, struct wl_keyboard *wl_keyboard,
+                     uint32_t format, int32_t fd, uint32_t size);
+void keyboard_enter(void *data, struct wl_keyboard *wl_keyboard, uint32_t serial,
+                    struct wl_surface *surface, struct wl_array *keys);
+void keyboard_leave(void *data, struct wl_keyboard *wl_keyboard, uint32_t serial,
+                    struct wl_surface *surface);
+bool start_repeater(struct seat *seat, uint32_t key);
+bool stop_repeater(struct seat *seat, uint32_t key);
+
 void get_current_modifiers(const struct seat *seat,
                            xkb_mod_mask_t *effective,
                            xkb_mod_mask_t *consumed,

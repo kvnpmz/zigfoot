@@ -60,6 +60,14 @@ int render_url_format_label(char32_t *label, const char32_t *key,
                             const char32_t *url, bool show_url,
                             size_t entered_key_len, int max_cols);
 void render_dirty_overflowing_glyphs(struct terminal *term);
+/* Ported to input.zig (D4a). */
+bool start_repeater(struct seat *seat, uint32_t key);
+bool stop_repeater(struct seat *seat, uint32_t key);
+void keyboard_enter(void *data, struct wl_keyboard *wl_keyboard,
+                    uint32_t serial, struct wl_surface *surface,
+                    struct wl_array *keys);
+void keyboard_leave(void *data, struct wl_keyboard *wl_keyboard,
+                    uint32_t serial, struct wl_surface *surface);
 bool render_xcursor_set(struct seat *seat, struct terminal *term,
                        enum cursor_shape shape);
 void render_buffer_release_callback(struct buffer *buf, void *data);
@@ -5795,6 +5803,63 @@ test_buffer_release_early_outs(void)
     term_free(term);
 }
 
+/*
+ * Keyboard setup (input.zig, D4a): the key-repeat timer and the enter/leave
+ * bookkeeping. Installing a real keymap needs a compositor, so that part is
+ * covered by the smoke launches instead.
+ */
+static void
+test_keyboard_setup(void)
+{
+    struct seat seat;
+    memset(&seat, 0, sizeof(seat));
+    struct wayland wl = {0};
+    seat.wayl = &wl;
+    seat.name = "test-seat";
+
+    seat.kbd.repeat.fd = timerfd_create(CLOCK_MONOTONIC, TFD_CLOEXEC);
+    xassert(seat.kbd.repeat.fd >= 0);
+    seat.kbd.repeat.rate = 25;
+    seat.kbd.repeat.delay = 500;
+
+    seat.kbd.repeat.dont_re_repeat = true;
+    check(start_repeater(&seat, 0x20),
+          "dont-re-repeat short-circuits the repeat timer");
+    check(seat.kbd.repeat.key != 0x20,
+          "a short-circuited start does not claim the key");
+
+    seat.kbd.repeat.dont_re_repeat = false;
+    seat.kbd.repeat.rate = 0;
+    check(start_repeater(&seat, 0x20),
+          "a zero repeat rate short-circuits the repeat timer");
+
+    seat.kbd.repeat.rate = 25;
+    check(start_repeater(&seat, 0x41) && seat.kbd.repeat.key == 0x41,
+          "a valid repeat request arms the timer and claims the key");
+
+    check(stop_repeater(&seat, 0x42),
+          "stopping a key that is not repeating is a no-op");
+
+    /* Enter with a NULL surface is a no-op (seen on Hyprland). */
+    seat.kbd_focus = NULL;
+    keyboard_enter(&seat, NULL, 1, NULL, NULL);
+    check(seat.kbd_focus == NULL,
+          "keyboard_enter() ignores a NULL surface");
+
+    /* Leave without a focus still clears the modifier state (Sway bug). */
+    seat.kbd.shift = true;
+    seat.kbd.alt = true;
+    seat.kbd.ctrl = true;
+    seat.kbd.super = true;
+    keyboard_leave(&seat, NULL, 1, NULL);
+    check(!seat.kbd.shift && !seat.kbd.alt && !seat.kbd.ctrl && !seat.kbd.super,
+          "keyboard_leave() clears the modifier state");
+    check(seat.kbd_focus == NULL,
+          "keyboard_leave() leaves no focus behind");
+
+    close(seat.kbd.repeat.fd);
+}
+
 int
 main(void)
 {
@@ -5834,6 +5899,7 @@ main(void)
     test_render_resize_early_outs();
     test_xcursor_set_early_outs();
     test_buffer_release_early_outs();
+    test_keyboard_setup();
     test_scrollback_indicator();
     test_search_box_offset();
     test_url_label();

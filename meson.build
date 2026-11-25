@@ -485,6 +485,18 @@ selection_obj = custom_target(
 )
 
 
+input_obj = custom_target(
+  'input_obj',
+  input: 'input.zig',
+  depend_files: files('terminal_types.zig'),
+  output: 'input.o',
+  depends: c_layout,
+  command: [
+    python, files('compile_zig.py'), '@INPUT@', '@OUTPUT@',
+    grapheme_clustering_zig,
+  ]
+)
+
 render_obj = custom_target(
   'render_obj',
   input: 'render.zig',
@@ -826,7 +838,7 @@ footlib = static_library(
   fdm_obj, 'fdm.h',
   foot_features_obj, 'foot-features.h',
   'ime.c', 'ime.h',
-  'input.c', 'input.h',
+  'input.c', input_obj, 'input.h',
   'key-binding.c', 'key-binding.h',
   notify_obj, 'notify.h', 'notify-shim.c',
   quirks_obj, 'quirks.h',
