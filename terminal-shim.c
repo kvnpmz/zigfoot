@@ -241,6 +241,9 @@ void render_shim_region_union_rect(
 void wayland_shim_surface_damage_buffer(
     struct wl_surface *surface, int x, int y, int width, int height)
 {
+    /* Defensive: the headless harness renders without a wayland surface. */
+    if (surface == NULL)
+        return;
     wl_surface_damage_buffer(surface, x, y, width, height);
 }
 

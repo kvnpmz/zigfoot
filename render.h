@@ -21,6 +21,13 @@ enum resize_options {
 bool render_resize(
     struct terminal *term, int width, int height, uint8_t resize_options);
 
+struct buffer;
+struct damage;
+void grid_render_scroll(
+    struct terminal *term, struct buffer *buf, const struct damage *dmg);
+void grid_render_scroll_reverse(
+    struct terminal *term, struct buffer *buf, const struct damage *dmg);
+
 struct row;
 int render_cell(
     struct terminal *term, pixman_image_t *pix, pixman_region32_t *damage,

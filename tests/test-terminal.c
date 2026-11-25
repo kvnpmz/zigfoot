@@ -4487,6 +4487,83 @@ test_render_cell(void)
     term_with_fonts_free(term);
 }
 
+/* D3f: scroll damage */
+static void
+test_grid_render_scroll(void)
+{
+    /* 8 rows of 4 bytes, one byte per "pixel" so memmove is visible. */
+    enum { ROWS = 8, STRIDE = 4 };
+    uint8_t data[ROWS * STRIDE];
+    for (int r = 0; r < ROWS; r++)
+        for (int c = 0; c < STRIDE; c++)
+            data[r * STRIDE + c] = (uint8_t)(r + 1);
+
+    pixman_region32_t dirty;
+    pixman_region32_init(&dirty);
+
+    /* shm_can_scroll()/shm_scroll() read the private part of the buffer;
+     * a zeroed blob keeps `scrollable` false so the memmove path runs. */
+    union {
+        struct buffer buf;
+        uint8_t pad[512];
+    } storage = {0};
+    struct buffer *bufp = &storage.buf;
+    bufp->width = STRIDE;
+    bufp->height = ROWS;
+    bufp->stride = STRIDE;
+    bufp->data = data;
+    bufp->dirty = &dirty;
+
+    struct terminal term = {0};
+    struct wl_window win = {0};
+    term.window = &win;
+    term.cell_height = 1;
+    term.rows = ROWS;
+    term.cols = STRIDE;
+    term.width = STRIDE;
+    term.height = ROWS;
+
+    struct damage dmg = {0};
+    dmg.type = DAMAGE_SCROLL;
+    dmg.region.start = 1;
+    dmg.region.end = 6;
+    dmg.lines = 2;
+
+    grid_render_scroll(&term, bufp, &dmg);
+    /* Rows 1..3 should now hold what used to be rows 3..5. */
+    check(data[1 * STRIDE] == 4 && data[2 * STRIDE] == 5 && data[3 * STRIDE] == 6,
+          "grid_render_scroll() moves the region up by the damage line count");
+    check(data[0 * STRIDE] == 1 && data[4 * STRIDE] == 5,
+          "grid_render_scroll() leaves rows outside the region alone");
+    check(pixman_region32_not_empty(&dirty),
+          "grid_render_scroll() adds the scrolled area to the damage");
+
+    /* Reverse: rows 3..5 should become rows 1..3. */
+    for (int r = 0; r < ROWS; r++)
+        for (int c = 0; c < STRIDE; c++)
+            data[r * STRIDE + c] = (uint8_t)(r + 1);
+    pixman_region32_fini(&dirty);
+    pixman_region32_init(&dirty);
+
+    grid_render_scroll_reverse(&term, bufp, &dmg);
+    check(data[3 * STRIDE] == 2 && data[4 * STRIDE] == 3 && data[5 * STRIDE] == 4,
+          "grid_render_scroll_reverse() moves the region down");
+    check(data[0 * STRIDE] == 1,
+          "grid_render_scroll_reverse() leaves the rows above alone");
+
+    /* A scroll of the whole region is a no-op. */
+    for (int r = 0; r < ROWS; r++)
+        for (int c = 0; c < STRIDE; c++)
+            data[r * STRIDE + c] = (uint8_t)(r + 1);
+    struct damage all = dmg;
+    all.lines = (uint16_t)(all.region.end - all.region.start);
+    grid_render_scroll(&term, bufp, &all);
+    check(data[1 * STRIDE] == 2,
+          "scrolling the entire region is a no-op (it is fully repainted)");
+
+    pixman_region32_fini(&dirty);
+}
+
 int
 main(void)
 {
@@ -4514,6 +4591,7 @@ main(void)
     test_render_refresh();
     test_render_margin();
     test_render_cell();
+    test_grid_render_scroll();
     test_csd_data();
     test_render_csd_part();
     test_configure();

@@ -1450,3 +1450,135 @@ export fn render_cell(
     render_shim_clip_clear(pix);
     return cell_cols;
 }
+
+// ─────────────────────────────────────────────────────────────────────────
+// Scroll damage (D3f)
+// ─────────────────────────────────────────────────────────────────────────
+
+const Damage = types.Damage;
+
+extern fn shm_can_scroll(buf: *const Buffer) callconv(.c) bool;
+extern fn shm_scroll(
+    buf: *Buffer,
+    rows: c_int,
+    top_margin: c_int,
+    top_keep_rows: c_int,
+    bottom_margin: c_int,
+    bottom_keep_rows: c_int,
+) callconv(.c) bool;
+
+export fn grid_render_scroll(term: *Terminal, buf: *Buffer, dmg: *const Damage) callconv(.c) void {
+    const region_size: c_int = dmg.region.end - dmg.region.start;
+
+    if (dmg.lines >= region_size) {
+        // The entire scroll region will be scrolled out (i.e. replaced)
+        return;
+    }
+
+    const height: c_int = (region_size - dmg.lines) * term.cell_height;
+    std.debug.assert(height > 0);
+
+    const dst_y = term.margins.top + (dmg.region.start + 0) * term.cell_height;
+    const src_y = term.margins.top + (dmg.region.start + dmg.lines) * term.cell_height;
+
+    // SHM scrolling needs to first "move" (punch hole + allocate)
+    // dmg->lines number of lines, and then we need to restore the bottom
+    // scroll region. If the total number of lines is less than half the
+    // screen - use SHM. Otherwise use memmove.
+    const try_shm_scroll = shm_can_scroll(buf) and
+        (dmg.lines + dmg.region.start + (term.rows - dmg.region.end)) < @divTrunc(term.rows, 2);
+
+    var did_shm_scroll = false;
+
+    if (try_shm_scroll) {
+        did_shm_scroll = shm_scroll(
+            buf,
+            @as(c_int, dmg.lines) * term.cell_height,
+            term.margins.top,
+            dmg.region.start * term.cell_height,
+            term.margins.bottom,
+            (term.rows - dmg.region.end) * term.cell_height,
+        );
+    }
+
+    if (did_shm_scroll) {
+        // Restore margins
+        render_margin(term, buf, dmg.region.end - dmg.lines, term.rows, false);
+    } else {
+        // Fallback for when we either cannot do SHM scrolling, or it failed
+        const raw: [*]u8 = @ptrCast(buf.data.?);
+        const stride: usize = @intCast(buf.stride);
+        const len: usize = @as(usize, @intCast(height)) * stride;
+        const dst = raw + @as(usize, @intCast(dst_y)) * stride;
+        const src = raw + @as(usize, @intCast(src_y)) * stride;
+        std.mem.copyForwards(u8, dst[0..len], src[0..len]);
+    }
+
+    wayland_shim_surface_damage_buffer(
+        term.window.?.surface.surf,
+        term.margins.left,
+        dst_y,
+        term.width - term.margins.left - term.margins.right,
+        height,
+    );
+
+    // TODO: remove this if re-enabling scroll damage when re-applying last
+    // frame's damage (see reapply_old_damage())
+    render_shim_region_union_rect(buf.dirty, 0, dst_y, buf.width, height);
+}
+
+export fn grid_render_scroll_reverse(term: *Terminal, buf: *Buffer, dmg: *const Damage) callconv(.c) void {
+    const region_size: c_int = dmg.region.end - dmg.region.start;
+
+    if (dmg.lines >= region_size) {
+        // The entire scroll region will be scrolled out (i.e. replaced)
+        return;
+    }
+
+    const height: c_int = (region_size - dmg.lines) * term.cell_height;
+    std.debug.assert(height > 0);
+
+    const src_y = term.margins.top + (dmg.region.start + 0) * term.cell_height;
+    const dst_y = term.margins.top + (dmg.region.start + dmg.lines) * term.cell_height;
+
+    const try_shm_scroll = shm_can_scroll(buf) and
+        (dmg.lines + dmg.region.start + (term.rows - dmg.region.end)) < @divTrunc(term.rows, 2);
+
+    var did_shm_scroll = false;
+
+    if (try_shm_scroll) {
+        did_shm_scroll = shm_scroll(
+            buf,
+            -@as(c_int, dmg.lines) * term.cell_height,
+            term.margins.top,
+            dmg.region.start * term.cell_height,
+            term.margins.bottom,
+            (term.rows - dmg.region.end) * term.cell_height,
+        );
+    }
+
+    if (did_shm_scroll) {
+        // Restore margins
+        render_margin(term, buf, dmg.region.start, dmg.region.start + dmg.lines, false);
+    } else {
+        // Fallback for when we either cannot do SHM scrolling, or it failed
+        const raw: [*]u8 = @ptrCast(buf.data.?);
+        const stride: usize = @intCast(buf.stride);
+        const len: usize = @as(usize, @intCast(height)) * stride;
+        const dst = raw + @as(usize, @intCast(dst_y)) * stride;
+        const src = raw + @as(usize, @intCast(src_y)) * stride;
+        // Reverse scrolling copies upwards, so the regions overlap the other
+        // way round: use memmove semantics.
+        std.mem.copyBackwards(u8, dst[0..len], src[0..len]);
+    }
+
+    wayland_shim_surface_damage_buffer(
+        term.window.?.surface.surf,
+        term.margins.left,
+        dst_y,
+        term.width - term.margins.left - term.margins.right,
+        height,
+    );
+
+    render_shim_region_union_rect(buf.dirty, 0, dst_y, buf.width, height);
+}
