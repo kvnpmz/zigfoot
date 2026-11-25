@@ -42,6 +42,11 @@ void render_row(
     struct terminal *term, pixman_image_t *pix, pixman_region32_t *damage,
     struct row *row, int row_no, int cursor_col);
 void render_urgency(struct terminal *term, struct buffer *buf);
+
+void render_osd(
+    struct terminal *term, const struct wayl_sub_surface *sub_surf,
+    struct fcft_font *font, struct buffer *buf, const char32_t *text,
+    uint32_t _fg, uint32_t _bg, unsigned x);
 pixman_color_t get_csd_button_fg_color(const struct terminal *term);
 void render_csd_button_minimize(struct terminal *term, struct buffer *buf);
 void render_csd_button_maximize_maximized(
@@ -87,11 +92,21 @@ struct csd_data {
 };
 
 struct csd_data get_csd_data(const struct terminal *term, enum csd_surface surf_idx);
+void render_csd(struct terminal *term);
+void render_csd_title(
+    struct terminal *term, const struct csd_data *info, struct buffer *buf);
+void render_csd_border(
+    struct terminal *term, enum csd_surface surf_idx,
+    const struct csd_data *info, struct buffer *buf);
+void render_csd_button(
+    struct terminal *term, enum csd_surface surf_idx,
+    const struct csd_data *info, struct buffer *buf);
+
 void csd_commit(
     struct terminal *term, struct wayl_surface *surf, struct buffer *buf);
 void render_csd_part(
     struct terminal *term, struct wl_surface *surf, struct buffer *buf,
-    int width, int height, pixman_color_t *color);
+    int width, int height, const pixman_color_t *color);
 
 void render_buffer_release_callback(struct buffer *buf, void *data);
 void render_wait_for_preapply_damage(struct terminal *term);

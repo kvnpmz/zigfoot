@@ -650,9 +650,9 @@ utmp backends where available.
 
 ## 13. Sequenced backlog (refreshed 2026-11-24)
 
-State: **35,767 of 48,830 C lines gone (73.3%)**, ~58% by effort, 35 modules
-ported, 592 harness assertions, `meson test` 5/5 in three build dirs.
-Remaining module C: 13,063 lines, plus 2,465 lines of `*-shim.c` accessors.
+State: **35,870 of 48,830 C lines gone (73.5%)**, ~59% by effort, 35 modules
+ported, 603 harness assertions, `meson test` 5/5 in three build dirs.
+Remaining module C: 12,960 lines, plus 2,545 lines of `*-shim.c` accessors.
 
 **`wayland` is done.** `wayland.c` is down from 2,884 lines to **359**, and what
 is left is glue rather than logic: the fourteen generated-protocol listener
@@ -799,8 +799,9 @@ Order matters: `search` and `wayland` first (they unblock the rest), then
 | **D3f** done | `render`: `grid_render_scroll()` and `grid_render_scroll_reverse()` — the "SHM scroll or memmove" heuristic (`lines + region.start + (rows - region.end) < rows/2`, guarded by `shm_can_scroll()`), the margin restore after a successful SHM scroll, the memmove fallback (`copyForwards` for up, `copyBackwards` for down, matching `memmove()`'s overlap semantics), and the surface damage + buffer damage that follow. 6 new harness checks scroll a real byte buffer and read it back | D3e | 0.5d |
 | **D3g** done | `render`: the sixel path — `render_sixel_images()` (viewport-relative start/end with wrap-around, sorted-list early exits, `sixel_sync_cache()`), `render_sixel()` (chunking consecutive visible *dirty* rows to avoid recompositing, the opaque path that only marks cells clean unless the last row/column is partially covered, the transparent path that renders the cells underneath via `render_row()`), and the chunk compositor with its margin clamping. One new shim for a composite with an explicit operator and source offset. 8 new harness checks composite a real sixel image and check the clean/dirty bookkeeping | D3f | 1d |
 | **D3h** done | `render`: the CSD button painters — `get_csd_button_fg_color()`, the shared button geometry (a square of a third of the buffer, `min(width/2, scale)` thick), `render_csd_button_minimize()`, `_maximize_window()`, `_maximize_maximized()`, `_maximize()` and `_close()` (four pixman triangles, kept in C as `render_shim_close_button()`), plus `any_pointer_is_on_button()`. 11 new harness checks paint the buttons on a real 36×36 buffer and verify each glyph's shape | D3g | 0.5d |
-| **D3i** | `render`: `render_csd_title()`/`render_csd_border()`/`render_csd()` and the OSD text painter | D3h | 1–2d |
-| **D3j** | `render`: overlay, IME-preedit and scrollback-position painting | D3i | 2d |
+| **D3i** done | `render`: the CSD painting layer — `render_csd_title()` (configured title colour, dimming when unfocused, `M`-advance margin, `ambstoc32()` title), `render_csd_border()` (transparent fill + the visible strip at `border_width - border_width_visible`), `render_csd_button()` (per-button theme colour, dim-until-hovered, background + glyph), and `render_csd()` (the eight-surface loop, position/skip decisions, `shm_get_many()` and the three painters). Also **`render_osd()`**, the text painter: clip, background, fcft text run with a per-character fallback, baseline from the font metrics, colour-emoji vs mask compositing, the attach/damage/opaque-region/commit tail. `struct fcft_text_run` stays in C behind three shims; `wl_region`/`wl_surface_set_opaque_region` behind a fourth. 12 new harness checks | D3h | 1.5d |
+| **D3j** | `render`: overlay and IME-preedit painting | D3i | 1–2d |
+| **D3k2** | `render`: `render_scrollback_position()` and `render_render_timer()` | D3j | 1d |
 | **D3k** | `render`: search-box and url painting | D3j | 2d |
 | **D3l** | `render`: the worker thread, damage tracking, `grid_render()`, `render_resize()` and the remaining xcursor/tiocswinsz glue | D3k | 3–4d |
 | **D4** | `input` (3,687) — split into D4a keyboard/legacy+kitty protocols, D4b pointer/mouse/touch, D4c compose/IME plumbing | after B2 + key-binding | 1–1.5w |

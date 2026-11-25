@@ -4806,6 +4806,144 @@ test_csd_buttons(void)
     pixman_image_unref(pix);
 }
 
+/* D3i: CSD border, button background and title */
+static void
+test_csd_paint(void)
+{
+    enum { BW = 40, BH = 40 };
+    uint32_t pixels[BW * BH];
+    pixman_image_t *pix = pixman_image_create_bits(PIXMAN_a8r8g8b8, BW, BH, pixels, BW * 4);
+    if (pix == NULL) {
+        printf("skip: pixman_image_create_bits() failed\n");
+        return;
+    }
+
+    pixman_region32_t dirty;
+    pixman_region32_init(&dirty);
+    pixman_image_t *pix_arr[1] = {pix};
+    struct buffer buf = {0};
+    buf.width = BW;
+    buf.height = BH;
+    buf.pix = pix_arr;
+    buf.pix_instances = 1;
+    buf.dirty = &dirty;
+
+    struct terminal term = {0};
+    struct config conf = {0};
+    struct wl_window win = {0};
+    struct wayland wl = {0};
+    term.conf = &conf;
+    term.window = &win;
+    term.wl = &wl;
+    win.term = &term;
+    win.csd_mode = CSD_YES;
+    term.scale = 1.0f;
+    term.visual_focus = true;
+    term.cols = 4;
+    term.rows = 2;
+    term.cell_width = 10;
+    term.cell_height = 10;
+    term.width = 100;
+    term.height = 50;
+    term.font_subpixel = FCFT_SUBPIXEL_NONE;
+    conf.colors_dark.fg = 0x00ffffff;
+    conf.colors_dark.bg = 0x00000000;
+    conf.colors_dark.table[1] = 0x00ff0000; /* red, for close */
+    conf.colors_dark.table[2] = 0x0000ff00; /* green */
+    conf.colors_dark.table[4] = 0x000000ff; /* blue */
+    conf.csd.border_width = 4;
+    conf.csd.border_width_visible = 2;
+    conf.csd.title_height = 20;
+
+    struct csd_data info = {.x = 0, .y = 0, .width = BW, .height = BH};
+
+    /* ── border: transparent fill + visible strip ────────────────── */
+    memset(pixels, 0, sizeof(pixels));
+    conf.csd.color.border_set = 1;
+    conf.csd.color.border = 0xff0000ff;
+    render_csd_border(&term, CSD_SURF_TOP, &info, &buf);
+    /* bwidth=4, vwidth=2 -> x=2, y=height-2, w=36, h=2 */
+    check(pix_pixel(pix, 2, BH - 2) == 0xff0000ff,
+          "the top border's visible strip is painted");
+    check(pix_pixel(pix, 2, 0) == 0,
+          "the invisible part of the top border stays transparent");
+    check(pix_pixel(pix, 0, BH - 2) == 0 && pix_pixel(pix, 39, BH - 2) == 0,
+          "the border strip is inset by the invisible part");
+
+    memset(pixels, 0, sizeof(pixels));
+    render_csd_border(&term, CSD_SURF_LEFT, &info, &buf);
+    check(pix_pixel(pix, 2, 5) == 0xff0000ff,
+          "the left border's visible strip is painted");
+    check(pix_pixel(pix, 0, 5) == 0,
+          "the left border strip is inset as well");
+    conf.csd.color.border_set = 0;
+
+    /* ── button: transparent until the pointer hovers it ─────────── */
+    memset(pixels, 0, sizeof(pixels));
+    term.active_surface = TERM_SURF_NONE;
+    render_csd_button(&term, CSD_SURF_MINIMIZE, &info, &buf);
+    check(pix_pixel(pix, BW / 2, BH / 2) == 0,
+          "an inactive CSD button is fully transparent");
+
+    struct seat seat = {0};
+    seat.wayl = &wl;
+    seat.mouse.x = 1;
+    seat.mouse.y = 1;
+    tll_push_back(wl.seats, seat);
+    term.active_surface = TERM_SURF_BUTTON_MINIMIZE;
+    win.wm_capabilities.minimize = true;
+    conf.csd.button_width = 10;
+
+    struct csd_data btn = {.x = 90, .y = 0, .width = 10, .height = 20};
+    memset(pixels, 0, sizeof(pixels));
+    render_csd_button(&term, CSD_SURF_MINIMIZE, &btn, &buf);
+    check(pix_pixel(pix, 5, 5) != 0,
+          "an active CSD button gets a background and a glyph");
+    tll_free(wl.seats);
+    term.active_surface = TERM_SURF_NONE;
+    conf.csd.button_width = 0;
+
+    /* ── title: background + text ────────────────────────────────── */
+    const char *fontname = "monospace";
+    struct fcft_font *font = fcft_from_name(1, &fontname, ":size=8");
+    if (font != NULL) {
+        win.csd.surface[CSD_SURF_TITLE].surface.surf = NULL;
+        win.csd.font = font;
+        term.window_title = xstrdup("Hi");
+        conf.csd.color.title_set = 1;
+        conf.csd.color.title = 0xff112233;
+
+        memset(pixels, 0, sizeof(pixels));
+        struct csd_data title = {.x = 0, .y = -20, .width = BW, .height = BH};
+        render_csd_title(&term, &title, &buf);
+        check(count_argb(pix, BW, BH, 0xff112233) > 0,
+              "the CSD title is painted with the configured background");
+        check(count_not_argb(pix, BW, BH, 0xff112233) > 0,
+              "the CSD title text is drawn on top");
+
+        free(term.window_title);
+        term.window_title = NULL;
+
+        /* A zero-sized surface is a no-op. */
+        memset(pixels, 0, sizeof(pixels));
+        struct csd_data empty = {0};
+        render_csd_title(&term, &empty, &buf);
+        check(count_not_argb(pix, BW, BH, 0) == 0,
+              "a zero-sized title surface is not painted");
+        fcft_destroy(font);
+        win.csd.font = NULL;
+    }
+
+    /* ── render_csd() bails out when fullscreen ──────────────────── */
+    win.is_fullscreen = true;
+    render_csd(&term);
+    check(1, "render_csd() is a no-op when fullscreen");
+    win.is_fullscreen = false;
+
+    pixman_region32_fini(&dirty);
+    pixman_image_unref(pix);
+}
+
 int
 main(void)
 {
@@ -4836,6 +4974,7 @@ main(void)
     test_grid_render_scroll();
     test_render_sixel();
     test_csd_buttons();
+    test_csd_paint();
     test_csd_data();
     test_render_csd_part();
     test_configure();

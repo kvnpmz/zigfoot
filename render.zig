@@ -941,7 +941,7 @@ export fn render_csd_part(
     buf: *Buffer,
     width: c_int,
     height: c_int,
-    color: *PixmanColor,
+    color: *const PixmanColor,
 ) callconv(.c) void {
     _ = surf;
     _ = width;
@@ -1938,4 +1938,417 @@ export fn any_pointer_is_on_button(term: *const Terminal, csd_surface: types.Csd
     }
 
     return false;
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// CSD borders, buttons and title (D3i)
+// ─────────────────────────────────────────────────────────────────────────
+
+extern fn ambstoc32(src: ?[*:0]const u8) callconv(.c) ?[*]u32;
+extern fn free(ptr: ?*anyopaque) callconv(.c) void;
+extern fn shm_get_many(
+    chain: *types.ShmBufferChain,
+    count: usize,
+    widths: [*]c_int,
+    heights: [*]c_int,
+    bufs: [*]?*Buffer,
+) callconv(.c) void;
+extern fn wayland_shim_subsurface_set_position(sub: ?*anyopaque, x: c_int, y: c_int) callconv(.c) void;
+extern fn render_shim_fcft_font_max_advance_x(font: *const FcftFont) callconv(.c) c_int;
+
+const empty_wtext = [_:0]u32{0};
+
+export fn render_csd_title(term: *Terminal, info: *const CsdData, buf: *Buffer) callconv(.c) void {
+    const win = term.window.?;
+    std.debug.assert(win.csd_mode == .yes);
+
+    const surf = &win.csd.surface[@intFromEnum(types.CsdSurface.title)];
+    if (info.width == 0 or info.height == 0)
+        return;
+
+    const conf = term.conf.?;
+
+    var bg: u32 = if (conf.csd.color._flags.title_set)
+        conf.csd.color.title
+    else
+        (@as(u32, 0xff) << 24) | conf.colors_dark.fg;
+    var fg: u32 = if (conf.csd.color._flags.buttons_set)
+        conf.csd.color.buttons
+    else
+        conf.colors_dark.bg;
+
+    if (!term.visual_focus) {
+        bg = color_dim(term, bg);
+        fg = color_dim(term, fg);
+    }
+
+    const _title_text = ambstoc32(@ptrCast(term.window_title));
+    const title_text: [*]const u32 = if (_title_text) |t| t else &empty_wtext;
+
+    const font = win.csd.font;
+    var margin: c_int = 0;
+    if (font) |f| {
+        const M = fcft_rasterize_char_utf32(f, 'M', term.font_subpixel);
+        margin = if (M) |m| m.advance.x else render_shim_fcft_font_max_advance_x(f);
+    }
+
+    render_osd(term, surf, font, buf, title_text, fg, bg, @intCast(margin));
+    csd_commit(term, &surf.surface, buf);
+
+    if (_title_text) |t| free(@ptrCast(t));
+}
+
+export fn render_csd_border(term: *Terminal, surf_idx: types.CsdSurface, info: *const CsdData, buf: *Buffer) callconv(.c) void {
+    const win = term.window.?;
+    std.debug.assert(win.csd_mode == .yes);
+    std.debug.assert(@intFromEnum(surf_idx) >= @intFromEnum(types.CsdSurface.left) and
+        @intFromEnum(surf_idx) <= @intFromEnum(types.CsdSurface.bottom));
+
+    const surf = &win.csd.surface[@intCast(@intFromEnum(surf_idx))].surface;
+
+    if (info.width == 0 or info.height == 0)
+        return;
+
+    const conf = term.conf.?;
+    const gamma_correct = wayl_do_linear_blending(term.wl, conf);
+
+    {
+        // Fully transparent - no need to do a color space transform
+        const color = color_hex_to_pixman_with_alpha(0, 0, gamma_correct);
+        render_csd_part(term, surf.surf, buf, info.width, info.height, &color);
+    }
+
+    // The "visible" border.
+    const scale = term.scale;
+    const bwidth = roundf(conf.csd.border_width * scale);
+    const vwidth = roundf(conf.csd.border_width_visible * scale); // Visible size
+
+    std.debug.assert(bwidth >= vwidth);
+
+    const pix = bufferPix(buf);
+
+    if (vwidth > 0) {
+        var x: c_int = 0;
+        var y: c_int = 0;
+        var w: c_int = 0;
+        var h: c_int = 0;
+
+        switch (surf_idx) {
+            .top, .bottom => {
+                x = bwidth - vwidth;
+                y = if (surf_idx == .top) info.height - vwidth else 0;
+                w = info.width - 2 * x;
+                h = vwidth;
+            },
+            .left, .right => {
+                x = if (surf_idx == .left) bwidth - vwidth else 0;
+                y = 0;
+                w = vwidth;
+                h = info.height;
+            },
+            else => unreachable, // unexpected CSD surface type
+        }
+
+        std.debug.assert(x >= 0);
+        std.debug.assert(y >= 0);
+        std.debug.assert(w >= 0);
+        std.debug.assert(h >= 0);
+
+        std.debug.assert(x + w <= info.width);
+        std.debug.assert(y + h <= info.height);
+
+        var _color: u32 = if (conf.csd.color._flags.border_set)
+            conf.csd.color.border
+        else if (conf.csd.color._flags.title_set)
+            conf.csd.color.title
+        else
+            (@as(u32, 0xff) << 24) | conf.colors_dark.fg;
+
+        if (!term.visual_focus)
+            _color = color_dim(term, _color);
+
+        const alpha: u16 = @truncate((_color >> 24) | (_color >> 24 << 8));
+        const color = color_hex_to_pixman_with_alpha(_color, alpha, gamma_correct);
+
+        fillRect(pix, &color, &.{.{
+            .x = @intCast(x),
+            .y = @intCast(y),
+            .width = @intCast(w),
+            .height = @intCast(h),
+        }});
+    }
+
+    csd_commit(term, surf, buf);
+}
+
+export fn render_csd_button(term: *Terminal, surf_idx: types.CsdSurface, info: *const CsdData, buf: *Buffer) callconv(.c) void {
+    const win = term.window.?;
+    std.debug.assert(win.csd_mode == .yes);
+    std.debug.assert(@intFromEnum(surf_idx) >= @intFromEnum(types.CsdSurface.minimize) and
+        @intFromEnum(surf_idx) <= @intFromEnum(types.CsdSurface.close));
+
+    const surf = &win.csd.surface[@intCast(@intFromEnum(surf_idx))].surface;
+
+    if (info.width == 0 or info.height == 0)
+        return;
+
+    const conf = term.conf.?;
+    var _color: u32 = undefined;
+    var alpha: u16 = 0xffff;
+    var is_active = false;
+    var is_set = false;
+    var conf_color: ?*const u32 = null;
+
+    switch (surf_idx) {
+        .minimize => {
+            _color = conf.colors_dark.table[4]; // blue
+            is_set = conf.csd.color._flags.minimize_set;
+            conf_color = &conf.csd.color.minimize;
+            is_active = term.active_surface == .button_minimize and
+                any_pointer_is_on_button(term, .minimize);
+        },
+        .maximize => {
+            _color = conf.colors_dark.table[2]; // green
+            is_set = conf.csd.color._flags.maximize_set;
+            conf_color = &conf.csd.color.maximize;
+            is_active = term.active_surface == .button_maximize and
+                any_pointer_is_on_button(term, .maximize);
+        },
+        .close => {
+            _color = conf.colors_dark.table[1]; // red
+            is_set = conf.csd.color._flags.close_set;
+            conf_color = &conf.csd.color.quit;
+            is_active = term.active_surface == .button_close and
+                any_pointer_is_on_button(term, .close);
+        },
+        else => unreachable, // unhandled surface type
+    }
+
+    if (is_active) {
+        if (is_set) {
+            _color = conf_color.?.*;
+            alpha = @truncate((_color >> 24) | (_color >> 24 << 8));
+        }
+    } else {
+        _color = 0;
+        alpha = 0;
+    }
+
+    if (!term.visual_focus)
+        _color = color_dim(term, _color);
+
+    const gamma_correct = wayl_do_linear_blending(term.wl, conf);
+    const color = color_hex_to_pixman_with_alpha(_color, alpha, gamma_correct);
+    render_csd_part(term, surf.surf, buf, info.width, info.height, &color);
+
+    switch (surf_idx) {
+        .minimize => render_csd_button_minimize(term, buf),
+        .maximize => render_csd_button_maximize(term, buf),
+        .close => render_csd_button_close(term, buf),
+        else => unreachable, // unhandled surface type
+    }
+
+    csd_commit(term, surf, buf);
+}
+
+export fn render_csd(term: *Terminal) callconv(.c) void {
+    const win = term.window.?;
+    std.debug.assert(win.csd_mode == .yes);
+
+    if (win.is_fullscreen)
+        return;
+
+    const scale = term.scale;
+    var infos: [types.CSD_SURF_COUNT]CsdData = undefined;
+    var widths: [types.CSD_SURF_COUNT]c_int = undefined;
+    var heights: [types.CSD_SURF_COUNT]c_int = undefined;
+
+    for (0..types.CSD_SURF_COUNT) |i| {
+        const surf_idx: types.CsdSurface = @enumFromInt(@as(c_int, @intCast(i)));
+        infos[i] = get_csd_data(term, surf_idx);
+
+        const width = infos[i].width;
+        const height = infos[i].height;
+
+        const surf = win.csd.surface[i].surface.surf;
+        const sub = win.csd.surface[i].sub;
+
+        std.debug.assert(surf != null);
+        std.debug.assert(sub != null);
+
+        if (width == 0 or height == 0) {
+            widths[i] = 0;
+            heights[i] = 0;
+            wayland_shim_subsurface_set_position(sub, 0, 0);
+            wayland_shim_surface_attach(surf, null, 0, 0);
+            wayland_shim_surface_commit(surf);
+            continue;
+        }
+
+        widths[i] = width;
+        heights[i] = height;
+        wayland_shim_subsurface_set_position(
+            sub, roundf(fdiv(infos[i].x, scale)), roundf(fdiv(infos[i].y, scale)));
+    }
+
+    var bufs: [types.CSD_SURF_COUNT]?*Buffer = undefined;
+    shm_get_many(@ptrCast(@alignCast(term.render.chains.csd.?)), types.CSD_SURF_COUNT, &widths, &heights, &bufs);
+
+    var i: usize = @intFromEnum(types.CsdSurface.left);
+    while (i <= @intFromEnum(types.CsdSurface.bottom)) : (i += 1)
+        render_csd_border(term, @enumFromInt(@as(c_int, @intCast(i))), &infos[i], bufs[i].?);
+
+    i = @intFromEnum(types.CsdSurface.minimize);
+    while (i <= @intFromEnum(types.CsdSurface.close)) : (i += 1)
+        render_csd_button(term, @enumFromInt(@as(c_int, @intCast(i))), &infos[i], bufs[i].?);
+
+    render_csd_title(term, &infos[@intFromEnum(types.CsdSurface.title)], bufs[@intFromEnum(types.CsdSurface.title)].?);
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// render_osd(): the small text painter (D3i)
+// ─────────────────────────────────────────────────────────────────────────
+
+const OSD_TEXT_RUN_SHAPING: c_int = 0x2; // FCFT_CAPABILITY_TEXT_RUN_SHAPING
+
+extern fn render_shim_fcft_font_height(font: *const FcftFont) callconv(.c) c_int;
+extern fn render_shim_fcft_has_text_run() callconv(.c) bool;
+extern fn render_shim_fcft_text_run(
+    font: *FcftFont,
+    len: usize,
+    text: [*]const u32,
+    subpixel: c_int,
+    out_glyphs: *[*]const ?*FcftGlyph,
+    out_count: *usize,
+) callconv(.c) ?*anyopaque;
+extern fn render_shim_fcft_text_run_destroy(run: ?*anyopaque) callconv(.c) void;
+extern fn wayland_shim_set_opaque_region(
+    compositor: ?*anyopaque,
+    surf: ?*anyopaque,
+    width: c_int,
+    height: c_int,
+    is_opaque: bool,
+) callconv(.c) void;
+extern fn quirk_weston_subsurface_desync_on(sub: ?*anyopaque) callconv(.c) void;
+extern fn quirk_weston_subsurface_desync_off(sub: ?*anyopaque) callconv(.c) void;
+
+fn c32Len(s: [*]const u32) usize {
+    var i: usize = 0;
+    while (s[i] != 0) : (i += 1) {}
+    return i;
+}
+
+export fn render_osd(
+    term: *Terminal,
+    sub_surf: *const types.WaylSubSurface,
+    font: ?*FcftFont,
+    buf: *Buffer,
+    text: [*]const u32,
+    _fg: u32,
+    _bg: u32,
+    x_in: c_uint,
+) callconv(.c) void {
+    var x = x_in;
+    const pix = bufferPix(buf);
+
+    render_shim_clip_rect(pix, 0, 0, buf.width, buf.height);
+
+    const gamma_correct = wayl_do_linear_blending(term.wl, term.conf.?);
+    const alpha: u16 = @truncate((_bg >> 24) | (_bg >> 24 << 8));
+    const bg = color_hex_to_pixman_with_alpha(_bg, alpha, gamma_correct);
+
+    fillRect(pix, &bg, &.{.{
+        .x = 0,
+        .y = 0,
+        .width = @intCast(buf.width),
+        .height = @intCast(buf.height),
+    }});
+
+    const fg = color_hex_to_pixman(_fg, gamma_correct);
+    const x_ofs: c_int = term.font_x_ofs;
+
+    const len = c32Len(text);
+
+    var text_run: ?*anyopaque = null;
+    var glyphs: []const ?*FcftGlyph = &.{};
+    var small: [64]?*FcftGlyph = undefined;
+    var glyph_count: usize = 0;
+
+    if (font) |f| {
+        if (render_shim_fcft_has_text_run()) {
+            var run_glyphs: [*]const ?*FcftGlyph = undefined;
+            var run_count: usize = 0;
+            text_run = render_shim_fcft_text_run(
+                f, len, text, term.font_subpixel, &run_glyphs, &run_count);
+
+            if (text_run != null) {
+                glyphs = run_glyphs[0..run_count];
+                glyph_count = run_count;
+            }
+        }
+
+        if (text_run == null) {
+            // Fall back to per-character rasterization. `small` is only
+            // enough for the OSD strings foot draws (a few dozen
+            // characters); anything longer is truncated, which the
+            // compositor clamps anyway.
+            for (0..len) |i| {
+                if (glyph_count == small.len)
+                    break;
+                const glyph = fcft_rasterize_char_utf32(f, text[i], term.font_subpixel) orelse continue;
+                small[glyph_count] = glyph;
+                glyph_count += 1;
+            }
+            glyphs = small[0..glyph_count];
+        }
+    }
+
+    const src = render_shim_solid_fill(&fg).?;
+
+    // Calculate baseline
+    var y: c_uint = 0;
+    if (font) |f| {
+        const line_height = buf.height;
+        const font_height = @max(
+            render_shim_fcft_font_height(f),
+            terminal_shim_fcft_font_ascent(f) + terminal_shim_fcft_font_descent(f));
+        const glyph_top_y: c_int = @intFromFloat(@round(
+            @as(f64, @floatFromInt(line_height - font_height)) / 2.0));
+        y = @intCast(@as(c_int, term.font_y_ofs) + glyph_top_y + terminal_shim_fcft_font_ascent(f));
+
+        for (glyphs) |maybe_glyph| {
+            const glyph = maybe_glyph orelse continue;
+
+            if (glyph.is_color_glyph) {
+                render_shim_composite(
+                    optPix(glyph.pix), null, pix,
+                    @as(c_int, @intCast(x)) + x_ofs + glyph.x,
+                    @as(c_int, @intCast(y)) - glyph.y,
+                    glyph.width, glyph.height);
+            } else {
+                render_shim_composite(
+                    src, optPix(glyph.pix), pix,
+                    @as(c_int, @intCast(x)) + x_ofs + glyph.x,
+                    @as(c_int, @intCast(y)) - glyph.y,
+                    glyph.width, glyph.height);
+            }
+
+            x = @intCast(@as(c_int, @intCast(x)) + glyph.advance.x);
+        }
+    }
+
+    render_shim_fcft_text_run_destroy(text_run);
+    render_shim_image_unref(src);
+    render_shim_clip_clear(pix);
+
+    quirk_weston_subsurface_desync_on(sub_surf.sub);
+    wayl_surface_scale(term.window.?, @constCast(&sub_surf.surface), buf, term.scale);
+    wayland_shim_surface_attach(sub_surf.surface.surf, buf.wl_buf, 0, 0);
+    wayland_shim_surface_damage_buffer(sub_surf.surface.surf, 0, 0, buf.width, buf.height);
+
+    wayland_shim_set_opaque_region(
+        term.wl.?.compositor, sub_surf.surface.surf, buf.width, buf.height, alpha == 0xffff);
+
+    wayland_shim_surface_commit(sub_surf.surface.surf);
+    quirk_weston_subsurface_desync_off(sub_surf.sub);
 }

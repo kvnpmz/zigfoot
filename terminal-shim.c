@@ -247,6 +247,82 @@ void wayland_shim_surface_damage_buffer(
     wl_surface_damage_buffer(surface, x, y, width, height);
 }
 
+/* wl_subsurface_set_position() is a generated static inline. */
+void wayland_shim_subsurface_set_position(
+    struct wl_subsurface *sub, int x, int y)
+{
+    /* Defensive: the headless harness has no wayland sub-surfaces. */
+    if (sub == NULL)
+        return;
+    wl_subsurface_set_position(sub, x, y);
+}
+
+int render_shim_fcft_font_max_advance_x(const struct fcft_font *font)
+{
+    return font->max_advance.x;
+}
+
+int render_shim_fcft_font_height(const struct fcft_font *font)
+{
+    return font->height;
+}
+
+/* fcft's text-run API is optional at runtime; wrap it so render.zig does
+ * not have to mirror struct fcft_text_run. */
+bool render_shim_fcft_has_text_run(void)
+{
+    return (fcft_capabilities() & FCFT_CAPABILITY_TEXT_RUN_SHAPING) != 0;
+}
+
+void *render_shim_fcft_text_run(
+    struct fcft_font *font, size_t len, const uint32_t *text,
+    enum fcft_subpixel subpixel,
+    const struct fcft_glyph ***out_glyphs, size_t *out_count)
+{
+    struct fcft_text_run *run = fcft_rasterize_text_run_utf32(
+        font, len, text, subpixel);
+
+    if (run == NULL) {
+        *out_glyphs = NULL;
+        *out_count = 0;
+        return NULL;
+    }
+
+    *out_glyphs = run->glyphs;
+    *out_count = run->count;
+    return run;
+}
+
+void render_shim_fcft_text_run_destroy(void *run)
+{
+    fcft_text_run_destroy(run);
+}
+
+/* wl_compositor_create_region()/wl_region_*()/wl_surface_set_opaque_region()
+ * are generated static inlines (and the headless harness has no compositor). */
+void wayland_shim_set_opaque_region(
+    struct wl_compositor *compositor, struct wl_surface *surf,
+    int width, int height, bool opaque)
+{
+    if (surf == NULL)
+        return;
+
+    if (!opaque) {
+        wl_surface_set_opaque_region(surf, NULL);
+        return;
+    }
+
+    if (compositor == NULL)
+        return;
+
+    struct wl_region *region = wl_compositor_create_region(compositor);
+    if (region != NULL) {
+        wl_region_add(region, 0, 0, width, height);
+        wl_surface_set_opaque_region(surf, region);
+        wl_region_destroy(region);
+    }
+}
+
 /* pixman region/image helpers for render_cell(). The clip is always
  * "this rect", so init+set+fini collapse into one call. */
 void render_shim_clip_rect(
@@ -1119,11 +1195,15 @@ void wayland_shim_decoration_set_mode(void *decoration, uint32_t mode)
 void wayland_shim_surface_attach(
     struct wl_surface *surf, struct wl_buffer *buffer, int32_t x, int32_t y)
 {
+    if (surf == NULL)
+        return;
     wl_surface_attach(surf, buffer, x, y);
 }
 
 void wayland_shim_surface_commit(struct wl_surface *surf)
 {
+    if (surf == NULL)
+        return;
     wl_surface_commit(surf);
 }
 
@@ -1281,6 +1361,8 @@ void wayland_shim_xdg_activation_activate(
 
 void wayland_shim_surface_set_buffer_scale(struct wl_surface *surf, int32_t scale)
 {
+    if (surf == NULL)
+        return;
     wl_surface_set_buffer_scale(surf, scale);
 }
 
