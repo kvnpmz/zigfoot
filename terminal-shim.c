@@ -48,11 +48,6 @@ size_t terminal_shim_mb_cur_max(void) {
 }
 
 
-/* urls_mode_is_active() is static inline in url-mode.h. */
-bool terminal_shim_urls_mode_active(const struct terminal *term) {
-    return urls_mode_is_active(term);
-}
-
 /* The null checks are defensive: in foot itself `window` is always set, but
  * the headless harness runs these paths without a wayland window. */
 
@@ -109,70 +104,35 @@ void terminal_shim_term_reset_grapheme_state(struct terminal *term) {
 
 #include "emoji-variation-sequences.h"
 
-uint32_t
-terminal_shim_precompose(struct terminal *term, uint32_t base, uint32_t wc,
-                         bool *base_from_primary,
-                         bool *comb_from_primary,
-                         bool *pre_from_primary)
-{
-    if (term->fonts[0] == NULL) {
-        *base_from_primary = false;
-        *comb_from_primary = false;
-        *pre_from_primary = false;
-        return (uint32_t)-1;
-    }
-
-    return fcft_precompose(
-        term->fonts[0], base, wc,
-        base_from_primary, comb_from_primary, pre_from_primary);
-}
-
-#if defined(FOOT_GRAPHEME_CLUSTERING)
-static int
-emoji_vs_compare(const void *_key, const void *_entry)
-{
-    const struct emoji_vs *key = _key;
-    const struct emoji_vs *entry = _entry;
-
-    uint32_t cp = key->start;
-
-    if (cp < entry->start)
-        return -1;
-    else if (cp > entry->end)
-        return 1;
-    else
-        return 0;
-}
-#endif
-
-/*
- * Returns the forced grapheme width for a VS-15 (1) / VS-16 (2)
- * variation selector sequence, or -1 if the base character isn't in the
- * table (or isn't followed by a supported variation selector).
- */
-int
-terminal_shim_emoji_vs_width(uint32_t cp, uint32_t wc)
+/* The generated packed table is C data; terminal.zig owns the bsearch logic.
+ * Scalar accessors avoid making Zig reproduce C bit-field allocation. */
+size_t
+terminal_shim_emoji_vs_count(void)
 {
 #if defined(FOOT_GRAPHEME_CLUSTERING)
-    const struct emoji_vs *vs =
-        bsearch(
-            &(struct emoji_vs){.start = cp},
-            emoji_vs, sizeof(emoji_vs) / sizeof(emoji_vs[0]),
-            sizeof(struct emoji_vs),
-            &emoji_vs_compare);
-
-    if (vs != NULL) {
-        if (wc == 0xfe0e && vs->vs15)
-            return 1;
-        if (wc == 0xfe0f && vs->vs16)
-            return 2;
-    }
+    return sizeof(emoji_vs) / sizeof(emoji_vs[0]);
 #else
-    (void)cp;
-    (void)wc;
+    return 0;
 #endif
+}
 
-    return -1;
+void
+terminal_shim_emoji_vs_get(size_t index, uint32_t *start, uint32_t *end,
+                           bool *vs15, bool *vs16)
+{
+#if defined(FOOT_GRAPHEME_CLUSTERING)
+    const struct emoji_vs *vs = &emoji_vs[index];
+    *start = vs->start;
+    *end = vs->end;
+    *vs15 = vs->vs15;
+    *vs16 = vs->vs16;
+#else
+    (void)index;
+    (void)start;
+    (void)end;
+    (void)vs15;
+    (void)vs16;
+#endif
 }
 
 
@@ -242,22 +202,16 @@ void render_shim_region_union_rect(
     pixman_region32_union_rect(region, region, x, y, width, height);
 }
 
-void wayland_shim_surface_damage_buffer(
+/* Generated requests; wayland.zig owns their defensive null checks. */
+void wayland_shim_surface_damage_buffer_request(
     struct wl_surface *surface, int x, int y, int width, int height)
 {
-    /* Defensive: the headless harness renders without a wayland surface. */
-    if (surface == NULL)
-        return;
     wl_surface_damage_buffer(surface, x, y, width, height);
 }
 
-/* wl_subsurface_set_position() is a generated static inline. */
-void wayland_shim_subsurface_set_position(
+void wayland_shim_subsurface_set_position_request(
     struct wl_subsurface *sub, int x, int y)
 {
-    /* Defensive: the headless harness has no wayland sub-surfaces. */
-    if (sub == NULL)
-        return;
     wl_subsurface_set_position(sub, x, y);
 }
 
@@ -300,60 +254,6 @@ void *render_shim_fcft_text_run(
 void render_shim_fcft_text_run_destroy(void *run)
 {
     fcft_text_run_destroy(run);
-}
-
-/* wl_compositor_create_region()/wl_region_*()/wl_surface_set_opaque_region()
- * are generated static inlines (and the headless harness has no compositor). */
-void wayland_shim_set_opaque_region(
-    struct wl_compositor *compositor, struct wl_surface *surf,
-    int width, int height, bool opaque)
-{
-    if (surf == NULL)
-        return;
-
-    if (!opaque) {
-        wl_surface_set_opaque_region(surf, NULL);
-        return;
-    }
-
-    if (compositor == NULL)
-        return;
-
-    struct wl_region *region = wl_compositor_create_region(compositor);
-    if (region != NULL) {
-        wl_region_add(region, 0, 0, width, height);
-        wl_surface_set_opaque_region(surf, region);
-        wl_region_destroy(region);
-    }
-}
-
-
-/* The search box's opaque region only covers the visible part of the
- * sub-surface, so it cannot use wayland_shim_set_opaque_region(). */
-void wayland_shim_set_opaque_region_rect(
-    struct wl_compositor *compositor, struct wl_surface *surf,
-    int x, int y, int width, int height)
-{
-    if (surf == NULL || compositor == NULL)
-        return;
-
-    struct wl_region *region = wl_compositor_create_region(compositor);
-    if (region != NULL) {
-        wl_region_add(region, x, y, width, height);
-        wl_surface_set_opaque_region(surf, region);
-        wl_region_destroy(region);
-    }
-}
-
-/* pixman region/image helpers for render_cell(). The clip is always
- * "this rect", so init+set+fini collapse into one call. */
-void render_shim_clip_rect(
-    pixman_image_t *pix, int x, int y, int width, int height)
-{
-    pixman_region32_t clip;
-    pixman_region32_init_rect(&clip, x, y, width, height);
-    pixman_image_set_clip_region32(pix, &clip);
-    pixman_region32_fini(&clip);
 }
 
 void render_shim_clip_clear(pixman_image_t *pix)
@@ -489,45 +389,6 @@ void render_shim_image_unref(pixman_image_t *pix)
     pixman_image_unref(pix);
 }
 
-/* The CSD close button is a pair of crossed X shapes, composited as four
- * pixman triangles -- a library type we would rather not mirror. */
-void render_shim_close_button(
-    pixman_image_t *pix, const pixman_color_t *color,
-    int x_margin, int y_margin, int width, int thick)
-{
-#define I(x) pixman_int_to_fixed(x)
-
-    pixman_triangle_t tri[4] = {
-        {
-            .p1 = {.x = I(x_margin), .y = I(y_margin + thick)},
-            .p2 = {.x = I(x_margin + width - thick), .y = I(y_margin + width)},
-            .p3 = {.x = I(x_margin + thick), .y = I(y_margin)},
-        },
-        {
-            .p1 = {.x = I(x_margin + width), .y = I(y_margin + width - thick)},
-            .p2 = {.x = I(x_margin + thick), .y = I(y_margin)},
-            .p3 = {.x = I(x_margin + width - thick), .y = I(y_margin + width)},
-        },
-        {
-            .p1 = {.x = I(x_margin), .y = I(y_margin + width - thick)},
-            .p2 = {.x = I(x_margin + width), .y = I(y_margin + thick)},
-            .p3 = {.x = I(x_margin + thick), .y = I(y_margin + width)},
-        },
-        {
-            .p1 = {.x = I(x_margin + width), .y = I(y_margin + thick)},
-            .p2 = {.x = I(x_margin), .y = I(y_margin + width - thick)},
-            .p3 = {.x = I(x_margin + width - thick), .y = I(y_margin)},
-        },
-    };
-
-#undef I
-
-    pixman_image_t *src = pixman_image_create_solid_fill(color);
-    pixman_composite_triangles(
-        PIXMAN_OP_OVER, src, pix, PIXMAN_a1, 0, 0, 0, 0, 4, tri);
-    pixman_image_unref(src);
-}
-
 /* Sixel compositing needs an explicit operator and a source rect offset. */
 void render_shim_composite_op(
     int op,
@@ -558,80 +419,7 @@ void render_shim_workers_unlock(struct terminal *term)
     mtx_unlock(&term->render.workers.lock);
 }
 
-/*
- * The curly underline is composited from two trapezoids. pixman_trapezoid_t
- * is a library type we would rather not mirror, so the geometry comes in
- * from Zig and the composite happens here.
- */
-void render_shim_curly_underline(
-    pixman_image_t *pix, const pixman_color_t *color,
-    int x, int top, int bot, int half_x, int full_x, int th)
-{
-#define I(x) pixman_int_to_fixed(x)
-
-    /* characters sit on top of the curlies */
-    const pixman_trapezoid_t traps[] = {
-        {
-            I(top), I(bot),
-            {{I(x), I(bot - th)}, {I(half_x), I(top - th)}},
-            {{I(x), I(bot + th)}, {I(half_x), I(top + th)}},
-        },
-        {
-            I(top), I(bot),
-            {{I(half_x), I(top + th)}, {I(full_x), I(bot + th)}},
-            {{I(half_x), I(top - th)}, {I(full_x), I(bot - th)}},
-        },
-    };
-
-#undef I
-
-    pixman_image_t *fill = pixman_image_create_solid_fill(color);
-    pixman_composite_trapezoids(
-        PIXMAN_OP_OVER, fill, pix, PIXMAN_a8, 0, 0, 0, 0,
-        sizeof(traps) / sizeof(traps[0]), traps);
-    pixman_image_unref(fill);
-}
-
 /* ── font loading (terminal.zig) ─────────────────────────────────── */
-
-/* Headless harness has no wayland object; foot itself always does. */
-bool terminal_shim_linear_blending(const struct terminal *term) {
-    return term->wl != NULL && wayl_do_linear_blending(term->wl, term->conf);
-}
-
-/* Likewise: the harness has no buffer chains. */
-bool terminal_shim_grid_is_high_bit_depth(const struct terminal *term) {
-    return term->render.chains.grid != NULL &&
-           shm_chain_bit_depth(term->render.chains.grid) >= SHM_BITS_10;
-}
-
-/* struct fcft_font_options is fcft's business; set only the three fields
- * reload_fonts() needs. The high-res format choice keeps the
- * HAVE_PIXMAN_RGBA_16 build option on the C side. */
-void
-terminal_shim_fcft_font_options_configure(
-    struct fcft_font_options *options,
-    enum fcft_scaling_filter scaling_filter,
-    bool srgb_decode,
-    bool high_res_color)
-{
-    options->scaling_filter = scaling_filter;
-    options->color_glyphs.format = PIXMAN_a8r8g8b8;
-    options->color_glyphs.srgb_decode = srgb_decode;
-
-    if (high_res_color) {
-        /*
-         * Use a high-res buffer type for emojis. We don't want to use
-         * an a2r10g0b10 type of surface, since we need more than 2
-         * bits for alpha.
-         */
-#if defined(HAVE_PIXMAN_RGBA_16)
-        options->color_glyphs.format = PIXMAN_a16b16g16r16;
-#else
-        options->color_glyphs.format = PIXMAN_rgba_float;
-#endif
-    }
-}
 
 /* util.h's thrd_err_as_string() is a static inline switch, which Zig cannot
  * call; the render-worker error paths log through this. */
@@ -1513,14 +1301,29 @@ void wayland_shim_toplevel_tag_set(
 #endif
 }
 
-void wayland_shim_toplevel_icon_set(
-    struct xdg_toplevel_icon_manager_v1 *m, struct xdg_toplevel *toplevel,
-    const char *name)
+/* Generated requests; wayland.zig preserves the create/set/destroy order. */
+struct xdg_toplevel_icon_v1 *
+wayland_shim_toplevel_icon_manager_create_icon(
+    struct xdg_toplevel_icon_manager_v1 *m)
 {
-    struct xdg_toplevel_icon_v1 *icon =
-        xdg_toplevel_icon_manager_v1_create_icon(m);
+    return xdg_toplevel_icon_manager_v1_create_icon(m);
+}
+
+void wayland_shim_toplevel_icon_set_name(
+    struct xdg_toplevel_icon_v1 *icon, const char *name)
+{
     xdg_toplevel_icon_v1_set_name(icon, name);
+}
+
+void wayland_shim_toplevel_icon_manager_set_icon(
+    struct xdg_toplevel_icon_manager_v1 *m, struct xdg_toplevel *toplevel,
+    struct xdg_toplevel_icon_v1 *icon)
+{
     xdg_toplevel_icon_manager_v1_set_icon(m, toplevel, icon);
+}
+
+void wayland_shim_toplevel_icon_destroy(struct xdg_toplevel_icon_v1 *icon)
+{
     xdg_toplevel_icon_v1_destroy(icon);
 }
 
@@ -1722,19 +1525,10 @@ int terminal_shim_grid_row_absolute_in_view(const struct grid *grid, int row_no)
 }
 
 /* ======================================================================
- * The last of render.c (D3l4). What is left here must stay C: the exit-time
- * presentation statistics (a DESTRUCTOR attribute), struct presentation_context
- * with its two struct timevals, and the protocol listener tables, which are
- * generated-struct layout. Everything that was a *function* in render.c now
- * lives in render.zig.
+ * The last of render.c (D3l4). The exit-time presentation logger keeps C's
+ * DESTRUCTOR attribute; its counters and the context allocation are in
+ * render.zig. Protocol listener tables remain generated-struct knowledge.
  * ====================================================================== */
-
-static struct {
-    size_t total;
-    size_t zero;  /* commits presented in less than one frame interval */
-    size_t one;   /* commits presented in one frame interval */
-    size_t two;   /* commits presented in two or more frame intervals */
-} presentation_statistics = {0};
 
 void fdm_hook_refresh_pending_terminals(struct fdm *fdm, void *data);
 
@@ -1743,14 +1537,16 @@ void fdm_hook_refresh_pending_terminals(struct fdm *fdm, void *data);
 static void DESTRUCTOR
 log_presentation_statistics(void)
 {
-    if (presentation_statistics.total == 0)
+    size_t total, zero, one, two;
+    render_shim_presentation_stat_get(&total, &zero, &one, &two);
+
+    if (total == 0)
         return;
 
-    const size_t total = presentation_statistics.total;
     LOG_INFO("presentation statistics: zero=%f%%, one=%f%%, two=%f%%",
-             100. * presentation_statistics.zero / total,
-             100. * presentation_statistics.one / total,
-             100. * presentation_statistics.two / total);
+             100. * zero / total,
+             100. * one / total,
+             100. * two / total);
 }
 
 /* Ported to render.zig: the callbacks, not the tables. */
@@ -1763,49 +1559,6 @@ void presented(
     uint32_t refresh, uint32_t seq_hi, uint32_t seq_lo, uint32_t flags);
 void discarded(
     void *data, struct wp_presentation_feedback *wp_presentation_feedback);
-
-struct presentation_context {
-    struct terminal *term;
-    struct timeval input;
-    struct timeval commit;
-};
-
-struct terminal *
-render_presentation_ctx_term(void *data)
-{
-    return ((struct presentation_context *)data)->term;
-}
-
-void
-render_presentation_ctx_input(void *data, int64_t *sec, int64_t *usec)
-{
-    const struct presentation_context *ctx = data;
-    *sec = ctx->input.tv_sec;
-    *usec = ctx->input.tv_usec;
-}
-
-void
-render_presentation_ctx_commit(void *data, int64_t *sec, int64_t *usec)
-{
-    const struct presentation_context *ctx = data;
-    *sec = ctx->commit.tv_sec;
-    *usec = ctx->commit.tv_usec;
-}
-
-/* The counters and their DESTRUCTOR stay in C: the exit-time log is a C
- * attribute (macros.h), not something Zig can portably express. */
-void
-render_shim_presentation_stat_add(unsigned frame_count)
-{
-    presentation_statistics.total++;
-
-    if (frame_count >= 2)
-        presentation_statistics.two++;
-    else if (frame_count >= 1)
-        presentation_statistics.one++;
-    else
-        presentation_statistics.zero++;
-}
 
 static const struct wp_presentation_feedback_listener presentation_feedback_listener = {
     .sync_output = &sync_output,
@@ -1836,20 +1589,6 @@ render_shim_presentation_feedback_add(
 {
     wp_presentation_feedback_add_listener(
         feedback, &presentation_feedback_listener, ctx);
-}
-
-void *
-render_shim_presentation_ctx_new(
-    struct terminal *term, int64_t input_sec, int64_t input_usec,
-    int64_t commit_sec, int64_t commit_usec)
-{
-    struct presentation_context *ctx = xmalloc(sizeof(*ctx));
-    *ctx = (struct presentation_context){
-        .term = term,
-        .input = {.tv_sec = input_sec, .tv_usec = input_usec},
-        .commit = {.tv_sec = commit_sec, .tv_usec = commit_usec},
-    };
-    return ctx;
 }
 
 void frame_callback(
@@ -1942,4 +1681,3 @@ render_shim_callback_destroy(struct wl_callback *callback)
     if (callback != NULL)
         wl_callback_destroy(callback);
 }
-

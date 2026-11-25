@@ -34,6 +34,12 @@ const BIND_ACTION_URL_TOGGLE_URL_ON_JUMP_LABEL: c_int = 2;
 
 const O_RDWR: c_int = 2;
 
+/// url-mode.h's static inline, exported under the existing C ABI name for
+/// commands, input and render.
+export fn terminal_shim_urls_mode_active(term: *const Terminal) callconv(.c) bool {
+    return term.url.list.length > 0;
+}
+
 extern fn open(path: [*:0]const u8, flags: c_int, ...) callconv(.c) c_int;
 extern fn close(fd: c_int) callconv(.c) c_int;
 extern fn free(ptr: ?*anyopaque) callconv(.c) void;
@@ -56,8 +62,7 @@ extern fn grid_snapshot(grid: *const types.Grid) callconv(.c) *types.Grid;
 extern fn grid_free(grid: ?*types.Grid) callconv(.c) void;
 extern fn terminal_shim_grid_row_in_view(grid: *types.Grid, row: c_int) callconv(.c) ?*types.Row;
 
-extern fn wayl_win_subsurface_new(
-    win: *types.WlWindow, surf: *types.WaylSubSurface, allow_pointer_input: bool) callconv(.c) bool;
+extern fn wayl_win_subsurface_new(win: *types.WlWindow, surf: *types.WaylSubSurface, allow_pointer_input: bool) callconv(.c) bool;
 extern fn wayl_win_subsurface_destroy(surf: ?*types.WaylSubSurface) callconv(.c) void;
 extern fn wayl_get_activation_token(
     wayl: *types.Wayland,
@@ -120,22 +125,8 @@ extern fn url_shim_regex_match(
     eo1: *usize,
 ) callconv(.c) bool;
 
-extern fn log_msg(
-    class: c_int,
-    module: [*:0]const u8,
-    file: [*:0]const u8,
-    lineno: c_int,
-    fmt: [*:0]const u8,
-    ...
-) callconv(.c) void;
-extern fn log_errno(
-    class: c_int,
-    module: [*:0]const u8,
-    file: [*:0]const u8,
-    lineno: c_int,
-    fmt: [*:0]const u8,
-    ...
-) callconv(.c) void;
+extern fn log_msg(class: c_int, module: [*:0]const u8, file: [*:0]const u8, lineno: c_int, fmt: [*:0]const u8, ...) callconv(.c) void;
+extern fn log_errno(class: c_int, module: [*:0]const u8, file: [*:0]const u8, lineno: c_int, fmt: [*:0]const u8, ...) callconv(.c) void;
 
 const LOG_CLASS_ERROR: c_int = 1;
 
@@ -203,9 +194,7 @@ fn spawnUrlLauncherWithToken(
 ) bool {
     const dev_null = open("/dev/null", O_RDWR);
     if (dev_null < 0) {
-        log_errno(
-            LOG_CLASS_ERROR, "url-mode", "url-mode.zig", @intCast(@src().line),
-            "failed to open /dev/null");
+        log_errno(LOG_CLASS_ERROR, "url-mode", "url-mode.zig", @intCast(@src().line), "failed to open /dev/null");
         return false;
     }
 
@@ -224,9 +213,7 @@ fn spawnUrlLauncherWithToken(
         const cwd: [*c]const u8 = if (term.cwd) |c| c else null;
         const token: [*c]const u8 = if (xdg_activation_token) |t| t else null;
 
-        ret = spawn(
-            term.reaper, cwd, @ptrCast(argv), dev_null, dev_null, dev_null,
-            null, null, token) >= 0;
+        ret = spawn(term.reaper, cwd, @ptrCast(argv), dev_null, dev_null, dev_null, null, null, token) >= 0;
 
         var i: usize = 0;
         while (i < argc) : (i += 1)
@@ -237,7 +224,6 @@ fn spawnUrlLauncherWithToken(
     _ = close(dev_null);
     return ret;
 }
-
 
 const SpawnActivationContext = extern struct {
     term: *Terminal,
@@ -267,10 +253,7 @@ fn spawnUrlLauncher(
         .url = xstrdup(url),
     };
 
-    if (wayl_get_activation_token(
-            seat.wayl.?, seat, serial, term.window.?,
-            &activationTokenDone, ctx))
-    {
+    if (wayl_get_activation_token(seat.wayl.?, seat, serial, term.window.?, &activationTokenDone, ctx)) {
         // Context free:d by callback
         return true;
     }
@@ -539,12 +522,8 @@ fn regexDetected(
                     // the terminator.
                     if (vline.sz == 0 or requires_size > vline.sz - 1) {
                         const new_size = requires_size * 2;
-                        vline.utf8 = @ptrCast(@alignCast(xreallocarray(
-                            if (vline.utf8) |p| @as(?*anyopaque, @ptrCast(p)) else null,
-                            new_size, 1)));
-                        vline.map = @ptrCast(@alignCast(xreallocarray(
-                            if (vline.map) |p| @as(?*anyopaque, @ptrCast(p)) else null,
-                            new_size, @sizeOf(types.Coord))));
+                        vline.utf8 = @ptrCast(@alignCast(xreallocarray(if (vline.utf8) |p| @as(?*anyopaque, @ptrCast(p)) else null, new_size, 1)));
+                        vline.map = @ptrCast(@alignCast(xreallocarray(if (vline.map) |p| @as(?*anyopaque, @ptrCast(p)) else null, new_size, @sizeOf(types.Coord))));
                         vline.sz = new_size;
                     }
 
@@ -734,8 +713,7 @@ fn generateKeyCombos(
     const alphabet_len = c32Len(alphabet);
 
     var hints_count: usize = 1;
-    var hints: [*]?[*:0]u32 = @ptrCast(@alignCast(
-        xmalloc(hints_count * @sizeOf(?[*:0]u32)) orelse unreachable));
+    var hints: [*]?[*:0]u32 = @ptrCast(@alignCast(xmalloc(hints_count * @sizeOf(?[*:0]u32)) orelse unreachable));
 
     hints[0] = xc32dup(&EMPTY_C32);
 
@@ -745,8 +723,7 @@ fn generateKeyCombos(
         offset += 1;
         const prefix_len = c32Len(prefix);
 
-        hints = @ptrCast(@alignCast(
-            xrealloc(@ptrCast(hints), (hints_count + alphabet_len) * @sizeOf(?[*:0]u32)) orelse unreachable));
+        hints = @ptrCast(@alignCast(xrealloc(@ptrCast(hints), (hints_count + alphabet_len) * @sizeOf(?[*:0]u32)) orelse unreachable));
 
         var i: usize = 0;
         while (i < alphabet_len) : (i += 1) {

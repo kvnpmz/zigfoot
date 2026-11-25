@@ -605,6 +605,7 @@ terminal_obj = custom_target(
   command: [
     python, files('compile_zig.py'), '@INPUT@', '@OUTPUT@',
     grapheme_clustering_zig,
+    'pixman_rgba_16=' + pixman_rgba_16.to_string(),
     'utmp_enabled=' + (utmp_backend != 'none').to_string(),
     'utmp_add="' + utmp_add + '"',
     'utmp_del="' + utmp_del + '"',

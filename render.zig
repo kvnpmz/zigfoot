@@ -65,9 +65,22 @@ extern fn terminal_shim_fcft_font_underline_thickness(font: *const anyopaque) ca
 extern fn terminal_shim_fcft_font_strikeout_position(font: *const anyopaque) callconv(.c) c_int;
 extern fn terminal_shim_fcft_font_strikeout_thickness(font: *const anyopaque) callconv(.c) c_int;
 
-/// The trapezoid path needs `pixman_trapezoid_t`, which C owns; keep the
-/// geometry computation here and the composite call in the shim.
-extern fn render_shim_curly_underline(
+const PIXMAN_a8: u32 = 0x08018000;
+
+extern fn pixman_composite_trapezoids(
+    op: c_int,
+    src: ?*PixmanImage,
+    dst: *PixmanImage,
+    mask_format: u32,
+    x_src: c_int,
+    y_src: c_int,
+    x_dst: c_int,
+    y_dst: c_int,
+    n_traps: c_int,
+    traps: [*]const types.PixmanTrapezoid,
+) callconv(.c) void;
+
+fn curlyUnderline(
     pix: *PixmanImage,
     color: *const PixmanColor,
     x: c_int,
@@ -76,7 +89,28 @@ extern fn render_shim_curly_underline(
     half_x: c_int,
     full_x: c_int,
     th: c_int,
-) callconv(.c) void;
+) void {
+    const I = pixmanIntToFixed;
+    // Characters sit on top of the curlies.
+    const traps = [2]types.PixmanTrapezoid{
+        .{
+            .top = I(top),
+            .bottom = I(bot),
+            .left = .{ .p1 = .{ .x = I(x), .y = I(bot - th) }, .p2 = .{ .x = I(half_x), .y = I(top - th) } },
+            .right = .{ .p1 = .{ .x = I(x), .y = I(bot + th) }, .p2 = .{ .x = I(half_x), .y = I(top + th) } },
+        },
+        .{
+            .top = I(top),
+            .bottom = I(bot),
+            .left = .{ .p1 = .{ .x = I(half_x), .y = I(top + th) }, .p2 = .{ .x = I(full_x), .y = I(bot + th) } },
+            .right = .{ .p1 = .{ .x = I(half_x), .y = I(top - th) }, .p2 = .{ .x = I(full_x), .y = I(bot - th) } },
+        },
+    };
+
+    const fill = pixman_image_create_solid_fill(color);
+    pixman_composite_trapezoids(PIXMAN_OP_OVER, fill, pix, PIXMAN_a8, 0, 0, 0, 0, 2, &traps);
+    pixman_image_unref(fill);
+}
 
 /// `srgb_decode_8_to_16_table[]` is generated into the build directory by
 /// `scripts/srgb.py`.
@@ -94,15 +128,14 @@ fn fillRect(
     color: *const PixmanColor,
     rects: []const PixmanRectangle16,
 ) void {
-    _ = pixman_image_fill_rectangles(
-        PIXMAN_OP_SRC, pix, color, @intCast(rects.len), rects.ptr);
+    _ = pixman_image_fill_rectangles(PIXMAN_OP_SRC, pix, color, @intCast(rects.len), rects.ptr);
 }
 
 // ─────────────────────────────────────────────────────────────────────────
 // Colour helpers
 // ─────────────────────────────────────────────────────────────────────────
 
-export fn attrs_to_font(term: *const Terminal, attrs: *const align(4) Attributes) callconv(.c) ?*FcftFont {
+export fn attrs_to_font(term: *const Terminal, attrs: *align(4) const Attributes) callconv(.c) ?*FcftFont {
     const idx: usize = @as(usize, @intFromBool(attrs.italic)) * 2 + @intFromBool(attrs.bold);
     return @ptrCast(term.fonts[idx]);
 }
@@ -412,7 +445,7 @@ export fn draw_styled_underline(
             const hx_2 = @as(f64, @floatFromInt(ceil_w)) * @as(f64, @floatFromInt(ceil_w)) / 4.0;
             const th: c_int = @intFromFloat(@round(@sqrt(th_2 + (th_2 * bt_2 / hx_2)) / 2.0));
 
-            render_shim_curly_underline(pix, color, x, top, bot, half_x, full_x, th);
+            curlyUnderline(pix, color, x, top, bot, half_x, full_x, th);
         },
 
         .none, .single => unreachable,
@@ -556,7 +589,6 @@ export fn draw_cursor(
                 draw_hollow_block(term, pix, &cursor_color, x, y, cols);
         },
     }
-
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -584,14 +616,7 @@ extern fn terminal_shim_urls_mode_active(term: *const Terminal) callconv(.c) boo
 extern fn term_icon(term: *const Terminal) callconv(.c) [*:0]const u8;
 extern fn wayland_shim_xdg_toplevel_set_app_id(toplevel: ?*anyopaque, app_id: [*:0]const u8) callconv(.c) void;
 extern fn wayland_shim_toplevel_icon_set(m: ?*anyopaque, toplevel: ?*anyopaque, name: [*:0]const u8) callconv(.c) void;
-extern fn log_msg(
-    class: c_int,
-    module: [*:0]const u8,
-    file: [*:0]const u8,
-    lineno: c_int,
-    fmt: [*:0]const u8,
-    ...
-) callconv(.c) void;
+extern fn log_msg(class: c_int, module: [*:0]const u8, file: [*:0]const u8, lineno: c_int, fmt: [*:0]const u8, ...) callconv(.c) void;
 
 /// Rate limit for title/app-id/icon updates: at most one update per 8333 µs.
 const UPDATE_INTERVAL_NS: isize = 8333 * 1000;
@@ -687,7 +712,10 @@ export fn render_refresh_app_id(term: *Terminal) callconv(.c) void {
 export fn render_refresh_icon(term: *Terminal) callconv(.c) void {
     if (term.wl.?.toplevel_icon_manager == null) {
         log_msg(
-            LOG_CLASS_DEBUG, "render", "render.zig", @intCast(@src().line),
+            LOG_CLASS_DEBUG,
+            "render",
+            "render.zig",
+            @intCast(@src().line),
             "compositor does not implement xdg-toplevel-icon: " ++
                 "ignoring request to refresh window icon",
         );
@@ -698,11 +726,9 @@ export fn render_refresh_icon(term: *Terminal) callconv(.c) void {
         return;
 
     const icon_name = term_icon(term);
-    log_msg(LOG_CLASS_DEBUG, "render", "render.zig", @intCast(@src().line),
-        "setting toplevel icon: %s", icon_name);
+    log_msg(LOG_CLASS_DEBUG, "render", "render.zig", @intCast(@src().line), "setting toplevel icon: %s", icon_name);
 
-    wayland_shim_toplevel_icon_set(
-        term.wl.?.toplevel_icon_manager, term.window.?.xdg_toplevel, icon_name);
+    wayland_shim_toplevel_icon_set(term.wl.?.toplevel_icon_manager, term.window.?.xdg_toplevel, icon_name);
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -818,13 +844,9 @@ export fn render_margin(
         // Bottom
         wayland_shim_surface_damage_buffer(surf, 0, bmargin, term.width, term.margins.bottom);
         // Left
-        wayland_shim_surface_damage_buffer(
-            surf, 0, term.margins.top + start_line * term.cell_height,
-            term.margins.left, line_count * term.cell_height);
+        wayland_shim_surface_damage_buffer(surf, 0, term.margins.top + start_line * term.cell_height, term.margins.left, line_count * term.cell_height);
         // Right
-        wayland_shim_surface_damage_buffer(
-            surf, rmargin, term.margins.top + start_line * term.cell_height,
-            term.margins.right, line_count * term.cell_height);
+        wayland_shim_surface_damage_buffer(surf, rmargin, term.margins.top + start_line * term.cell_height, term.margins.right, line_count * term.cell_height);
     }
 }
 
@@ -995,7 +1017,6 @@ const GLYPH_LEGACY_FIRST: u32 = 0x1FB00;
 const GLYPH_LEGACY_LAST: u32 = 0x1FB9B;
 const GLYPH_LEGACY_COUNT: usize = GLYPH_LEGACY_LAST - GLYPH_LEGACY_FIRST + 1;
 
-
 extern fn fcft_rasterize_char_utf32(font: *const FcftFont, cp: u32, subpixel: c_int) callconv(.c) ?*FcftGlyph;
 extern fn fcft_rasterize_grapheme_utf32(
     font: *const FcftFont,
@@ -1008,7 +1029,12 @@ extern fn box_drawing(term: *const Terminal, wc: u32) callconv(.c) ?*FcftGlyph;
 extern fn term_arm_blink_timer(term: *Terminal) callconv(.c) void;
 extern fn xcalloc(n: usize, size: usize) callconv(.c) ?*anyopaque;
 
-extern fn render_shim_clip_rect(pix: *PixmanImage, x: c_int, y: c_int, width: c_int, height: c_int) callconv(.c) void;
+fn clipRect(pix: *PixmanImage, x: c_int, y: c_int, width: c_int, height: c_int) void {
+    var clip: Region32 = undefined;
+    render_shim_region_init_rect(regionPtr(&clip), x, y, width, height);
+    render_shim_set_clip_region(pix, regionPtr(&clip));
+    render_shim_region_fini(regionPtr(&clip));
+}
 extern fn render_shim_clip_clear(pix: *PixmanImage) callconv(.c) void;
 extern fn render_shim_solid_fill(color: *const PixmanColor) callconv(.c) ?*PixmanImage;
 extern fn render_shim_image_unref(pix: *PixmanImage) callconv(.c) void;
@@ -1291,7 +1317,7 @@ export fn render_cell(
         }
     }
 
-    render_shim_clip_rect(pix, x, y, render_width, height);
+    clipRect(pix, x, y, render_width, height);
 
     if (damage) |d|
         render_shim_region_union_rect(d, x, y, render_width, height);
@@ -1344,18 +1370,10 @@ export fn render_cell(
             if (glyph.is_color_glyph) {
                 // Glyph surface is a pre-rendered image (typically colour emoji)
                 if (!(cell.attrs.blink and term.blink.state == .off)) {
-                    render_shim_composite(
-                        optPix(glyph.pix), null, pix,
-                        pen_x + letter_x_ofs + g_x,
-                        y + @as(c_int, term.font_baseline) - g_y,
-                        glyph.width, glyph.height);
+                    render_shim_composite(optPix(glyph.pix), null, pix, pen_x + letter_x_ofs + g_x, y + @as(c_int, term.font_baseline) - g_y, glyph.width, glyph.height);
                 }
             } else {
-                render_shim_composite(
-                    clr_pix, optPix(glyph.pix), pix,
-                    pen_x + letter_x_ofs + g_x,
-                    y + @as(c_int, term.font_baseline) - g_y,
-                    glyph.width, glyph.height);
+                render_shim_composite(clr_pix, optPix(glyph.pix), pix, pen_x + letter_x_ofs + g_x, y + @as(c_int, term.font_baseline) - g_y, glyph.width, glyph.height);
 
                 // Combining characters
                 if (composed) |c| {
@@ -1376,11 +1394,7 @@ export fn render_cell(
                         if (cell_cols > 1)
                             pen_x += cell_width;
 
-                        render_shim_composite(
-                            clr_pix, optPix(g.pix), pix,
-                            pen_x + letter_x_ofs + x_ofs + g.x,
-                            y + @as(c_int, term.font_baseline) - g.y,
-                            g.width, g.height);
+                        render_shim_composite(clr_pix, optPix(g.pix), pix, pen_x + letter_x_ofs + x_ofs + g.x, y + @as(c_int, term.font_baseline) - g.y, g.width, g.height);
                     }
                 }
             }
@@ -1409,10 +1423,8 @@ export fn render_cell(
 
                         if (range.start <= col and col <= range.end) {
                             switch (range.data.underline.color_src) {
-                                .base256 => underline_color = color_hex_to_pixman(
-                                    term.colors.table[range.data.underline.color], gamma_correct),
-                                .rgb => underline_color = color_hex_to_pixman(
-                                    range.data.underline.color, gamma_correct),
+                                .base256 => underline_color = color_hex_to_pixman(term.colors.table[range.data.underline.color], gamma_correct),
+                                .rgb => underline_color = color_hex_to_pixman(range.data.underline.color, gamma_correct),
                                 .default => {},
                                 .base16 => unreachable, // underline color can't be base-16
                             }
@@ -1431,12 +1443,10 @@ export fn render_cell(
             draw_strikeout(term, pix, font, &fg, x, y, cell_cols);
 
         if (cell.attrs.url and conf.url.style != .none) {
-            const url_color = color_hex_to_pixman(
-                if (conf.colors_dark.use_custom.url)
-                    conf.colors_dark.url
-                else
-                    term.colors.table[3],
-                gamma_correct);
+            const url_color = color_hex_to_pixman(if (conf.colors_dark.use_custom.url)
+                conf.colors_dark.url
+            else
+                term.colors.table[3], gamma_correct);
 
             draw_styled_underline(term, pix, font, &url_color, conf.url.style, x, y, cell_cols);
         }
@@ -1635,9 +1645,12 @@ fn renderSixelChunk(
         optPix(sixel.pix),
         null,
         pix,
-        0, img_start_row * term.cell_height,
-        x, y,
-        width, height,
+        0,
+        img_start_row * term.cell_height,
+        x,
+        y,
+        width,
+        height,
     );
 
     if (damage) |d|
@@ -1796,14 +1809,66 @@ export fn render_sixel_images(
 
 const SeatList = tll.Tll(types.Seat);
 
-extern fn render_shim_close_button(
+const PIXMAN_OP_OVER: c_int = 3;
+const PIXMAN_a1: u32 = 0x01011000;
+
+extern fn pixman_image_create_solid_fill(color: *const PixmanColor) callconv(.c) ?*PixmanImage;
+extern fn pixman_image_unref(image: ?*PixmanImage) callconv(.c) void;
+extern fn pixman_composite_triangles(
+    op: c_int,
+    src: ?*PixmanImage,
+    dst: *PixmanImage,
+    mask_format: u32,
+    x_src: c_int,
+    y_src: c_int,
+    x_dst: c_int,
+    y_dst: c_int,
+    n_tris: c_int,
+    tris: [*]const types.PixmanTriangle,
+) callconv(.c) void;
+
+fn pixmanIntToFixed(x: c_int) i32 {
+    // pixman_int_to_fixed() is a C multiply that can overflow; wrapping
+    // retains the machine result for that UB case and is exact in range.
+    return x *% 65536;
+}
+
+fn closeButton(
     pix: *PixmanImage,
     color: *const PixmanColor,
     x_margin: c_int,
     y_margin: c_int,
     width: c_int,
     thick: c_int,
-) callconv(.c) void;
+) void {
+    const I = pixmanIntToFixed;
+    const tri = [4]types.PixmanTriangle{
+        .{
+            .p1 = .{ .x = I(x_margin), .y = I(y_margin + thick) },
+            .p2 = .{ .x = I(x_margin + width - thick), .y = I(y_margin + width) },
+            .p3 = .{ .x = I(x_margin + thick), .y = I(y_margin) },
+        },
+        .{
+            .p1 = .{ .x = I(x_margin + width), .y = I(y_margin + width - thick) },
+            .p2 = .{ .x = I(x_margin + thick), .y = I(y_margin) },
+            .p3 = .{ .x = I(x_margin + width - thick), .y = I(y_margin + width) },
+        },
+        .{
+            .p1 = .{ .x = I(x_margin), .y = I(y_margin + width - thick) },
+            .p2 = .{ .x = I(x_margin + width), .y = I(y_margin + thick) },
+            .p3 = .{ .x = I(x_margin + thick), .y = I(y_margin + width) },
+        },
+        .{
+            .p1 = .{ .x = I(x_margin + width), .y = I(y_margin + thick) },
+            .p2 = .{ .x = I(x_margin), .y = I(y_margin + width - thick) },
+            .p3 = .{ .x = I(x_margin + width - thick), .y = I(y_margin) },
+        },
+    };
+
+    const src = pixman_image_create_solid_fill(color);
+    pixman_composite_triangles(PIXMAN_OP_OVER, src, pix, PIXMAN_a1, 0, 0, 0, 0, 4, &tri);
+    pixman_image_unref(src);
+}
 
 fn getCsdButtonFgColor(term: *const Terminal) PixmanColor {
     const conf = term.conf.?;
@@ -1909,7 +1974,7 @@ export fn render_csd_button_close(term: *Terminal, buf: *Buffer) callconv(.c) vo
     const color = getCsdButtonFgColor(term);
     const g = buttonGeom(term, buf);
 
-    render_shim_close_button(bufferPix(buf), &color, g.x_margin, g.y_margin, g.width, g.thick);
+    closeButton(bufferPix(buf), &color, g.x_margin, g.y_margin, g.width, g.thick);
 }
 
 export fn any_pointer_is_on_button(term: *const Terminal, csd_surface: types.CsdSurface) callconv(.c) bool {
@@ -2186,8 +2251,7 @@ export fn render_csd(term: *Terminal) callconv(.c) void {
 
         widths[i] = width;
         heights[i] = height;
-        wayland_shim_subsurface_set_position(
-            sub, roundf(fdiv(infos[i].x, scale)), roundf(fdiv(infos[i].y, scale)));
+        wayland_shim_subsurface_set_position(sub, roundf(fdiv(infos[i].x, scale)), roundf(fdiv(infos[i].y, scale)));
     }
 
     var bufs: [types.CSD_SURF_COUNT]?*Buffer = undefined;
@@ -2250,7 +2314,7 @@ export fn render_osd(
     var x = x_in;
     const pix = bufferPix(buf);
 
-    render_shim_clip_rect(pix, 0, 0, buf.width, buf.height);
+    clipRect(pix, 0, 0, buf.width, buf.height);
 
     const gamma_correct = wayl_do_linear_blending(term.wl, term.conf.?);
     const alpha: u16 = @truncate((_bg >> 24) | (_bg >> 24 << 8));
@@ -2277,8 +2341,7 @@ export fn render_osd(
         if (render_shim_fcft_has_text_run()) {
             var run_glyphs: [*]const ?*FcftGlyph = undefined;
             var run_count: usize = 0;
-            text_run = render_shim_fcft_text_run(
-                f, len, text, term.font_subpixel, &run_glyphs, &run_count);
+            text_run = render_shim_fcft_text_run(f, len, text, term.font_subpixel, &run_glyphs, &run_count);
 
             if (text_run != null) {
                 glyphs = run_glyphs[0..run_count];
@@ -2308,28 +2371,17 @@ export fn render_osd(
     var y: c_uint = 0;
     if (font) |f| {
         const line_height = buf.height;
-        const font_height = @max(
-            render_shim_fcft_font_height(f),
-            terminal_shim_fcft_font_ascent(f) + terminal_shim_fcft_font_descent(f));
-        const glyph_top_y: c_int = @intFromFloat(@round(
-            @as(f64, @floatFromInt(line_height - font_height)) / 2.0));
+        const font_height = @max(render_shim_fcft_font_height(f), terminal_shim_fcft_font_ascent(f) + terminal_shim_fcft_font_descent(f));
+        const glyph_top_y: c_int = @intFromFloat(@round(@as(f64, @floatFromInt(line_height - font_height)) / 2.0));
         y = @intCast(@as(c_int, term.font_y_ofs) + glyph_top_y + terminal_shim_fcft_font_ascent(f));
 
         for (glyphs) |maybe_glyph| {
             const glyph = maybe_glyph orelse continue;
 
             if (glyph.is_color_glyph) {
-                render_shim_composite(
-                    optPix(glyph.pix), null, pix,
-                    @as(c_int, @intCast(x)) + x_ofs + glyph.x,
-                    @as(c_int, @intCast(y)) - glyph.y,
-                    glyph.width, glyph.height);
+                render_shim_composite(optPix(glyph.pix), null, pix, @as(c_int, @intCast(x)) + x_ofs + glyph.x, @as(c_int, @intCast(y)) - glyph.y, glyph.width, glyph.height);
             } else {
-                render_shim_composite(
-                    src, optPix(glyph.pix), pix,
-                    @as(c_int, @intCast(x)) + x_ofs + glyph.x,
-                    @as(c_int, @intCast(y)) - glyph.y,
-                    glyph.width, glyph.height);
+                render_shim_composite(src, optPix(glyph.pix), pix, @as(c_int, @intCast(x)) + x_ofs + glyph.x, @as(c_int, @intCast(y)) - glyph.y, glyph.width, glyph.height);
             }
 
             x = @intCast(@as(c_int, @intCast(x)) + glyph.advance.x);
@@ -2345,13 +2397,11 @@ export fn render_osd(
     wayland_shim_surface_attach(sub_surf.surface.surf, buf.wl_buf, 0, 0);
     wayland_shim_surface_damage_buffer(sub_surf.surface.surf, 0, 0, buf.width, buf.height);
 
-    wayland_shim_set_opaque_region(
-        term.wl.?.compositor, sub_surf.surface.surf, buf.width, buf.height, alpha == 0xffff);
+    wayland_shim_set_opaque_region(term.wl.?.compositor, sub_surf.surface.surf, buf.width, buf.height, alpha == 0xffff);
 
     wayland_shim_surface_commit(sub_surf.surface.surf);
     quirk_weston_subsurface_desync_off(sub_surf.sub);
 }
-
 
 // ─────────────────────────────────────────────────────────────────────────
 // IME preedit and the overlay surface (D3j)
@@ -2397,7 +2447,11 @@ extern fn render_shim_region_union(dst: *anyopaque, a: *const anyopaque, b: *con
 extern fn render_shim_region_extents(r: *const anyopaque, out: *PixmanBox32) callconv(.c) void;
 extern fn render_shim_set_clip_region(pix: *PixmanImage, r: ?*const anyopaque) callconv(.c) void;
 extern fn render_shim_single_pixel_buffer(
-    manager: ?*anyopaque, r: u32, g: u32, b: u32, a: u32,
+    manager: ?*anyopaque,
+    r: u32,
+    g: u32,
+    b: u32,
+    a: u32,
 ) callconv(.c) ?*anyopaque;
 extern fn shm_shim_wl_buffer_destroy(wl_buffer: ?*anyopaque) callconv(.c) void;
 extern fn wayland_shim_surface_set_buffer_scale(surf: ?*anyopaque, scale: i32) callconv(.c) void;
@@ -2545,8 +2599,7 @@ fn renderImePreeditForSeat(term: *Terminal, seat: *types.Seat, buf: *Buffer) voi
 
         var cursor_color: PixmanColor = undefined;
         var text_color: PixmanColor = undefined;
-        cursor_colors_for_cell(
-            term, start_cell, &fg, &bg, &cursor_color, &text_color, gamma_correct);
+        cursor_colors_for_cell(term, start_cell, &fg, &bg, &cursor_color, &text_color, gamma_correct);
 
         const x: c_int = term.margins.left + (col_idx + start) * term.cell_width;
         const y: c_int = term.margins.top + row_idx * term.cell_height;
@@ -2566,8 +2619,7 @@ fn renderImePreeditForSeat(term: *Terminal, seat: *types.Seat, buf: *Buffer) voi
                 draw_hollow_block(term, bufferPix(buf), &cursor_color, x, y, cols);
             }
 
-            term_ime_set_cursor_rect(
-                term, x, y, (end - start) * term.cell_width, term.cell_height);
+            term_ime_set_cursor_rect(term, x, y, (end - start) * term.cell_width, term.cell_height);
         }
     }
 
@@ -2582,8 +2634,7 @@ fn renderImePreeditForSeat(term: *Terminal, seat: *types.Seat, buf: *Buffer) voi
     const damage_w = cells_used * term.cell_width;
     const damage_h = term.cell_height;
 
-    wayland_shim_surface_damage_buffer(
-        term.window.?.surface.surf, damage_x, damage_y, damage_w, damage_h);
+    wayland_shim_surface_damage_buffer(term.window.?.surface.surf, damage_x, damage_y, damage_w, damage_h);
 }
 
 export fn render_ime_preedit(term: *Terminal, buf: *Buffer) callconv(.c) void {
@@ -2630,8 +2681,7 @@ fn renderOverlaySinglePixel(term: *Terminal, style: c_int, color: PixmanColor) v
 
     wayland_shim_subsurface_set_position(overlay.sub, 0, 0);
 
-    wayland_shim_surface_damage_buffer(
-        overlay.surface.surf, 0, 0, term.width, term.height);
+    wayland_shim_surface_damage_buffer(overlay.surface.surf, 0, 0, term.width, term.height);
 
     wayland_shim_surface_commit(overlay.surface.surf);
     quirk_weston_subsurface_desync_off(overlay.sub);
@@ -2720,8 +2770,7 @@ export fn render_overlay(term: *Terminal) callconv(.c) void {
         if (!buffer_reuse) {
             // Can't reuse last frame's damage - set to full window, to
             // ensure *everything* is updated
-            render_shim_region_init_rect(
-                regionPtr(&old_see_through), 0, 0, buf.width, buf.height);
+            render_shim_region_init_rect(regionPtr(&old_see_through), 0, 0, buf.width, buf.height);
         } else {
             // Use last frame's saved region
             render_shim_region_init(regionPtr(&old_see_through));
@@ -2746,8 +2795,7 @@ export fn render_overlay(term: *Terminal) callconv(.c) void {
                 const width = (end_col + 1 - start_col) * term.cell_width;
                 const height = term.cell_height;
 
-                render_shim_region_union_rect(
-                    regionPtr(see_through), x, y, width, height);
+                render_shim_region_union_rect(regionPtr(see_through), x, y, width, height);
 
                 r += 1;
                 if (r > end_row)
@@ -2763,8 +2811,7 @@ export fn render_overlay(term: *Terminal) callconv(.c) void {
         render_shim_region_init(regionPtr(&new_see_through));
 
         if (buffer_reuse) {
-            render_shim_region_subtract(
-                regionPtr(&new_see_through), regionPtr(see_through), regionPtr(&old_see_through));
+            render_shim_region_subtract(regionPtr(&new_see_through), regionPtr(see_through), regionPtr(&old_see_through));
         } else {
             // Buffer content is unknown - explicitly clear *all* current
             // see-through areas
@@ -2776,15 +2823,13 @@ export fn render_overlay(term: *Terminal) callconv(.c) void {
         // frame but are not anymore
         var new_dimmed: Region32 = undefined;
         render_shim_region_init(regionPtr(&new_dimmed));
-        render_shim_region_subtract(
-            regionPtr(&new_dimmed), regionPtr(&old_see_through), regionPtr(see_through));
+        render_shim_region_subtract(regionPtr(&new_dimmed), regionPtr(&old_see_through), regionPtr(see_through));
         render_shim_region_fini(regionPtr(&old_see_through));
 
         // Total affected area
         var damage: Region32 = undefined;
         render_shim_region_init(regionPtr(&damage));
-        render_shim_region_union(
-            regionPtr(&damage), regionPtr(&new_see_through), regionPtr(&new_dimmed));
+        render_shim_region_union(regionPtr(&damage), regionPtr(&new_see_through), regionPtr(&new_dimmed));
         render_shim_region_extents(regionPtr(&damage), &damage_bounds);
 
         // Clear cells that became selected in this frame.
@@ -2841,8 +2886,6 @@ export fn render_overlay(term: *Terminal) callconv(.c) void {
     term.render.last_overlay_style = style;
 }
 
-
-
 // ─────────────────────────────────────────────────────────────────────────
 // Presentation feedback and the renderer object (D3k1)
 // ─────────────────────────────────────────────────────────────────────────
@@ -2851,10 +2894,7 @@ const LOG_CLASS_ERROR: c_int = 1;
 const LOG_CLASS_WARNING: c_int = 2;
 const LOG_CLASS_INFO: c_int = 3;
 
-extern fn log_errno(
-    class: c_int, module: [*:0]const u8, file: [*:0]const u8, lineno: c_int,
-    fmt: [*:0]const u8, ...
-) callconv(.c) void;
+extern fn log_errno(class: c_int, module: [*:0]const u8, file: [*:0]const u8, lineno: c_int, fmt: [*:0]const u8, ...) callconv(.c) void;
 
 const Fdm = opaque {};
 
@@ -2863,7 +2903,10 @@ const FdmHook = *const fn (*Fdm, ?*anyopaque) callconv(.c) void;
 const FDM_HOOK_PRIORITY_NORMAL: c_int = 1;
 
 extern fn fdm_hook_add(
-    fdm: *Fdm, hook: FdmHook, data: ?*anyopaque, priority: c_int,
+    fdm: *Fdm,
+    hook: FdmHook,
+    data: ?*anyopaque,
+    priority: c_int,
 ) callconv(.c) bool;
 extern fn fdm_hook_del(fdm: *Fdm, hook: FdmHook, priority: c_int) callconv(.c) bool;
 
@@ -2878,11 +2921,41 @@ comptime {
     std.debug.assert(@sizeOf(Renderer) == 2 * @sizeOf(usize));
 }
 
-extern fn render_presentation_ctx_term(ctx: ?*anyopaque) callconv(.c) ?*Terminal;
-extern fn render_presentation_ctx_input(ctx: ?*anyopaque, sec: *i64, usec: *i64) callconv(.c) void;
-extern fn render_presentation_ctx_commit(ctx: ?*anyopaque, sec: *i64, usec: *i64) callconv(.c) void;
 extern fn render_shim_presentation_feedback_destroy(fb: ?*anyopaque) callconv(.c) void;
-extern fn render_shim_presentation_stat_add(frames: c_uint) callconv(.c) void;
+
+const PresentationStatistics = struct {
+    total: usize = 0,
+    zero: usize = 0,
+    one: usize = 0,
+    two: usize = 0,
+};
+
+var presentation_statistics = PresentationStatistics{};
+
+export fn render_shim_presentation_stat_add(frames: c_uint) callconv(.c) void {
+    presentation_statistics.total += 1;
+
+    if (frames >= 2)
+        presentation_statistics.two += 1
+    else if (frames >= 1)
+        presentation_statistics.one += 1
+    else
+        presentation_statistics.zero += 1;
+}
+
+/// The C DESTRUCTOR keeps the exit-time logging attribute; this supplies the
+/// counters without exposing Zig global storage to C.
+export fn render_shim_presentation_stat_get(
+    total: *usize,
+    zero: *usize,
+    one: *usize,
+    two: *usize,
+) callconv(.c) void {
+    total.* = presentation_statistics.total;
+    zero.* = presentation_statistics.zero;
+    one.* = presentation_statistics.one;
+    two.* = presentation_statistics.two;
+}
 
 export fn render_init(fdm: *Fdm, wayl: *types.Wayland) callconv(.c) ?*Renderer {
     const raw = std.c.malloc(@sizeOf(Renderer)) orelse {
@@ -2894,9 +2967,7 @@ export fn render_init(fdm: *Fdm, wayl: *types.Wayland) callconv(.c) ?*Renderer {
     renderer.* = .{ .fdm = fdm, .wayl = wayl };
 
     if (!fdm_hook_add(fdm, &fdm_hook_refresh_pending_terminals, renderer, FDM_HOOK_PRIORITY_NORMAL)) {
-        log_msg(
-            LOG_CLASS_ERROR, "render", "render.zig", @intCast(@src().line),
-            "failed to register FDM hook");
+        log_msg(LOG_CLASS_ERROR, "render", "render.zig", @intCast(@src().line), "failed to register FDM hook");
         free(renderer);
         return null;
     }
@@ -2935,6 +3006,23 @@ export fn render_presentation_frame_count(total_us: i64, refresh: f32) callconv(
     return presentationFrameCount(total_us, refresh);
 }
 
+fn presentationCtxNew(
+    term: *Terminal,
+    input_sec: i64,
+    input_usec: i64,
+    commit_sec: i64,
+    commit_usec: i64,
+) *types.PresentationContext {
+    const raw = xmalloc(@sizeOf(types.PresentationContext)) orelse unreachable;
+    const ctx: *types.PresentationContext = @ptrCast(@alignCast(raw));
+    ctx.* = .{
+        .term = term,
+        .input = .{ .tv_sec = input_sec, .tv_usec = input_usec },
+        .commit = .{ .tv_sec = commit_sec, .tv_usec = commit_usec },
+    };
+    return ctx;
+}
+
 export fn sync_output(
     data: ?*anyopaque,
     wp_presentation_feedback: ?*anyopaque,
@@ -2961,16 +3049,13 @@ export fn presented(
     _ = seq_lo;
     _ = flags;
 
-    const ctx = data orelse return;
-    const term = render_presentation_ctx_term(ctx) orelse return;
+    const ctx: *types.PresentationContext = @ptrCast(@alignCast(data.?));
+    const term = ctx.term orelse return;
 
-    var in_sec: i64 = 0;
-    var in_usec: i64 = 0;
-    render_presentation_ctx_input(ctx, &in_sec, &in_usec);
-
-    var commit_sec: i64 = 0;
-    var commit_usec: i64 = 0;
-    render_presentation_ctx_commit(ctx, &commit_sec, &commit_usec);
+    const in_sec = ctx.input.tv_sec;
+    const in_usec = ctx.input.tv_usec;
+    const commit_sec = ctx.commit.tv_sec;
+    const commit_usec = ctx.commit.tv_usec;
 
     const presented_sec: i64 = @as(i64, tv_sec_hi) << 32 | @as(i64, tv_sec_lo);
     const presented_usec: i64 = @as(i64, tv_nsec / 1000);
@@ -2989,7 +3074,10 @@ export fn presented(
     }
 
     log_msg(
-        LOG_CLASS_DEBUG, "render", "render.zig", @intCast(@src().line),
+        LOG_CLASS_DEBUG,
+        "render",
+        "render.zig",
+        @intCast(@src().line),
         "commit: %lu s %lu µs, presented: %lu s %lu µs",
         @as(u64, @intCast(commit_sec)),
         @as(u64, @intCast(commit_usec)),
@@ -3024,17 +3112,11 @@ export fn presented(
 
     const msg: [*:0]const u8 = @ptrCast(&msg_buf);
     if (frame_count >= 2) {
-        log_msg(
-            LOG_CLASS_ERROR, "render", "render.zig", @intCast(@src().line),
-            "%s (more than %u frames)", msg, frame_count);
+        log_msg(LOG_CLASS_ERROR, "render", "render.zig", @intCast(@src().line), "%s (more than %u frames)", msg, frame_count);
     } else if (frame_count >= 1) {
-        log_msg(
-            LOG_CLASS_WARNING, "render", "render.zig", @intCast(@src().line),
-            "%s (more than %u frames)", msg, frame_count);
+        log_msg(LOG_CLASS_WARNING, "render", "render.zig", @intCast(@src().line), "%s (more than %u frames)", msg, frame_count);
     } else {
-        log_msg(
-            LOG_CLASS_INFO, "render", "render.zig", @intCast(@src().line),
-            "%s (more than %u frames)", msg, frame_count);
+        log_msg(LOG_CLASS_INFO, "render", "render.zig", @intCast(@src().line), "%s (more than %u frames)", msg, frame_count);
     }
 
     render_shim_presentation_feedback_destroy(wp_presentation_feedback);
@@ -3048,8 +3130,6 @@ export fn discarded(
     render_shim_presentation_feedback_destroy(wp_presentation_feedback);
     free(data);
 }
-
-
 
 // ─────────────────────────────────────────────────────────────────────────
 // Damage re-application (D3k2a)
@@ -3172,14 +3252,14 @@ export fn reapply_old_damage(term: *Terminal, new_buf: *Buffer, old: *Buffer) ca
     render_shim_region_fini(regionPtr(&dirty));
 }
 
-
-
 // ─────────────────────────────────────────────────────────────────────────
 // Scrollback indicator and render timer (D3k2b)
 // ─────────────────────────────────────────────────────────────────────────
 
 extern fn wayl_win_subsurface_new(
-    win: *types.WlWindow, surf: *types.WaylSubSurface, allow_pointer_input: bool,
+    win: *types.WlWindow,
+    surf: *types.WaylSubSurface,
+    allow_pointer_input: bool,
 ) callconv(.c) bool;
 extern fn wayl_win_subsurface_destroy(surf: ?*types.WaylSubSurface) callconv(.c) void;
 extern fn mbsntoc32(dst: ?[*]u32, src: [*c]const u8, nms: usize, len: usize) callconv(.c) usize;
@@ -3218,9 +3298,7 @@ export fn render_scrollback_position(term: *Terminal) callconv(.c) void {
 
     if (win.scrollback_indicator.surface.surf == null) {
         if (!wayl_win_subsurface_new(win, &win.scrollback_indicator, false)) {
-            log_msg(
-                LOG_CLASS_ERROR, "render", "render.zig", @intCast(@src().line),
-                "failed to create scrollback indicator surface");
+            log_msg(LOG_CLASS_ERROR, "render", "render.zig", @intCast(@src().line), "failed to create scrollback indicator surface");
             return;
         }
     }
@@ -3261,16 +3339,14 @@ export fn render_scrollback_position(term: *Terminal) callconv(.c) void {
     switch (conf.scrollback.indicator.format) {
         .percentage => {
             var str_buf: [8]u8 = undefined;
-            const str = std.fmt.bufPrintZ(
-                &str_buf, "{d}%", .{@as(c_int, @intFromFloat(100.0 * percent))}) catch unreachable;
+            const str = std.fmt.bufPrintZ(&str_buf, "{d}%", .{@as(c_int, @intFromFloat(100.0 * percent))}) catch unreachable;
             _ = mbsntoc32(&text_buf, str.ptr, text_buf.len, str.len);
             cell_count = 3;
         },
 
         .lineno => {
             var str_buf: [64]u8 = undefined;
-            const str = std.fmt.bufPrintZ(
-                &str_buf, "{d}", .{rebased_view + 1}) catch unreachable;
+            const str = std.fmt.bufPrintZ(&str_buf, "{d}", .{rebased_view + 1}) catch unreachable;
             _ = mbsntoc32(&text_buf, str.ptr, text_buf.len, str.len);
             cell_count = @intFromFloat(@ceil(@log10(@as(f32, @floatFromInt(grid.num_rows)))));
         },
@@ -3328,8 +3404,7 @@ export fn render_scrollback_position(term: *Terminal) callconv(.c) void {
         @ptrCast(@alignCast(term.render.chains.scrollback_indicator.?));
     const buf = shm_get_buffer(chain, width, height) orelse return;
 
-    wayland_shim_subsurface_set_position(
-        win.scrollback_indicator.sub, roundfDiv(x, scale), roundfDiv(y, scale));
+    wayland_shim_subsurface_set_position(win.scrollback_indicator.sub, roundfDiv(x, scale), roundfDiv(y, scale));
 
     var fg: u32 = term.colors.table[0];
     var bg: u32 = term.colors.table[8 + 4];
@@ -3397,8 +3472,6 @@ export fn render_render_timer(term: *Terminal, render_time: Timespec) callconv(.
     );
 }
 
-
-
 // ─────────────────────────────────────────────────────────────────────────
 // The search box (D3k3)
 // ─────────────────────────────────────────────────────────────────────────
@@ -3408,8 +3481,12 @@ extern fn c32ncat(dst: [*]u32, src: [*]const u32, n: usize) callconv(.c) [*]u32;
 extern fn c32cat(dst: [*]u32, src: [*]const u32) callconv(.c) [*]u32;
 extern fn c32swidth(s: [*]const u32, n: usize) callconv(.c) c_int;
 extern fn wayland_shim_set_opaque_region_rect(
-    compositor: ?*anyopaque, surf: ?*anyopaque,
-    x: c_int, y: c_int, width: c_int, height: c_int,
+    compositor: ?*anyopaque,
+    surf: ?*anyopaque,
+    x: c_int,
+    y: c_int,
+    width: c_int,
+    height: c_int,
 ) callconv(.c) void;
 
 /// The window-relative position of a search-box coordinate (C's WINDOW_X/Y).
@@ -3537,7 +3614,7 @@ export fn render_search_box(term: *Terminal) callconv(.c) void {
     const buf = shm_get_buffer(chain, @intCast(width), @intCast(height)) orelse return;
     const pix = bufferPix(buf);
 
-    render_shim_clip_rect(pix, 0, 0, @intCast(width), @intCast(height));
+    clipRect(pix, 0, 0, @intCast(width), @intCast(height));
 
     const is_match = search.match_len == text_len;
     const custom_colors = if (is_match)
@@ -3607,8 +3684,7 @@ export fn render_search_box(term: *Terminal) callconv(.c) void {
                     }
                 }
 
-                glyph_offset = searchBoxGlyphOffset(
-                    glyph_offset, visible_cells, total_cells, cell_idx);
+                glyph_offset = searchBoxGlyphOffset(glyph_offset, visible_cells, total_cells, cell_idx);
                 term.render.search_glyph_offset = glyph_offset;
 
                 break;
@@ -3673,9 +3749,7 @@ export fn render_search_box(term: *Terminal) callconv(.c) void {
 
                     // Bar-styled cursor, if in the visible area
                     if (start >= 0 and start <= @as(c_int, @intCast(visible_cells))) {
-                        draw_beam_cursor(
-                            term, pix, font.?, &fg,
-                            x + start * term.cell_width, y);
+                        draw_beam_cursor(term, pix, font.?, &fg, x + start * term.cell_width, y);
                     }
 
                     term_ime_set_cursor_rect(
@@ -3694,15 +3768,11 @@ export fn render_search_box(term: *Terminal) callconv(.c) void {
                     ), 0);
 
                     draw_underline(term, pix, font.?, &fg, x, y, count1);
-                    draw_underline(
-                        term, pix, font.?, &fg,
-                        x + end * term.cell_width, y, count2);
+                    draw_underline(term, pix, font.?, &fg, x + end * term.cell_width, y, count2);
 
                     // TODO: partially hidden rectangles
                     if (start >= 0 and end <= @as(c_int, @intCast(visible_cells))) {
-                        draw_hollow_block(
-                            term, pix, &fg,
-                            x + start * term.cell_width, y, end - start);
+                        draw_hollow_block(term, pix, &fg, x + start * term.cell_width, y, end - start);
                     }
 
                     term_ime_set_cursor_rect(
@@ -3719,9 +3789,7 @@ export fn render_search_box(term: *Terminal) callconv(.c) void {
                 std.debug.assert(cell_idx <= glyph_offset + visible_cells);
 
                 draw_beam_cursor(term, pix, font.?, &fg, x, y);
-                term_ime_set_cursor_rect(
-                    term, windowX(margin, x), windowY(term, margin, height, y),
-                    1, term.cell_height);
+                term_ime_set_cursor_rect(term, windowX(margin, x), windowY(term, margin, height, y), 1, term.cell_height);
             }
         }
 
@@ -3737,15 +3805,17 @@ export fn render_search_box(term: *Terminal) callconv(.c) void {
             continue;
         }
 
-        const glyph = fcft_rasterize_char_utf32(
-            font.?, text[i], term.font_subpixel) orelse continue;
+        const glyph = fcft_rasterize_char_utf32(font.?, text[i], term.font_subpixel) orelse continue;
 
         if (glyph.is_color_glyph) {
             render_shim_composite(
-                optPix(glyph.pix), null, pix,
+                optPix(glyph.pix),
+                null,
+                pix,
                 x + x_ofs + glyph.x,
                 y + @as(c_int, term.font_baseline) - glyph.y,
-                glyph.width, glyph.height,
+                glyph.width,
+                glyph.height,
             );
         } else {
             // Zero-width characters need an extra offset
@@ -3759,10 +3829,13 @@ export fn render_search_box(term: *Terminal) callconv(.c) void {
 
             const src = render_shim_solid_fill(&fg).?;
             render_shim_composite(
-                src, optPix(glyph.pix), pix,
+                src,
+                optPix(glyph.pix),
+                pix,
                 x + x_ofs + combining_ofs + glyph.x,
                 y + @as(c_int, term.font_baseline) - glyph.y,
-                glyph.width, glyph.height,
+                glyph.width,
+                glyph.height,
             );
             render_shim_image_unref(src);
         }
@@ -3775,9 +3848,7 @@ export fn render_search_box(term: *Terminal) callconv(.c) void {
 
     if (!have_preedit_cells and search.cursor >= search.len) {
         draw_beam_cursor(term, pix, font.?, &fg, x, y);
-        term_ime_set_cursor_rect(
-            term, windowX(margin, x), windowY(term, margin, height, y),
-            1, term.cell_height);
+        term_ime_set_cursor_rect(term, windowX(margin, x), windowY(term, margin, height, y), 1, term.cell_height);
     }
 
     quirk_weston_subsurface_desync_on(win.search.sub);
@@ -3794,8 +3865,7 @@ export fn render_search_box(term: *Terminal) callconv(.c) void {
 
     wayl_surface_scale(win, &win.search.surface, buf, scale);
     wayland_shim_surface_attach(win.search.surface.surf, buf.wl_buf, 0, 0);
-    wayland_shim_surface_damage_buffer(
-        win.search.surface.surf, 0, 0, @intCast(width), @intCast(height));
+    wayland_shim_surface_damage_buffer(win.search.surface.surf, 0, 0, @intCast(width), @intCast(height));
 
     wayland_shim_set_opaque_region_rect(
         term.wl.?.compositor,
@@ -3812,8 +3882,6 @@ export fn render_search_box(term: *Terminal) callconv(.c) void {
     free(text_raw);
     free(widths_raw);
 }
-
-
 
 // ─────────────────────────────────────────────────────────────────────────
 // URL jump labels (D3k4)
@@ -3903,8 +3971,7 @@ export fn render_url_format_label(
     entered_key_len: usize,
     max_cols: c_int,
 ) callconv(.c) c_int {
-    return buildUrlLabel(
-        label, key, url orelse &empty_wtext, show_url, entered_key_len, max_cols);
+    return buildUrlLabel(label, key, url orelse &empty_wtext, show_url, entered_key_len, max_cols);
 }
 
 export fn render_urls(term: *Terminal) callconv(.c) void {
@@ -4006,8 +4073,7 @@ export fn render_urls(term: *Terminal) callconv(.c) void {
         ) orelse unreachable;
         const label: [*]u32 = @ptrCast(@alignCast(label_raw));
 
-        const cols = buildUrlLabel(
-            label, key, url_wchars, show_url, entered_key_len, max_cols);
+        const cols = buildUrlLabel(label, key, url_wchars, show_url, entered_key_len, max_cols);
 
         free(url_wchars_raw);
 
@@ -4016,10 +4082,8 @@ export fn render_urls(term: *Terminal) callconv(.c) void {
             continue;
         }
 
-        const width: c_int = snapToScale(
-            x_margin + cols * term.cell_width + x_margin, scale);
-        const height: c_int = snapToScale(
-            y_margin + term.cell_height + y_margin, scale);
+        const width: c_int = snapToScale(x_margin + cols * term.cell_width + x_margin, scale);
+        const height: c_int = snapToScale(y_margin + term.cell_height + y_margin, scale);
 
         // The label buffer is heap allocated (C's was a VLA and got copied
         // with xc32dup()); it is freed by the second pass.
@@ -4079,8 +4143,14 @@ export fn render_urls(term: *Terminal) callconv(.c) void {
         );
 
         render_osd(
-            term, sub_surf, @ptrCast(term.fonts[0]), buf, label,
-            fg, 0xff000000 | bg, @intCast(x_margin),
+            term,
+            sub_surf,
+            @ptrCast(term.fonts[0]),
+            buf,
+            label,
+            fg,
+            0xff000000 | bg,
+            @intCast(x_margin),
         );
 
         free(@ptrCast(label));
@@ -4092,14 +4162,11 @@ export fn render_urls(term: *Terminal) callconv(.c) void {
     free(bufs_raw);
 }
 
-
-
 // ─────────────────────────────────────────────────────────────────────────
 // Size notifications (D3l3a)
 // ─────────────────────────────────────────────────────────────────────────
 
-extern fn render_shim_tiocswinsz(
-    ptmx: c_int, rows: c_int, cols: c_int, xpixel: c_int, ypixel: c_int) callconv(.c) c_int;
+extern fn render_shim_tiocswinsz(ptmx: c_int, rows: c_int, cols: c_int, xpixel: c_int, ypixel: c_int) callconv(.c) c_int;
 extern fn term_send_size_notification(term: *Terminal) callconv(.c) void;
 extern fn term_ptmx_pause(term: *Terminal) callconv(.c) void;
 extern fn term_ptmx_resume(term: *Terminal) callconv(.c) void;
@@ -4135,16 +4202,8 @@ export fn tiocswinsz(term: *Terminal) callconv(.c) void {
     if (term.ptmx < 0)
         return;
 
-    if (render_shim_tiocswinsz(
-            term.ptmx,
-            term.rows,
-            term.cols,
-            term.cols * term.cell_width,
-            term.rows * term.cell_height) < 0)
-    {
-        log_errno(
-            LOG_CLASS_ERROR, "render", "render.zig", @intCast(@src().line),
-            "TIOCSWINSZ");
+    if (render_shim_tiocswinsz(term.ptmx, term.rows, term.cols, term.cols * term.cell_width, term.rows * term.cell_height) < 0) {
+        log_errno(LOG_CLASS_ERROR, "render", "render.zig", @intCast(@src().line), "TIOCSWINSZ");
     }
 
     term_send_size_notification(term);
@@ -4270,9 +4329,7 @@ export fn send_dimensions_to_client(term: *Terminal) callconv(.c) void {
         // Lazy create timer fd
         fd = timerfd_create(CLOCK_MONOTONIC, TFD_CLOEXEC | TFD_NONBLOCK);
         if (fd < 0) {
-            log_errno(
-                LOG_CLASS_ERROR, "render", "render.zig", @intCast(@src().line),
-                "failed to create TIOCSWINSZ timer");
+            log_errno(LOG_CLASS_ERROR, "render", "render.zig", @intCast(@src().line), "failed to create TIOCSWINSZ timer");
         } else if (!fdm_add(term.fdm.?, fd, EPOLLIN, &fdm_tiocswinsz, term)) {
             _ = close(fd);
             fd = -1;
@@ -4292,9 +4349,7 @@ export fn send_dimensions_to_client(term: *Terminal) callconv(.c) void {
         };
 
         if (timerfd_settime(fd, 0, &timeout, null) < 0) {
-            log_errno(
-                LOG_CLASS_ERROR, "render", "render.zig", @intCast(@src().line),
-                "failed to arm TIOCSWINSZ timer");
+            log_errno(LOG_CLASS_ERROR, "render", "render.zig", @intCast(@src().line), "failed to arm TIOCSWINSZ timer");
             _ = fdm_del(term.fdm.?, fd);
             win.resize_timeout_fd = -1;
         } else {
@@ -4346,8 +4401,7 @@ const RESIZE_FORCE: u8 = 1 << 0;
 const RESIZE_BY_CELLS: u8 = 1 << 1;
 const RESIZE_KEEP_GRID: u8 = 1 << 2;
 
-extern fn mouse_coord_pixel_to_cell(
-    seat: *anyopaque, term: *const Terminal, x: c_int, y: c_int) callconv(.c) void;
+extern fn mouse_coord_pixel_to_cell(seat: *anyopaque, term: *const Terminal, x: c_int, y: c_int) callconv(.c) void;
 extern fn term_disable_app_sync_updates(term: *Terminal) callconv(.c) void;
 extern fn urls_reset(term: *Terminal) callconv(.c) void;
 extern fn selection_cancel(term: *Terminal) callconv(.c) void;
@@ -4361,10 +4415,8 @@ extern fn grid_resize_without_reflow(
     new_screen_rows: c_int,
 ) callconv(.c) void;
 extern fn sixel_reflow(term: *Terminal) callconv(.c) void;
-extern fn wayland_shim_xdg_toplevel_set_min_size(
-    toplevel: ?*anyopaque, width: c_int, height: c_int) callconv(.c) void;
-extern fn wayland_shim_xdg_surface_set_window_geometry(
-    surface: ?*anyopaque, x: c_int, y: c_int, width: c_int, height: c_int) callconv(.c) void;
+extern fn wayland_shim_xdg_toplevel_set_min_size(toplevel: ?*anyopaque, width: c_int, height: c_int) callconv(.c) void;
+extern fn wayland_shim_xdg_surface_set_window_geometry(surface: ?*anyopaque, x: c_int, y: c_int, width: c_int, height: c_int) callconv(.c) void;
 
 fn roundF(v: f64) c_int {
     return @intFromFloat(@round(v));
@@ -4472,10 +4524,8 @@ export fn render_resize(
     const min_rows: c_int = 1;
 
     // Minimum window size (must be divisible by the scaling factor)
-    const min_width: c_int = roundF(scale * @ceil(
-        @as(f64, @floatFromInt(min_cols * term.cell_width)) / scale));
-    const min_height: c_int = roundF(scale * @ceil(
-        @as(f64, @floatFromInt(min_rows * term.cell_height)) / scale));
+    const min_width: c_int = roundF(scale * @ceil(@as(f64, @floatFromInt(min_cols * term.cell_width)) / scale));
+    const min_height: c_int = roundF(scale * @ceil(@as(f64, @floatFromInt(min_rows * term.cell_height)) / scale));
 
     width = @max(width, min_width);
     height = @max(height, min_height);
@@ -4483,14 +4533,10 @@ export fn render_resize(
     // Padding
     const max_pad_x: c_int = @divTrunc(width - min_width, 2);
     const max_pad_y: c_int = @divTrunc(height - min_height, 2);
-    const pad_left: c_int = @intFromFloat(@min(
-        @as(f64, @floatFromInt(max_pad_x)), scale * @as(f64, @floatFromInt(conf.pad_left))));
-    const pad_right: c_int = @intFromFloat(@min(
-        @as(f64, @floatFromInt(max_pad_x)), scale * @as(f64, @floatFromInt(conf.pad_right))));
-    const pad_top: c_int = @intFromFloat(@min(
-        @as(f64, @floatFromInt(max_pad_y)), scale * @as(f64, @floatFromInt(conf.pad_top))));
-    const pad_bottom: c_int = @intFromFloat(@min(
-        @as(f64, @floatFromInt(max_pad_y)), scale * @as(f64, @floatFromInt(conf.pad_bottom))));
+    const pad_left: c_int = @intFromFloat(@min(@as(f64, @floatFromInt(max_pad_x)), scale * @as(f64, @floatFromInt(conf.pad_left))));
+    const pad_right: c_int = @intFromFloat(@min(@as(f64, @floatFromInt(max_pad_x)), scale * @as(f64, @floatFromInt(conf.pad_right))));
+    const pad_top: c_int = @intFromFloat(@min(@as(f64, @floatFromInt(max_pad_y)), scale * @as(f64, @floatFromInt(conf.pad_top))));
+    const pad_bottom: c_int = @intFromFloat(@min(@as(f64, @floatFromInt(max_pad_y)), scale * @as(f64, @floatFromInt(conf.pad_bottom))));
 
     if (is_floating and
         (opts & RESIZE_BY_CELLS) != 0 and
@@ -4499,13 +4545,11 @@ export fn render_resize(
         // If resizing in cell increments, restrict the width and height
         width = @divTrunc(width - (pad_left + pad_right), term.cell_width) *
             term.cell_width + (pad_left + pad_right);
-        width = @max(min_width, roundF(scale * @round(
-            @as(f64, @floatFromInt(width)) / scale)));
+        width = @max(min_width, roundF(scale * @round(@as(f64, @floatFromInt(width)) / scale)));
 
         height = @divTrunc(height - (pad_top + pad_bottom), term.cell_height) *
             term.cell_height + (pad_top + pad_bottom);
-        height = @max(min_height, roundF(scale * @round(
-            @as(f64, @floatFromInt(height)) / scale)));
+        height = @max(min_height, roundF(scale * @round(@as(f64, @floatFromInt(height)) / scale)));
     }
 
     if ((opts & RESIZE_FORCE) == 0 and
@@ -4522,9 +4566,7 @@ export fn render_resize(
     // Drop out of URL mode
     urls_reset(term);
 
-    log_msg(
-        LOG_CLASS_DEBUG, "render", "render.zig", @intCast(@src().line),
-        "resized: size=%dx%d (scale=%.2f)", width, height, term.scale);
+    log_msg(LOG_CLASS_DEBUG, "render", "render.zig", @intCast(@src().line), "resized: size=%dx%d (scale=%.2f)", width, height, term.scale);
 
     term.width = width;
     term.height = height;
@@ -4534,10 +4576,8 @@ export fn render_resize(
     const old_rows = term.rows;
 
     // Screen rows/cols after resize
-    const new_cols: c_int = @divTrunc(
-        term.width - (pad_left + pad_right), term.cell_width);
-    const new_rows: c_int = @divTrunc(
-        term.height - (pad_top + pad_bottom), term.cell_height);
+    const new_cols: c_int = @divTrunc(term.width - (pad_left + pad_right), term.cell_width);
+    const new_rows: c_int = @divTrunc(term.height - (pad_top + pad_bottom), term.cell_height);
 
     // Requirements for scrollback: the total number of rows (visible +
     // scrollback) must be a power of two and representable in a signed int.
@@ -4548,14 +4588,10 @@ export fn render_resize(
     );
 
     // Grid rows/cols after resize
-    const new_normal_grid_rows: c_int = @intCast(@min(
-        ceilPow2(scrollback_lines_not_yet_power_of_two), max_scrollback));
-    const new_alt_grid_rows: c_int = @intCast(@min(
-        ceilPow2(@intCast(new_rows)), max_scrollback));
+    const new_normal_grid_rows: c_int = @intCast(@min(ceilPow2(scrollback_lines_not_yet_power_of_two), max_scrollback));
+    const new_alt_grid_rows: c_int = @intCast(@min(ceilPow2(@intCast(new_rows)), max_scrollback));
 
-    log_msg(
-        LOG_CLASS_DEBUG, "render", "render.zig", @intCast(@src().line),
-        "grid rows: %d", new_normal_grid_rows);
+    log_msg(LOG_CLASS_DEBUG, "render", "render.zig", @intCast(@src().line), "grid rows: %d", new_normal_grid_rows);
 
     std.debug.assert(new_cols >= 1);
     std.debug.assert(new_rows >= 1);
@@ -4590,9 +4626,7 @@ export fn render_resize(
     var skip_reflow = false;
 
     if (new_cols == old_cols and new_rows == old_rows) {
-        log_msg(
-            LOG_CLASS_DEBUG, "render", "render.zig", @intCast(@src().line),
-            "grid layout unaffected; skipping reflow");
+        log_msg(LOG_CLASS_DEBUG, "render", "render.zig", @intCast(@src().line), "grid layout unaffected; skipping reflow");
         term.interactive_resizing.new_rows = new_normal_grid_rows;
         skip_reflow = true;
     }
@@ -4641,8 +4675,7 @@ export fn render_resize(
             g.view = 0;
             g.cursor = orig.cursor;
             g.saved_cursor = orig.saved_cursor;
-            g.rows = @ptrCast(@alignCast(xcalloc(
-                @intCast(g.num_rows), @sizeOf(?*types.Row)).?));
+            g.rows = @ptrCast(@alignCast(xcalloc(@intCast(g.num_rows), @sizeOf(?*types.Row)).?));
             g.cur_row = null;
             g.kitty_kbd = orig.kitty_kbd;
 
@@ -4667,13 +4700,11 @@ export fn render_resize(
                     if (src.count != 0) {
                         // Copy underline ranges
                         const count: usize = @intCast(src.count);
-                        const dst_extra: *types.RowData = @ptrCast(@alignCast(
-                            xcalloc(1, @sizeOf(types.RowData)).?));
+                        const dst_extra: *types.RowData = @ptrCast(@alignCast(xcalloc(1, @sizeOf(types.RowData)).?));
                         dst_row.extra = dst_extra;
 
                         const dst = &dst_extra.underline_ranges;
-                        const v: [*]types.RowRange = @ptrCast(@alignCast(
-                            xmalloc(count * @sizeOf(types.RowRange)).?));
+                        const v: [*]types.RowRange = @ptrCast(@alignCast(xmalloc(count * @sizeOf(types.RowRange)).?));
                         dst.v = v;
                         dst.count = @intCast(count);
                         dst.size = @intCast(count);
@@ -4786,13 +4817,8 @@ export fn render_resize(
 
         sixel_reflow(term);
 
-        log_msg(
-            LOG_CLASS_DEBUG, "render", "render.zig", @intCast(@src().line),
-            "resized: grid: cols=%d, rows=%d " ++
-                "(left-margin=%d, right-margin=%d, top-margin=%d, bottom-margin=%d)",
-            term.cols, term.rows,
-            term.margins.left, term.margins.right,
-            term.margins.top, term.margins.bottom);
+        log_msg(LOG_CLASS_DEBUG, "render", "render.zig", @intCast(@src().line), "resized: grid: cols=%d, rows=%d " ++
+            "(left-margin=%d, right-margin=%d, top-margin=%d, bottom-margin=%d)", term.cols, term.rows, term.margins.left, term.margins.right, term.margins.top, term.margins.bottom);
 
         if (term.scroll_region.start >= term.rows)
             term.scroll_region.start = 0;
@@ -4852,10 +4878,8 @@ export fn render_resize(
         const y = roundF(@as(f64, @floatFromInt(-title)) / scale) -
             roundF(@as(f64, @floatFromInt(border)) / scale);
 
-        wayland_shim_xdg_toplevel_set_min_size(
-            window.xdg_toplevel, toplevel_min_width, toplevel_min_height);
-        wayland_shim_xdg_surface_set_window_geometry(
-            window.xdg_surface, x, y, toplevel_width, toplevel_height);
+        wayland_shim_xdg_toplevel_set_min_size(window.xdg_toplevel, toplevel_min_width, toplevel_min_height);
+        wayland_shim_xdg_surface_set_window_geometry(window.xdg_surface, x, y, toplevel_width, toplevel_height);
     }
 
     const normal_damage: *tll.Tll(types.Damage) = @ptrCast(&term.normal.scroll_damage);
@@ -4888,13 +4912,6 @@ extern fn render_shim_add_frame_callback(surf: ?*anyopaque, data: *anyopaque) ca
 extern fn render_shim_presentation_commit_time(wl: *types.Wayland, sec: *i64, nsec: *i64) callconv(.c) void;
 extern fn render_shim_presentation_feedback_new(wl: *types.Wayland, surf: ?*anyopaque) callconv(.c) ?*anyopaque;
 extern fn render_shim_presentation_feedback_add(fb: *anyopaque, ctx: *anyopaque) callconv(.c) void;
-extern fn render_shim_presentation_ctx_new(
-    term: *Terminal,
-    input_sec: i64,
-    input_usec: i64,
-    commit_sec: i64,
-    commit_usec: i64,
-) callconv(.c) *anyopaque;
 
 /// Only set once the compositor has refused a buffer release 10 frames in a
 /// row; the warning is emitted at most once per process (C used a `static`).
@@ -4990,9 +5007,7 @@ export fn grid_render(term: *Terminal) callconv(.c) void {
     dirty_old_cursor(term);
     dirty_cursor(term);
 
-    log_msg(
-        LOG_CLASS_DEBUG, "render", "render.zig", @intCast(@src().line),
-        "buffer age: %u (%p)", @as(c_uint, buf.age), @as(*anyopaque, buf));
+    log_msg(LOG_CLASS_DEBUG, "render", "render.zig", @intCast(@src().line), "buffer age: %u (%p)", @as(c_uint, buf.age), @as(*anyopaque, buf));
 
     var last_buf: ?*Buffer = null;
     if (term.render.last_buf) |raw|
@@ -5016,17 +5031,13 @@ export fn grid_render(term: *Terminal) callconv(.c) void {
                 term.conf.?.tweak.preapply_damage and
                 term.render.workers.count > 0)
             {
-                log_msg(
-                    LOG_CLASS_INFO, "render", "render.zig", @intCast(@src().line),
-                    "enabling pre-applied frame damage");
+                log_msg(LOG_CLASS_INFO, "render", "render.zig", @intCast(@src().line), "enabling pre-applied frame damage");
                 term.render.preapply_last_frame_damage = true;
             } else if (!have_warned_slow_release and
                 !term.render.preapply_last_frame_damage)
             {
-                log_msg(
-                    LOG_CLASS_WARNING, "render", "render.zig", @intCast(@src().line),
-                    "compositor is not releasing buffers immediately; " ++
-                        "expect lower rendering performance");
+                log_msg(LOG_CLASS_WARNING, "render", "render.zig", @intCast(@src().line), "compositor is not releasing buffers immediately; " ++
+                    "expect lower rendering performance");
                 have_warned_slow_release = true;
             }
         }
@@ -5139,11 +5150,9 @@ export fn grid_render(term: *Terminal) callconv(.c) void {
 
     var i: usize = 0;
     while (i < worker_count) : (i += 1) {
-        render_shim_region_union(
-            regionPtr(&damage), regionPtr(&damage), dirtyRegionPtr(buf, i + 1));
+        render_shim_region_union(regionPtr(&damage), regionPtr(&damage), dirtyRegionPtr(buf, i + 1));
     }
-    render_shim_region_union(
-        dirtyRegionPtr(buf, 0), dirtyRegionPtr(buf, 0), regionPtr(&damage));
+    render_shim_region_union(dirtyRegionPtr(buf, 0), dirtyRegionPtr(buf, 0), regionPtr(&damage));
 
     const surf = term.window.?.surface.surf;
     {
@@ -5152,10 +5161,7 @@ export fn grid_render(term: *Terminal) callconv(.c) void {
             var b: usize = 0;
             while (b < box_count) : (b += 1) {
                 const box = boxes[b];
-                wayland_shim_surface_damage_buffer(
-                    surf,
-                    box.x1, box.y1,
-                    box.x2 - box.x1, box.y2 - box.y1);
+                wayland_shim_surface_damage_buffer(surf, box.x1, box.y1, box.x2 - box.x1, box.y2 - box.y1);
             }
         }
     }
@@ -5189,16 +5195,24 @@ export fn grid_render(term: *Terminal) callconv(.c) void {
 
         switch (term.conf.?.tweak.render_timer) {
             .log, .both => log_msg(
-                LOG_CLASS_INFO, "render", "render.zig", @intCast(@src().line),
+                LOG_CLASS_INFO,
+                "render",
+                "render.zig",
+                @intCast(@src().line),
                 "frame rendered in %lds %9ldns " ++
                     "(%lds %9ldns wait, %lds %9ldns rendering, " ++
                     "%lds %9ldns double buffering) not included: " ++
                     "%lds %ldns pre-apply damage",
-                total_render_time.tv_sec, total_render_time.tv_nsec,
-                wait_time.tv_sec, wait_time.tv_nsec,
-                render_time.tv_sec, render_time.tv_nsec,
-                double_buffering_time.tv_sec, double_buffering_time.tv_nsec,
-                preapply_damage.tv_sec, preapply_damage.tv_nsec,
+                total_render_time.tv_sec,
+                total_render_time.tv_nsec,
+                wait_time.tv_sec,
+                wait_time.tv_nsec,
+                render_time.tv_sec,
+                render_time.tv_nsec,
+                double_buffering_time.tv_sec,
+                double_buffering_time.tv_nsec,
+                preapply_damage.tv_sec,
+                preapply_damage.tv_nsec,
             ),
             .none, .osd => {},
         }
@@ -5225,12 +5239,10 @@ export fn grid_render(term: *Terminal) callconv(.c) void {
 
         const feedback = render_shim_presentation_feedback_new(term.wl.?, surf);
         if (feedback == null) {
-            log_msg(
-                LOG_CLASS_WARNING, "render", "render.zig", @intCast(@src().line),
-                "failed to create presentation feedback");
+            log_msg(LOG_CLASS_WARNING, "render", "render.zig", @intCast(@src().line), "failed to create presentation feedback");
         } else {
             const input_time = workersTimespec(&term.render.input_time);
-            const ctx = render_shim_presentation_ctx_new(
+            const ctx = presentationCtxNew(
                 term,
                 input_time.tv_sec,
                 @divTrunc(input_time.tv_nsec, 1000),
@@ -5297,12 +5309,9 @@ export fn render_worker_thread(ctx_in: ?*anyopaque) callconv(.c) ?*anyopaque {
     render_shim_block_all_signals();
 
     var title_buf: [16]u8 = undefined;
-    const title = std.fmt.bufPrintZ(
-        &title_buf, "foot:render:{d}", .{my_id}) catch "foot:render";
+    const title = std.fmt.bufPrintZ(&title_buf, "foot:render:{d}", .{my_id}) catch "foot:render";
     if (render_shim_set_thread_name(title.ptr) < 0) {
-        log_errno(
-            LOG_CLASS_ERROR, "render", "render.zig", @intCast(@src().line),
-            "render worker %d: failed to set process title", my_id);
+        log_errno(LOG_CLASS_ERROR, "render", "render.zig", @intCast(@src().line), "render worker %d: failed to set process title", my_id);
     }
 
     const start: *anyopaque = @ptrCast(&term.render.workers.start);
@@ -5373,8 +5382,7 @@ export fn render_worker_thread(ctx_in: ?*anyopaque) callconv(.c) ?*anyopaque {
                         } else if (pre_buf.age == 1) {
                             render_shim_region_copy(regionPtr(&dmg), last_buf.dirty.?);
                         } else {
-                            render_shim_region_init_rect(
-                                regionPtr(&dmg), 0, 0, pre_buf.width, pre_buf.height);
+                            render_shim_region_init_rect(regionPtr(&dmg), 0, 0, pre_buf.width, pre_buf.height);
                         }
 
                         const pix = bufferPix(pre_buf);
@@ -5456,13 +5464,10 @@ export fn render_wait_for_preapply_damage(term: *Terminal) callconv(.c) void {
 
 extern fn render_shim_add_xcursor_callback(surf: ?*anyopaque, data: *anyopaque) callconv(.c) ?*anyopaque;
 extern fn render_shim_cursor_theme_get_cursor(theme: ?*anyopaque, name: [*:0]const u8) callconv(.c) ?*anyopaque;
-extern fn render_shim_cursor_image_0(
-    cursor: ?*anyopaque, width: *i32, height: *i32, hotspot_x: *i32, hotspot_y: *i32) callconv(.c) bool;
+extern fn render_shim_cursor_image_0(cursor: ?*anyopaque, width: *i32, height: *i32, hotspot_x: *i32, hotspot_y: *i32) callconv(.c) bool;
 extern fn render_shim_cursor_image_0_buffer(cursor: ?*anyopaque) callconv(.c) ?*anyopaque;
-extern fn render_shim_pointer_set_cursor(
-    pointer: ?*anyopaque, serial: u32, surf: ?*anyopaque, hotspot_x: i32, hotspot_y: i32) callconv(.c) void;
-extern fn render_shim_cursor_shape_device_v1_set_shape(
-    device: ?*anyopaque, serial: u32, shape: u32) callconv(.c) void;
+extern fn render_shim_pointer_set_cursor(pointer: ?*anyopaque, serial: u32, surf: ?*anyopaque, hotspot_x: i32, hotspot_y: i32) callconv(.c) void;
+extern fn render_shim_cursor_shape_device_v1_set_shape(device: ?*anyopaque, serial: u32, shape: u32) callconv(.c) void;
 extern fn render_shim_xdg_toplevel_set_title(toplevel: ?*anyopaque, title: [*:0]const u8) callconv(.c) void;
 extern fn render_shim_callback_destroy(callback: ?*anyopaque) callconv(.c) void;
 extern fn cursor_shape_to_server_shape(shape: c_int) callconv(.c) c_int;
@@ -5596,9 +5601,7 @@ fn renderXcursorUpdate(seat: *types.Seat) void {
 
     if (pointer.shape == .hidden) {
         // Hide cursor
-        log_msg(
-            LOG_CLASS_DEBUG, "render", "render.zig", @intCast(@src().line),
-            "hiding cursor using client-side NULL-surface");
+        log_msg(LOG_CLASS_DEBUG, "render", "render.zig", @intCast(@src().line), "hiding cursor using client-side NULL-surface");
         wayland_shim_surface_attach(surf, null, 0, 0);
         render_shim_pointer_set_cursor(seat.wl_pointer, pointer.serial, surf, 0, 0);
         wayland_shim_surface_commit(surf);
@@ -5612,8 +5615,7 @@ fn renderXcursorUpdate(seat: *types.Seat) void {
         std.debug.assert(shape != .custom or xcursor != null);
 
         const custom_shape: c_int = if (shape == .custom and xcursor != null)
-            cursor_string_to_server_shape(
-                xcursor.?, seat.wayl.?.shape_manager_version)
+            cursor_string_to_server_shape(xcursor.?, seat.wayl.?.shape_manager_version)
         else
             0;
 
@@ -5625,22 +5627,15 @@ fn renderXcursorUpdate(seat: *types.Seat) void {
             else
                 cursor_shape_to_server_shape(@intFromEnum(shape));
 
-            log_msg(
-                LOG_CLASS_DEBUG, "render", "render.zig", @intCast(@src().line),
-                "setting %scursor shape using cursor-shape-v1",
-                @as([*:0]const u8, if (custom_shape != 0) "custom " else ""));
+            log_msg(LOG_CLASS_DEBUG, "render", "render.zig", @intCast(@src().line), "setting %scursor shape using cursor-shape-v1", @as([*:0]const u8, if (custom_shape != 0) "custom " else ""));
 
-            render_shim_cursor_shape_device_v1_set_shape(
-                device, pointer.serial, @intCast(wp_shape));
+            render_shim_cursor_shape_device_v1_set_shape(device, pointer.serial, @intCast(wp_shape));
 
             return;
         }
     }
 
-    log_msg(
-        LOG_CLASS_DEBUG, "render", "render.zig", @intCast(@src().line),
-        "setting %scursor shape using a client-side cursor surface",
-        @as([*:0]const u8, if (pointer.shape == .custom) "custom " else ""));
+    log_msg(LOG_CLASS_DEBUG, "render", "render.zig", @intCast(@src().line), "setting %scursor shape using a client-side cursor surface", @as([*:0]const u8, if (pointer.shape == .custom) "custom " else ""));
 
     if (pointer.cursor == null) {
         // Normally we never get here with a NULL cursor: an update is only
@@ -5653,17 +5648,14 @@ fn renderXcursorUpdate(seat: *types.Seat) void {
     var height: i32 = 0;
     var hotspot_x: i32 = 0;
     var hotspot_y: i32 = 0;
-    if (!render_shim_cursor_image_0(
-            pointer.cursor, &width, &height, &hotspot_x, &hotspot_y))
-    {
+    if (!render_shim_cursor_image_0(pointer.cursor, &width, &height, &hotspot_x, &hotspot_y)) {
         return;
     }
 
     const scale = pointer.scale;
     const buf = render_shim_cursor_image_0_buffer(pointer.cursor);
 
-    wayl_surface_scale_explicit_width_height(
-        seat.mouse_focus.?.window.?, &pointer.surface, width, height, scale);
+    wayl_surface_scale_explicit_width_height(seat.mouse_focus.?.window.?, &pointer.surface, width, height, scale);
 
     wayland_shim_surface_attach(surf, buf, 0, 0);
 
@@ -5831,9 +5823,7 @@ export fn render_xcursor_set(
             if (custom) |name| {
                 pointer.cursor = render_shim_cursor_theme_get_cursor(pointer.theme, name);
                 if (pointer.cursor != null) {
-                    log_msg(
-                        LOG_CLASS_DEBUG, "render", "render.zig", @intCast(@src().line),
-                        "loaded xcursor %s", name);
+                    log_msg(LOG_CLASS_DEBUG, "render", "render.zig", @intCast(@src().line), "loaded xcursor %s", name);
                 }
             }
         } else {
@@ -5842,12 +5832,9 @@ export fn render_xcursor_set(
 
             var i: usize = 0;
             while (names[i] != null) : (i += 1) {
-                pointer.cursor = render_shim_cursor_theme_get_cursor(
-                    pointer.theme, names[i]);
+                pointer.cursor = render_shim_cursor_theme_get_cursor(pointer.theme, names[i]);
                 if (pointer.cursor != null) {
-                    log_msg(
-                        LOG_CLASS_DEBUG, "render", "render.zig", @intCast(@src().line),
-                        "loaded xcursor %s", names[i]);
+                    log_msg(LOG_CLASS_DEBUG, "render", "render.zig", @intCast(@src().line), "loaded xcursor %s", names[i]);
                     break;
                 }
             }
@@ -5858,10 +5845,7 @@ export fn render_xcursor_set(
                 term.mouse_user_cursor.?
             else
                 cursor_shape_to_string(@intFromEnum(shape))[0];
-            log_msg(
-                LOG_CLASS_ERROR, "render", "render.zig", @intCast(@src().line),
-                "failed to load xcursor pointer '%s', and all of its fallbacks",
-                first);
+            log_msg(LOG_CLASS_ERROR, "render", "render.zig", @intCast(@src().line), "failed to load xcursor pointer '%s', and all of its fallbacks", first);
             return false;
         }
     } else {
@@ -5939,4 +5923,3 @@ export fn render_buffer_release_callback(buf: ?*anyopaque, data: ?*anyopaque) ca
     queue.pushBack(-3);
     _ = mtx_unlock(lock);
 }
-
