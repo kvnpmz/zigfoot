@@ -87,6 +87,7 @@ const FdHandler = struct {
 const Hook = struct {
     callback: HookCb,
     data: ?*anyopaque,
+    deleted: bool = false,
     prev: ?*Hook = null,
     next: ?*Hook = null,
 };
@@ -121,6 +122,7 @@ fn List(comptime T: type) type {
 const Fdm = struct {
     epoll_fd: c_int,
     is_polling: bool,
+    hooks_dispatching: bool,
     fds: List(FdHandler),
     deferred: List(FdHandler),
     sigmask: SigSet,
@@ -135,6 +137,11 @@ var received_signals: ?[*]volatile std.c.sig_atomic_t = null;
 
 fn gs() *volatile c_int {
     return &got_signal;
+}
+
+fn dropReceivedSignals() void {
+    free(@ptrCast(@volatileCast(received_signals)));
+    received_signals = null;
 }
 
 fn signalHandler(signo: c_int) callconv(.c) void {
@@ -201,11 +208,15 @@ export fn fdm_init() ?*Fdm {
 
     const raw = malloc(@sizeOf(Fdm)) orelse {
         logErrno(@src(), "malloc() failed", .{});
+        _ = close(epoll_fd);
+        dropReceivedSignals();
         return null;
     };
     const sh = calloc(rtmax, @sizeOf(SigHandler)) orelse {
         logErrno(@src(), "failed to allocate signal handler array", .{});
         free(raw);
+        _ = close(epoll_fd);
+        dropReceivedSignals();
         return null;
     };
 
@@ -213,6 +224,7 @@ export fn fdm_init() ?*Fdm {
     fdm.* = .{
         .epoll_fd = epoll_fd,
         .is_polling = false,
+        .hooks_dispatching = false,
         .fds = .{},
         .deferred = .{},
         .sigmask = sigmask,
@@ -262,8 +274,7 @@ export fn fdm_destroy(fdm_opt: ?*Fdm) void {
     if (fdm.events) |e| free(@ptrCast(e));
     free(fdm);
 
-    free(@ptrCast(@volatileCast(received_signals)));
-    received_signals = null;
+    dropReceivedSignals();
 }
 
 export fn fdm_add(fdm: *Fdm, fd: c_int, events: c_int, cb: FdCb, data: ?*anyopaque) bool {
@@ -382,8 +393,14 @@ export fn fdm_hook_del(fdm: *Fdm, hook: HookCb, priority: c_int) bool {
     const list = hookList(fdm, priority);
     var it = list.head;
     while (it) |n| : (it = n.next) {
-        if (n.callback != hook)
+        if (n.callback != hook or n.deleted)
             continue;
+        if (fdm.hooks_dispatching) {
+            // A callback that deletes another hook must not free the node
+            // runHooks() is walking. Reap it when dispatch ends instead.
+            n.deleted = true;
+            return true;
+        }
         list.remove(n);
         free(n);
         return true;
@@ -450,9 +467,24 @@ export fn fdm_signal_del(fdm: *Fdm, signo: c_int) bool {
 fn runHooks(fdm: *Fdm, list: *List(Hook)) void {
     var it = list.head;
     while (it) |n| {
-        const next = n.next; // read before the callback, which may remove n
-        n.callback(fdm, n.data);
+        const next = n.next;
+        if (!n.deleted)
+            n.callback(fdm, n.data);
         it = next;
+    }
+}
+
+fn reapDeletedHooks(fdm: *Fdm) void {
+    for (&fdm.hooks) |*list| {
+        var it = list.head;
+        while (it) |n| {
+            const next = n.next;
+            if (n.deleted) {
+                list.remove(n);
+                free(n);
+            }
+            it = next;
+        }
     }
 }
 
@@ -462,9 +494,12 @@ export fn fdm_poll(fdm: *Fdm) bool {
         return false;
     }
 
+    fdm.hooks_dispatching = true;
     runHooks(fdm, &fdm.hooks[2]);
     runHooks(fdm, &fdm.hooks[1]);
     runHooks(fdm, &fdm.hooks[0]);
+    fdm.hooks_dispatching = false;
+    reapDeletedHooks(fdm);
 
     const n = fdm.fds.len;
     if (n > fdm.events_cap) {
