@@ -32,32 +32,7 @@
 #include "wayland.h"
 #include "fdm.h"
 
-/* Return the seat with keyboard focus matching `term`, or NULL. */
-struct seat *
-osc_seat_with_focus(struct terminal *term)
-{
-    tll_foreach(term->wl->seats, it) {
-        if (it->item.kbd_focus == term)
-            return &it->item;
-    }
-    return NULL;
-}
-
-
-
-
-
-size_t
-osc_ptmx_buffers_len(struct terminal *term)
-{
-    return tll_length(term->ptmx_buffers);
-}
-
-void
-osc_fdm_epollout_ptmx(struct terminal *term)
-{
-    fdm_event_add(term->fdm, term->ptmx, EPOLLOUT);
-}
+/* ── Seat/ptmx and kitty action helpers: ported to osc.zig ──────── */
 
 /* ── Chunk F: struct color_theme accessors ─────────────────────── */
 #include <string.h>
@@ -86,11 +61,6 @@ osc_xstrjoin3(const char *a, const char *b, const char *c)
     return xstrjoin3(a, b, c);
 }
 
-void
-osc_kitty_actions_push_back(struct notification *notif, char *s)
-{
-    tll_push_back(notif->actions, s);
-}
 
 /* ── Chunk E-3: kitty_text_size helpers ─────────────────────────── */
 size_t
