@@ -17,6 +17,12 @@
 #include "input.h"
 #include "ime.h"
 #include "key-binding.h"
+#include "selection.h"
+#include "server.h"
+#include "fdm.h"
+#include "client-protocol.h"
+#include <sys/epoll.h>
+#include <sys/socket.h>
 
 #include <errno.h>
 #include <fcntl.h>
@@ -67,6 +73,63 @@ static unsigned current_iteration;
 static char fail_header[160];
 static size_t fail_header_len;
 static int fail_fd = -1;
+
+static void
+write_fuzz_bytes(int fd)
+{
+    size_t sent = 0;
+    while (sent < current_len) {
+        ssize_t count = write(fd, current_input + sent, current_len - sent);
+        if (count > 0)
+            sent += (size_t)count;
+        else if (count < 0 && errno == EINTR)
+            continue;
+        else
+            break;
+    }
+}
+
+void __wrap_wayland_shim_data_offer_receive(void *offer, const char *mime, int32_t fd)
+{
+    (void)offer;
+    (void)mime;
+    write_fuzz_bytes(fd);
+}
+
+void __wrap_wayland_shim_primary_offer_receive(void *offer, const char *mime, int32_t fd)
+{
+    (void)offer;
+    (void)mime;
+    write_fuzz_bytes(fd);
+}
+
+void __wrap_wayland_shim_add_data_offer_listener(void *offer, void *seat)
+{
+    (void)offer;
+    (void)seat;
+}
+
+void __wrap_wayland_shim_add_primary_offer_listener(void *offer, void *seat)
+{
+    (void)offer;
+    (void)seat;
+}
+
+void __wrap_wayland_shim_data_offer_destroy(void *offer) { (void)offer; }
+void __wrap_wayland_shim_primary_selection_offer_destroy(void *offer) { (void)offer; }
+void __wrap_wayland_shim_data_offer_accept(void *offer, uint32_t serial, const char *mime)
+{
+    (void)offer;
+    (void)serial;
+    (void)mime;
+}
+void __wrap_wayland_shim_data_offer_set_actions(void *offer, uint32_t actions, uint32_t preferred)
+{
+    (void)offer;
+    (void)actions;
+    (void)preferred;
+}
+void __wrap_wayland_shim_data_offer_finish(void *offer) { (void)offer; }
 
 static uint64_t
 next_random(void)
@@ -198,6 +261,7 @@ fixture_init(struct fixture *f)
     f->conf.app_id = "foot";
     f->term->wl = &f->wayl;
     f->term->window = &f->window;
+    f->window.term = f->term;
     f->title_timer = timerfd_create(CLOCK_MONOTONIC, TFD_NONBLOCK | TFD_CLOEXEC);
     f->app_id_timer = timerfd_create(CLOCK_MONOTONIC, TFD_NONBLOCK | TFD_CLOEXEC);
     f->icon_timer = timerfd_create(CLOCK_MONOTONIC, TFD_NONBLOCK | TFD_CLOEXEC);
@@ -310,7 +374,15 @@ static const char *const corpus[] = {
     "\033[?1000;1002;1003;1006;1016h\033[?1000l",
     "\033[3 a\033[?25l\033[?25h\033[?2004h\033[?2004l",
     "\033]777;notify;summary;body\033\\",
-    "\033_apc\033\\\033X sos\033\\\033^ pm\033\\"
+    "\033_apc\033\\\033X sos\033\\\033^ pm\033\\",
+    "clip\r\n\001board\nfile:///tmp/a b\r\nhttps://example.invalid/\n",
+    "\033]52;p;AAECAwQFBgcICQ==\007"
+};
+
+static const unsigned char ipc_corpus[] = {
+    0, 0, 0, 0, 4, 12, 0, 0, 0,
+    0, 0, 0, 0, 4, 11, 0, 0, 0,
+    1, 0, 0, 0, 255
 };
 
 #define CORPUS_COUNT (sizeof(corpus) / sizeof(corpus[0]))
@@ -330,8 +402,12 @@ mutate_input(void)
     size_t len = 0;
     unsigned pieces = 1 + (unsigned)(next_random() % 3);
     for (unsigned i = 0; i < pieces; i++) {
-        const char *piece = corpus[next_random() % CORPUS_COUNT];
-        append_bytes(current_input, &len, piece, strlen(piece));
+        if (next_random() % 13 == 0)
+            append_bytes(current_input, &len, (const char *)ipc_corpus, sizeof(ipc_corpus));
+        else {
+            const char *piece = corpus[next_random() % CORPUS_COUNT];
+            append_bytes(current_input, &len, piece, strlen(piece));
+        }
     }
 
     unsigned mutations = 2 + (unsigned)(next_random() % 12);
@@ -439,6 +515,160 @@ exercise_input(struct fixture *f)
     ime_reset_preedit(&f->seat);
 }
 
+struct receive_state {
+    size_t bytes;
+    unsigned calls;
+    bool done;
+};
+
+static void
+receive_cb(char *data, size_t size, void *user)
+{
+    struct receive_state *state = user;
+    state->bytes += size;
+    state->calls++;
+}
+
+static void
+receive_done(void *user)
+{
+    ((struct receive_state *)user)->done = true;
+}
+
+static void
+write_all(int fd, const void *data, size_t len)
+{
+    const unsigned char *bytes = data;
+    while (len > 0) {
+        ssize_t count = write(fd, bytes, len);
+        if (count > 0) {
+            bytes += count;
+            len -= (size_t)count;
+        } else if (count < 0 && errno == EINTR) {
+            continue;
+        } else {
+            break;
+        }
+    }
+}
+
+void begin_receive_clipboard(
+    struct terminal *term, bool no_strip, int read_fd, int mime_type,
+    void (*cb)(char *data, size_t size, void *user),
+    void (*done)(void *user), void *user);
+
+static void
+exercise_clipboard(struct fixture *f, unsigned mode)
+{
+    int fds[2];
+    xassert(pipe2(fds, O_CLOEXEC | O_NONBLOCK) == 0);
+    if (mode != 0) {
+        size_t payload_len = current_len < 256 ? current_len : 256;
+        write_all(fds[1], current_input, payload_len);
+    }
+    close(fds[1]);
+
+    struct fdm *fdm = fdm_init();
+    xassert(fdm != NULL);
+    f->term->fdm = fdm;
+    struct receive_state state = {0};
+    void *offer = (void *)(uintptr_t)1;
+
+    switch (mode) {
+    case 0:
+        begin_receive_clipboard(f->term, false, fds[0],
+                                DATA_OFFER_MIME_URI_LIST, receive_cb, receive_done, &state);
+        break;
+    case 1:
+        f->seat.clipboard.data_offer = offer;
+        f->seat.clipboard.mime_type = DATA_OFFER_MIME_URI_LIST;
+        f->term->bracketed_paste = next_random() & 1;
+        selection_from_clipboard(&f->seat, f->term, (uint32_t)next_random());
+        break;
+    case 2:
+        f->wayl.primary_selection_device_manager = offer;
+        f->seat.primary.data_offer = offer;
+        f->seat.primary.mime_type = (enum data_offer_mime_type)(1 + next_random() % 6);
+        f->term->bracketed_paste = next_random() & 1;
+        selection_from_primary(&f->seat, f->term);
+        break;
+    default:
+        f->window.term = f->term;
+        f->seat.clipboard.data_offer = offer;
+        f->seat.clipboard.mime_type = DATA_OFFER_MIME_URI_LIST;
+        f->seat.clipboard.window = &f->window;
+        f->term->bracketed_paste = next_random() & 1;
+        selection_data_device_drop(&f->seat, NULL);
+        selection_data_device_leave(&f->seat, NULL);
+        selection_data_device_motion(&f->seat, NULL, 0, 0, 0);
+        break;
+    }
+
+    for (unsigned tries = 0; tries < 16; tries++) {
+        bool finished = mode == 0 ? state.done : !f->term->is_sending_paste_data;
+        if (finished)
+            break;
+        xassert(fdm_poll(fdm));
+    }
+    xassert(mode == 0 ? state.done : !f->term->is_sending_paste_data);
+    f->term->fdm = NULL;
+    fdm_destroy(fdm);
+    f->seat.clipboard.data_offer = NULL;
+    f->seat.clipboard.mime_type = DATA_OFFER_MIME_UNSET;
+    f->seat.clipboard.window = NULL;
+    f->seat.primary.data_offer = NULL;
+    f->seat.primary.mime_type = DATA_OFFER_MIME_UNSET;
+    f->wayl.primary_selection_device_manager = NULL;
+    f->term->is_sending_paste_data = false;
+}
+
+static void
+exercise_ipc(struct fixture *f)
+{
+    int fds[2];
+    xassert(socketpair(AF_UNIX, SOCK_STREAM, 0, fds) == 0);
+    struct server server = {0};
+    struct client *client = xcalloc(1, sizeof(*client));
+    client->server = &server;
+    client->fd = fds[0];
+    struct terminal_instance instance = {.terminal = f->term};
+    client->instance = &instance;
+    f->term->colors.active_theme = COLOR_THEME_DARK;
+
+    struct client_ipc_hdr hdr = {.ipc_code = FOOT_IPC_SIGUSR,
+                                 .size = sizeof(struct client_ipc_sigusr)};
+    struct client_ipc_sigusr payload = {.signo = SIGUSR1};
+    write_all(fds[1], &hdr, sizeof(hdr));
+    write_all(fds[1], &payload, sizeof(payload));
+    xassert(fdm_client(NULL, fds[0], EPOLLIN, client));
+    free(client);
+    close(fds[0]);
+    close(fds[1]);
+
+    fds[0] = fds[1] = -1;
+    xassert(socketpair(AF_UNIX, SOCK_STREAM, 0, fds) == 0);
+    client = xcalloc(1, sizeof(*client));
+    client->server = &server;
+    client->fd = fds[0];
+    client->instance = &instance;
+    write_all(fds[1], &hdr, 2);
+    xassert(fdm_client(NULL, fds[0], EPOLLIN, client));
+    free(client);
+    close(fds[0]);
+    close(fds[1]);
+
+    fds[0] = fds[1] = -1;
+    xassert(socketpair(AF_UNIX, SOCK_STREAM, 0, fds) == 0);
+    client = xcalloc(1, sizeof(*client));
+    client->server = &server;
+    client->fd = fds[0];
+    uint32_t total = UINT32_MAX;
+    write_all(fds[1], &total, sizeof(total));
+    xassert(fdm_client(NULL, fds[0], EPOLLIN, client));
+    /* The server freed the client during shutdown. */
+    close(fds[1]);
+}
+
 int
 main(int argc, char **argv)
 {
@@ -496,6 +726,8 @@ main(int argc, char **argv)
 
     struct fixture fixture;
     fixture_init(&fixture);
+    unsigned regression_mode = seed_value >= 117 && seed_value <= 120
+        ? (unsigned)(seed_value - 116) : 0;
     for (current_iteration = 1; current_iteration <= iterations; current_iteration++) {
         if (!replay)
             mutate_input();
@@ -519,6 +751,12 @@ main(int argc, char **argv)
 
         if (current_iteration % 11 == 0)
             exercise_input(&fixture);
+        if (regression_mode >= 1 && regression_mode <= 3)
+            exercise_clipboard(&fixture, regression_mode - 1);
+        else if (regression_mode == 0 && current_iteration % 31 == 0)
+            exercise_clipboard(&fixture, (unsigned)(next_random() % 4));
+        if (regression_mode == 4 || current_iteration % 41 == 0)
+            exercise_ipc(&fixture);
         if (current_iteration % 7 == 0) {
             key_binding_unload_keymap(fixture.bindings, &fixture.seat);
             key_binding_load_keymap(fixture.bindings, &fixture.seat);

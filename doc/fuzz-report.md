@@ -125,3 +125,40 @@ The first attempt stopped at seed 71 because the harness evaluated
 `current_input[next_random() % current_len]` after mutation produced an empty
 input. This was a divide-by-zero in the fuzz driver, not in foot. The empty-input IME path now
 leaves the text buffer empty. The repeated campaign passed all 120 seeds.
+
+## Agent B merged-tree regression campaign — 2026-11-25
+
+Base: `9f4f1def`. The harness now exercises clipboard, primary, DnD, and IPC framing. Seeds 117 to 120 are fixed regression modes. Other seeds use the new paths at periodic intervals.
+
+Command:
+
+```sh
+cd /workspace-b
+export ZIG_GLOBAL_CACHE_DIR=/tmp/agent-b/zig-cache
+bash scripts/fuzz-vt.sh 120
+```
+
+Result: **FAIL at seed 1, iteration 200**. The driver stopped as designed. Seed 120 ran 200 IPC-framing iterations and passed. Seed 119 reached the same product failure through DnD.
+
+### Product failure
+
+- Seed: 1 in the full campaign. Seed 118 reproduces it in one iteration.
+- Minimized input: one byte, `0x01`.
+- Path: clipboard URI-list receive → `receiveChunk()` → `fdmReceiveDecoderUri()`.
+- Triage: `receiveChunk()` calls the URI decoder with a zero length when it strips a leading C0 control byte. `fdmReceiveDecoderUri()` does not allocate `ctx.buf.data` for a zero-length chunk, then unwraps the null pointer at `selection.zig:2130`.
+- Boundary: `selection.zig` is module logic and was not edited. Agent A owns the fix.
+
+Reproduce:
+
+```sh
+printf '\001' > /tmp/fuzz-vt/min-uri.bin
+FUZZ_VT_FAIL=/tmp/fuzz-vt/min-uri-fail timeout 30 \
+    /tmp/fuzz-vt/fuzz-vt 118 1 /tmp/fuzz-vt/min-uri.bin
+```
+
+### Driver fixes
+
+- The snapshot script kept old members when it rebuilt a thin archive as a regular archive. The merged tree then produced duplicate-symbol link errors. The script now removes the old regular archive before `ar rcs`.
+- The first clipboard driver used the direct-receive callback state for selection and DnD paths. Those paths use their own completion callback. The driver now checks `term.is_sending_paste_data` for modes 1 to 3.
+
+No product source was changed for this failure.
