@@ -829,6 +829,22 @@ void wayland_shim_seat_release(struct wl_seat *seat)
     wl_seat_release(seat);
 }
 
+/* Generated xdg-shell inlines: render_resize() sizes the CSD-decorated
+ * toplevel in surface-logical coordinates. */
+void
+wayland_shim_xdg_toplevel_set_min_size(
+    struct xdg_toplevel *toplevel, int width, int height)
+{
+    xdg_toplevel_set_min_size(toplevel, width, height);
+}
+
+void
+wayland_shim_xdg_surface_set_window_geometry(
+    struct xdg_surface *xdg_surface, int x, int y, int width, int height)
+{
+    xdg_surface_set_window_geometry(xdg_surface, x, y, width, height);
+}
+
 void wayland_shim_ack_configure(struct xdg_surface *xdg_surface, uint32_t serial)
 {
     xdg_surface_ack_configure(xdg_surface, serial);

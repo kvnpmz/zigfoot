@@ -4342,6 +4342,541 @@ export fn set_size_from_grid(
     if (height) |h| h.* = new_height;
 }
 // ─────────────────────────────────────────────────────────────────────────
+// render_resize (D3l3b)
+// ─────────────────────────────────────────────────────────────────────────
+
+const RESIZE_FORCE: u8 = 1 << 0;
+const RESIZE_BY_CELLS: u8 = 1 << 1;
+const RESIZE_KEEP_GRID: u8 = 1 << 2;
+
+extern fn mouse_coord_pixel_to_cell(
+    seat: *anyopaque, term: *const Terminal, x: c_int, y: c_int) callconv(.c) void;
+extern fn term_disable_app_sync_updates(term: *Terminal) callconv(.c) void;
+extern fn urls_reset(term: *Terminal) callconv(.c) void;
+extern fn selection_cancel(term: *Terminal) callconv(.c) void;
+extern fn selection_finalize(seat: ?*anyopaque, term: *Terminal, serial: u32) callconv(.c) void;
+extern fn grid_row_alloc(cols: c_int, initialize: bool) callconv(.c) *types.Row;
+extern fn grid_resize_without_reflow(
+    grid: *types.Grid,
+    new_rows: c_int,
+    new_cols: c_int,
+    old_screen_rows: c_int,
+    new_screen_rows: c_int,
+) callconv(.c) void;
+extern fn sixel_reflow(term: *Terminal) callconv(.c) void;
+extern fn wayland_shim_xdg_toplevel_set_min_size(
+    toplevel: ?*anyopaque, width: c_int, height: c_int) callconv(.c) void;
+extern fn wayland_shim_xdg_surface_set_window_geometry(
+    surface: ?*anyopaque, x: c_int, y: c_int, width: c_int, height: c_int) callconv(.c) void;
+
+fn roundF(v: f64) c_int {
+    return @intFromFloat(@round(v));
+}
+
+/// next power of two >= n, as C's `1 << (32 - __builtin_clz(n))`.
+fn ceilPow2(n: u32) u32 {
+    std.debug.assert(n > 0);
+    return @as(u32, 1) << @intCast(32 - @clz(n));
+}
+
+/// The configure/resize entry point: work out the window size the compositor
+/// asked for, derive the grid from it, resize both grids (reflowing the
+/// normal one, truncating while an interactive resize is in progress) and
+/// tell the client + compositor about the result.
+export fn render_resize(
+    term: *Terminal,
+    width_in: c_int,
+    height_in: c_int,
+    opts: u8,
+) callconv(.c) bool {
+    if (term.shutdown.in_progress)
+        return false;
+
+    const window = term.window.?;
+    const conf = term.conf.?;
+
+    if (!window.is_configured)
+        return false;
+
+    if (term.cell_width == 0 and term.cell_height == 0)
+        return false;
+
+    const is_floating =
+        !window.is_maximized and
+        !window.is_fullscreen and
+        !window.is_tiled;
+
+    // Convert logical size to physical size
+    const scale: f64 = term.scale;
+    var width: c_int = roundF(@as(f64, @floatFromInt(width_in)) * scale);
+    var height: c_int = roundF(@as(f64, @floatFromInt(height_in)) * scale);
+
+    // If the grid should be kept, the size should be overridden
+    if (is_floating and (opts & RESIZE_KEEP_GRID) != 0)
+        set_size_from_grid(term, &width, &height, term.cols, term.rows);
+
+    if (width == 0) {
+        // The compositor is letting us choose the width
+        if (term.stashed_width != 0) {
+            // If a default size is requested, prefer the "last used" size
+            width = term.stashed_width;
+        } else switch (conf.size.type) {
+            .px => {
+                width = @intCast(conf.size.width);
+
+                if (wayl_win_csd_borders_visible(window))
+                    width -= 2 * @as(c_int, conf.csd.border_width_visible);
+
+                width = @intFromFloat(@as(f64, @floatFromInt(width)) * scale);
+            },
+            .cells => set_size_from_grid(
+                term,
+                &width,
+                null,
+                @intCast(conf.size.width),
+                @intCast(conf.size.height),
+            ),
+        }
+    }
+
+    if (height == 0) {
+        // The compositor is letting us choose the height
+        if (term.stashed_height != 0) {
+            // If a default size is requested, prefer the "last used" size
+            height = term.stashed_height;
+        } else switch (conf.size.type) {
+            .px => {
+                height = @intCast(conf.size.height);
+
+                // Take CSDs into account
+                if (wayl_win_csd_titlebar_visible(window))
+                    height -= @as(c_int, conf.csd.title_height);
+
+                if (wayl_win_csd_borders_visible(window))
+                    height -= 2 * @as(c_int, conf.csd.border_width_visible);
+
+                height = @intFromFloat(@as(f64, @floatFromInt(height)) * scale);
+            },
+            .cells => set_size_from_grid(
+                term,
+                null,
+                &height,
+                @intCast(conf.size.width),
+                @intCast(conf.size.height),
+            ),
+        }
+    }
+
+    // Don't shrink the grid too much
+    const min_cols: c_int = 1;
+    const min_rows: c_int = 1;
+
+    // Minimum window size (must be divisible by the scaling factor)
+    const min_width: c_int = roundF(scale * @ceil(
+        @as(f64, @floatFromInt(min_cols * term.cell_width)) / scale));
+    const min_height: c_int = roundF(scale * @ceil(
+        @as(f64, @floatFromInt(min_rows * term.cell_height)) / scale));
+
+    width = @max(width, min_width);
+    height = @max(height, min_height);
+
+    // Padding
+    const max_pad_x: c_int = @divTrunc(width - min_width, 2);
+    const max_pad_y: c_int = @divTrunc(height - min_height, 2);
+    const pad_left: c_int = @intFromFloat(@min(
+        @as(f64, @floatFromInt(max_pad_x)), scale * @as(f64, @floatFromInt(conf.pad_left))));
+    const pad_right: c_int = @intFromFloat(@min(
+        @as(f64, @floatFromInt(max_pad_x)), scale * @as(f64, @floatFromInt(conf.pad_right))));
+    const pad_top: c_int = @intFromFloat(@min(
+        @as(f64, @floatFromInt(max_pad_y)), scale * @as(f64, @floatFromInt(conf.pad_top))));
+    const pad_bottom: c_int = @intFromFloat(@min(
+        @as(f64, @floatFromInt(max_pad_y)), scale * @as(f64, @floatFromInt(conf.pad_bottom))));
+
+    if (is_floating and
+        (opts & RESIZE_BY_CELLS) != 0 and
+        conf.resize_by_cells)
+    {
+        // If resizing in cell increments, restrict the width and height
+        width = @divTrunc(width - (pad_left + pad_right), term.cell_width) *
+            term.cell_width + (pad_left + pad_right);
+        width = @max(min_width, roundF(scale * @round(
+            @as(f64, @floatFromInt(width)) / scale)));
+
+        height = @divTrunc(height - (pad_top + pad_bottom), term.cell_height) *
+            term.cell_height + (pad_top + pad_bottom);
+        height = @max(min_height, roundF(scale * @round(
+            @as(f64, @floatFromInt(height)) / scale)));
+    }
+
+    if ((opts & RESIZE_FORCE) == 0 and
+        width == term.width and
+        height == term.height and
+        scale == @as(f64, term.scale))
+    {
+        return false;
+    }
+
+    // Cancel an application initiated "Synchronized Update"
+    term_disable_app_sync_updates(term);
+
+    // Drop out of URL mode
+    urls_reset(term);
+
+    log_msg(
+        LOG_CLASS_DEBUG, "render", "render.zig", @intCast(@src().line),
+        "resized: size=%dx%d (scale=%.2f)", width, height, term.scale);
+
+    term.width = width;
+    term.height = height;
+
+    // Screen rows/cols before resize
+    const old_cols = term.cols;
+    const old_rows = term.rows;
+
+    // Screen rows/cols after resize
+    const new_cols: c_int = @divTrunc(
+        term.width - (pad_left + pad_right), term.cell_width);
+    const new_rows: c_int = @divTrunc(
+        term.height - (pad_top + pad_bottom), term.cell_height);
+
+    // Requirements for scrollback: the total number of rows (visible +
+    // scrollback) must be a power of two and representable in a signed int.
+    const max_scrollback: u32 = (@as(u32, 0x7fffffff) >> 1) + 1;
+    const scrollback_lines_not_yet_power_of_two: u32 = @min(
+        @as(u64, term.render.scrollback_lines) + @as(u64, @intCast(new_rows)) - 1,
+        @as(u64, max_scrollback),
+    );
+
+    // Grid rows/cols after resize
+    const new_normal_grid_rows: c_int = @intCast(@min(
+        ceilPow2(scrollback_lines_not_yet_power_of_two), max_scrollback));
+    const new_alt_grid_rows: c_int = @intCast(@min(
+        ceilPow2(@intCast(new_rows)), max_scrollback));
+
+    log_msg(
+        LOG_CLASS_DEBUG, "render", "render.zig", @intCast(@src().line),
+        "grid rows: %d", new_normal_grid_rows);
+
+    std.debug.assert(new_cols >= 1);
+    std.debug.assert(new_rows >= 1);
+
+    // Margins
+    const grid_width = new_cols * term.cell_width;
+    const grid_height = new_rows * term.cell_height;
+    const total_x_pad = term.width - grid_width;
+    const total_y_pad = term.height - grid_height;
+
+    const centered_padding =
+        conf.center_when == .always or
+        (conf.center_when == .maximized_and_fullscreen and
+            (window.is_fullscreen or window.is_maximized)) or
+        (conf.center_when == .fullscreen and window.is_fullscreen);
+
+    if (centered_padding and !window.is_resizing) {
+        term.margins.left = @divTrunc(total_x_pad, 2);
+        term.margins.top = @divTrunc(total_y_pad, 2);
+    } else {
+        term.margins.left = pad_left;
+        term.margins.top = pad_top;
+    }
+    term.margins.right = total_x_pad - term.margins.left;
+    term.margins.bottom = total_y_pad - term.margins.top;
+
+    std.debug.assert(term.margins.left >= pad_left);
+    std.debug.assert(term.margins.right >= pad_right);
+    std.debug.assert(term.margins.top >= pad_top);
+    std.debug.assert(term.margins.bottom >= pad_bottom);
+
+    var skip_reflow = false;
+
+    if (new_cols == old_cols and new_rows == old_rows) {
+        log_msg(
+            LOG_CLASS_DEBUG, "render", "render.zig", @intCast(@src().line),
+            "grid layout unaffected; skipping reflow");
+        term.interactive_resizing.new_rows = new_normal_grid_rows;
+        skip_reflow = true;
+    }
+
+    if (!skip_reflow) {
+        // Since text reflow is slow, don't do it *while* resizing. Only do it
+        // when done, or after "pausing" the resize for long enough (the
+        // TIOCSWINSZ timer, see send_dimensions_to_client()). To be able to
+        // do the final reflow correctly we need a copy of the grid as it was
+        // before the resize started.
+        if (window.is_resizing and conf.resize_delay_ms > 0) {
+            const resizing = &term.interactive_resizing;
+
+            if (resizing.grid == null) {
+                term_ptmx_pause(term);
+
+                // Stash the current 'normal' grid, as-is, to be used when
+                // doing the final reflow
+                resizing.old_screen_rows = term.rows;
+                resizing.old_cols = term.cols;
+                resizing.old_hide_cursor = @intFromBool(term.hide_cursor);
+                const stash: *types.Grid = @ptrCast(@alignCast(xmalloc(@sizeOf(types.Grid)).?));
+                stash.* = term.normal;
+                resizing.grid = stash;
+
+                if (term.grid == &term.normal) {
+                    resizing.selection_coords = term.selection.coords;
+                    term.selection.coords.start.row -= term.grid.?.view;
+                    term.selection.coords.end.row -= term.grid.?.view;
+                }
+            } else {
+                // We'll replace the current temporary grid, with a new one
+                // (again based on the original grid)
+                grid_free(&term.normal);
+            }
+
+            const orig = resizing.grid.?;
+
+            // Copy the current viewport (of the original grid) to a new grid
+            // that is used during the resize. Sixels and OSC-8 URLs are
+            // thrown away here; they are restored by the final reflow.
+            var g = std.mem.zeroes(types.Grid);
+            g.num_rows = @intCast(ceilPow2(@intCast(resizing.old_screen_rows)));
+            g.num_cols = resizing.old_cols;
+            g.offset = 0;
+            g.view = 0;
+            g.cursor = orig.cursor;
+            g.saved_cursor = orig.saved_cursor;
+            g.rows = @ptrCast(@alignCast(xcalloc(
+                @intCast(g.num_rows), @sizeOf(?*types.Row)).?));
+            g.cur_row = null;
+            g.kitty_kbd = orig.kitty_kbd;
+
+            var i: usize = 0;
+            var j: c_int = orig.view;
+            while (i < @as(usize, @intCast(resizing.old_screen_rows))) : ({
+                i += 1;
+                j = (j + 1) & (orig.num_rows - 1);
+            }) {
+                const dst_row = grid_row_alloc(g.num_cols, false);
+                g.rows.?[i] = dst_row;
+
+                const n_cells: usize = @intCast(g.num_cols);
+                @memcpy(
+                    dst_row.cells.?[0..n_cells],
+                    orig.rows.?[@intCast(j)].?.cells.?[0..n_cells],
+                );
+
+                const src_extra = orig.rows.?[@intCast(j)].?.extra;
+                if (src_extra) |ex| {
+                    const src = &ex.underline_ranges;
+                    if (src.count != 0) {
+                        // Copy underline ranges
+                        const count: usize = @intCast(src.count);
+                        const dst_extra: *types.RowData = @ptrCast(@alignCast(
+                            xcalloc(1, @sizeOf(types.RowData)).?));
+                        dst_row.extra = dst_extra;
+
+                        const dst = &dst_extra.underline_ranges;
+                        const v: [*]types.RowRange = @ptrCast(@alignCast(
+                            xmalloc(count * @sizeOf(types.RowRange)).?));
+                        dst.v = v;
+                        dst.count = @intCast(count);
+                        dst.size = @intCast(count);
+                        @memcpy(v[0..count], src.v.?[0..count]);
+                    }
+                }
+            }
+
+            term.normal = g;
+            term.hide_cursor = true;
+        }
+
+        if (term.grid == &term.alt) {
+            selection_cancel(term);
+        } else {
+            // Don't cancel, but make sure there aren't any ongoing selections
+            // after the resize
+            const seats: *tll.Tll(types.Seat) = @ptrCast(&term.wl.?.seats);
+            var it = seats.foreach();
+            while (it.next()) |node| {
+                const seat = &node.item;
+                if (seat.kbd_focus == term)
+                    selection_finalize(seat, term, seat.pointer.serial);
+            }
+        }
+
+        // Ensure mouse col/row coordinates are still valid
+        const seats: *tll.Tll(types.Seat) = @ptrCast(&term.wl.?.seats);
+        var it = seats.foreach();
+        while (it.next()) |node| {
+            const seat = &node.item;
+            if (seat.mouse_focus == term)
+                mouse_coord_pixel_to_cell(seat, term, seat.mouse.x, seat.mouse.y);
+        }
+
+        // TODO: if the selection_finalize() call above is ever removed (i.e.
+        // if selections may span a resize), the selection's pivot point
+        // coordinates *must* be added to the tracking points list.
+        if (window.is_resizing and conf.resize_delay_ms > 0) {
+            // Simple truncating resize, *while* an interactive resize is
+            // ongoing.
+            const resizing = &term.interactive_resizing;
+            std.debug.assert(resizing.grid != null);
+            std.debug.assert(new_normal_grid_rows > 0);
+            resizing.new_rows = new_normal_grid_rows;
+
+            grid_resize_without_reflow(
+                &term.normal,
+                new_alt_grid_rows,
+                new_cols,
+                resizing.old_screen_rows,
+                new_rows,
+            );
+        } else {
+            // Full text reflow
+            var old_normal_rows = old_rows;
+
+            const resizing = &term.interactive_resizing;
+            if (resizing.grid != null) {
+                // Throw away the current, truncated, "normal" grid, and use
+                // the original grid instead (from before the resize started)
+                grid_free(&term.normal);
+                term.normal = resizing.grid.?.*;
+                free(resizing.grid.?);
+
+                term.hide_cursor = resizing.old_hide_cursor != 0;
+                term.selection.coords = resizing.selection_coords;
+
+                old_normal_rows = resizing.old_screen_rows;
+
+                resizing.grid = null;
+                resizing.old_screen_rows = 0;
+                resizing.new_rows = 0;
+                resizing.old_hide_cursor = 0;
+                resizing.selection_coords = .{
+                    .start = .{ .col = -1, .row = -1 },
+                    .end = .{ .col = -1, .row = -1 },
+                };
+                term_ptmx_resume(term);
+            }
+
+            var tracking_points = [_]*types.Coord{
+                &term.selection.coords.start,
+                &term.selection.coords.end,
+            };
+
+            grid_resize_and_reflow(
+                &term.normal,
+                term,
+                new_normal_grid_rows,
+                new_cols,
+                old_normal_rows,
+                new_rows,
+                if (term.selection.coords.end.row >= 0) tracking_points.len else 0,
+                &tracking_points,
+            );
+        }
+
+        grid_resize_without_reflow(&term.alt, new_alt_grid_rows, new_cols, old_rows, new_rows);
+
+        // Reset tab stops
+        const tab_stops: *tll.Tll(c_int) = @ptrCast(&term.tab_stops);
+        tab_stops.freeList();
+        var c: c_int = 0;
+        while (c < new_cols) : (c += 8)
+            tab_stops.pushBack(c);
+
+        term.cols = new_cols;
+        term.rows = new_rows;
+
+        sixel_reflow(term);
+
+        log_msg(
+            LOG_CLASS_DEBUG, "render", "render.zig", @intCast(@src().line),
+            "resized: grid: cols=%d, rows=%d " ++
+                "(left-margin=%d, right-margin=%d, top-margin=%d, bottom-margin=%d)",
+            term.cols, term.rows,
+            term.margins.left, term.margins.right,
+            term.margins.top, term.margins.bottom);
+
+        if (term.scroll_region.start >= term.rows)
+            term.scroll_region.start = 0;
+        if (term.scroll_region.end > term.rows or
+            term.scroll_region.end >= old_rows)
+        {
+            term.scroll_region.end = term.rows;
+        }
+
+        term.render.last_cursor.row = null;
+    }
+
+    // Signal TIOCSWINSZ
+    send_dimensions_to_client(term);
+
+    if (is_floating) {
+        // Stash current size, to enable us to restore it when we're being
+        // un-maximized/fullscreened/tiled
+        term.stashed_width = term.width;
+        term.stashed_height = term.height;
+    }
+
+    {
+        const title_shown = wayl_win_csd_titlebar_visible(window);
+        const border_shown = wayl_win_csd_borders_visible(window);
+
+        const title: c_int = if (title_shown)
+            roundF(@as(f64, @floatFromInt(conf.csd.title_height)) * scale)
+        else
+            0;
+        const border: c_int = if (border_shown)
+            roundF(@as(f64, @floatFromInt(conf.csd.border_width_visible)) * scale)
+        else
+            0;
+
+        // Must use surface logical coordinates (same calculations as
+        // get_csd_data(), but with different inputs)
+        const toplevel_min_width = roundF(@as(f64, @floatFromInt(border)) / scale) +
+            roundF(@as(f64, @floatFromInt(min_width)) / scale) +
+            roundF(@as(f64, @floatFromInt(border)) / scale);
+
+        const toplevel_min_height = roundF(@as(f64, @floatFromInt(border)) / scale) +
+            roundF(@as(f64, @floatFromInt(title)) / scale) +
+            roundF(@as(f64, @floatFromInt(min_height)) / scale) +
+            roundF(@as(f64, @floatFromInt(border)) / scale);
+
+        const toplevel_width = roundF(@as(f64, @floatFromInt(border)) / scale) +
+            roundF(@as(f64, @floatFromInt(term.width)) / scale) +
+            roundF(@as(f64, @floatFromInt(border)) / scale);
+
+        const toplevel_height = roundF(@as(f64, @floatFromInt(border)) / scale) +
+            roundF(@as(f64, @floatFromInt(title)) / scale) +
+            roundF(@as(f64, @floatFromInt(term.height)) / scale) +
+            roundF(@as(f64, @floatFromInt(border)) / scale);
+
+        const x = roundF(@as(f64, @floatFromInt(-border)) / scale);
+        const y = roundF(@as(f64, @floatFromInt(-title)) / scale) -
+            roundF(@as(f64, @floatFromInt(border)) / scale);
+
+        wayland_shim_xdg_toplevel_set_min_size(
+            window.xdg_toplevel, toplevel_min_width, toplevel_min_height);
+        wayland_shim_xdg_surface_set_window_geometry(
+            window.xdg_surface, x, y, toplevel_width, toplevel_height);
+    }
+
+    const normal_damage: *tll.Tll(types.Damage) = @ptrCast(&term.normal.scroll_damage);
+    const alt_damage: *tll.Tll(types.Damage) = @ptrCast(&term.alt.scroll_damage);
+    normal_damage.freeList();
+    alt_damage.freeList();
+
+    render_wait_for_preapply_damage(term);
+    if (term.render.last_buf) |raw| {
+        shm_unref(@ptrCast(@alignCast(raw)));
+        term.render.last_buf = null;
+    }
+    term_damage_view(term);
+    render_refresh_csd(term);
+    render_refresh_search(term);
+    render_refresh(term);
+
+    return true;
+}
+
+// ─────────────────────────────────────────────────────────────────────────
 // grid_render (D3l2)
 // ─────────────────────────────────────────────────────────────────────────
 

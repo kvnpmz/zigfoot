@@ -60,6 +60,8 @@ int render_url_format_label(char32_t *label, const char32_t *key,
                             const char32_t *url, bool show_url,
                             size_t entered_key_len, int max_cols);
 void render_dirty_overflowing_glyphs(struct terminal *term);
+bool render_resize(struct terminal *term, int width, int height,
+                   uint8_t opts);
 void set_size_from_grid(struct terminal *term, int *width,
                         int *height, int cols, int rows);
 size_t render_search_box_glyph_offset(
@@ -5675,6 +5677,56 @@ test_set_size_from_grid(void)
     term_free(term);
 }
 
+/*
+ * render_resize()'s decision points (render.zig, D3l3b). The resize itself
+ * needs a configured window and real grids, so the harness covers the
+ * early-outs and the "nothing changed" path.
+ */
+static void
+test_render_resize_early_outs(void)
+{
+    struct terminal *term = term_new();
+    struct wl_window win = {0};
+    struct wayland wl = {0};
+    static struct config conf;
+    memset(&conf, 0, sizeof(conf));
+
+    term->window = &win;
+    term->wl = &wl;
+    term->conf = &conf;
+    term->scale = 1.0f;
+    term->width = 800;
+    term->height = 480;
+    term->cols = 80;
+    term->rows = 24;
+    term->cell_width = 10;
+    term->cell_height = 20;
+
+    check(!render_resize(term, 800, 480, 0),
+          "an unconfigured window is not resized");
+
+    win.is_configured = true;
+    term->cell_width = 0;
+    term->cell_height = 0;
+    check(!render_resize(term, 800, 480, 0),
+          "a terminal without a font size is not resized");
+
+    term->cell_width = 10;
+    term->cell_height = 20;
+    term->shutdown.in_progress = true;
+    check(!render_resize(term, 800, 480, 0),
+          "a shutting-down terminal is not resized");
+
+    term->shutdown.in_progress = false;
+    check(!render_resize(term, 800, 480, 0),
+          "the same size and scale is not a resize");
+
+    term->window = NULL;
+    term->wl = NULL;
+    term->conf = NULL;
+    term_free(term);
+}
+
 int
 main(void)
 {
@@ -5711,6 +5763,7 @@ main(void)
     test_render_wait_for_preapply_damage();
     test_overflowing_glyphs();
     test_set_size_from_grid();
+    test_render_resize_early_outs();
     test_scrollback_indicator();
     test_search_box_offset();
     test_url_label();

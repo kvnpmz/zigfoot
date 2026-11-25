@@ -1969,10 +1969,12 @@ export fn grid_resize_without_reflow(
     gridResizeWithoutReflow(grid, new_rows, new_cols, old_screen_rows, new_screen_rows);
 }
 
-// Called from grid-shim.c, which supplies term->composed.
+// C's grid_resize_and_reflow() takes a `struct terminal *` and uses its
+// `composed` table; grid-shim.c used to do that forwarding, but it stopped
+// being built when the export landed, so the terminal is unwrapped here.
 export fn grid_resize_and_reflow(
     grid: *types.Grid,
-    composed_root: ?*Composed,
+    term: *const types.Terminal,
     new_rows: c_int,
     new_cols: c_int,
     old_screen_rows: c_int,
@@ -1980,7 +1982,16 @@ export fn grid_resize_and_reflow(
     tracking_points_count: usize,
     tracking_points: ?[*]const *types.Coord,
 ) callconv(.c) void {
-    gridResizeAndReflow(grid, composed_root, new_rows, new_cols, old_screen_rows, new_screen_rows, tracking_points_count, tracking_points);
+    gridResizeAndReflow(
+        grid,
+        if (term.composed) |c| @ptrCast(@alignCast(c)) else null,
+        new_rows,
+        new_cols,
+        old_screen_rows,
+        new_screen_rows,
+        tracking_points_count,
+        tracking_points,
+    );
 }
 
 export fn grid_row_range_put(
