@@ -2149,3 +2149,593 @@ export fn keymap_lookup(
 
     return null;
 }
+
+// kitty-keymap.h's kitty_keymap[] (D4b2b), translated to Zig.
+//
+// The C struct was packed (u32 sym, u16 key, one byte of final+is_modifier);
+// the C table is gone now, so the Zig struct only needs the same *fields*.
+// The table *must* stay sorted by sym: kitty_kbd_protocol() binary-searches
+// it (the generator asserts that).
+pub const KittyKeyData = packed struct {
+    sym: u32,
+    key: u16,
+    final: u7,
+    is_modifier: bool,
+};
+
+
+const kitty_keymap = [_]KittyKeyData{
+    .{ .sym = 0xfe03, .key = 57453, .final = 'u', .is_modifier = true },
+    .{ .sym = 0xfe11, .key = 57454, .final = 'u', .is_modifier = true },
+    .{ .sym = 0xfe20, .key = 9, .final = 'u', .is_modifier = false },
+    .{ .sym = 0xff08, .key = 127, .final = 'u', .is_modifier = false },
+    .{ .sym = 0xff09, .key = 9, .final = 'u', .is_modifier = false },
+    .{ .sym = 0xff0d, .key = 13, .final = 'u', .is_modifier = false },
+    .{ .sym = 0xff13, .key = 57362, .final = 'u', .is_modifier = false },
+    .{ .sym = 0xff14, .key = 57359, .final = 'u', .is_modifier = false },
+    .{ .sym = 0xff1b, .key = 27, .final = 'u', .is_modifier = false },
+    .{ .sym = 0xff50, .key = 1, .final = 'H', .is_modifier = false },
+    .{ .sym = 0xff51, .key = 1, .final = 'D', .is_modifier = false },
+    .{ .sym = 0xff52, .key = 1, .final = 'A', .is_modifier = false },
+    .{ .sym = 0xff53, .key = 1, .final = 'C', .is_modifier = false },
+    .{ .sym = 0xff54, .key = 1, .final = 'B', .is_modifier = false },
+    .{ .sym = 0xff55, .key = 5, .final = '~', .is_modifier = false },
+    .{ .sym = 0xff56, .key = 6, .final = '~', .is_modifier = false },
+    .{ .sym = 0xff57, .key = 1, .final = 'F', .is_modifier = false },
+    .{ .sym = 0xff61, .key = 57361, .final = 'u', .is_modifier = false },
+    .{ .sym = 0xff63, .key = 2, .final = '~', .is_modifier = false },
+    .{ .sym = 0xff67, .key = 57363, .final = 'u', .is_modifier = false },
+    .{ .sym = 0xff7f, .key = 57360, .final = 'u', .is_modifier = true },
+    .{ .sym = 0xff8d, .key = 57414, .final = 'u', .is_modifier = false },
+    .{ .sym = 0xff95, .key = 57423, .final = 'u', .is_modifier = false },
+    .{ .sym = 0xff96, .key = 57417, .final = 'u', .is_modifier = false },
+    .{ .sym = 0xff97, .key = 57419, .final = 'u', .is_modifier = false },
+    .{ .sym = 0xff98, .key = 57418, .final = 'u', .is_modifier = false },
+    .{ .sym = 0xff99, .key = 57420, .final = 'u', .is_modifier = false },
+    .{ .sym = 0xff9a, .key = 57421, .final = 'u', .is_modifier = false },
+    .{ .sym = 0xff9b, .key = 57422, .final = 'u', .is_modifier = false },
+    .{ .sym = 0xff9c, .key = 57424, .final = 'u', .is_modifier = false },
+    .{ .sym = 0xff9d, .key = 1, .final = 'E', .is_modifier = false },
+    .{ .sym = 0xff9e, .key = 57425, .final = 'u', .is_modifier = false },
+    .{ .sym = 0xff9f, .key = 57426, .final = 'u', .is_modifier = false },
+    .{ .sym = 0xffaa, .key = 57411, .final = 'u', .is_modifier = false },
+    .{ .sym = 0xffab, .key = 57413, .final = 'u', .is_modifier = false },
+    .{ .sym = 0xffac, .key = 57416, .final = 'u', .is_modifier = false },
+    .{ .sym = 0xffad, .key = 57412, .final = 'u', .is_modifier = false },
+    .{ .sym = 0xffae, .key = 57409, .final = 'u', .is_modifier = false },
+    .{ .sym = 0xffaf, .key = 57410, .final = 'u', .is_modifier = false },
+    .{ .sym = 0xffb0, .key = 57399, .final = 'u', .is_modifier = false },
+    .{ .sym = 0xffb1, .key = 57400, .final = 'u', .is_modifier = false },
+    .{ .sym = 0xffb2, .key = 57401, .final = 'u', .is_modifier = false },
+    .{ .sym = 0xffb3, .key = 57402, .final = 'u', .is_modifier = false },
+    .{ .sym = 0xffb4, .key = 57403, .final = 'u', .is_modifier = false },
+    .{ .sym = 0xffb5, .key = 57404, .final = 'u', .is_modifier = false },
+    .{ .sym = 0xffb6, .key = 57405, .final = 'u', .is_modifier = false },
+    .{ .sym = 0xffb7, .key = 57406, .final = 'u', .is_modifier = false },
+    .{ .sym = 0xffb8, .key = 57407, .final = 'u', .is_modifier = false },
+    .{ .sym = 0xffb9, .key = 57408, .final = 'u', .is_modifier = false },
+    .{ .sym = 0xffbd, .key = 57415, .final = 'u', .is_modifier = false },
+    .{ .sym = 0xffbe, .key = 1, .final = 'P', .is_modifier = false },
+    .{ .sym = 0xffbf, .key = 1, .final = 'Q', .is_modifier = false },
+    .{ .sym = 0xffc0, .key = 13, .final = '~', .is_modifier = false },
+    .{ .sym = 0xffc1, .key = 1, .final = 'S', .is_modifier = false },
+    .{ .sym = 0xffc2, .key = 15, .final = '~', .is_modifier = false },
+    .{ .sym = 0xffc3, .key = 17, .final = '~', .is_modifier = false },
+    .{ .sym = 0xffc4, .key = 18, .final = '~', .is_modifier = false },
+    .{ .sym = 0xffc5, .key = 19, .final = '~', .is_modifier = false },
+    .{ .sym = 0xffc6, .key = 20, .final = '~', .is_modifier = false },
+    .{ .sym = 0xffc7, .key = 21, .final = '~', .is_modifier = false },
+    .{ .sym = 0xffc8, .key = 23, .final = '~', .is_modifier = false },
+    .{ .sym = 0xffc9, .key = 24, .final = '~', .is_modifier = false },
+    .{ .sym = 0xffca, .key = 57376, .final = 'u', .is_modifier = false },
+    .{ .sym = 0xffcb, .key = 57377, .final = 'u', .is_modifier = false },
+    .{ .sym = 0xffcc, .key = 57378, .final = 'u', .is_modifier = false },
+    .{ .sym = 0xffcd, .key = 57379, .final = 'u', .is_modifier = false },
+    .{ .sym = 0xffce, .key = 57380, .final = 'u', .is_modifier = false },
+    .{ .sym = 0xffcf, .key = 57381, .final = 'u', .is_modifier = false },
+    .{ .sym = 0xffd0, .key = 57382, .final = 'u', .is_modifier = false },
+    .{ .sym = 0xffd1, .key = 57383, .final = 'u', .is_modifier = false },
+    .{ .sym = 0xffd2, .key = 57384, .final = 'u', .is_modifier = false },
+    .{ .sym = 0xffd3, .key = 57385, .final = 'u', .is_modifier = false },
+    .{ .sym = 0xffd4, .key = 57386, .final = 'u', .is_modifier = false },
+    .{ .sym = 0xffd5, .key = 57387, .final = 'u', .is_modifier = false },
+    .{ .sym = 0xffd6, .key = 57388, .final = 'u', .is_modifier = false },
+    .{ .sym = 0xffd7, .key = 57389, .final = 'u', .is_modifier = false },
+    .{ .sym = 0xffd8, .key = 57390, .final = 'u', .is_modifier = false },
+    .{ .sym = 0xffd9, .key = 57391, .final = 'u', .is_modifier = false },
+    .{ .sym = 0xffda, .key = 57392, .final = 'u', .is_modifier = false },
+    .{ .sym = 0xffdb, .key = 57393, .final = 'u', .is_modifier = false },
+    .{ .sym = 0xffdc, .key = 57394, .final = 'u', .is_modifier = false },
+    .{ .sym = 0xffdd, .key = 57395, .final = 'u', .is_modifier = false },
+    .{ .sym = 0xffde, .key = 57396, .final = 'u', .is_modifier = false },
+    .{ .sym = 0xffdf, .key = 57397, .final = 'u', .is_modifier = false },
+    .{ .sym = 0xffe0, .key = 57398, .final = 'u', .is_modifier = false },
+    .{ .sym = 0xffe1, .key = 57441, .final = 'u', .is_modifier = true },
+    .{ .sym = 0xffe2, .key = 57447, .final = 'u', .is_modifier = true },
+    .{ .sym = 0xffe3, .key = 57442, .final = 'u', .is_modifier = true },
+    .{ .sym = 0xffe4, .key = 57448, .final = 'u', .is_modifier = true },
+    .{ .sym = 0xffe5, .key = 57358, .final = 'u', .is_modifier = true },
+    .{ .sym = 0xffe7, .key = 57446, .final = 'u', .is_modifier = true },
+    .{ .sym = 0xffe8, .key = 57452, .final = 'u', .is_modifier = true },
+    .{ .sym = 0xffe9, .key = 57443, .final = 'u', .is_modifier = true },
+    .{ .sym = 0xffea, .key = 57449, .final = 'u', .is_modifier = true },
+    .{ .sym = 0xffeb, .key = 57444, .final = 'u', .is_modifier = true },
+    .{ .sym = 0xffec, .key = 57450, .final = 'u', .is_modifier = true },
+    .{ .sym = 0xffed, .key = 57445, .final = 'u', .is_modifier = true },
+    .{ .sym = 0xffee, .key = 57451, .final = 'u', .is_modifier = true },
+    .{ .sym = 0xffff, .key = 3, .final = '~', .is_modifier = false },
+    .{ .sym = 0x1008ff11, .key = 57438, .final = 'u', .is_modifier = false },
+    .{ .sym = 0x1008ff12, .key = 57440, .final = 'u', .is_modifier = false },
+    .{ .sym = 0x1008ff13, .key = 57439, .final = 'u', .is_modifier = false },
+    .{ .sym = 0x1008ff14, .key = 57428, .final = 'u', .is_modifier = false },
+    .{ .sym = 0x1008ff15, .key = 57432, .final = 'u', .is_modifier = false },
+    .{ .sym = 0x1008ff16, .key = 57436, .final = 'u', .is_modifier = false },
+    .{ .sym = 0x1008ff17, .key = 57435, .final = 'u', .is_modifier = false },
+    .{ .sym = 0x1008ff1c, .key = 57437, .final = 'u', .is_modifier = false },
+    .{ .sym = 0x1008ff31, .key = 57429, .final = 'u', .is_modifier = false },
+    .{ .sym = 0x1008ff3e, .key = 57434, .final = 'u', .is_modifier = false },
+    .{ .sym = 0x1008ff97, .key = 57433, .final = 'u', .is_modifier = false },
+};
+
+// ─────────────────────────────────────────────────────────────────────────
+// The keyboard protocols (D4b2b): the legacy (VT/xterm-style) encoder and the
+// kitty keyboard protocol encoder.
+// ─────────────────────────────────────────────────────────────────────────
+
+const WL_KEYBOARD_KEY_STATE_RELEASED: c_int = 0;
+const WL_KEYBOARD_KEY_STATE_PRESSED: c_int = 1;
+
+const XKB_COMPOSE_COMPOSING: c_int = 1;
+const XKB_COMPOSE_COMPOSED: c_int = 2;
+
+const XKB_KEY_UP_DIR: c_int = 0;
+const XKB_KEY_DOWN_DIR: c_int = 1;
+
+const XKB_KEY_a: u32 = 0x61;
+const XKB_KEY_z: u32 = 0x7a;
+const XKB_KEY_Return: u32 = 0xff0d;
+const XKB_KEY_BackSpace: u32 = 0xff08;
+const XKB_KEY_Tab: u32 = 0xff09;
+
+// kitty keyboard protocol flag bits (kitty-keymap.h / terminal.h).
+const KITTY_KBD_DISAMBIGUATE: u32 = 0x001;
+const KITTY_KBD_REPORT_EVENT: u32 = 0x002;
+const KITTY_KBD_REPORT_ALTERNATE: u32 = 0x004;
+const KITTY_KBD_REPORT_ALL: u32 = 0x008;
+const KITTY_KBD_REPORT_ASSOCIATED: u32 = 0x010;
+
+/// input.c's `struct kbd_ctx`: everything the protocol encoders need about
+/// one key event, resolved by key_press_release().
+pub const KbdCtx = extern struct {
+    layout: u32,
+    key: u32,
+    sym: u32,
+
+    level0_syms: extern struct {
+        syms: ?[*]const u32,
+        count: usize,
+    },
+
+    mods: u32,
+    consumed: u32,
+
+    utf8: extern struct {
+        buf: ?[*]const u8,
+        count: usize,
+    },
+    utf32: ?[*]u32,
+
+    compose_status: c_int,
+    key_state: c_int,
+};
+
+extern fn xkb_state_key_get_layout(state: ?*anyopaque, key: u32) callconv(.c) u32;
+extern fn xkb_keymap_key_get_syms_by_level(
+    keymap: ?*anyopaque,
+    key: u32,
+    layout: u32,
+    level: u32,
+    syms_out: *?[*]const u32,
+) callconv(.c) c_int;
+extern fn xkb_keysym_to_lower(sym: u32) callconv(.c) u32;
+extern fn xkb_keysym_to_utf32(sym: u32) callconv(.c) u32;
+extern fn xkb_state_update_key(state: ?*anyopaque, key: u32, direction: c_int) callconv(.c) c_int;
+extern fn terminal_shim_isc32print(c32: u32) callconv(.c) bool;
+extern fn term_to_slave(term: *Terminal, data: ?*const anyopaque, len: usize) callconv(.c) bool;
+extern fn c32rtomb(s: [*]u8, wc: u32, ps: *anyopaque) callconv(.c) usize;
+
+
+/// C's `is_control_key()`: 0x40..0x7f.
+fn isControlKey(x: u32) bool {
+    return x >= 0x40 and x <= 0x7f;
+}
+
+/// C's `IS_CTRL()`: C0 controls and DEL/C1.
+fn isCtrlByte(x: u8) bool {
+    return x < 0x20 or (x >= 0x7f and x <= 0x9f);
+}
+
+fn emit(term: *Terminal, data: []const u8) void {
+    _ = term_to_slave(term, data.ptr, data.len);
+}
+
+
+/// The xterm modifier parameter used in CSI 27 ; <mod> ; <sym> ~.
+fn modParam(mods: c_int) u8 {
+    return switch (mods) {
+        MOD_SHIFT => 2,
+        MOD_ALT => 3,
+        MOD_SHIFT | MOD_ALT => 4,
+        MOD_CTRL => 5,
+        MOD_SHIFT | MOD_CTRL => 6,
+        MOD_ALT | MOD_CTRL => 7,
+        MOD_SHIFT | MOD_ALT | MOD_CTRL => 8,
+        MOD_META => 9,
+        MOD_META | MOD_SHIFT => 10,
+        MOD_META | MOD_ALT => 11,
+        MOD_META | MOD_SHIFT | MOD_ALT => 12,
+        MOD_META | MOD_CTRL => 13,
+        MOD_META | MOD_SHIFT | MOD_CTRL => 14,
+        MOD_META | MOD_ALT | MOD_CTRL => 15,
+        MOD_META | MOD_SHIFT | MOD_ALT | MOD_CTRL => 16,
+        else => 0,
+    };
+}
+
+/// The legacy (i.e. non-kitty) encoder: MOD_ANY key tables first, then
+/// modifyOtherKeys, then the meta/alt strategies.
+export fn legacy_kbd_protocol(
+    seat: *Seat,
+    term: *Terminal,
+    ctx: *const KbdCtx,
+) callconv(.c) bool {
+    if (ctx.key_state != WL_KEYBOARD_KEY_STATE_PRESSED)
+        return false;
+    if (ctx.compose_status == XKB_COMPOSE_COMPOSING)
+        return false;
+
+    var keymap_mods: c_int = MOD_NONE;
+    if (seat.kbd.shift) keymap_mods |= MOD_SHIFT;
+    if (seat.kbd.alt) keymap_mods |= MOD_ALT;
+    if (seat.kbd.ctrl) keymap_mods |= MOD_CTRL;
+    if (seat.kbd.super) keymap_mods |= MOD_META;
+
+    const sym = ctx.sym;
+    const count = ctx.utf8.count;
+    const utf8 = ctx.utf8.buf;
+
+
+    if (keymap_lookup(term, sym, keymap_mods)) |keymap| {
+        emit(term, std.mem.span(keymap.seq));
+        return true;
+    }
+
+    if (count == 0)
+        return false;
+
+    const ctrl_is_in_effect = (keymap_mods & MOD_CTRL) != 0;
+    const ctrl_seq = isControlKey(sym) or
+        (count == 1 and isCtrlByte(utf8.?[0]));
+
+    var modify_other_keys2_in_effect = false;
+
+    if (term.modify_other_keys_2) {
+        // Mimic XTerm: with shift held, 'A'-'Z' are encoded as a CSI, other
+        // upper-case symbols (e.g. 'Ö') are emitted as-is.
+        const shift_mask: u32 = @as(u32, 1) << @intCast(seat.kbd.mod_shift);
+        if ((ctx.mods & ~shift_mask & seat.kbd.legacy_significant) != 0) {
+            modify_other_keys2_in_effect = true;
+        } else {
+            const layout_idx = xkb_state_key_get_layout(seat.kbd.xkb_state, ctx.key);
+
+            // The pressed key's base symbol: for 'A' (shift-a) that's 'a'.
+            var base_syms: ?[*]const u32 = null;
+            const base_count = xkb_keymap_key_get_syms_by_level(
+                seat.kbd.xkb_keymap, ctx.key, layout_idx, 0, &base_syms);
+
+            const lower_cased_sym = xkb_keysym_to_lower(sym);
+            var i: usize = 0;
+            while (i < @as(usize, @intCast(base_count))) : (i += 1) {
+                const s = base_syms.?[i];
+                if (lower_cased_sym == s and s >= XKB_KEY_a and s <= XKB_KEY_z) {
+                    modify_other_keys2_in_effect = true;
+                    break;
+                }
+            }
+        }
+    }
+
+
+    if (keymap_mods != MOD_NONE and
+        (modify_other_keys2_in_effect or (ctrl_is_in_effect and !ctrl_seq)))
+    {
+        const modify_param = modParam(keymap_mods);
+        std.debug.assert(modify_param != 0);
+
+        var reply: [32]u8 = undefined;
+        const n = std.fmt.bufPrint(&reply, "\x1b[27;{d};{d}~", .{ modify_param, sym }) catch
+            return false;
+        emit(term, n);
+    } else if (keymap_mods & MOD_ALT != 0) {
+        // Alt is either an ESC prefix, the 8th bit, or ignored entirely.
+        if (term.meta.esc_prefix) {
+            emit(term, "\x1b");
+            emit(term, utf8.?[0..count]);
+        } else if (term.meta.eight_bit and count == 1) {
+            const wc: u32 = 0x80 | utf8.?[0];
+
+            var utf8_meta: [8]u8 = undefined;
+            var state: [4]usize = .{ 0, 0, 0, 0 };
+            const chars = c32rtomb(&utf8_meta, wc, &state);
+
+            if (chars != @as(usize, @bitCast(@as(isize, -1))))
+                emit(term, utf8_meta[0..chars])
+            else
+                emit(term, utf8.?[0..count]);
+        } else {
+            // Alt ignored
+            emit(term, utf8.?[0..count]);
+        }
+    } else {
+        emit(term, utf8.?[0..count]);
+    }
+
+    return true;
+}
+
+fn kittyLookup(sym: u32) ?*const KittyKeyData {
+    // The table is sorted; C used bsearch().
+    var lo: usize = 0;
+    var hi: usize = kitty_keymap.len;
+    while (lo < hi) {
+        const mid = lo + (hi - lo) / 2;
+        const e = &kitty_keymap[mid];
+        if (e.sym == sym)
+            return e;
+        if (e.sym < sym)
+            lo = mid + 1
+        else
+            hi = mid;
+    }
+    return null;
+}
+
+/// The kitty keyboard protocol encoder.
+export fn kitty_kbd_protocol(
+    seat: *Seat,
+    term: *Terminal,
+    ctx: *const KbdCtx,
+) callconv(.c) bool {
+    const repeating = seat.kbd.repeat.dont_re_repeat;
+    const pressed = ctx.key_state == WL_KEYBOARD_KEY_STATE_PRESSED and !repeating;
+    const released = ctx.key_state == WL_KEYBOARD_KEY_STATE_RELEASED;
+    const composing = ctx.compose_status == XKB_COMPOSE_COMPOSING;
+    const composed = ctx.compose_status == XKB_COMPOSE_COMPOSED;
+
+    const grid = term.grid.?;
+    const flags: u32 = @bitCast(@intFromEnum(grid.kitty_kbd.flags[grid.kitty_kbd.idx]));
+
+    const disambiguate = flags & KITTY_KBD_DISAMBIGUATE != 0;
+    const report_events = flags & KITTY_KBD_REPORT_EVENT != 0;
+    const report_alternate = flags & KITTY_KBD_REPORT_ALTERNATE != 0;
+    const report_all_as_escapes = flags & KITTY_KBD_REPORT_ALL != 0;
+
+    if (!report_events and released)
+        return false;
+
+    // TODO: should we even bother with this, or just say it's not supported?
+    if (!disambiguate and !report_all_as_escapes and pressed)
+        return legacy_kbd_protocol(seat, term, ctx);
+
+    const sym = ctx.sym;
+    const utf32 = ctx.utf32;
+    const utf8 = ctx.utf8.buf;
+    const count = ctx.utf8.count;
+
+    // Look up sym in the pre-defined keysym table
+    const info = kittyLookup(sym);
+    std.debug.assert(info == null or info.?.sym == sym);
+
+    var mods: u32 = 0;
+    var locked: u32 = 0;
+    var consumed: u32 = ctx.consumed;
+
+    if (info != null and info.?.is_modifier) {
+        // The xkb state reflects the state *before* this key event, so a
+        // modifier key does not report itself. The kitty protocol requires
+        // it to, so update the state, read it back, and (deliberately) do
+        // not revert - see the comment in the C original.
+        _ = xkb_state_update_key(
+            seat.kbd.xkb_state, ctx.key, if (pressed) XKB_KEY_DOWN_DIR else XKB_KEY_UP_DIR);
+
+        get_current_modifiers(seat, &mods, null, 0, false);
+
+        locked = xkb_state_serialize_mods(seat.kbd.xkb_state, XKB_STATE_MODS_LOCKED);
+        consumed = xkb_state_key_get_consumed_mods2(
+            seat.kbd.xkb_state, ctx.key, XKB_CONSUMED_MODE_XKB);
+    } else {
+        // Same as ctx.mods, but *without* filtering locked modifiers
+        get_current_modifiers(seat, &mods, null, 0, false);
+        locked = xkb_state_serialize_mods(seat.kbd.xkb_state, XKB_STATE_MODS_LOCKED);
+    }
+
+    mods &= seat.kbd.kitty_significant;
+    consumed &= seat.kbd.kitty_significant;
+
+    // Locked modifiers are part of the protocol, but only when the key would
+    // otherwise produce a CSIu: if it would produce plain text, emit text.
+    var is_text = count > 0 and utf32 != null and (mods & ~locked & ~consumed) == 0;
+    if (utf32) |u| {
+        var i: usize = 0;
+        while (u[i] != 0) : (i += 1) {
+            if (!terminal_shim_isc32print(u[i])) {
+                is_text = false;
+                break;
+            }
+        }
+    }
+
+    const report_associated_text =
+        (flags & KITTY_KBD_REPORT_ASSOCIATED != 0) and is_text and !released;
+
+    if (composing and !(info != null and info.?.is_modifier)) {
+        // We never emit anything while composing, *except* modifiers (and
+        // only in report-all-keys-as-escape-codes mode).
+        return false;
+    }
+
+    if (!composing and !report_all_as_escapes) {
+        if ((mods & ~locked & ~consumed) == 0) {
+            switch (sym) {
+                XKB_KEY_Return => {
+                    if (!released)
+                        emit(term, "\r");
+                    return true;
+                },
+                XKB_KEY_BackSpace => {
+                    if (!released)
+                        emit(term, "\x7f");
+                    return true;
+                },
+                XKB_KEY_Tab => {
+                    if (!released)
+                        emit(term, "\t");
+                    return true;
+                },
+                else => {},
+            }
+        }
+
+        // Plain-text without modifiers, or composed text, is emitted as-is
+        if (is_text and !released) {
+            emit(term, utf8.?[0..count]);
+            return true;
+        }
+    }
+
+    // ── emit_escapes ──────────────────────────────────────────────────────
+    var encoded_mods: u32 = 0;
+    inline for (.{
+        .{ "mod_shift", 0 },
+        .{ "mod_alt", 1 },
+        .{ "mod_ctrl", 2 },
+        .{ "mod_super", 3 },
+        .{ "mod_caps", 6 },
+        .{ "mod_num", 7 },
+    }) |spec| {
+        const idx = @field(seat.kbd, spec[0]);
+        if (idx != XKB_MOD_INVALID) {
+            if (mods & (@as(u32, 1) << @intCast(idx)) != 0)
+                encoded_mods |= @as(u32, 1) << spec[1];
+        }
+    }
+    encoded_mods += 1;
+
+    var unshifted: i32 = -1;
+    var shifted: i32 = -1;
+    var base: i32 = -1;
+    var final: u8 = 'u';
+
+    if (info) |i| {
+        // Use the code from the lookup table (cursor keys, enter, tab, ...)
+        if (!i.is_modifier or report_all_as_escapes) {
+            shifted = @intCast(i.key);
+            final = @intCast(i.final);
+        }
+    } else {
+        // Use the keysym (typically its Unicode codepoint value)
+        shifted = if (composed)
+            @bitCast(utf32.?[0])
+        else
+            @bitCast(xkb_keysym_to_utf32(sym));
+
+        final = 'u';
+    }
+
+    if (shifted <= 0)
+        return false;
+
+    // The symbol the pressed key produces in the base layout (layout 0).
+    var base_syms: ?[*]const u32 = null;
+    const base_sym_count = xkb_keymap_key_get_syms_by_level(
+        seat.kbd.xkb_keymap, ctx.key, 0, 0, &base_syms);
+    if (base_sym_count > 0) {
+        const utf32_base = xkb_keysym_to_utf32(base_syms.?[0]);
+        if (utf32_base != 0)
+            base = @bitCast(utf32_base);
+    }
+
+    // If a non-significant modifier generated the symbol, keep the shifted
+    // codepoint: those modifiers cannot be encoded, so using the base symbol
+    // would lose them (e.g. AltGr+2 = '@' on a Swedish layout).
+    const use_level0_sym =
+        (ctx.mods & ~seat.kbd.kitty_significant) == 0 and ctx.level0_syms.count > 0;
+
+    unshifted = if (use_level0_sym) @bitCast(xkb_keysym_to_utf32(ctx.level0_syms.syms.?[0])) else 0;
+
+    std.debug.assert(encoded_mods >= 1);
+
+    var event_buf: [4]u8 = .{ 0, 0, 0, 0 };
+    if (report_events) {
+        // Note: this deviates slightly from kitty, which omits the ":1"
+        // sub-parameter for key press events.
+        event_buf[0] = ':';
+        event_buf[1] = '0' + @as(u8, if (pressed) 1 else if (repeating) 2 else 3);
+    }
+    const event = std.mem.sliceTo(&event_buf, 0);
+
+    var buf: [128]u8 = undefined;
+    var len: usize = 0;
+
+    const key: i32 = if (unshifted > 0 and
+        terminal_shim_isc32print(@bitCast(unshifted)) and !composed)
+        unshifted
+    else
+        shifted;
+    const alternate = shifted;
+
+    if (final == 'u' or final == '~') {
+        len += (std.fmt.bufPrint(buf[len..], "\x1b[{d}", .{key}) catch return false).len;
+
+        if (report_alternate) {
+            const emit_alternate = alternate > 0 and alternate != key;
+            const emit_base = base > 0 and base != key and base != alternate and
+                terminal_shim_isc32print(@bitCast(base));
+
+            if (emit_alternate)
+                len += (std.fmt.bufPrint(buf[len..], ":{d}", .{alternate}) catch return false).len;
+
+            if (emit_base)
+                len += (std.fmt.bufPrint(
+                    buf[len..], "{s}:{d}", .{ if (!emit_alternate) ":" else "", base }) catch return false).len;
+        }
+
+        const emit_mods = encoded_mods > 1 or event.len > 0;
+        if (emit_mods)
+            len += (std.fmt.bufPrint(buf[len..], ";{d}{s}", .{ encoded_mods, event }) catch return false).len;
+
+        if (report_associated_text) {
+            len += (std.fmt.bufPrint(
+                buf[len..], "{s};{d}", .{ if (!emit_mods) ";" else "", utf32.?[0] }) catch return false).len;
+
+            // Additional text codepoints
+            if (utf32.?[0] != 0) {
+                var i: usize = 1;
+                while (utf32.?[i] != 0) : (i += 1) {
+                    len += (std.fmt.bufPrint(buf[len..], ":{d}", .{utf32.?[i]}) catch return false).len;
+                }
+            }
+        }
+
+        len += (std.fmt.bufPrint(buf[len..], "{c}", .{final}) catch return false).len;
+    } else {
+        if (encoded_mods > 1 or event.len > 0)
+            len += (std.fmt.bufPrint(
+                buf[len..], "\x1b[1;{d}{s}{c}", .{ encoded_mods, event, final }) catch return false).len
+        else
+            len += (std.fmt.bufPrint(buf[len..], "\x1b[{c}", .{final}) catch return false).len;
+    }
+
+    return term_to_slave(term, &buf, len);
+}
+

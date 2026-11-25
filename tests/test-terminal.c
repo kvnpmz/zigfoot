@@ -66,6 +66,11 @@ const struct key_data *keymap_lookup(struct terminal *term,
                                          enum modifier mods);
 const struct key_data *keymap_data_for_sym(xkb_keysym_t sym,
                                            size_t *count);
+struct kbd_ctx;
+bool legacy_kbd_protocol(struct seat *seat, struct terminal *term,
+                          const struct kbd_ctx *ctx);
+bool kitty_kbd_protocol(struct seat *seat, struct terminal *term,
+                        const struct kbd_ctx *ctx);
 bool keysym_is_modifier(xkb_keysym_t keysym);
 void modifier_string(xkb_mod_mask_t mods, size_t sz,
                      char mod_str[static sz], const struct seat *seat);
@@ -5973,6 +5978,149 @@ test_keymap_lookup(void)
           "an unknown keysym has no key table");
 }
 
+/*
+ * The two keyboard-protocol encoders (input.zig, D4b2b).
+ *
+ * Both are pure functions of a struct kbd_ctx, so they can be driven directly
+ * and their output read back from a real pty.
+ */
+static void
+kbd_ctx_init(struct kbd_ctx *ctx, xkb_keysym_t sym, const char *utf8,
+             uint32_t *utf32, bool pressed)
+{
+    memset(ctx, 0, sizeof(*ctx));
+    ctx->sym = sym;
+    ctx->key = 38;  /* 'a' on evdev */
+    ctx->utf8.buf = (const uint8_t *)utf8;
+    ctx->utf8.count = strlen(utf8);
+    ctx->utf32 = utf32;
+    ctx->compose_status = XKB_COMPOSE_NOTHING;
+    ctx->key_state = pressed ? WL_KEYBOARD_KEY_STATE_PRESSED
+                             : WL_KEYBOARD_KEY_STATE_RELEASED;
+}
+
+static void
+test_kbd_protocols(void)
+{
+    struct terminal *term = term_new();
+    struct seat seat;
+    memset(&seat, 0, sizeof(seat));
+    seat.kbd_focus = term;
+
+    /* kitty_kbd_protocol() consults the xkb keymap for the base layout
+     * symbol, so give the seat a real one. */
+    struct xkb_context *xkb_ctx = xkb_context_new(XKB_CONTEXT_NO_FLAGS);
+    struct xkb_keymap *km = xkb_ctx != NULL
+        ? xkb_keymap_new_from_names(xkb_ctx, NULL, XKB_KEYMAP_COMPILE_NO_FLAGS)
+        : NULL;
+    if (km != NULL) {
+        seat.kbd.xkb = xkb_ctx;
+        seat.kbd.xkb_keymap = km;
+        seat.kbd.xkb_state = xkb_state_new(km);
+        seat.kbd.mod_ctrl = xkb_keymap_mod_get_index(km, XKB_MOD_NAME_CTRL);
+        seat.kbd.mod_shift = xkb_keymap_mod_get_index(km, XKB_MOD_NAME_SHIFT);
+        seat.kbd.kitty_significant = (1u << seat.kbd.mod_ctrl) |
+                                     (1u << seat.kbd.mod_shift);
+    }
+
+    int slave = term_capture_begin(term);
+    char buf[256];
+
+    struct kbd_ctx ctx;
+    uint32_t a_utf32[] = {'a', 0};
+
+    /* ── legacy ─────────────────────────────────────────────────────── */
+    kbd_ctx_init(&ctx, XKB_KEY_a, "a", a_utf32, true);
+    check(legacy_kbd_protocol(&seat, term, &ctx),
+          "legacy: a plain 'a' is handled");
+    term_capture_read(slave, buf, sizeof(buf));
+    check_text(buf, "a", "legacy: a plain 'a' is sent as-is");
+
+    /* Ctrl+a: xkb hands us the control character, and keysym 0x61 counts as
+     * a control key (is_control_key() covers 0x40..0x7f), so the raw byte is
+     * what gets sent. */
+    seat.kbd.ctrl = true;
+    uint32_t ctrl_a_utf32[] = {1, 0};
+    kbd_ctx_init(&ctx, XKB_KEY_a, "\001", ctrl_a_utf32, true);
+    legacy_kbd_protocol(&seat, term, &ctx);
+    term_capture_read(slave, buf, sizeof(buf));
+    check_text(buf, "\001", "legacy: Ctrl+a sends the control character");
+
+    /* A non-ASCII keysym with ctrl does go through the modifyOtherKeys CSI. */
+    uint32_t eacute_utf32[] = {0xe9, 0};
+    kbd_ctx_init(&ctx, 0xe9, "\303\251", eacute_utf32, true);
+    legacy_kbd_protocol(&seat, term, &ctx);
+    term_capture_read(slave, buf, sizeof(buf));
+    check_text(buf, "\033[27;5;233~",
+               "legacy: Ctrl+eacute is CSI 27;5;233~");
+    seat.kbd.ctrl = false;
+
+    /* Alt+Return comes from the key table, not the CSI path. */
+    uint32_t ret_utf32[] = {'\r', 0};
+    seat.kbd.alt = true;
+    kbd_ctx_init(&ctx, XKB_KEY_Return, "\r", ret_utf32, true);
+    legacy_kbd_protocol(&seat, term, &ctx);
+    term_capture_read(slave, buf, sizeof(buf));
+    check_text(buf, "\033\r", "legacy: Alt+Return is ESC CR");
+    seat.kbd.alt = false;
+
+    /* Release events are not the legacy protocol's business. */
+    kbd_ctx_init(&ctx, XKB_KEY_a, "a", a_utf32, false);
+    check(!legacy_kbd_protocol(&seat, term, &ctx),
+          "legacy: a release event is not encoded");
+
+    /* ── kitty ──────────────────────────────────────────────────────── */
+    term->grid->kitty_kbd.flags[0] = KITTY_KBD_DISAMBIGUATE;
+    term->grid->kitty_kbd.idx = 0;
+
+    kbd_ctx_init(&ctx, XKB_KEY_a, "a", a_utf32, true);
+    check(kitty_kbd_protocol(&seat, term, &ctx), "kitty: 'a' is handled");
+    term_capture_read(slave, buf, sizeof(buf));
+    check_text(buf, "a", "kitty: plain text stays plain text");
+
+    /* report-all-keys-as-escapes turns it into a CSI u. */
+    term->grid->kitty_kbd.flags[0] = KITTY_KBD_DISAMBIGUATE | KITTY_KBD_REPORT_ALL;
+    kbd_ctx_init(&ctx, XKB_KEY_a, "a", a_utf32, true);
+    kitty_kbd_protocol(&seat, term, &ctx);
+    term_capture_read(slave, buf, sizeof(buf));
+    check_text(buf, "\033[97u", "kitty: report-all encodes 'a' as CSI 97u");
+
+    /* ... and adds the modifier parameter with ctrl held. */
+    seat.kbd.ctrl = true;
+    xkb_state_update_mask(seat.kbd.xkb_state,
+                          1u << seat.kbd.mod_ctrl, 0, 0, 0, 0, 0);
+    kbd_ctx_init(&ctx, XKB_KEY_a, "a", a_utf32, true);
+    kitty_kbd_protocol(&seat, term, &ctx);
+    term_capture_read(slave, buf, sizeof(buf));
+    check_text(buf, "\033[97;5u", "kitty: Ctrl+a is CSI 97;5u");
+    xkb_state_update_mask(seat.kbd.xkb_state, 0, 0, 0, 0, 0, 0);
+    seat.kbd.ctrl = false;
+
+    /* Release events are only reported with the report-events flag. */
+    term->grid->kitty_kbd.flags[0] = KITTY_KBD_DISAMBIGUATE | KITTY_KBD_REPORT_ALL;
+    kbd_ctx_init(&ctx, XKB_KEY_a, "a", a_utf32, false);
+    check(!kitty_kbd_protocol(&seat, term, &ctx),
+          "kitty: a release without report-events is dropped");
+
+    term->grid->kitty_kbd.flags[0] = KITTY_KBD_DISAMBIGUATE | KITTY_KBD_REPORT_ALL |
+                                     KITTY_KBD_REPORT_EVENT;
+    kbd_ctx_init(&ctx, XKB_KEY_a, "a", a_utf32, false);
+    kitty_kbd_protocol(&seat, term, &ctx);
+    term_capture_read(slave, buf, sizeof(buf));
+    check_text(buf, "\033[97;1:3u", "kitty: a release is CSI 97;1:3u");
+
+    term_capture_end(term, slave);
+
+    if (seat.kbd.xkb_state != NULL)
+        xkb_state_unref(seat.kbd.xkb_state);
+    if (km != NULL)
+        xkb_keymap_unref(km);
+    if (xkb_ctx != NULL)
+        xkb_context_unref(xkb_ctx);
+
+    term_free(term);
+}
+
 int
 main(void)
 {
@@ -6015,6 +6163,7 @@ main(void)
     test_keyboard_setup();
     test_modifier_helpers();
     test_keymap_lookup();
+    test_kbd_protocols();
     test_scrollback_indicator();
     test_search_box_offset();
     test_url_label();

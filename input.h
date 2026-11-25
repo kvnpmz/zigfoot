@@ -1,6 +1,8 @@
 #pragma once
 
 #include <stdint.h>
+#include <xkbcommon/xkbcommon.h>
+#include <xkbcommon/xkbcommon-compose.h>
 #include <wayland-client.h>
 
 #include "cursor-shape.h"
@@ -46,6 +48,35 @@ void keyboard_repeat_info(void *data, struct wl_keyboard *wl_keyboard,
 const struct key_data *keymap_data_for_sym(xkb_keysym_t sym, size_t *count);
 const struct key_data *keymap_lookup(struct terminal *term, xkb_keysym_t sym,
                                      enum modifier mods);
+/* One key events worth of resolved state: filled in by key_press_release()
+ * and consumed by the two protocol encoders. */
+struct kbd_ctx {
+    xkb_layout_index_t layout;
+    xkb_keycode_t key;
+    xkb_keysym_t sym;
+
+    struct {
+        const xkb_keysym_t *syms;
+        size_t count;
+    } level0_syms;
+
+    xkb_mod_mask_t mods;
+    xkb_mod_mask_t consumed;
+
+    struct {
+        const uint8_t *buf;
+        size_t count;
+    } utf8;
+    uint32_t *utf32;
+
+    enum xkb_compose_status compose_status;
+    enum wl_keyboard_key_state key_state;
+};
+
+bool legacy_kbd_protocol(struct seat *seat, struct terminal *term,
+                          const struct kbd_ctx *ctx);
+bool kitty_kbd_protocol(struct seat *seat, struct terminal *term,
+                        const struct kbd_ctx *ctx);
 bool fdm_write_pipe(struct fdm *fdm, int fd, int events, void *data);
 void keyboard_keymap(void *data, struct wl_keyboard *wl_keyboard,
                      uint32_t format, int32_t fd, uint32_t size);
