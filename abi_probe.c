@@ -17,6 +17,7 @@
 #include "shm.h"
 #include "terminal.h"
 #include "wayland.h"
+#include "client-protocol.h"
 
 int main(int argc, char **argv) {
     FILE *out = stdout;
@@ -2970,6 +2971,28 @@ fprintf(out, "pub const ShmBufferChain_release_cb__size: usize = %zu;\n", sizeof
 fprintf(out, "pub const ShmBufferChain_release_cb: usize = %zu;\n", offsetof(struct buffer_chain, release_cb));
 fprintf(out, "pub const ShmBufferChain_cb_data__size: usize = %zu;\n", sizeof(((struct buffer_chain *)0)->cb_data));
 fprintf(out, "pub const ShmBufferChain_cb_data: usize = %zu;\n", offsetof(struct buffer_chain, cb_data));
+fprintf(out, "pub const ClientString__size: usize = %zu;\n", sizeof(struct client_string));
+fprintf(out, "pub const ClientString_len__size: usize = %zu;\n", sizeof(((struct client_string *)0)->len));
+fprintf(out, "pub const ClientString_len: usize = %zu;\n", offsetof(struct client_string, len));
+fprintf(out, "pub const ClientData__size: usize = %zu;\n", sizeof(struct client_data));
+fprintf(out, "pub const ClientData_token_len__size: usize = %zu;\n", sizeof(((struct client_data *)0)->token_len));
+fprintf(out, "pub const ClientData_token_len: usize = %zu;\n", offsetof(struct client_data, token_len));
+fprintf(out, "pub const ClientData_exe_len__size: usize = %zu;\n", sizeof(((struct client_data *)0)->exe_len));
+fprintf(out, "pub const ClientData_exe_len: usize = %zu;\n", offsetof(struct client_data, exe_len));
+fprintf(out, "pub const ClientData_cwd_len__size: usize = %zu;\n", sizeof(((struct client_data *)0)->cwd_len));
+fprintf(out, "pub const ClientData_cwd_len: usize = %zu;\n", offsetof(struct client_data, cwd_len));
+fprintf(out, "pub const ClientData_override_count__size: usize = %zu;\n", sizeof(((struct client_data *)0)->override_count));
+fprintf(out, "pub const ClientData_override_count: usize = %zu;\n", offsetof(struct client_data, override_count));
+fprintf(out, "pub const ClientData_foot_argc__size: usize = %zu;\n", sizeof(((struct client_data *)0)->foot_argc));
+fprintf(out, "pub const ClientData_foot_argc: usize = %zu;\n", offsetof(struct client_data, foot_argc));
+fprintf(out, "pub const ClientData_slave_argc__size: usize = %zu;\n", sizeof(((struct client_data *)0)->slave_argc));
+fprintf(out, "pub const ClientData_slave_argc: usize = %zu;\n", offsetof(struct client_data, slave_argc));
+fprintf(out, "pub const ClientData_env_count__size: usize = %zu;\n", sizeof(((struct client_data *)0)->env_count));
+fprintf(out, "pub const ClientData_env_count: usize = %zu;\n", offsetof(struct client_data, env_count));
+fprintf(out, "pub const ClientIpcHdr__size: usize = %zu;\n", sizeof(struct client_ipc_hdr));
+fprintf(out, "pub const ClientIpcSigusr__size: usize = %zu;\n", sizeof(struct client_ipc_sigusr));
+fprintf(out, "pub const ClientIpcSigusr_signo__size: usize = %zu;\n", sizeof(((struct client_ipc_sigusr *)0)->signo));
+fprintf(out, "pub const ClientIpcSigusr_signo: usize = %zu;\n", offsetof(struct client_ipc_sigusr, signo));
 fprintf(out, "pub const Render__size: usize = %zu;\n", sizeof(((struct terminal *)0)->render));
 fprintf(out, "pub const Render_chains__size: usize = %zu;\n", sizeof(((struct terminal *)0)->render.chains));
 fprintf(out, "pub const Render_chains: usize = %zu;\n", offsetof(struct terminal, render.chains) - offsetof(struct terminal, render));

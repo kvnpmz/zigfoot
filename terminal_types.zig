@@ -92,6 +92,46 @@ fn expectAbi(comptime T: type, comptime key_prefix: []const u8) void {
     }
 }
 
+/// client-protocol.h wire mirrors. The ABI probe pins sizes and offsets.
+/// ClientIpcHdr keeps opaque bytes because Zig packed structs round up to
+/// eight bytes, while the C wire header is five bytes.
+pub const ClientString = extern struct {
+    len: u16,
+};
+
+pub const ClientDataFlags = packed struct(u8) {
+    hold: bool,
+    no_wait: bool,
+    xdga_token: bool,
+    reserved: u5,
+};
+
+pub const ClientData = extern struct {
+    _flags: ClientDataFlags,
+    token_len: u8,
+    exe_len: u16,
+    cwd_len: u16,
+    override_count: u16,
+    foot_argc: u16,
+    slave_argc: u16,
+    env_count: u16,
+};
+
+pub const ClientIpcHdr = extern struct {
+    _bytes: [5]u8,
+};
+
+pub const ClientIpcSigusr = extern struct {
+    signo: c_int,
+};
+
+comptime {
+    expectAbi(ClientString, "ClientString");
+    expectAbi(ClientData, "ClientData");
+    expectAbi(ClientIpcHdr, "ClientIpcHdr");
+    expectAbi(ClientIpcSigusr, "ClientIpcSigusr");
+}
+
 pub const ColorSource = enum(c_int) {
     default,
     base16,

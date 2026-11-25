@@ -106,6 +106,10 @@ C_TYPES: dict[str, str] = {
     "ShmBufferPool": "struct buffer_pool",
     "ShmBufferPrivate": "struct buffer_private",
     "ShmBufferChain": "struct buffer_chain",
+    "ClientString": "struct client_string",
+    "ClientData": "struct client_data",
+    "ClientIpcHdr": "struct client_ipc_hdr",
+    "ClientIpcSigusr": "struct client_ipc_sigusr",
 }
 
 NESTED_IN_TERMINAL: dict[str, str] = {
@@ -324,6 +328,7 @@ def generate() -> str:
         '#include "shm.h"',
         '#include "terminal.h"',
         '#include "wayland.h"',
+        '#include "client-protocol.h"',
         "",
         "int main(int argc, char **argv) {",
         "    FILE *out = stdout;",

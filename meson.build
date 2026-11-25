@@ -731,6 +731,34 @@ shm_obj = custom_target(
   ]
 )
 
+client_obj = custom_target(
+  'client_obj',
+  input: 'client.zig',
+  depend_files: files('terminal_types.zig'),
+  output: 'client.o',
+  depends: c_layout,
+  command: [
+    python, files('compile_zig.py'), '@INPUT@', '@OUTPUT@',
+    grapheme_clustering_zig,
+    'client_entrypoint=true',
+    'default_terminfo="@0@"'.format(get_option('default-terminfo')),
+  ]
+)
+
+client_harness_obj = custom_target(
+  'client_harness_obj',
+  input: 'client.zig',
+  depend_files: files('terminal_types.zig'),
+  output: 'client-harness.o',
+  depends: c_layout,
+  command: [
+    python, files('compile_zig.py'), '@INPUT@', '@OUTPUT@',
+    grapheme_clustering_zig,
+    'client_entrypoint=false',
+    'default_terminfo="@0@"'.format(get_option('default-terminfo')),
+  ]
+)
+
 slave_obj = custom_target(
   'slave_obj',
   input: 'slave.zig',
@@ -907,7 +935,7 @@ executable(
 
 executable(
   'footclient',
-  'client.c', 'client-protocol.h',
+  client_obj, 'client-protocol.h',
   foot_features_obj, 'foot-features.h',
   'macros.h',
   'util.h',

@@ -812,7 +812,8 @@ Order matters: `search` and `wayland` first (they unblock the rest), then
 | **D5b** done | `ime`: the whole module — pending preedit/commit/delete state, `ime_reset_pending`/`ime_reset_preedit`, `done()` applying the six protocol steps (commit to the search input or the slave, then the preedit → cells with the `mblen()`+`c32width()` byte→cell cursor mapping, wide-glyph spacers, and the outside-cursor underline), `ime_enable`/`ime_disable`/`ime_update_cursor_rect` (pending-vs-sent rect dedupe, beam-vs-block width, grid-row rebasing) and the six listeners. Five `terminal_shim_text_input_*` forwarders for the generated inlines; the listener table moved to `wayland.c`; `ime.h` declares the callbacks outside the feature guard, and the `#else` stubs are gone (meson refuses `-Dime=false`). 15 new harness checks | D5a | 0.5d |
 | **D5c** done | `url-mode`: the whole module — the url-mode binding dispatcher, activation (uri_parse, the local file: prefix strip, clipboard or launcher), the spawn-launcher + XDG activation-token callback, `urls_input()`'s three matchers and jump-label editing, `regex_detected()` (per-logical-line utf8 flattening with a byte→cell map, combining expansion, `c32rtomb()`), `osc8_uris()`, overlap removal, `generate_key_combos()`/`urls_assign_key_combos()` with duplicate reuse, `tag_cells_for_url()`, `urls_render()` and `urls_reset()`. `regexec()` stays in C (`url_shim_regex_match()`; `regex_t`/`regmatch_t` are libc-specific), `toc32lower()` added to `char32.zig`. 8 new harness checks | D5b | 1.5d |
 | **D5d-a** done | `selection`: the data-source send path — `target`, `send`, `cancelled`, the DnD stubs, `primary_send`/`primary_cancelled`, and `send_clipboard_or_primary()` (non-blocking fd, synchronous `async_write()`, EPOLLOUT `clipboard_send` context for the remainder, then close). Source listener tables stay in C (as with keyboard/pointer); two destroy-inline shims added. 3 new harness checks write into a real pipe. Also fixed `async_write()`'s NULL+len=0 cast. 157 of 844 lines gone | D5c | 1d |
-| **D6** | `main` (770), `server` (707), `client` (679) | last; they tie everything together and are only fully testable once a window opens | 4–5d |
+| **D6a** done | `client`: the whole 679-line module — option parsing, working-directory and URI handling, socket discovery, setup-packet serialization, environment forwarding, signal forwarding and the server response. Four wire mirrors are pinned by the ABI probe. Seven headless checks cover protocol sizes, string limits, window-size parsing, sendall, and SIGUSR IPC. No C shim remains | D5 | 1d |
+| **D6** | `main` (770), `server` (707) | last; they tie everything together and are only fully testable once a window opens | 3–4d |
 
 ### Track E — endgame (~2–3 days)
 
@@ -900,7 +901,8 @@ Per-module burn-down (share of that module's original C that is gone):
 | `input` | 0 / 3,687 | **100%** | `input.c` deleted in D4e; listener tables now live in `terminal-shim.c` |
 | `url-mode` | 0 / 833 | **100%** | `url-mode.c` deleted in D5c; `url-mode.zig` is the module |
 | `main` | 770 / 770 | 0% | |
-| `server` / `client` | 707 / 679 | 0% | |
+| `server` | 707 / 707 | 0% | |
+| `client` | 0 / 679 | **100%** | `client.c` deleted; `client.zig` owns the entry point and setup packet |
 | `key-binding` | 0 / 661 | **100%** | `key-binding.c` deleted in D5a; `key-binding.zig` is the module |
 | `ime` | 0 / 540 | **100%** | `ime.c` deleted in D5b; `ime.zig` is the module |
 
@@ -952,6 +954,13 @@ stayed in C (`url_shim_regex_match()`, since `regex_t`'s `re_nsub` and
 `regmatch_t` are libc-specific); `toc32lower()` was added to `char32.zig`.
 8 new harness checks: detection over a real POSIX regex (two rows), the
 match range/action, the first label letter, duplicate-URL reuse, and reset.
+
+**Post-D6a:** `client.c` is **deleted**. `client.zig` emits the
+`main` symbol only for the footclient object; the harness object uses the same
+source without the entry point. `ClientString`, `ClientData`,
+`ClientIpcHdr`, and `ClientIpcSigusr` are ABI-probed. The full gate passes in
+all three build directories, and a fake UNIX server verified the setup packet
+and exit-code response.
 
 **Post-E1b:** `slave.c` is down to **64** lines and contains only
 `slave_shim_execvpe()`: Zig 0.16 has no `execvpeZ()`, and the portable
