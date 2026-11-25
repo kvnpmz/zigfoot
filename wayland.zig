@@ -423,3 +423,141 @@ export fn wayl_win_ring_bell(win: *const types.WlWindow) callconv(.c) bool {
 export fn wayl_do_linear_blending(wayl: *const types.Wayland, conf: *const types.Config) callconv(.c) bool {
     return conf.gamma_correct and wayl.color_management.img_description != null;
 }
+
+// ─────────────────────────────────────────────────────────────────────────
+// Window surfaces
+//
+// wl_surface/wl_subsurface/wl_region/wp_viewport are almost entirely static
+// inline wrappers in the generated headers, so each entry point has a
+// wayland_shim_* forwarder in terminal-shim.c.
+// ─────────────────────────────────────────────────────────────────────────
+
+const WP_COLOR_MANAGER_V1_RENDER_INTENT_PERCEPTUAL: u32 = 0;
+
+extern fn wayland_shim_compositor_create_surface(compositor: ?*anyopaque) callconv(.c) ?*anyopaque;
+extern fn wayland_shim_compositor_create_region(compositor: ?*anyopaque) callconv(.c) ?*anyopaque;
+extern fn wayland_shim_subcompositor_get_subsurface(
+    subcompositor: ?*anyopaque,
+    surface: ?*anyopaque,
+    parent: ?*anyopaque,
+) callconv(.c) ?*anyopaque;
+extern fn wayland_shim_viewporter_get_viewport(viewporter: ?*anyopaque, surface: ?*anyopaque) callconv(.c) ?*anyopaque;
+extern fn wayland_shim_color_manager_get_surface(manager: ?*anyopaque, surface: ?*anyopaque) callconv(.c) ?*anyopaque;
+extern fn wayland_shim_color_management_set_image_description(cm_surface: ?*anyopaque, img: ?*anyopaque, intent: u32) callconv(.c) void;
+extern fn wayland_shim_color_management_surface_destroy(cm_surface: ?*anyopaque) callconv(.c) void;
+extern fn wayland_shim_surface_destroy(surf: ?*anyopaque) callconv(.c) void;
+extern fn wayland_shim_surface_set_user_data(surf: ?*anyopaque, data: ?*anyopaque) callconv(.c) void;
+extern fn wayland_shim_surface_set_input_region(surf: ?*anyopaque, region: ?*anyopaque) callconv(.c) void;
+extern fn wayland_shim_region_destroy(region: ?*anyopaque) callconv(.c) void;
+extern fn wayland_shim_subsurface_destroy(sub: ?*anyopaque) callconv(.c) void;
+extern fn wayland_shim_viewport_destroy(viewport: ?*anyopaque) callconv(.c) void;
+extern fn quirk_shim_subsurface_set_sync(sub: ?*anyopaque) callconv(.c) void;
+
+const LOG_CLASS_ERROR: c_int = 1;
+
+export fn wayl_win_subsurface_new_with_custom_parent(
+    win: *types.WlWindow,
+    parent: ?*anyopaque,
+    surf: *types.WaylSubSurface,
+    allow_pointer_input: bool,
+) callconv(.c) bool {
+    const wayl = waylandOf(win);
+    const term: *types.Terminal = @ptrCast(@alignCast(win.term.?));
+
+    surf.surface.surf = null;
+    surf.surface.viewport = null;
+    surf.sub = null;
+
+    const main_surface = wayland_shim_compositor_create_surface(wayl.compositor);
+
+    if (main_surface == null) {
+        log_msg(LOG_CLASS_ERROR, "wayland", "wayland.zig", @intCast(@src().line), "failed to instantiate surface for sub-surface");
+        return false;
+    }
+
+    surf.surface.color_management = null;
+    if (term.conf.?.gamma_correct and wayl.color_management.img_description != null) {
+        std.debug.assert(wayl.color_management.manager != null);
+
+        surf.surface.color_management = wayland_shim_color_manager_get_surface(
+            wayl.color_management.manager,
+            main_surface,
+        );
+
+        wayland_shim_color_management_set_image_description(
+            surf.surface.color_management,
+            wayl.color_management.img_description,
+            WP_COLOR_MANAGER_V1_RENDER_INTENT_PERCEPTUAL,
+        );
+    }
+
+    const sub = wayland_shim_subcompositor_get_subsurface(
+        wayl.sub_compositor,
+        main_surface,
+        parent,
+    );
+
+    if (sub == null) {
+        log_msg(LOG_CLASS_ERROR, "wayland", "wayland.zig", @intCast(@src().line), "failed to instantiate sub-surface");
+        wayland_shim_surface_destroy(main_surface);
+        return false;
+    }
+
+    var viewport: ?*anyopaque = null;
+    if (wayl.viewporter != null) {
+        viewport = wayland_shim_viewporter_get_viewport(wayl.viewporter, main_surface);
+        if (viewport == null) {
+            log_msg(LOG_CLASS_ERROR, "wayland", "wayland.zig", @intCast(@src().line), "failed to instantiate viewport for sub-surface");
+            wayland_shim_subsurface_destroy(sub);
+            wayland_shim_surface_destroy(main_surface);
+            return false;
+        }
+    }
+
+    wayland_shim_surface_set_user_data(main_surface, win);
+    quirk_shim_subsurface_set_sync(sub);
+
+    // Disable pointer and touch events
+    if (!allow_pointer_input) {
+        const empty = wayland_shim_compositor_create_region(wayl.compositor);
+        wayland_shim_surface_set_input_region(main_surface, empty);
+        wayland_shim_region_destroy(empty);
+    }
+
+    surf.surface.surf = main_surface;
+    surf.sub = sub;
+    surf.surface.viewport = viewport;
+    return true;
+}
+
+export fn wayl_win_subsurface_new(
+    win: *types.WlWindow,
+    surf: *types.WaylSubSurface,
+    allow_pointer_input: bool,
+) callconv(.c) bool {
+    return wayl_win_subsurface_new_with_custom_parent(win, win.surface.surf, surf, allow_pointer_input);
+}
+
+export fn wayl_win_subsurface_destroy(surf_in: ?*types.WaylSubSurface) callconv(.c) void {
+    const surf = surf_in orelse return;
+
+    if (surf.surface.color_management != null) {
+        wayland_shim_color_management_surface_destroy(surf.surface.color_management);
+        surf.surface.color_management = null;
+    }
+
+    if (surf.surface.viewport != null) {
+        wayland_shim_viewport_destroy(surf.surface.viewport);
+        surf.surface.viewport = null;
+    }
+
+    if (surf.sub != null) {
+        wayland_shim_subsurface_destroy(surf.sub);
+        surf.sub = null;
+    }
+
+    if (surf.surface.surf != null) {
+        wayland_shim_surface_destroy(surf.surface.surf);
+        surf.surface.surf = null;
+    }
+}

@@ -3497,6 +3497,13 @@ test_wayland_misc(void)
 
     wayl.system_bell = NULL;
     check(!wayl_win_ring_bell(&win), "no system bell protocol means no bell");
+
+    /* Destroying a sub-surface with nothing in it must be a no-op */
+    struct wayl_sub_surface empty = {0};
+    wayl_win_subsurface_destroy(&empty);
+    check(empty.surface.surf == NULL && empty.sub == NULL,
+          "destroying an empty sub-surface is a no-op");
+    wayl_win_subsurface_destroy(NULL);
 }
 
 int

@@ -309,6 +309,82 @@ bool terminal_shim_hasc32upper(const char32_t *s)
 }
 
 /* Generated-protocol static inlines (wayland.zig cannot see them). */
+struct wl_surface *wayland_shim_compositor_create_surface(
+    struct wl_compositor *compositor)
+{
+    return wl_compositor_create_surface(compositor);
+}
+
+struct wl_region *wayland_shim_compositor_create_region(
+    struct wl_compositor *compositor)
+{
+    return wl_compositor_create_region(compositor);
+}
+
+struct wl_subsurface *wayland_shim_subcompositor_get_subsurface(
+    struct wl_subcompositor *subcompositor, struct wl_surface *surface,
+    struct wl_surface *parent)
+{
+    return wl_subcompositor_get_subsurface(subcompositor, surface, parent);
+}
+
+struct wp_viewport *wayland_shim_viewporter_get_viewport(
+    struct wp_viewporter *viewporter, struct wl_surface *surface)
+{
+    return wp_viewporter_get_viewport(viewporter, surface);
+}
+
+struct wp_color_management_surface_v1 *wayland_shim_color_manager_get_surface(
+    struct wp_color_manager_v1 *manager, struct wl_surface *surface)
+{
+    return wp_color_manager_v1_get_surface(manager, surface);
+}
+
+void wayland_shim_color_management_set_image_description(
+    struct wp_color_management_surface_v1 *cm_surface,
+    struct wp_image_description_v1 *img, uint32_t intent)
+{
+    wp_color_management_surface_v1_set_image_description(
+        cm_surface, img, intent);
+}
+
+void wayland_shim_color_management_surface_destroy(
+    struct wp_color_management_surface_v1 *cm_surface)
+{
+    wp_color_management_surface_v1_destroy(cm_surface);
+}
+
+void wayland_shim_surface_destroy(struct wl_surface *surf)
+{
+    wl_surface_destroy(surf);
+}
+
+void wayland_shim_surface_set_user_data(struct wl_surface *surf, void *data)
+{
+    wl_surface_set_user_data(surf, data);
+}
+
+void wayland_shim_surface_set_input_region(
+    struct wl_surface *surf, struct wl_region *region)
+{
+    wl_surface_set_input_region(surf, region);
+}
+
+void wayland_shim_region_destroy(struct wl_region *region)
+{
+    wl_region_destroy(region);
+}
+
+void wayland_shim_subsurface_destroy(struct wl_subsurface *sub)
+{
+    wl_subsurface_destroy(sub);
+}
+
+void wayland_shim_viewport_destroy(struct wp_viewport *viewport)
+{
+    wp_viewport_destroy(viewport);
+}
+
 void wayland_shim_xdg_system_bell_ring(
     struct xdg_system_bell_v1 *bell, struct wl_surface *surface)
 {
