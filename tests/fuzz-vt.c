@@ -425,8 +425,10 @@ exercise_input(struct fixture *f)
      * for interpreting whatever reaches it). */
     unsigned char text[64];
     size_t text_len = next_random() % sizeof(text);
-    for (size_t i = 0; i < text_len; i++)
-        text[i] = current_input[next_random() % current_len];
+    if (current_len > 0) {
+        for (size_t i = 0; i < text_len; i++)
+            text[i] = current_input[next_random() % current_len];
+    }
     text[text_len] = 0;
     ime_preedit_string(&f->seat, NULL, (const char *)text,
                        (int32_t)next_random(), (int32_t)next_random());

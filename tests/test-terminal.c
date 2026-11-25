@@ -6557,6 +6557,15 @@ test_slave_shims(void)
     const struct slave_constants *c = slave_shim_constants();
     check(c != NULL, "slave_shim_constants() returns a table");
 
+#if defined(FOOT_TERMINFO_PATH)
+    const char *terminfo_path = slave_shim_terminfo_path();
+    check(terminfo_path != NULL && strcmp(terminfo_path, FOOT_TERMINFO_PATH) == 0,
+          "slave_shim_terminfo_path() returns the configured path");
+#else
+    check(slave_shim_terminfo_path() == NULL,
+          "slave_shim_terminfo_path() is NULL without a configured path");
+#endif
+
     check(c->o_rdwr == O_RDWR && c->o_cloexec == O_CLOEXEC &&
           c->o_nonblock == O_NONBLOCK,
           "slave constants: the open flags match the C macros");
@@ -6600,6 +6609,16 @@ test_slave_shims(void)
 
     check(slave_shim_set_iutf8(-1) == 1,
           "slave_shim_set_iutf8() reports an unreadable fd as 1");
+
+    check(slave_shim_reset_signals(),
+          "slave_shim_reset_signals() restores the child signal state");
+
+    char *const argv[] = {(char *)"foot-fuzz-missing", NULL};
+    char *const envp[] = {NULL};
+    errno = 0;
+    check(slave_shim_execvpe("/foot-fuzz-missing", argv, envp) == -1 &&
+          errno == ENOENT,
+          "slave_shim_execvpe() reports a missing executable");
 }
 
 /*
