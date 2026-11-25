@@ -248,6 +248,7 @@ terminal_shim_fcft_font_options_configure(
 /* util.h's thrd_err_as_string() is a static inline switch, which Zig cannot
  * call; the render-worker error paths log through this. */
 #include "util.h"
+#include "char32.h"
 const char *terminal_shim_thrd_err_as_string(int thrd_err)
 {
     return thrd_err_as_string(thrd_err);
@@ -283,4 +284,32 @@ void terminal_shim_xdg_toplevel_set_fullscreen(struct xdg_toplevel *toplevel,
                                                struct wl_output *output)
 {
     xdg_toplevel_set_fullscreen(toplevel, output);
+}
+/* char32.h's comparison and predicate helpers are static inlines. */
+int terminal_shim_c32ncmp(const char32_t *s1, const char32_t *s2, size_t n)
+{
+    return c32ncmp(s1, s2, n);
+}
+int terminal_shim_c32ncasecmp(const char32_t *s1, const char32_t *s2, size_t n)
+{
+    return c32ncasecmp(s1, s2, n);
+}
+bool terminal_shim_isc32print(char32_t c32)
+{
+    return isc32print(c32);
+}
+bool terminal_shim_isc32space(char32_t c32)
+{
+    return isc32space(c32);
+}
+
+bool terminal_shim_hasc32upper(const char32_t *s)
+{
+    return hasc32upper(s);
+}
+
+/* grid.h's grid_row_absolute_in_view() is a static inline. */
+int terminal_shim_grid_row_absolute_in_view(const struct grid *grid, int row_no)
+{
+    return grid_row_absolute_in_view(grid, row_no);
 }

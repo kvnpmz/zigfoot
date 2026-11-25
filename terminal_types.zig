@@ -164,6 +164,12 @@ pub const SearchDirection = enum(c_int) {
     forward,
 };
 
+/// search.c's `enum extend_direction`.
+pub const ExtendDirection = enum(c_int) {
+    left,
+    right,
+};
+
 pub const CursorStyle = enum(c_int) {
     block,
     underline,

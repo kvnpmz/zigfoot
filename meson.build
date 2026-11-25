@@ -485,6 +485,18 @@ selection_obj = custom_target(
 )
 
 
+search_obj = custom_target(
+  'search_obj',
+  input: 'search.zig',
+  depend_files: files('terminal_types.zig', 'tll.zig'),
+  output: 'search.o',
+  depends: c_layout,
+  command: [
+    python, files('compile_zig.py'), '@INPUT@', '@OUTPUT@',
+    grapheme_clustering_zig,
+  ]
+)
+
 terminal_obj = custom_target(
   '',
   input: 'terminal.zig',
@@ -796,7 +808,7 @@ footlib = static_library(
   quirks_obj, 'quirks.h',
   reaper_obj, 'reaper.h',
   'render.c', 'render.h',
-  'search.c', 'search.h',
+  search_obj, 'search.h',
   'server.c', 'server.h', 'client-protocol.h',
   shm_obj, 'shm.c', 'shm.h',
   slave_obj, 'slave.c', 'slave.h',

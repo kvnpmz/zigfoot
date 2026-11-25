@@ -33,9 +33,11 @@ echo "smoke: $foot -C -c <temp config>"
 "$foot" -C -c "$conf"
 
 weston_pid=
+xvfb_pid=
 runtime_dir=
 cleanup() {
     [ -n "$weston_pid" ] && kill "$weston_pid" 2>/dev/null || true
+    [ -n "$xvfb_pid" ] && kill "$xvfb_pid" 2>/dev/null || true
     [ -n "$runtime_dir" ] && rm -rf "$runtime_dir"
     rm -rf "$tmp_dir"
 }
@@ -46,9 +48,38 @@ if [ -z "${WAYLAND_DISPLAY:-}" ]; then
         runtime_dir=$(mktemp -d)
         export XDG_RUNTIME_DIR=$runtime_dir
         export WAYLAND_DISPLAY=wayland-smoke
-        echo "smoke: starting headless weston"
-        weston --backend=headless-backend.so --socket="$WAYLAND_DISPLAY" \
-               --idle-time=0 --log="$runtime_dir/weston.log" &
+        backend=headless-backend.so
+        # Weston's headless backend creates no wl_seat, and foot refuses to
+        # start without one. The x11 backend under a throwaway Xvfb has a
+        # virtual keyboard and pointer, so prefer it when Xvfb is available.
+        if command -v Xvfb >/dev/null 2>&1; then
+            display=:91
+            while [ -e "/tmp/.X${display#:}-lock" ] ||
+                  [ -e "/tmp/.X11-unix/X${display#:}" ]; do
+                display=:$(( ${display#:} + 1 ))
+            done
+            Xvfb "$display" -screen 0 1024x768x24 \
+                  >"$runtime_dir/xvfb.log" 2>&1 &
+            xvfb_pid=$!
+            export DISPLAY=$display
+
+            i=0
+            while [ ! -e "/tmp/.X11-unix/X${display#:}" ]; do
+                i=$((i + 1))
+                if [ "$i" -gt 50 ]; then
+                    echo "smoke: Xvfb did not come up" >&2
+                    cat "$runtime_dir/xvfb.log" >&2 || true
+                    exit 1
+                fi
+                sleep 0.1
+            done
+
+            backend=x11-backend.so
+        fi
+        echo "smoke: starting weston ($backend)"
+        weston --backend="$backend" --socket="$WAYLAND_DISPLAY" \
+               --idle-time=0 --log="$runtime_dir/weston.log" \
+               >>"$runtime_dir/weston.log" 2>&1 &
         weston_pid=$!
         i=0
         while [ ! -S "$runtime_dir/$WAYLAND_DISPLAY" ]; do

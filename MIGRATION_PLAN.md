@@ -650,9 +650,15 @@ utmp backends where available.
 
 ## 13. Sequenced backlog (refreshed 2026-11-24)
 
-State: **29,768 of 48,830 C lines gone (61.0%)**, ~44% by effort, 32 modules
-ported, 390 harness assertions, `meson test` 5/5 in three build dirs.
-Remaining C: 19,062 lines, 1,422 of which are `*-shim.c` accessors.
+State: **31,280 of 48,830 C lines gone (64.1%)**, ~46% by effort, 33 modules
+ported, 405 harness assertions, `meson test` 5/5 in three build dirs.
+Remaining C: 17,550 lines, 1,460 of which are `*-shim.c` accessors.
+
+`smoke.sh` now launches **real windows**: weston's headless backend creates no
+`wl_seat`, so foot refused to start ("no seats available"). When `Xvfb` is
+installed the script starts weston's `x11-backend.so` inside a throwaway Xvfb,
+which has a virtual keyboard and pointer; the whole five-launch phase
+(80x24, 132x43, 20x5, maximized, fullscreen) runs inside `full-check.sh`.
 
 **`terminal.c` is deleted.** Its prototypes moved into `terminal.h` and its
 two `UNITTEST` constructors moved into the harness (`term_erase_scrollback()`'s
@@ -736,7 +742,6 @@ fabricates `struct terminal` today).
 | **C3a** done | T11a part 1: `fdm_delayed_render`, `term_window_configured` and `initialize_render_workers` (~105 lines). The C11 thread calls are plain libc externs through the sem/mtx/cnd byte blobs in the mirror; `thrd_err_as_string()` is a `util.h` static inline, so it gets one shim. 7 new harness checks (a real timerfd pair and a real worker thread) | B1, render | 1d |
 | **C3b** done | T11a part 2: `add_utmp_record()`/`del_utmp_record()`. `UTMP_ADD`/`UTMP_DEL`/`UTMP_DEL_HAVE_ARGUMENT` now reach Zig as `utmp_add`/`utmp_del`/`utmp_del_have_argument` build options (plus `utmp_enabled` for the `-Dutmp-backend=none` arm, which still returns `true` without spawning). 4 new harness checks; the disabled configuration was compiled by hand to prove the `comptime` arm | C3a | 0.5d |
 | **C4a** done | T11b part 0: `term_kbd_focus_out()` and `term_surface_kind()` (~90 lines), the last two read-only leftovers. 8 new harness checks (focus-out with a real pty, and every CSD surface) | C3b | 0.5d |
-| **C4b** | T11b part 1: `term_init` (~408 lines incl. its error paths) | C3, wayland, render | 1–2d |
 | **C4b** done | T11c: `term_shutdown`, `shutdown_maybe_done`, `fdm_shutdown`, `fdm_terminate_timeout`, `fdm_client_terminated` (~218 lines). Only `term_destroy` and `wayl_win_destroy` remain externs. 8 new harness checks run the real shutdown against a real `fdm` | C4a | 1d |
 | **C5** done | T11d part 1: `term_destroy()` + `sig_alarm()` (~240 lines) — the whole teardown, including the worker-pool wake/join and the blocking SIGALRM/waitpid slave reap. 3 new harness checks (a bare terminal, NULL, and a terminal with a live render worker that must be joined) | C4b | 1d |
 | **C6** done | T11d part 2: `term_reset()` (~150 lines). 16 new harness checks cover the soft path (modes, charsets, VT state, `OSC 8` buffer, theme left alone) and the hard path (grid switch, theme reapplied, cursors/scroll region, rows re-allocated and the scrollback freed) | C5 | 1d |
@@ -760,7 +765,7 @@ Order matters: `search` and `wayland` first (they unblock the rest), then
 
 | Chunk | Module | Why this order | Est. |
 |---|---|---|---|
-| **D1** | `search` (1,512) | only 8 `seat->` lines and it depends on grid/terminal internals that are already Zig | 2–3d |
+| **D1** done | `search` (1,512): the matching core (`matches_cell`, `find_next`, the match iterator, the query buffer), the lifecycle (`search_begin`/`search_cancel`), the coord/extend/word/line selectors, `execute_binding()` and `search_input()` — 1,704 lines of Zig, `search.c` deleted. `struct key_binding`/`key_binding_set` are mirrored locally (56/104 bytes, pinned at compile time), and `char32.h`'s c32 comparisons plus `grid_row_absolute_in_view()` got shims. 15 new harness checks drive the buffer edits through `search_input()` with a synthetic binding list | 2–3d |
 | **D2** | `wayland` (2,884) | B1 unblocks it; porting it deletes the monitor/output accessors and makes `render` portable | 1w |
 | **D3** | `render` (5,479) — split into D3a chains/damage/cursor, D3b grid/csd/box-drawing glyph cache, D3c sixel/notifications/search-highlight | biggest module; do it after `wayland` so the surface/scale paths are Zig | 1.5–2w |
 | **D4** | `input` (3,687) — split into D4a keyboard/legacy+kitty protocols, D4b pointer/mouse/touch, D4c compose/IME plumbing | after B2 + key-binding | 1–1.5w |

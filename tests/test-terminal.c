@@ -34,6 +34,7 @@
 #include <linux/input-event-codes.h>
 #include "input.h"
 #include "key-binding.h"
+#include "search.h"
 #include <sys/timerfd.h>
 #include <sys/epoll.h>
 #include <semaphore.h>
@@ -3252,6 +3253,112 @@ test_box_drawing(void)
     term_with_fonts_free(term);
 }
 
+
+static void
+test_search(void)
+{
+    struct terminal *term = term_new();
+
+    /* search_begin() needs a real wayland surface, so initialise the query
+     * buffer by hand the same way it does. */
+    term->is_searching = true;
+    term->search.sz = 64;
+    term->search.buf = xmalloc(term->search.sz * sizeof(term->search.buf[0]));
+    term->search.buf[0] = U'\0';
+    term->search.match = (struct coord){-1, -1};
+
+    struct row *old = term->normal.rows[3];
+    term->normal.rows[3] = row_new("hello");
+    grid_row_free(old);
+
+    search_add_chars(term, "ll", 2);
+    check(term->search.len == 2, "search_add_chars() appends to the query");
+    check(term->search.buf[0] == U'l' && term->search.buf[1] == U'l' &&
+          term->search.buf[2] == U'\0', "search_add_chars() writes the chars");
+
+    search_find_next(term, SEARCH_FORWARD);
+    check(term->search.match.row == 3 && term->search.match.col == 2,
+          "search finds \"ll\" in row 3, col 2");
+    check(term->search.match_len == 2, "the match is as long as the query");
+
+    struct search_match_iterator iter = search_matches_new_iter(term);
+    struct range r = search_matches_next(&iter);
+    check(r.start.row == 3 && r.start.col == 2, "iterator: first match starts at 3,2");
+    check(r.end.row == 3 && r.end.col == 3, "iterator: first match ends at 3,3");
+
+    r = search_matches_next(&iter);
+    check(r.start.row == -1 && r.end.row == -1, "iterator: no more matches");
+
+    search_selection_cancelled(term);
+    check(term->search.match.row == -1 && term->search.match_len == 0,
+          "search_selection_cancelled() clears the match");
+
+    /* Editing through search_input(): the search binding set is a plain
+     * tll, so a one-entry list is enough to reach every action. */
+    struct key_binding_set bindings = {0};
+    struct seat seat = {0};
+    xkb_keysym_t raw[1] = {XKB_KEY_Left};
+
+    term->search.buf[0] = U'h';
+    term->search.buf[1] = U'i';
+    term->search.buf[2] = U'\0';
+    term->search.len = 2;
+    term->search.cursor = 2;
+
+    struct key_binding kb = {0};
+    kb.type = KEY_BINDING;
+    kb.action = BIND_ACTION_SEARCH_EDIT_LEFT;
+    kb.k.sym = XKB_KEY_Left;
+    tll_push_back(bindings.search, kb);
+
+    search_input(&seat, term, &bindings, 0, XKB_KEY_Left, 0, 0, raw, 1, 0);
+    check(term->search.cursor == 1, "search_input(EDIT_LEFT) moves the cursor");
+    check(seat.kbd.last_shortcut_sym == XKB_KEY_Left,
+          "search_input() records the shortcut symbol");
+
+    kb.action = BIND_ACTION_SEARCH_DELETE_PREV;
+    tll_pop_back(bindings.search);
+    tll_push_back(bindings.search, kb);
+    search_input(&seat, term, &bindings, 0, XKB_KEY_Left, 0, 0, raw, 1, 0);
+    check(term->search.len == 1 && term->search.cursor == 0,
+          "search_input(DELETE_PREV) removes the char before the cursor");
+    check(term->search.buf[0] == U'i' && term->search.buf[1] == U'\0',
+          "search_input(DELETE_PREV) shifts the tail left");
+
+    kb.action = BIND_ACTION_SEARCH_EDIT_END;
+    tll_pop_back(bindings.search);
+    tll_push_back(bindings.search, kb);
+    search_input(&seat, term, &bindings, 0, XKB_KEY_Left, 0, 0, raw, 1, 0);
+    check(term->search.cursor == 1, "search_input(EDIT_END) jumps to the end");
+
+    kb.action = BIND_ACTION_SEARCH_DELETE_TO_START;
+    tll_pop_back(bindings.search);
+    tll_push_back(bindings.search, kb);
+    search_input(&seat, term, &bindings, 0, XKB_KEY_Left, 0, 0, raw, 1, 0);
+    check(term->search.len == 0 && term->search.cursor == 0,
+          "search_input(DELETE_TO_START) empties the query");
+
+    /* FIND_NEXT on an empty query resurrects the last query */
+    term->search.last.buf = xmalloc(4 * sizeof(term->search.last.buf[0]));
+    term->search.last.buf[0] = U'h';
+    term->search.last.buf[1] = U'e';
+    term->search.last.buf[2] = U'\0';
+    term->search.last.len = 2;
+
+    kb.action = BIND_ACTION_SEARCH_FIND_NEXT;
+    tll_pop_back(bindings.search);
+    tll_push_back(bindings.search, kb);
+    search_input(&seat, term, &bindings, 0, XKB_KEY_Left, 0, 0, raw, 1, 0);
+    check(term->search.len == 2 && term->search.last.buf == NULL,
+          "search_input(FIND_NEXT) restores the last query");
+    check(term->search.match.row == 3 && term->search.match.col == 0,
+          "search_input(FIND_NEXT) finds \"he\" in row 3");
+
+    tll_free(bindings.search);
+    free(term->search.buf);
+    term_free(term);
+}
+
 int
 main(void)
 {
@@ -3272,6 +3379,7 @@ main(void)
     test_command_output_absent();
     test_erase_scrollback();
     test_emoji_vs_table();
+    test_search();
     test_osc8();
     test_size_notifications();
     test_flash();
