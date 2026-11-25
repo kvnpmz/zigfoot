@@ -3392,3 +3392,118 @@ export fn mouse_scroll(seat: *Seat, amount: c_int, axis: u32) callconv(.c) void 
     }
 }
 
+// ─────────────────────────────────────────────────────────────────────────
+// Binding-action constants (D4c groundwork)
+//
+// The values are emitted by asking the C compiler (scripts/gen_bind_enums.sh),
+// so they cannot drift from key-binding.h / config.h.
+// ─────────────────────────────────────────────────────────────────────────
+
+pub const BINDING_AUX_NONE: c_int = 0;
+pub const BINDING_AUX_PIPE: c_int = 1;
+pub const BINDING_AUX_REGEX: c_int = 3;
+pub const BINDING_AUX_TEXT: c_int = 2;
+pub const BIND_ACTION_CLIPBOARD_COPY: c_int = 10;
+pub const BIND_ACTION_CLIPBOARD_PASTE: c_int = 11;
+pub const BIND_ACTION_COUNT: c_int = 48;
+pub const BIND_ACTION_FONT_SIZE_DOWN: c_int = 15;
+pub const BIND_ACTION_FONT_SIZE_RESET: c_int = 16;
+pub const BIND_ACTION_FONT_SIZE_UP: c_int = 14;
+pub const BIND_ACTION_FULLSCREEN: c_int = 20;
+pub const BIND_ACTION_KEY_COUNT: c_int = 38;
+pub const BIND_ACTION_MAXIMIZE: c_int = 19;
+pub const BIND_ACTION_MINIMIZE: c_int = 18;
+pub const BIND_ACTION_NONE: c_int = 0;
+pub const BIND_ACTION_NOOP: c_int = 1;
+pub const BIND_ACTION_PIPE_COMMAND_OUTPUT: c_int = 24;
+pub const BIND_ACTION_PIPE_SCROLLBACK: c_int = 21;
+pub const BIND_ACTION_PIPE_SELECTED: c_int = 23;
+pub const BIND_ACTION_PIPE_VIEW: c_int = 22;
+pub const BIND_ACTION_PRIMARY_PASTE: c_int = 12;
+pub const BIND_ACTION_PROMPT_NEXT: c_int = 30;
+pub const BIND_ACTION_PROMPT_PREV: c_int = 29;
+pub const BIND_ACTION_QUIT: c_int = 32;
+pub const BIND_ACTION_REGEX_COPY: c_int = 34;
+pub const BIND_ACTION_REGEX_LAUNCH: c_int = 33;
+pub const BIND_ACTION_SCROLLBACK_DOWN_HALF_PAGE: c_int = 6;
+pub const BIND_ACTION_SCROLLBACK_DOWN_LINE: c_int = 7;
+pub const BIND_ACTION_SCROLLBACK_DOWN_MOUSE: c_int = 39;
+pub const BIND_ACTION_SCROLLBACK_DOWN_PAGE: c_int = 5;
+pub const BIND_ACTION_SCROLLBACK_END: c_int = 9;
+pub const BIND_ACTION_SCROLLBACK_HOME: c_int = 8;
+pub const BIND_ACTION_SCROLLBACK_UP_HALF_PAGE: c_int = 3;
+pub const BIND_ACTION_SCROLLBACK_UP_LINE: c_int = 4;
+pub const BIND_ACTION_SCROLLBACK_UP_MOUSE: c_int = 38;
+pub const BIND_ACTION_SCROLLBACK_UP_PAGE: c_int = 2;
+pub const BIND_ACTION_SEARCH_CANCEL: c_int = 9;
+pub const BIND_ACTION_SEARCH_CLIPBOARD_PASTE: c_int = 33;
+pub const BIND_ACTION_SEARCH_COMMIT: c_int = 10;
+pub const BIND_ACTION_SEARCH_COUNT: c_int = 36;
+pub const BIND_ACTION_SEARCH_DELETE_NEXT: c_int = 21;
+pub const BIND_ACTION_SEARCH_DELETE_NEXT_WORD: c_int = 22;
+pub const BIND_ACTION_SEARCH_DELETE_PREV: c_int = 19;
+pub const BIND_ACTION_SEARCH_DELETE_PREV_WORD: c_int = 20;
+pub const BIND_ACTION_SEARCH_DELETE_TO_END: c_int = 24;
+pub const BIND_ACTION_SEARCH_DELETE_TO_START: c_int = 23;
+pub const BIND_ACTION_SEARCH_EDIT_END: c_int = 18;
+pub const BIND_ACTION_SEARCH_EDIT_HOME: c_int = 17;
+pub const BIND_ACTION_SEARCH_EDIT_LEFT: c_int = 13;
+pub const BIND_ACTION_SEARCH_EDIT_LEFT_WORD: c_int = 14;
+pub const BIND_ACTION_SEARCH_EDIT_RIGHT: c_int = 15;
+pub const BIND_ACTION_SEARCH_EDIT_RIGHT_WORD: c_int = 16;
+pub const BIND_ACTION_SEARCH_EXTEND_BACKWARD_CHAR: c_int = 29;
+pub const BIND_ACTION_SEARCH_EXTEND_BACKWARD_WORD: c_int = 30;
+pub const BIND_ACTION_SEARCH_EXTEND_BACKWARD_WORD_WS: c_int = 31;
+pub const BIND_ACTION_SEARCH_EXTEND_CHAR: c_int = 25;
+pub const BIND_ACTION_SEARCH_EXTEND_LINE_DOWN: c_int = 28;
+pub const BIND_ACTION_SEARCH_EXTEND_LINE_UP: c_int = 32;
+pub const BIND_ACTION_SEARCH_EXTEND_WORD: c_int = 26;
+pub const BIND_ACTION_SEARCH_EXTEND_WORD_WS: c_int = 27;
+pub const BIND_ACTION_SEARCH_FIND_NEXT: c_int = 12;
+pub const BIND_ACTION_SEARCH_FIND_PREV: c_int = 11;
+pub const BIND_ACTION_SEARCH_NONE: c_int = 0;
+pub const BIND_ACTION_SEARCH_PRIMARY_PASTE: c_int = 34;
+pub const BIND_ACTION_SEARCH_SCROLLBACK_DOWN_HALF_PAGE: c_int = 5;
+pub const BIND_ACTION_SEARCH_SCROLLBACK_DOWN_LINE: c_int = 6;
+pub const BIND_ACTION_SEARCH_SCROLLBACK_DOWN_PAGE: c_int = 4;
+pub const BIND_ACTION_SEARCH_SCROLLBACK_END: c_int = 8;
+pub const BIND_ACTION_SEARCH_SCROLLBACK_HOME: c_int = 7;
+pub const BIND_ACTION_SEARCH_SCROLLBACK_UP_HALF_PAGE: c_int = 2;
+pub const BIND_ACTION_SEARCH_SCROLLBACK_UP_LINE: c_int = 3;
+pub const BIND_ACTION_SEARCH_SCROLLBACK_UP_PAGE: c_int = 1;
+pub const BIND_ACTION_SEARCH_START: c_int = 13;
+pub const BIND_ACTION_SEARCH_UNICODE_INPUT: c_int = 35;
+pub const BIND_ACTION_SELECT_BEGIN: c_int = 40;
+pub const BIND_ACTION_SELECT_BEGIN_BLOCK: c_int = 41;
+pub const BIND_ACTION_SELECT_EXTEND: c_int = 42;
+pub const BIND_ACTION_SELECT_EXTEND_CHAR_WISE: c_int = 43;
+pub const BIND_ACTION_SELECT_QUOTE: c_int = 46;
+pub const BIND_ACTION_SELECT_ROW: c_int = 47;
+pub const BIND_ACTION_SELECT_WORD: c_int = 44;
+pub const BIND_ACTION_SELECT_WORD_WS: c_int = 45;
+pub const BIND_ACTION_SHOW_URLS_COPY: c_int = 25;
+pub const BIND_ACTION_SHOW_URLS_LAUNCH: c_int = 26;
+pub const BIND_ACTION_SHOW_URLS_PERSISTENT: c_int = 27;
+pub const BIND_ACTION_SPAWN_TERMINAL: c_int = 17;
+pub const BIND_ACTION_TEXT_BINDING: c_int = 28;
+pub const BIND_ACTION_THEME_SWITCH_DARK: c_int = 35;
+pub const BIND_ACTION_THEME_SWITCH_LIGHT: c_int = 36;
+pub const BIND_ACTION_THEME_TOGGLE: c_int = 37;
+pub const BIND_ACTION_UNICODE_INPUT: c_int = 31;
+pub const BIND_ACTION_URL_CANCEL: c_int = 1;
+pub const BIND_ACTION_URL_COUNT: c_int = 3;
+pub const BIND_ACTION_URL_NONE: c_int = 0;
+pub const BIND_ACTION_URL_TOGGLE_URL_ON_JUMP_LABEL: c_int = 2;
+
+// terminal.h's two small enums, transcribed in declaration order (the
+// generator that produces the rest needs their names from this header).
+pub const SELECTION_NONE: c_int = 0;
+pub const SELECTION_CHAR_WISE: c_int = 1;
+pub const SELECTION_WORD_WISE: c_int = 2;
+pub const SELECTION_QUOTE_WISE: c_int = 3;
+pub const SELECTION_LINE_WISE: c_int = 4;
+pub const SELECTION_BLOCK: c_int = 5;
+
+pub const URL_ACTION_COPY: c_int = 0;
+pub const URL_ACTION_LAUNCH: c_int = 1;
+pub const URL_ACTION_PERSISTENT: c_int = 2;
