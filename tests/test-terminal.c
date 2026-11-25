@@ -1360,6 +1360,81 @@ test_sgr_underline(void)
     term_free(term);
 }
 
+
+/*
+ * csi_dispatch(): the private-prefix switch (audit VT-01) and the SGR
+ * ``continue`` (audit VT-02).
+ *
+ * The harness never feeds bytes through vt_from_slave(), so these call the
+ * dispatcher directly — which is exactly how the dead-switch regression went
+ * unnoticed: DECSET/DECRST and friends were never invoked by any other check.
+ */
+extern void csi_dispatch(struct terminal *term, uint8_t final);
+
+static void
+test_csi_private_dispatch(void)
+{
+    struct terminal *term = term_new();
+
+    /* CSI ? 25 h/l — DECTCEM, i.e. DECSET/DECRST */
+    term->vt.params.idx = 1;
+    term->vt.params.v[0].value = 25;
+    term->vt.params.v[0].sub.idx = 0;
+
+    term->vt.private = '?';
+    term->hide_cursor = false;
+    csi_dispatch(term, 'l');
+    check(term->hide_cursor, "CSI ? 25 l hides the cursor (DECRST dispatches)");
+    csi_dispatch(term, 'h');
+    check(!term->hide_cursor, "CSI ? 25 h shows the cursor (DECSET dispatches)");
+
+    /* (CSI ? 1049 h/l is not exercised here: the harness fixture allocates
+     * rows for the normal grid only, and the alt-grid switch moves the cursor.) */
+
+    /* CSI ? $ 25 p — DECRQM, the two-byte '?' + '$' prefix */
+    term->vt.private = (uint32_t)'?' | ((uint32_t)'$' << 8);
+    term->vt.params.v[0].value = 25;
+    csi_dispatch(term, 'p');
+    check(1, "CSI ? $ 25 p (DECRQM) dispatches without crashing");
+
+    /* CSI > u / CSI < u — kitty keyboard push/pop */
+    term->vt.private = '>';
+    term->vt.params.idx = 0;
+    const unsigned idx_before = term->grid->kitty_kbd.idx;
+    csi_dispatch(term, 'u');
+    check(term->grid->kitty_kbd.idx != idx_before,
+          "CSI > u pushes a kitty keyboard level");
+
+    term->vt.private = '<';
+    term->vt.params.idx = 1;
+    term->vt.params.v[0].value = 1;
+    csi_dispatch(term, 'u');
+    check(term->grid->kitty_kbd.idx == idx_before,
+          "CSI < u pops the kitty keyboard level again");
+
+    term->vt.private = 0;
+    term_free(term);
+}
+
+static void
+test_sgr_bad_colour_keeps_parsing(void)
+{
+    struct terminal *term = term_new();
+
+    term->vt.params.idx = 2;
+    term->vt.params.v[0].value = 38;   /* extended colour, bad sub-param */
+    term->vt.params.v[0].sub.idx = 1;
+    term->vt.params.v[0].sub.value[0] = 9;
+    term->vt.params.v[1].value = 1;    /* bold, after the bad one */
+    term->vt.params.v[1].sub.idx = 0;
+
+    term->vt.attrs.bold = false;
+    csi_sgr(term);
+    check(term->vt.attrs.bold,
+          "an unrecognised 38:n form keeps parsing later SGR parameters");
+
+    term_free(term);
+}
 /* term_set_fonts(): needs four real fonts, a config and font_sizes, but no
  * window as long as resize_grid is false. */
 static void
@@ -8118,6 +8193,8 @@ main(void)
     test_theme_get();
     test_term_icon();
     test_sgr_underline();
+    test_csi_private_dispatch();
+    test_sgr_bad_colour_keeps_parsing();
     test_set_fonts();
     test_reload_fonts();
     test_dpi_and_scale();

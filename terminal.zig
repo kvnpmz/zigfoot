@@ -1370,8 +1370,10 @@ export fn term_scroll_reverse_partial(
         grid_row_free(current_row);
         term.grid.?.rows.?[@intCast(abs_r)] = null;
 
-        // C: if (term->render.last_cursor.row == row) term->render.last_cursor.row = NULL;
-        // render.last_cursor.row is opaque here; shim later if needed.
+        // The rendered cursor may still point at the row we just freed;
+        // render.zig dereferences this in the next frame.
+        if (term.render.last_cursor.row == current_row)
+            term.render.last_cursor.row = null;
     }
 
     sixel_scroll_down(term, rows);

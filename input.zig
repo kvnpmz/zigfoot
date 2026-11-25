@@ -2515,7 +2515,7 @@ export fn kitty_kbd_protocol(
     const composed = ctx.compose_status == XKB_COMPOSE_COMPOSED;
 
     const grid = term.grid.?;
-    const flags: u32 = @bitCast(@intFromEnum(grid.kitty_kbd.flags[grid.kitty_kbd.idx]));
+    const flags: u32 = @bitCast(grid.kitty_kbd.flags[grid.kitty_kbd.idx]);
 
     const disambiguate = flags & KITTY_KBD_DISAMBIGUATE != 0;
     const report_events = flags & KITTY_KBD_REPORT_EVENT != 0;
@@ -3139,8 +3139,8 @@ export fn key_press_release(
             .key_state = @intCast(state),
         };
 
-        const flags: u32 = @bitCast(@intFromEnum(
-            term.grid.?.kitty_kbd.flags[term.grid.?.kitty_kbd.idx]));
+        const flags: u32 = @bitCast(
+            term.grid.?.kitty_kbd.flags[term.grid.?.kitty_kbd.idx]);
         handled = if (flags != 0)
             kitty_kbd_protocol(seat, term, &ctx)
         else

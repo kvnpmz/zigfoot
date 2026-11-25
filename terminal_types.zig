@@ -466,14 +466,9 @@ test "row layout" {
     try @import("std").testing.expectEqual(@as(usize, 32), @sizeOf(Row));
 }
 
-pub const KittyKbdFlags = enum(c_int) {
-    disambiguate = 0x01,
-    report_event = 0x02,
-    report_alternate = 0x04,
-    report_all = 0x08,
-    report_associated = 0x10,
-    supported = 0x1f,
-};
+/// `enum kitty_kbd_flags` — C uses it as a bitmask (push/pop/set/reset with
+/// `&`, `|`, `~`), so mirror the ABI int rather than a closed Zig enum.
+pub const KittyKbdFlags = c_int;
 
 pub const Grid = extern struct {
     num_rows: c_int,
@@ -859,7 +854,7 @@ pub const Terminal = extern struct {
     cell_height: c_int,
     colors: Colors,
     color_stack: extern struct {
-        stack: ?*Colors,
+        stack: ?[*]Colors, // C: struct colors *stack, used as an array
         idx: usize,
         size: usize,
     },

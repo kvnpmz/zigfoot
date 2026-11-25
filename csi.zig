@@ -155,7 +155,9 @@ export fn csi_sgr(term: *types.Terminal) callconv(.c) void {
                     handled = false;
                 }
 
-                if (!handled) break;
+                // C's `break` leaves the switch and keeps parsing the
+                // remaining parameters; `continue` is the same here.
+                if (!handled) continue;
 
                 if (param == 58) {
                     term.vt.underline.color_src = src;
@@ -765,9 +767,27 @@ const CELL_COMB_CHARS_LO: u32 = 0x0020_0000;
 
 // ── csi_dispatch ──────────────────────────────────────────────────
 export fn csi_dispatch(term: *types.Terminal, final: u8) callconv(.c) void {
+    // C: switch (term->vt.private); a multi-byte prefix accumulates as
+    // (second << 8) | first, so `?$` arrives as '?' with '$' in byte 1.
     switch (term.vt.private) {
         0 => case0Dispatch(term, final),
-        else => {}, // TODO: cases '$', '>', '?', '!', '"', "'", '*', '+', '-', '=' as we fetch them
+
+        '?' => {
+            if ((term.vt.private >> 8) & 0xff == '$')
+                caseQuestionDollar(term, final)
+            else
+                caseQuestion(term, final);
+        },
+
+        '>' => caseGreater(term, final),
+        '<' => caseLess(term, final),
+        ' ' => caseSpace(term, final),
+        '!' => caseBang(term, final),
+        '=' => caseEquals(term, final),
+        '$' => caseDollar(term, final),
+        '#' => caseHash(term, final),
+
+        else => {},
     }
 }
 
@@ -1516,7 +1536,13 @@ fn caseQuestionDollar(term: *types.Terminal, final: u8) void {
 // ─── Chunk E3b-2: private branches $ and # ────────────────────────
 
 // externs
-extern fn grid_row(grid: *types.Grid, row_no: c_int) callconv(.c) ?*types.Row;
+/// grid.h: grid_row() is a static inline over _grid_row_maybe_alloc(alloc=false).
+fn gridRow(grid: *types.Grid, row_no: c_int) ?*types.Row {
+    if (grid.num_rows == 0)
+        return null;
+    const abs: c_int = row_no & (grid.num_rows - 1);
+    return grid.rows.?[@intCast(abs)];
+}
 extern fn grid_row_uri_range_erase(row: *types.Row, start: c_int, end: c_int) callconv(.c) void;
 extern fn sixel_overwrite_by_rectangle(term: *types.Terminal, row: c_int, col: c_int, height: c_int, width: c_int) callconv(.c) void;
 extern fn term_fill(term: *types.Terminal, row: c_int, col: c_int, c: u8, count: c_int, insert: bool) callconv(.c) void;
@@ -1536,7 +1562,7 @@ fn caseDollar(term: *types.Terminal, final: u8) void {
             const grid = term.grid orelse break :blk;
             var r: c_int = top;
             while (r <= bottom) : (r += 1) {
-                const row = grid_row(grid, r) orelse continue;
+                const row = gridRow(grid, r) orelse continue;
                 row.dirty = true;
                 const cells = row.cells orelse continue;
                 var c: c_int = left;
@@ -1570,7 +1596,7 @@ fn caseDollar(term: *types.Terminal, final: u8) void {
             const grid = term.grid orelse break :blk;
             var r: c_int = top;
             while (r <= bottom) : (r += 1) {
-                const row = grid_row(grid, r) orelse continue;
+                const row = gridRow(grid, r) orelse continue;
                 row.dirty = true;
                 const cells = row.cells orelse continue;
                 var c: c_int = left;
@@ -1628,7 +1654,7 @@ fn caseDollar(term: *types.Terminal, final: u8) void {
             while (r < row_count) : (r += 1) {
                 const row_buf = xmalloc(cell_count_u * cell_size) orelse break;
                 const row_cells: [*]types.Cell = @ptrCast(@alignCast(row_buf));
-                const src_row = grid_row(grid, src_top + r) orelse continue;
+                const src_row = gridRow(grid, src_top + r) orelse continue;
                 const src_cells = src_row.cells orelse continue;
                 _ = memcpy(row_cells, &src_cells[@intCast(src_left)], cell_count_u * cell_size);
                 copy[@intCast(r)] = row_cells;
@@ -1637,7 +1663,7 @@ fn caseDollar(term: *types.Terminal, final: u8) void {
             // Paste into dst cells
             r = 0;
             while (r < row_count) : (r += 1) {
-                const dst_row = grid_row(grid, dst_top + r) orelse continue;
+                const dst_row = gridRow(grid, dst_top + r) orelse continue;
                 dst_row.dirty = true;
                 const dst_cells = dst_row.cells orelse continue;
                 const copy_row = copy[@intCast(r)] orelse continue;
