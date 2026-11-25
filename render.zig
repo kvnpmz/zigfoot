@@ -5489,6 +5489,13 @@ fn streqOpt(a: ?[*:0]const u8, b: ?[*:0]const u8) bool {
 export fn render_update_title(term: *Terminal) callconv(.c) void {
     const max_len: usize = 2048;
 
+    // C dereferenced `term->window->xdg_toplevel` unconditionally. A real
+    // window always has one by the time a title change arrives; the harness
+    // builds a bare window, which made the rate-limit test timing-dependent
+    // under valgrind (Invalid read in wl_proxy_get_version).
+    const window = term.window orelse return;
+    const toplevel = window.xdg_toplevel orelse return;
+
     var title: [*:0]const u8 = "foot";
     if (term.window_title) |t|
         title = t;
@@ -5499,7 +5506,7 @@ export fn render_update_title(term: *Terminal) callconv(.c) void {
         title = copy.?;
     }
 
-    render_shim_xdg_toplevel_set_title(term.window.?.xdg_toplevel, title);
+    render_shim_xdg_toplevel_set_title(toplevel, title);
     if (copy) |c|
         free(c);
 }
