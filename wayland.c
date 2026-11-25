@@ -1718,174 +1718,37 @@ static const struct wp_fractional_scale_v1_listener fractional_scale_listener = 
     .preferred_scale = &fractional_scale_preferred_scale,
 };
 
-struct wl_window *
-wayl_win_init(struct terminal *term, const char *token)
+/* wayland.zig: the listener tables are still static here, so window
+ * creation attaches them through these. */
+void wayland_shim_add_surface_listener(
+    struct wl_surface *surf, struct wl_window *win)
 {
-    struct wayland *wayl = term->wl;
-    const struct config *conf = term->conf;
+    wl_surface_add_listener(surf, &surface_listener, win);
+}
 
-    struct wl_window *win = calloc(1, sizeof(*win));
-    if (unlikely(win == NULL)) {
-        LOG_ERRNO("calloc() failed");
-        return NULL;
-    }
+void wayland_shim_add_fractional_scale_listener(
+    struct wp_fractional_scale_v1 *scale, struct wl_window *win)
+{
+    wp_fractional_scale_v1_add_listener(scale, &fractional_scale_listener, win);
+}
 
-    win->term = term;
-    win->csd_mode = CSD_UNKNOWN;
-    win->csd.move_timeout_fd = -1;
-    win->resize_timeout_fd = -1;
-    win->scale = -1.;
+void wayland_shim_add_xdg_surface_listener(
+    struct xdg_surface *xdg_surface, struct wl_window *win)
+{
+    xdg_surface_add_listener(xdg_surface, &xdg_surface_listener, win);
+}
 
-    win->wm_capabilities.maximize = true;
-    win->wm_capabilities.minimize = true;
+void wayland_shim_add_xdg_toplevel_listener(
+    struct xdg_toplevel *toplevel, struct wl_window *win)
+{
+    xdg_toplevel_add_listener(toplevel, &xdg_toplevel_listener, win);
+}
 
-    win->surface.surf = wl_compositor_create_surface(wayl->compositor);
-    if (win->surface.surf == NULL) {
-        LOG_ERR("failed to create wayland surface");
-        goto out;
-    }
-
-    wl_surface_add_listener(win->surface.surf, &surface_listener, win);
-
-    if (wayl->fractional_scale_manager != NULL && wayl->viewporter != NULL) {
-        win->surface.viewport = wp_viewporter_get_viewport(wayl->viewporter, win->surface.surf);
-
-        win->fractional_scale =
-            wp_fractional_scale_manager_v1_get_fractional_scale(
-                wayl->fractional_scale_manager, win->surface.surf);
-        wp_fractional_scale_v1_add_listener(
-            win->fractional_scale, &fractional_scale_listener, win);
-    }
-
-#if defined(HAVE_EXT_BACKGROUND_EFFECT)
-    if (wayl->background_effect_manager != NULL) {
-        win->surface.background_effect =
-            ext_background_effect_manager_v1_get_background_effect(
-                wayl->background_effect_manager, win->surface.surf);
-    }
-#endif
-
-    wayl_win_alpha_changed(win);
-
-    win->xdg_surface = xdg_wm_base_get_xdg_surface(wayl->shell, win->surface.surf);
-    xdg_surface_add_listener(win->xdg_surface, &xdg_surface_listener, win);
-
-    win->xdg_toplevel = xdg_surface_get_toplevel(win->xdg_surface);
-    xdg_toplevel_add_listener(win->xdg_toplevel, &xdg_toplevel_listener, win);
-
-    xdg_toplevel_set_app_id(win->xdg_toplevel, conf->app_id);
-
-#if defined(HAVE_XDG_TOPLEVEL_TAG)
-    if (conf->toplevel_tag != NULL && conf->toplevel_tag[0] != '\0') {
-        if (wayl->toplevel_tag_manager != NULL) {
-            xdg_toplevel_tag_manager_v1_set_toplevel_tag(
-                wayl->toplevel_tag_manager, win->xdg_toplevel, conf->toplevel_tag);
-
-            /* TODO: the description is recommended to be the tag, but translated */
-            xdg_toplevel_tag_manager_v1_set_toplevel_description(
-                wayl->toplevel_tag_manager, win->xdg_toplevel, conf->toplevel_tag);
-        } else {
-            LOG_WARN("compositor does not implement the xdg-toplevel-tag protocol");
-        }
-    }
-#endif
-
-    if (wayl->toplevel_icon_manager != NULL) {
-        const char *app_id =
-            term->app_id != NULL ? term->app_id : term->conf->app_id;
-
-        struct xdg_toplevel_icon_v1 *icon =
-            xdg_toplevel_icon_manager_v1_create_icon(wayl->toplevel_icon_manager);
-        xdg_toplevel_icon_v1_set_name(icon, streq(
-            app_id, "footclient") ? "foot" : app_id);
-        xdg_toplevel_icon_manager_v1_set_icon(
-            wayl->toplevel_icon_manager, win->xdg_toplevel, icon);
-        xdg_toplevel_icon_v1_destroy(icon);
-    }
-
-    if (term->conf->gamma_correct) {
-        if (wayl->color_management.img_description != NULL) {
-            xassert(wayl->color_management.manager != NULL);
-
-            win->surface.color_management = wp_color_manager_v1_get_surface(
-                term->wl->color_management.manager, win->surface.surf);
-
-            wp_color_management_surface_v1_set_image_description(
-                win->surface.color_management, wayl->color_management.img_description,
-                WP_COLOR_MANAGER_V1_RENDER_INTENT_PERCEPTUAL);
-        } else {
-            if (wayl->color_management.manager == NULL) {
-                LOG_WARN(
-                    "gamma-corrected-blending: disabling; "
-                    "compositor does not implement the color-management protocol");
-            } else {
-                LOG_WARN(
-                    "gamma-corrected-blending: disabling; "
-                    "compositor does not implement all required color-management features");
-                LOG_WARN("use e.g. 'wayland-info' and verify the compositor implements:");
-                LOG_WARN("  - feature: parametric");
-                LOG_WARN("  - render intent: perceptual");
-                LOG_WARN("  - TF: ext_linear");
-                LOG_WARN("  - primaries: sRGB");
-            }
-        }
-    }
-
-    if (conf->csd.preferred == CONF_CSD_PREFER_NONE) {
-        /* User specifically do *not* want decorations */
-        win->csd_mode = CSD_NO;
-        LOG_INFO("window decorations disabled by user");
-    } else if (wayl->xdg_decoration_manager != NULL) {
-        win->xdg_toplevel_decoration = zxdg_decoration_manager_v1_get_toplevel_decoration(
-            wayl->xdg_decoration_manager, win->xdg_toplevel);
-
-        LOG_INFO("requesting %s decorations",
-                 conf->csd.preferred == CONF_CSD_PREFER_SERVER ? "SSD" : "CSD");
-
-        zxdg_toplevel_decoration_v1_set_mode(
-            win->xdg_toplevel_decoration,
-            (conf->csd.preferred == CONF_CSD_PREFER_SERVER
-                ? ZXDG_TOPLEVEL_DECORATION_V1_MODE_SERVER_SIDE
-                : ZXDG_TOPLEVEL_DECORATION_V1_MODE_CLIENT_SIDE));
-
-        zxdg_toplevel_decoration_v1_add_listener(
-            win->xdg_toplevel_decoration, &xdg_toplevel_decoration_listener, win);
-    } else {
-        /* No decoration manager - thus we *must* draw our own decorations */
-        win->configure.csd_mode = CSD_YES;
-        LOG_WARN("no decoration manager available - using CSDs unconditionally");
-    }
-
-    wl_surface_commit(win->surface.surf);
-
-    /* Complete XDG startup notification */
-    wayl_activate(wayl, win, token);
-
-    if (!wayl_win_subsurface_new(win, &win->overlay, false)) {
-        LOG_ERR("failed to create overlay surface");
-        goto out;
-    }
-
-    switch (conf->tweak.render_timer) {
-    case RENDER_TIMER_OSD:
-    case RENDER_TIMER_BOTH:
-        if (!wayl_win_subsurface_new(win, &win->render_timer, false)) {
-            LOG_ERR("failed to create render timer surface");
-            goto out;
-        }
-        break;
-
-    case RENDER_TIMER_NONE:
-    case RENDER_TIMER_LOG:
-        break;
-    }
-
-    return win;
-
-out:
-    if (win != NULL)
-        wayl_win_destroy(win);
-    return NULL;
+void wayland_shim_add_decoration_listener(
+    struct zxdg_toplevel_decoration_v1 *decoration, struct wl_window *win)
+{
+    zxdg_toplevel_decoration_v1_add_listener(
+        decoration, &xdg_toplevel_decoration_listener, win);
 }
 
 void

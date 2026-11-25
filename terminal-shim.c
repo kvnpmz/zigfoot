@@ -309,6 +309,79 @@ bool terminal_shim_hasc32upper(const char32_t *s)
 }
 
 /* Generated-protocol static inlines (wayland.zig cannot see them). */
+/* wayland.zig: window creation (D2i). */
+void *wayland_shim_fractional_scale_get(struct wp_fractional_scale_manager_v1 *m,
+                                        struct wl_surface *surf)
+{
+    return wp_fractional_scale_manager_v1_get_fractional_scale(m, surf);
+}
+
+void *wayland_shim_background_effect_get(
+    struct ext_background_effect_manager_v1 *m, struct wl_surface *surf)
+{
+#if defined(HAVE_EXT_BACKGROUND_EFFECT)
+    return ext_background_effect_manager_v1_get_background_effect(m, surf);
+#else
+    (void)m;
+    (void)surf;
+    return NULL;
+#endif
+}
+
+void *wayland_shim_xdg_wm_base_get_xdg_surface(
+    struct xdg_wm_base *shell, struct wl_surface *surf)
+{
+    return xdg_wm_base_get_xdg_surface(shell, surf);
+}
+
+void *wayland_shim_xdg_surface_get_toplevel(struct xdg_surface *xdg_surface)
+{
+    return xdg_surface_get_toplevel(xdg_surface);
+}
+
+void wayland_shim_xdg_toplevel_set_app_id(
+    struct xdg_toplevel *toplevel, const char *app_id)
+{
+    xdg_toplevel_set_app_id(toplevel, app_id);
+}
+
+void wayland_shim_toplevel_tag_set(
+    struct xdg_toplevel_tag_manager_v1 *m, struct xdg_toplevel *toplevel,
+    const char *tag)
+{
+#if defined(HAVE_XDG_TOPLEVEL_TAG)
+    xdg_toplevel_tag_manager_v1_set_toplevel_tag(m, toplevel, tag);
+    /* TODO: the description is recommended to be the tag, but translated */
+    xdg_toplevel_tag_manager_v1_set_toplevel_description(m, toplevel, tag);
+#else
+    (void)m;
+    (void)toplevel;
+    (void)tag;
+#endif
+}
+
+void wayland_shim_toplevel_icon_set(
+    struct xdg_toplevel_icon_manager_v1 *m, struct xdg_toplevel *toplevel,
+    const char *name)
+{
+    struct xdg_toplevel_icon_v1 *icon =
+        xdg_toplevel_icon_manager_v1_create_icon(m);
+    xdg_toplevel_icon_v1_set_name(icon, name);
+    xdg_toplevel_icon_manager_v1_set_icon(m, toplevel, icon);
+    xdg_toplevel_icon_v1_destroy(icon);
+}
+
+void *wayland_shim_decoration_get(
+    struct zxdg_decoration_manager_v1 *m, struct xdg_toplevel *toplevel)
+{
+    return zxdg_decoration_manager_v1_get_toplevel_decoration(m, toplevel);
+}
+
+void wayland_shim_decoration_set_mode(void *decoration, uint32_t mode)
+{
+    zxdg_toplevel_decoration_v1_set_mode(decoration, mode);
+}
+
 void wayland_shim_surface_attach(
     struct wl_surface *surf, struct wl_buffer *buffer, int32_t x, int32_t y)
 {

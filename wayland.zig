@@ -1127,3 +1127,187 @@ export fn wayl_win_destroy(win_in: ?*types.WlWindow) callconv(.c) void {
         _ = fdm_del(wayl.fdm, win.resize_timeout_fd);
     free(@as(?*anyopaque, @ptrCast(win)));
 }
+
+// ─────────────────────────────────────────────────────────────────────────
+// Window creation
+// ─────────────────────────────────────────────────────────────────────────
+
+extern fn calloc(nmemb: usize, size: usize) callconv(.c) ?*anyopaque;
+extern fn wayland_shim_fractional_scale_get(m: ?*anyopaque, surf: ?*anyopaque) callconv(.c) ?*anyopaque;
+extern fn wayland_shim_background_effect_get(m: ?*anyopaque, surf: ?*anyopaque) callconv(.c) ?*anyopaque;
+extern fn wayland_shim_xdg_wm_base_get_xdg_surface(shell: ?*anyopaque, surf: ?*anyopaque) callconv(.c) ?*anyopaque;
+extern fn wayland_shim_xdg_surface_get_toplevel(xdg_surface: ?*anyopaque) callconv(.c) ?*anyopaque;
+extern fn wayland_shim_xdg_toplevel_set_app_id(toplevel: ?*anyopaque, app_id: [*:0]const u8) callconv(.c) void;
+extern fn wayland_shim_toplevel_tag_set(m: ?*anyopaque, toplevel: ?*anyopaque, tag: [*:0]const u8) callconv(.c) void;
+extern fn wayland_shim_toplevel_icon_set(m: ?*anyopaque, toplevel: ?*anyopaque, name: [*:0]const u8) callconv(.c) void;
+extern fn wayland_shim_decoration_get(m: ?*anyopaque, toplevel: ?*anyopaque) callconv(.c) ?*anyopaque;
+extern fn wayland_shim_decoration_set_mode(decoration: ?*anyopaque, mode: u32) callconv(.c) void;
+extern fn wayland_shim_add_surface_listener(surf: ?*anyopaque, win: *types.WlWindow) callconv(.c) void;
+extern fn wayland_shim_add_fractional_scale_listener(scale: ?*anyopaque, win: *types.WlWindow) callconv(.c) void;
+extern fn wayland_shim_add_xdg_surface_listener(xdg_surface: ?*anyopaque, win: *types.WlWindow) callconv(.c) void;
+extern fn wayland_shim_add_xdg_toplevel_listener(toplevel: ?*anyopaque, win: *types.WlWindow) callconv(.c) void;
+extern fn wayland_shim_add_decoration_listener(decoration: ?*anyopaque, win: *types.WlWindow) callconv(.c) void;
+extern fn wayl_win_alpha_changed(win: *types.WlWindow) callconv(.c) void;
+extern fn wayl_activate(wayl: *types.Wayland, win: *types.WlWindow, token: [*c]const u8) callconv(.c) void;
+
+const ZXDG_TOPLEVEL_DECORATION_V1_MODE_CLIENT_SIDE: u32 = 1;
+const ZXDG_TOPLEVEL_DECORATION_V1_MODE_SERVER_SIDE: u32 = 2;
+
+export fn wayl_win_init(term: *types.Terminal, token: [*c]const u8) callconv(.c) ?*types.WlWindow {
+    const wayl = waylandOf2(term);
+    const conf = term.conf.?;
+
+    const win: *types.WlWindow = @ptrCast(@alignCast(calloc(1, @sizeOf(types.WlWindow)) orelse {
+        log_errno(LOG_CLASS_ERROR, "wayland", "wayland.zig", @intCast(@src().line), "calloc() failed");
+        return null;
+    }));
+
+    win.term = term;
+    win.csd_mode = .unknown;
+    win.csd.move_timeout_fd = -1;
+    win.resize_timeout_fd = -1;
+    win.scale = -1.0;
+
+    win.wm_capabilities.maximize = true;
+    win.wm_capabilities.minimize = true;
+
+    win.surface.surf = wayland_shim_compositor_create_surface(wayl.compositor);
+    if (win.surface.surf == null) {
+        log_msg(LOG_CLASS_ERROR, "wayland", "wayland.zig", @intCast(@src().line), "failed to create wayland surface");
+        return winInitFail(win);
+    }
+
+    wayland_shim_add_surface_listener(win.surface.surf, win);
+
+    if (wayl.fractional_scale_manager != null and wayl.viewporter != null) {
+        win.surface.viewport = wayland_shim_viewporter_get_viewport(wayl.viewporter, win.surface.surf);
+
+        win.fractional_scale = wayland_shim_fractional_scale_get(
+            wayl.fractional_scale_manager,
+            win.surface.surf,
+        );
+        wayland_shim_add_fractional_scale_listener(win.fractional_scale, win);
+    }
+
+    if (wayl.background_effect_manager != null) {
+        win.surface.background_effect = wayland_shim_background_effect_get(
+            wayl.background_effect_manager,
+            win.surface.surf,
+        );
+    }
+
+    wayl_win_alpha_changed(win);
+
+    win.xdg_surface = wayland_shim_xdg_wm_base_get_xdg_surface(wayl.shell, win.surface.surf);
+    wayland_shim_add_xdg_surface_listener(win.xdg_surface, win);
+
+    win.xdg_toplevel = wayland_shim_xdg_surface_get_toplevel(win.xdg_surface);
+    wayland_shim_add_xdg_toplevel_listener(win.xdg_toplevel, win);
+
+    wayland_shim_xdg_toplevel_set_app_id(win.xdg_toplevel, conf.app_id.?);
+
+    if (conf.toplevel_tag != null and conf.toplevel_tag.?[0] != 0) {
+        if (wayl.toplevel_tag_manager != null) {
+            wayland_shim_toplevel_tag_set(wayl.toplevel_tag_manager, win.xdg_toplevel, conf.toplevel_tag.?);
+        } else {
+            log_msg(LOG_CLASS_WARNING, "wayland", "wayland.zig", @intCast(@src().line), "compositor does not implement the xdg-toplevel-tag protocol");
+        }
+    }
+
+    if (wayl.toplevel_icon_manager != null) {
+        const app_id: [*:0]const u8 = if (term.app_id) |a| a else conf.app_id.?;
+
+        wayland_shim_toplevel_icon_set(
+            wayl.toplevel_icon_manager,
+            win.xdg_toplevel,
+            if (std.mem.eql(u8, std.mem.span(app_id), "footclient")) "foot" else app_id,
+        );
+    }
+
+    if (conf.gamma_correct) {
+        if (wayl.color_management.img_description != null) {
+            std.debug.assert(wayl.color_management.manager != null);
+
+            win.surface.color_management = wayland_shim_color_manager_get_surface(
+                wayl.color_management.manager,
+                win.surface.surf,
+            );
+
+            wayland_shim_color_management_set_image_description(
+                win.surface.color_management,
+                wayl.color_management.img_description,
+                WP_COLOR_MANAGER_V1_RENDER_INTENT_PERCEPTUAL,
+            );
+        } else {
+            if (wayl.color_management.manager == null) {
+                log_msg(LOG_CLASS_WARNING, "wayland", "wayland.zig", @intCast(@src().line), "gamma-corrected-blending: disabling; compositor does not implement the color-management protocol");
+            } else {
+                log_msg(LOG_CLASS_WARNING, "wayland", "wayland.zig", @intCast(@src().line), "gamma-corrected-blending: disabling; compositor does not implement all required color-management features");
+                log_msg(LOG_CLASS_WARNING, "wayland", "wayland.zig", @intCast(@src().line), "use e.g. 'wayland-info' and verify the compositor implements:");
+                log_msg(LOG_CLASS_WARNING, "wayland", "wayland.zig", @intCast(@src().line), "  - feature: parametric");
+                log_msg(LOG_CLASS_WARNING, "wayland", "wayland.zig", @intCast(@src().line), "  - render intent: perceptual");
+                log_msg(LOG_CLASS_WARNING, "wayland", "wayland.zig", @intCast(@src().line), "  - TF: ext_linear");
+                log_msg(LOG_CLASS_WARNING, "wayland", "wayland.zig", @intCast(@src().line), "  - primaries: sRGB");
+            }
+        }
+    }
+
+    if (conf.csd.preferred == .prefer_none) {
+        // User specifically do *not* want decorations
+        win.csd_mode = .no;
+        log_msg(LOG_CLASS_INFO, "wayland", "wayland.zig", @intCast(@src().line), "window decorations disabled by user");
+    } else if (wayl.xdg_decoration_manager != null) {
+        win.xdg_toplevel_decoration = wayland_shim_decoration_get(
+            wayl.xdg_decoration_manager,
+            win.xdg_toplevel,
+        );
+
+        log_msg(LOG_CLASS_INFO, "wayland", "wayland.zig", @intCast(@src().line), "requesting %s decorations", @as([*:0]const u8, if (conf.csd.preferred == .prefer_server) "SSD" else "CSD"));
+
+        wayland_shim_decoration_set_mode(
+            win.xdg_toplevel_decoration,
+            if (conf.csd.preferred == .prefer_server)
+                ZXDG_TOPLEVEL_DECORATION_V1_MODE_SERVER_SIDE
+            else
+                ZXDG_TOPLEVEL_DECORATION_V1_MODE_CLIENT_SIDE,
+        );
+
+        wayland_shim_add_decoration_listener(win.xdg_toplevel_decoration, win);
+    } else {
+        // No decoration manager - thus we *must* draw our own decorations
+        win.configure.csd_mode = .yes;
+        log_msg(LOG_CLASS_WARNING, "wayland", "wayland.zig", @intCast(@src().line), "no decoration manager available - using CSDs unconditionally");
+    }
+
+    wayland_shim_surface_commit(win.surface.surf);
+
+    // Complete XDG startup notification
+    wayl_activate(wayl, win, token);
+
+    if (!wayl_win_subsurface_new(win, &win.overlay, false)) {
+        log_msg(LOG_CLASS_ERROR, "wayland", "wayland.zig", @intCast(@src().line), "failed to create overlay surface");
+        return winInitFail(win);
+    }
+
+    switch (conf.tweak.render_timer) {
+        .osd, .both => {
+            if (!wayl_win_subsurface_new(win, &win.render_timer, false)) {
+                log_msg(LOG_CLASS_ERROR, "wayland", "wayland.zig", @intCast(@src().line), "failed to create render timer surface");
+                return winInitFail(win);
+            }
+        },
+
+        .none, .log => {},
+    }
+
+    return win;
+}
+
+fn winInitFail(win: *types.WlWindow) ?*types.WlWindow {
+    wayl_win_destroy(win);
+    return null;
+}
+
+fn waylandOf2(term: *types.Terminal) *types.Wayland {
+    return @ptrCast(@alignCast(term.wl.?));
+}
