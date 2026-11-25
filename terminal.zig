@@ -2223,7 +2223,6 @@ export fn term_ptmx_resume(term: *types.Terminal) callconv(.c) bool {
 const EIO: c_int = 5;
 const PTMX_READ_BUFFER_SIZE: usize = 24 * 1024;
 
-extern fn term_shutdown(term: *types.Terminal) callconv(.c) void;
 extern fn vt_from_slave(term: *types.Terminal, data: [*]const u8, len: usize) callconv(.c) void;
 
 // PTMX_TIMING is 0 in terminal.c; the timing instrumentation is omitted
@@ -2347,7 +2346,7 @@ export fn fdm_ptmx(
         // *not* fork+exec anything, and thus the only way to shutdown is
         // to wait for the PTY to be closed.
         if (term.slave < 0 and !term.conf.?.hold_at_exit)
-            term_shutdown(term);
+            _ = term_shutdown(term);
     }
 
     return true;
@@ -4155,4 +4154,284 @@ export fn term_surface_kind(
         return .button_close;
 
     return .none;
+}
+//
+// Chunk C4b — the shutdown sequence. shutdown_maybe_done(),
+// fdm_client_terminated(), fdm_shutdown(), fdm_terminate_timeout() and
+// term_shutdown() were static/global in terminal.c. term_destroy() is still C
+// (C5), so it stays an extern; everything else reads the mirrors.
+//
+
+extern fn term_destroy(term: *types.Terminal) callconv(.c) c_int;
+extern fn wayl_win_destroy(win: ?*types.WlWindow) callconv(.c) void;
+extern fn kill(pid: c_int, sig: c_int) callconv(.c) c_int;
+extern fn eventfd(initval: c_uint, flags: c_int) callconv(.c) c_int;
+extern fn write(fd: c_int, buf: *const anyopaque, count: usize) callconv(.c) isize;
+
+// Linux signal numbers and eventfd(2) flags, like the EPOLL* constants above.
+const SIGHUP: c_int = 1;
+const SIGKILL: c_int = 9;
+const SIGTERM: c_int = 15;
+const EFD_CLOEXEC: c_int = 0x80000;
+const EFD_NONBLOCK: c_int = 0x800;
+
+fn shutdown_maybe_done(term: *types.Terminal) void {
+    const shutdown_done =
+        term.window == null and term.shutdown.client_has_terminated;
+
+    const win_ptr: ?*anyopaque = if (term.window) |w| @ptrCast(w) else null;
+    log_msg(
+        LOG_CLASS_DEBUG,
+        "terminal",
+        "terminal.zig",
+        @intCast(@src().line),
+        "window=%p, slave-has-been-reaped=%d --> %s",
+        win_ptr,
+        @as(c_int, @intFromBool(term.shutdown.client_has_terminated)),
+        @as([*:0]const u8, if (shutdown_done)
+            "shutdown done, calling term_destroy()"
+        else
+            "no action"),
+    );
+
+    if (!shutdown_done)
+        return;
+
+    const cb = term.shutdown.cb;
+    const cb_data = term.shutdown.cb_data;
+
+    const exit_code = term_destroy(term);
+    if (cb) |raw| {
+        const f: *const fn (?*anyopaque, c_int) callconv(.c) void =
+            @ptrCast(@alignCast(raw));
+        f(cb_data, exit_code);
+    }
+}
+
+export fn fdm_client_terminated(
+    reaper: ?*anyopaque,
+    pid: c_int,
+    status: c_int,
+    data: ?*anyopaque,
+) callconv(.c) void {
+    _ = reaper;
+    const term: *types.Terminal = @ptrCast(@alignCast(data orelse return));
+
+    log_msg(
+        LOG_CLASS_DEBUG,
+        "terminal",
+        "terminal.zig",
+        @intCast(@src().line),
+        "slave (PID=%u) died",
+        pid,
+    );
+
+    term.shutdown.client_has_terminated = true;
+    term.shutdown.exit_status = status;
+
+    if (term.shutdown.terminate_timeout_fd >= 0) {
+        if (term.fdm) |fdm_ptr| _ = fdm_del(fdm_ptr, term.shutdown.terminate_timeout_fd);
+        term.shutdown.terminate_timeout_fd = -1;
+    }
+
+    if (term.shutdown.in_progress)
+        shutdown_maybe_done(term)
+    else if (term.conf) |conf| {
+        if (!conf.hold_at_exit)
+            _ = term_shutdown(term);
+    }
+}
+
+fn fdm_shutdown(
+    fdm: ?*anyopaque,
+    fd: c_int,
+    events: c_int,
+    data: ?*anyopaque,
+) callconv(.c) bool {
+    _ = events;
+    const term: *types.Terminal = @ptrCast(@alignCast(data orelse return false));
+
+    // Kill the event FD
+    if (term.fdm) |fdm_ptr| _ = fdm_del(fdm_ptr, fd);
+    _ = fdm;
+
+    wayl_win_destroy(term.window);
+    term.window = null;
+
+    // Normally we'd get unmapped when we destroy the wayland window above.
+    // However, under certain conditions those events are deferred (for
+    // example, when a screen locker is active), so we may get here without
+    // having been unmapped.
+    var it = seats(term);
+    while (it.next()) |seat| {
+        if (seat.kbd_focus == term) seat.kbd_focus = null;
+        if (seat.mouse_focus == term) seat.mouse_focus = null;
+    }
+
+    shutdown_maybe_done(term);
+    return true;
+}
+
+fn fdm_terminate_timeout(
+    fdm: ?*anyopaque,
+    fd: c_int,
+    events: c_int,
+    data: ?*anyopaque,
+) callconv(.c) bool {
+    _ = fdm;
+    _ = events;
+
+    var unused: u64 = 0;
+    const bytes = read(fd, &unused, @sizeOf(u64));
+    if (bytes < 0) {
+        log_errno(LOG_CLASS_ERROR, "terminal", "terminal.zig", @intCast(@src().line), "failed to read from slave terminate timeout FD");
+        return false;
+    }
+
+    const term: *types.Terminal = @ptrCast(@alignCast(data orelse return false));
+    if (term.shutdown.client_has_terminated)
+        bug(@src().file, @intCast(@src().line), "fdm_terminate_timeout", "assertion failed: '!term->shutdown.client_has_terminated'");
+
+    log_msg(
+        LOG_CLASS_DEBUG,
+        "terminal",
+        "terminal.zig",
+        @intCast(@src().line),
+        "slave (PID=%u) has not terminated, sending %s (%d)",
+        term.slave,
+        @as([*:0]const u8, if (term.shutdown.next_signal == SIGTERM)
+            "SIGTERM"
+        else if (term.shutdown.next_signal == SIGKILL)
+            "SIGKILL"
+        else
+            "<unknown>"),
+        term.shutdown.next_signal,
+    );
+
+    _ = kill(-term.slave, term.shutdown.next_signal);
+
+    switch (term.shutdown.next_signal) {
+        SIGTERM => term.shutdown.next_signal = SIGKILL,
+
+        SIGKILL => {
+            // Disarm. Shouldn't be necessary, as we should be able to shut
+            // down completely after sending SIGKILL, before the next timeout
+            // occurs. But let's play it safe...
+            if (term.shutdown.terminate_timeout_fd >= 0) {
+                const zero: types.Itimerspec = std.mem.zeroes(types.Itimerspec);
+                _ = timerfd_settime(term.shutdown.terminate_timeout_fd, 0, &zero, null);
+            }
+        },
+
+        else => {
+            bug(@src().file, @intCast(@src().line), "fdm_terminate_timeout", "can only handle SIGTERM and SIGKILL");
+        },
+    }
+
+    return true;
+}
+
+export fn term_shutdown(term: *types.Terminal) callconv(.c) bool {
+    if (term.shutdown.in_progress)
+        return true;
+
+    term.shutdown.in_progress = true;
+
+    // Close FDs, then postpone self-destruction to the next poll iteration by
+    // creating an event FD that we trigger immediately.
+    term_cursor_blink_update(term);
+    if (term.cursor_blink.fd >= 0)
+        bug(@src().file, @intCast(@src().line), "term_shutdown", "assertion failed: 'term->cursor_blink.fd < 0'");
+
+    if (term.fdm) |fdm_ptr| {
+        _ = fdm_del(fdm_ptr, term.selection.auto_scroll.fd);
+        _ = fdm_del(fdm_ptr, term.render.app_sync_updates.timer_fd);
+        _ = fdm_del(fdm_ptr, term.render.app_id.timer_fd);
+        _ = fdm_del(fdm_ptr, term.render.icon.timer_fd);
+        _ = fdm_del(fdm_ptr, term.render.title.timer_fd);
+        _ = fdm_del(fdm_ptr, term.delayed_render_timer.lower_fd);
+        _ = fdm_del(fdm_ptr, term.delayed_render_timer.upper_fd);
+        _ = fdm_del(fdm_ptr, term.blink.fd);
+        _ = fdm_del(fdm_ptr, term.flash.fd);
+    }
+
+    _ = del_utmp_record(term.conf, term.reaper, term.ptmx);
+
+    if (term.window != null and term.window.?.is_configured) {
+        if (term.fdm) |fdm_ptr| _ = fdm_del(fdm_ptr, term.ptmx);
+    } else {
+        _ = close(term.ptmx);
+    }
+
+    if (!term.shutdown.client_has_terminated) {
+        if (term.slave <= 0) {
+            term.shutdown.client_has_terminated = true;
+        } else {
+            log_msg(
+                LOG_CLASS_DEBUG,
+                "terminal",
+                "terminal.zig",
+                @intCast(@src().line),
+                "initiating asynchronous terminate of slave; sending SIGHUP to PID=%u",
+                term.slave,
+            );
+
+            _ = kill(-term.slave, SIGHUP);
+
+            // Set up a timer with an interval: on the first timeout we send
+            // SIGTERM. If the client still isn't terminating, we wait another
+            // interval and then send SIGKILL.
+            const timeout: types.Itimerspec = .{
+                .it_value = .{ .tv_sec = 30, .tv_nsec = 0 },
+                .it_interval = .{ .tv_sec = 30, .tv_nsec = 0 },
+            };
+
+            const timeout_fd = timerfd_create(CLOCK_MONOTONIC, TFD_CLOEXEC | TFD_NONBLOCK);
+            if (timeout_fd < 0 or
+                timerfd_settime(timeout_fd, 0, &timeout, null) < 0 or
+                term.fdm == null or
+                !fdm_add(term.fdm.?, timeout_fd, EPOLLIN, &fdm_terminate_timeout, term))
+            {
+                if (timeout_fd >= 0) _ = close(timeout_fd);
+                log_errno(LOG_CLASS_ERROR, "terminal", "terminal.zig", @intCast(@src().line), "failed to create slave terminate timeout FD");
+                return false;
+            }
+
+            if (term.shutdown.terminate_timeout_fd >= 0)
+                bug(@src().file, @intCast(@src().line), "term_shutdown", "assertion failed: 'term->shutdown.terminate_timeout_fd < 0'");
+            term.shutdown.terminate_timeout_fd = timeout_fd;
+            term.shutdown.next_signal = SIGTERM;
+        }
+    }
+
+    term.selection.auto_scroll.fd = -1;
+    term.render.app_sync_updates.timer_fd = -1;
+    term.render.app_id.timer_fd = -1;
+    term.render.icon.timer_fd = -1;
+    term.render.title.timer_fd = -1;
+    term.delayed_render_timer.lower_fd = -1;
+    term.delayed_render_timer.upper_fd = -1;
+    term.blink.fd = -1;
+    term.flash.fd = -1;
+    term.ptmx = -1;
+
+    const event_fd = eventfd(0, EFD_CLOEXEC | EFD_NONBLOCK);
+    if (event_fd == -1) {
+        log_errno(LOG_CLASS_ERROR, "terminal", "terminal.zig", @intCast(@src().line), "failed to create terminal shutdown event FD");
+        return false;
+    }
+
+    if (term.fdm == null or !fdm_add(term.fdm.?, event_fd, EPOLLIN, &fdm_shutdown, term)) {
+        _ = close(event_fd);
+        return false;
+    }
+
+    var one: u64 = 1;
+    if (write(event_fd, &one, @sizeOf(u64)) != @sizeOf(u64)) {
+        log_errno(LOG_CLASS_ERROR, "terminal", "terminal.zig", @intCast(@src().line), "failed to send terminal shutdown event");
+        if (term.fdm) |fdm_ptr| _ = fdm_del(fdm_ptr, event_fd);
+        return false;
+    }
+
+    return true;
 }

@@ -66,6 +66,7 @@ bool term_set_fonts(
     struct terminal *term, struct fcft_font *fonts[static 4], bool resize_grid);
 bool reload_fonts(struct terminal *term, bool resize_grid);
 bool load_fonts_from_conf(struct terminal *term);
+void fdm_client_terminated(struct reaper *reaper, pid_t pid, int status, void *data);
 bool add_utmp_record(const struct config *conf, struct reaper *reaper, int ptmx);
 bool del_utmp_record(const struct config *conf, struct reaper *reaper, int ptmx);
 bool fdm_delayed_render(struct fdm *fdm, int fd, int events, void *data);
@@ -2277,6 +2278,62 @@ test_surface_kind(void)
 }
 
 static void
+test_shutdown(void)
+{
+    struct terminal *term = term_new();
+    static struct config conf;
+    memset(&conf, 0, sizeof(conf));
+    struct fdm *fdm = fdm_init();
+    xassert(fdm != NULL);
+
+    term->conf = &conf;
+    term->fdm = fdm;
+    term->slave = 0; /* no client application: nothing to terminate */
+    term->ptmx = -1;
+    term->selection.auto_scroll.fd = -1;
+    term->render.app_sync_updates.timer_fd = -1;
+    term->render.app_id.timer_fd = -1;
+    term->render.icon.timer_fd = -1;
+    term->render.title.timer_fd = -1;
+    term->delayed_render_timer.lower_fd = -1;
+    term->delayed_render_timer.upper_fd = -1;
+    term->blink.fd = -1;
+    term->flash.fd = -1;
+    term->cursor_blink.fd = -1;
+    term->shutdown.terminate_timeout_fd = -1;
+
+    check(term_shutdown(term), "term_shutdown() starts the shutdown");
+    check(term->shutdown.in_progress, "shutdown is in progress");
+    check(term->shutdown.client_has_terminated,
+          "a terminal without a client counts as terminated");
+    check(term->ptmx == -1, "shutdown releases the pty");
+    check(term->delayed_render_timer.lower_fd == -1 &&
+          term->delayed_render_timer.upper_fd == -1,
+          "shutdown closes the delayed-render timers");
+    check(term_shutdown(term), "a second term_shutdown() is a no-op");
+
+    /* fdm_client_terminated() records the status and asks whether the
+     * shutdown is complete - here the window is still mapped, so it is not. */
+    struct terminal *term2 = term_new();
+    struct wl_window win = {0};
+    conf.hold_at_exit = true;
+    term2->conf = &conf;
+    term2->window = &win;
+    term2->shutdown.in_progress = true;
+    term2->shutdown.terminate_timeout_fd = -1;
+    fdm_client_terminated(NULL, 1234, 7, term2);
+    check(term2->shutdown.client_has_terminated,
+          "a dead slave marks the client as terminated");
+    check(term2->shutdown.exit_status == 7,
+          "the slave's exit status is recorded");
+
+    term2->window = NULL;
+    term_free(term2);
+    fdm_destroy(fdm);
+    term_free(term);
+}
+
+static void
 test_ime(void)
 {
     struct wayland wl = {0};
@@ -3088,6 +3145,7 @@ main(void)
     test_utmp();
     test_kbd_focus_out();
     test_surface_kind();
+    test_shutdown();
     test_quirks();
     test_version_and_features();
     test_log();

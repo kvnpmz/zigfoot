@@ -97,6 +97,7 @@ extern bool fdm_delayed_render(struct fdm *fdm, int fd, int events, void *data);
 extern bool add_utmp_record(const struct config *conf, struct reaper *reaper, int ptmx);
 extern bool del_utmp_record(const struct config *conf, struct reaper *reaper, int ptmx);
 extern bool initialize_render_workers(struct terminal *term);
+extern void fdm_client_terminated(struct reaper *reaper, pid_t pid, int status, void *data);
 
 /* enqueue_data_for_slave: ported to terminal.zig */
 /* data_to_slave: ported to terminal.zig */
@@ -142,9 +143,6 @@ extern bool fdm_app_id_update_timeout(struct fdm *fdm, int fd, int events, void 
 /* term_pt_or_px_as_pixels: ported to terminal.zig */
 
 /* reload_fonts / font_loader_thread / load_fonts_from_conf: ported to terminal.zig */
-
-static void fdm_client_terminated(
-    struct reaper *reaper, pid_t pid, int status, void *data);
 
 static const int PTY_OPEN_FLAGS = O_RDWR | O_NOCTTY;
 
@@ -556,225 +554,9 @@ close_fds:
  *   waitpid().
  */
 
-static void
-shutdown_maybe_done(struct terminal *term)
-{
-    bool shutdown_done =
-        term->window == NULL && term->shutdown.client_has_terminated;
-
-    LOG_DBG("window=%p, slave-has-been-reaped=%d --> %s",
-            (void *)term->window, term->shutdown.client_has_terminated,
-            (shutdown_done
-             ? "shutdown done, calling term_destroy()"
-             : "no action"));
-
-    if (!shutdown_done)
-        return;
-
-    void (*cb)(void *, int) = term->shutdown.cb;
-    void *cb_data = term->shutdown.cb_data;
-
-    int exit_code = term_destroy(term);
-    if (cb != NULL)
-        cb(cb_data, exit_code);
-}
-
-static void
-fdm_client_terminated(struct reaper *reaper, pid_t pid, int status, void *data)
-{
-    struct terminal *term = data;
-    LOG_DBG("slave (PID=%u) died", pid);
-
-    term->shutdown.client_has_terminated = true;
-    term->shutdown.exit_status = status;
-
-    if (term->shutdown.terminate_timeout_fd >= 0) {
-        fdm_del(term->fdm, term->shutdown.terminate_timeout_fd);
-        term->shutdown.terminate_timeout_fd = -1;
-    }
-
-    if (term->shutdown.in_progress)
-        shutdown_maybe_done(term);
-    else if (!term->conf->hold_at_exit)
-        term_shutdown(term);
-}
-
-static bool
-fdm_shutdown(struct fdm *fdm, int fd, int events, void *data)
-{
-    struct terminal *term = data;
-
-    /* Kill the event FD */
-    fdm_del(term->fdm, fd);
-
-    wayl_win_destroy(term->window);
-    term->window = NULL;
-
-    struct wayland *wayl = term->wl;
-
-    /*
-     * Normally we'd get unmapped when we destroy the Wayland
-     * above.
-     *
-     * However, it appears that under certain conditions, those events
-     * are deferred (for example, when a screen locker is active), and
-     * thus we can get here without having been unmapped.
-     */
-    tll_foreach(wayl->seats, it) {
-        if (it->item.kbd_focus == term)
-            it->item.kbd_focus = NULL;
-        if (it->item.mouse_focus == term)
-            it->item.mouse_focus = NULL;
-    }
-
-    shutdown_maybe_done(term);
-    return true;
-}
-
-static bool
-fdm_terminate_timeout(struct fdm *fdm, int fd, int events, void *data)
-{
-    uint64_t unused;
-    ssize_t bytes = read(fd, &unused, sizeof(unused));
-    if (bytes < 0) {
-        LOG_ERRNO("failed to read from slave terminate timeout FD");
-        return false;
-    }
-
-    struct terminal *term = data;
-    xassert(!term->shutdown.client_has_terminated);
-
-    LOG_DBG("slave (PID=%u) has not terminated, sending %s (%d)",
-            term->slave,
-            term->shutdown.next_signal == SIGTERM ? "SIGTERM"
-                : term->shutdown.next_signal == SIGKILL ? "SIGKILL"
-                    : "<unknown>",
-            term->shutdown.next_signal);
-
-    kill(-term->slave, term->shutdown.next_signal);
-
-    switch (term->shutdown.next_signal) {
-    case SIGTERM:
-        term->shutdown.next_signal = SIGKILL;
-        break;
-
-    case SIGKILL:
-        /* Disarm. Shouldn't be necessary, as we should be able to
-           shutdown completely after sending SIGKILL, before the next
-           timeout occurs). But lets play it safe... */
-        if (term->shutdown.terminate_timeout_fd >= 0) {
-            timerfd_settime(
-                term->shutdown.terminate_timeout_fd, 0,
-                &(const struct itimerspec){0}, NULL);
-        }
-        break;
-
-    default:
-        BUG("can only handle SIGTERM and SIGKILL");
-        return false;
-    }
-
-    return true;
-}
-
-bool
-term_shutdown(struct terminal *term)
-{
-    if (term->shutdown.in_progress)
-        return true;
-
-    term->shutdown.in_progress = true;
-
-    /*
-     * Close FDs then postpone self-destruction to the next poll
-     * iteration, by creating an event FD that we trigger immediately.
-     */
-
-    term_cursor_blink_update(term);
-    xassert(term->cursor_blink.fd < 0);
-
-    fdm_del(term->fdm, term->selection.auto_scroll.fd);
-    fdm_del(term->fdm, term->render.app_sync_updates.timer_fd);
-    fdm_del(term->fdm, term->render.app_id.timer_fd);
-    fdm_del(term->fdm, term->render.icon.timer_fd);
-    fdm_del(term->fdm, term->render.title.timer_fd);
-    fdm_del(term->fdm, term->delayed_render_timer.lower_fd);
-    fdm_del(term->fdm, term->delayed_render_timer.upper_fd);
-    fdm_del(term->fdm, term->blink.fd);
-    fdm_del(term->fdm, term->flash.fd);
-
-    del_utmp_record(term->conf, term->reaper, term->ptmx);
-
-    if (term->window != NULL && term->window->is_configured)
-        fdm_del(term->fdm, term->ptmx);
-    else
-        close(term->ptmx);
-
-    if (!term->shutdown.client_has_terminated) {
-        if (term->slave <= 0) {
-            term->shutdown.client_has_terminated = true;
-        } else {
-            LOG_DBG("initiating asynchronous terminate of slave; "
-                    "sending SIGHUP to PID=%u", term->slave);
-
-            kill(-term->slave, SIGHUP);
-
-            /*
-             * Set up a timer, with an interval - on the first timeout
-             * we'll send SIGTERM. If the the client application still
-             * isn't terminating, we'll wait an additional interval,
-             * and then send SIGKILL.
-             */
-            const struct itimerspec timeout = {.it_value = {.tv_sec = 30},
-                                               .it_interval = {.tv_sec = 30}};
-
-            int timeout_fd = timerfd_create(CLOCK_MONOTONIC, TFD_CLOEXEC | TFD_NONBLOCK);
-            if (timeout_fd < 0 ||
-                timerfd_settime(timeout_fd, 0, &timeout, NULL) < 0 ||
-                !fdm_add(term->fdm, timeout_fd, EPOLLIN, &fdm_terminate_timeout, term))
-            {
-                if (timeout_fd >= 0)
-                    close(timeout_fd);
-                LOG_ERRNO("failed to create slave terminate timeout FD");
-                return false;
-            }
-
-            xassert(term->shutdown.terminate_timeout_fd < 0);
-            term->shutdown.terminate_timeout_fd = timeout_fd;
-            term->shutdown.next_signal = SIGTERM;
-        }
-    }
-
-    term->selection.auto_scroll.fd = -1;
-    term->render.app_sync_updates.timer_fd = -1;
-    term->render.app_id.timer_fd = -1;
-    term->render.icon.timer_fd = -1;
-    term->render.title.timer_fd = -1;
-    term->delayed_render_timer.lower_fd = -1;
-    term->delayed_render_timer.upper_fd = -1;
-    term->blink.fd = -1;
-    term->flash.fd = -1;
-    term->ptmx = -1;
-
-    int event_fd = eventfd(0, EFD_CLOEXEC | EFD_NONBLOCK);
-    if (event_fd == -1) {
-        LOG_ERRNO("failed to create terminal shutdown event FD");
-        return false;
-    }
-
-    if (!fdm_add(term->fdm, event_fd, EPOLLIN, &fdm_shutdown, term)) {
-        close(event_fd);
-        return false;
-    }
-
-    if (write(event_fd, &(uint64_t){1}, sizeof(uint64_t)) != sizeof(uint64_t)) {
-        LOG_ERRNO("failed to send terminal shutdown event");
-        fdm_del(term->fdm, event_fd);
-        return false;
-    }
-
-    return true;
-}
+/* shutdown_maybe_done(), fdm_client_terminated(), fdm_shutdown(),
+ * fdm_terminate_timeout() and term_shutdown(): ported to terminal.zig
+ * (chunk C4b). */
 
 static volatile sig_atomic_t alarm_raised;
 
