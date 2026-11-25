@@ -485,6 +485,18 @@ selection_obj = custom_target(
 )
 
 
+render_obj = custom_target(
+  'render_obj',
+  input: 'render.zig',
+  depend_files: files('terminal_types.zig'),
+  output: 'render.o',
+  depends: c_layout,
+  command: [
+    python, files('compile_zig.py'), '@INPUT@', '@OUTPUT@',
+    grapheme_clustering_zig,
+  ]
+)
+
 wayland_obj = custom_target(
   'wayland_obj',
   input: 'wayland.zig',
@@ -819,7 +831,7 @@ footlib = static_library(
   notify_obj, 'notify.h', 'notify-shim.c',
   quirks_obj, 'quirks.h',
   reaper_obj, 'reaper.h',
-  'render.c', 'render.h',
+  'render.c', render_obj, 'render.h',
   search_obj, 'search.h',
   'server.c', 'server.h', 'client-protocol.h',
   shm_obj, 'shm.c', 'shm.h',

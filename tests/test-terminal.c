@@ -16,6 +16,7 @@
 #include "extract.h"
 #include "fdm.h"
 #include "wayland.h"
+#include "render.h"
 #include "shm.h"
 #include "slave.h"
 #include "log.h"
@@ -3870,6 +3871,169 @@ test_global_remove(void)
     check(tll_length(wayl.seats) == 0, "the removed seat is dropped");
 }
 
+static uint32_t
+pix_pixel(pixman_image_t *pix, int x, int y)
+{
+    const uint32_t *data = pixman_image_get_data(pix);
+    const int stride = pixman_image_get_stride(pix) / 4;
+    return data[y * stride + x];
+}
+
+/* D3a: the drawing primitives in render.zig */
+static void
+test_render_primitives(void)
+{
+    /* 8-bit channel expansion, linear vs sRGB */
+    pixman_color_t lin = color_hex_to_pixman(0x00112233, false);
+    check(lin.red == 0x1111 && lin.green == 0x2222 && lin.blue == 0x3333 &&
+          lin.alpha == 0xffff,
+          "color_hex_to_pixman expands the channels and fills alpha");
+
+    pixman_color_t srgb = color_hex_to_pixman(0x00808080, true);
+    pixman_color_t plain = color_hex_to_pixman(0x00808080, false);
+    check(srgb.red < plain.red && srgb.green < plain.green,
+          "the sRGB path goes through the decode table");
+
+    pixman_color_t half = color_hex_to_pixman_with_alpha(0xffffffff, 0x8000, false);
+    check(half.alpha == 0x8000 && half.red > 0x7f00 && half.red < 0x8100,
+          "color_hex_to_pixman_with_alpha premultiplies by alpha");
+
+    /* Blending */
+    check(color_blend_towards(0x00102030, 0x00ffffff, 0) == 0x00102030,
+          "blend towards with amount 0 is a no-op");
+    uint32_t darker = color_blend_towards(0x00ff0000, 0x00000000, 0.5f);
+    check((darker >> 16 & 0xff) < 0xff && (darker >> 16 & 0xff) > 0,
+          "blend towards black dims a channel but keeps the hue");
+
+    struct terminal term = {0};
+    struct config conf = {0};
+    term.conf = &conf;
+    term.colors.active_theme = COLOR_THEME_DARK;
+    conf.colors_dark.dim_blend_towards = DIM_BLEND_TOWARDS_BLACK;
+    conf.dim.amount = 0.5f;
+
+    uint32_t dimmed = color_dim(&term, 0x00ffffff);
+    check(dimmed != 0x00ffffff && (dimmed >> 16 & 0xff) < 0xff,
+          "color_dim() blends towards black by default");
+    conf.colors_dark.dim_blend_towards = DIM_BLEND_TOWARDS_WHITE;
+    check(color_dim(&term, 0x00000000) > 0,
+          "color_dim() blends towards white for the light theme");
+
+    /* custom dim: regular -> dim, bright -> regular */
+    conf.colors_dark.use_custom.dim = 1;
+    conf.colors_dark.dim[0] = 0x00123456;
+    term.colors.table[0] = 0x00aaaaaa;
+    term.colors.table[8] = 0x00bbbbbb;
+    check(color_dim(&term, 0x00aaaaaa) == 0x00123456,
+          "custom dim maps a regular color to its dim variant");
+    check(color_dim(&term, 0x00bbbbbb) == 0x00aaaaaa,
+          "custom dim maps a bright color to its regular variant");
+    conf.colors_dark.use_custom.dim = 0;
+
+    /* bold-in-bright */
+    term.colors.table[1] = 0x00111111;
+    term.colors.table[9] = 0x00222222;
+    conf.bold_in_bright.palette_based = true;
+    check(color_brighten(&term, 0x00111111) == 0x00222222,
+          "palette-based bold-in-bright maps 0-7 to 8-15");
+    check(color_brighten(&term, 0x00333333) == 0x00333333,
+          "palette-based bold-in-bright leaves other colors alone");
+    conf.bold_in_bright.palette_based = false;
+    conf.bold_in_bright.amount = 0.5f;
+    check(color_brighten(&term, 0x00000000) != 0,
+          "amount-based bold-in-bright blends towards white");
+
+    /* ── pixel tests on a real pixman image ───────────────────────── */
+    enum { W = 64, H = 64 };
+    uint32_t buf[W * H] = {0};
+    pixman_image_t *pix =
+        pixman_image_create_bits(PIXMAN_a8r8g8b8, W, H, buf, W * 4);
+    if (pix == NULL) {
+        printf("skip: pixman_image_create_bits() failed\n");
+        return;
+    }
+
+    const pixman_color_t red = {.red = 0xffff, .green = 0, .blue = 0, .alpha = 0xffff};
+    const pixman_color_t white = {.red = 0xffff, .green = 0xffff, .blue = 0xffff, .alpha = 0xffff};
+
+    term.cell_width = 10;
+    term.cell_height = 20;
+    term.scale = 1.0f;
+
+    draw_hollow_block(&term, pix, &white, 0, 0, 3);
+    check(pix_pixel(pix, 0, 0) == 0xffffffff && pix_pixel(pix, 29, 0) == 0xffffffff,
+          "hollow block paints the top and right borders");
+    check(pix_pixel(pix, 15, 10) == 0,
+          "hollow block leaves the middle empty");
+    check(pix_pixel(pix, 0, 19) == 0xffffffff,
+          "hollow block paints the bottom border");
+
+    memset(buf, 0, sizeof(buf));
+    conf.use_custom_underline_offset = true;
+    conf.underline_offset.px = 5;
+    conf.underline_thickness.px = 2;
+    term.font_baseline = 10;
+    draw_underline(&term, pix, NULL, &white, 0, 0, 3);
+    check(pix_pixel(pix, 5, 15) == 0xffffffff && pix_pixel(pix, 5, 16) == 0xffffffff,
+          "underline paints a band at the custom offset");
+    check(pix_pixel(pix, 5, 14) == 0 && pix_pixel(pix, 5, 17) == 0,
+          "underline thickness is respected");
+    check(pix_pixel(pix, 29, 15) == 0xffffffff && pix_pixel(pix, 30, 15) == 0,
+          "underline spans exactly the requested columns");
+
+    const char *fontname = "monospace";
+    struct fcft_font *font = fcft_from_name(1, &fontname, ":size=8");
+    if (font == NULL)
+        printf("skip: no font for the strikeout/beam checks\n");
+
+    if (font != NULL) {
+        memset(buf, 0, sizeof(buf));
+        conf.strikeout_thickness.px = 2;
+        draw_strikeout(&term, pix, font, &white, 0, 0, 3);
+        int struck = 0;
+        for (int y = 0; y < H; y++)
+            struck += pix_pixel(pix, 0, y) != 0;
+        check(struck == 2, "custom strikeout thickness wins over the font's");
+
+        memset(buf, 0, sizeof(buf));
+        conf.cursor.beam_thickness.px = 2;
+        draw_beam_cursor(&term, pix, font, &white, 4, 2);
+        int beam = 0;
+        for (int x = 0; x < W; x++)
+            beam += pix_pixel(pix, x, 10) != 0;
+        check(beam == 2, "the beam cursor is beam_thickness pixels wide");
+    }
+
+    /* Block cursor: cursor_bg/fg unset -> fg, swapping against bg */
+    memset(buf, 0, sizeof(buf));
+    struct cell cell = {0};
+    term.colors.cursor_bg = 0;
+    term.colors.cursor_fg = 0;
+    term.cursor_style = CURSOR_BLOCK;
+    term.cursor_blink.state = CURSOR_BLINK_OFF;
+    term.kbd_focus = true;
+    pixman_color_t fg = red;
+    pixman_color_t bg = {.red = 0, .green = 0, .blue = 0, .alpha = 0xffff};
+    draw_cursor(&term, &cell, NULL, pix, &fg, &bg, 0, 0, 2);
+    check(pix_pixel(pix, 5, 5) == 0xffff0000,
+          "a block cursor fills the cell with the foreground color");
+    check(fg.red == 0 && fg.alpha == 0xffff,
+          "the text color becomes the background while the cursor is drawn");
+
+    /* Unfocused + hollow: only a border, no fill */
+    memset(buf, 0, sizeof(buf));
+    term.kbd_focus = false;
+    conf.cursor.unfocused_style = CURSOR_UNFOCUSED_HOLLOW;
+    fg = red;
+    draw_cursor(&term, &cell, NULL, pix, &fg, &bg, 0, 0, 2);
+    check(pix_pixel(pix, 0, 0) == 0xffff0000 && pix_pixel(pix, 10, 10) == 0,
+          "an unfocused hollow cursor is an outline");
+
+    pixman_image_unref(pix);
+    if (font != NULL)
+        fcft_destroy(font);
+}
+
 int
 main(void)
 {
@@ -3893,6 +4057,7 @@ main(void)
     test_search();
     test_output();
     test_csd_visibility();
+    test_render_primitives();
     test_configure();
     test_surface_listener();
     test_small_listeners();

@@ -1,5 +1,6 @@
 #pragma once
 #include <stdbool.h>
+#include <pixman.h>
 
 #include "terminal.h"
 #include "fdm.h"
@@ -50,3 +51,47 @@ struct csd_data get_csd_data(const struct terminal *term, enum csd_surface surf_
 
 void render_buffer_release_callback(struct buffer *buf, void *data);
 void render_wait_for_preapply_damage(struct terminal *term);
+
+/* ── Ported to render.zig (D3a: drawing primitives) ─────────────────── */
+
+struct fcft_font *attrs_to_font(
+    const struct terminal *term, const struct attributes *attrs);
+pixman_color_t color_hex_to_pixman_with_alpha(
+    uint32_t color, uint16_t alpha, bool srgb);
+pixman_color_t color_hex_to_pixman(uint32_t color, bool srgb);
+uint32_t color_blend_towards(uint32_t from, uint32_t to, float amount);
+uint32_t color_dim(const struct terminal *term, uint32_t color);
+uint32_t color_brighten(const struct terminal *term, uint32_t color);
+void draw_hollow_block(
+    const struct terminal *term, pixman_image_t *pix,
+    const pixman_color_t *color, int x, int y, int cell_cols);
+void draw_beam_cursor(
+    const struct terminal *term, pixman_image_t *pix,
+    const struct fcft_font *font, const pixman_color_t *color,
+    int x, int y);
+void draw_underline_cursor(
+    const struct terminal *term, pixman_image_t *pix,
+    const struct fcft_font *font, const pixman_color_t *color,
+    int x, int y, int cols);
+void draw_underline(
+    const struct terminal *term, pixman_image_t *pix,
+    const struct fcft_font *font, const pixman_color_t *color,
+    int x, int y, int cols);
+void draw_styled_underline(
+    const struct terminal *term, pixman_image_t *pix,
+    const struct fcft_font *font, const pixman_color_t *color,
+    enum underline_style style, int x, int y, int cols);
+void draw_strikeout(
+    const struct terminal *term, pixman_image_t *pix,
+    const struct fcft_font *font, const pixman_color_t *color,
+    int x, int y, int cols);
+void cursor_colors_for_cell(
+    const struct terminal *term, const struct cell *cell,
+    const pixman_color_t *fg, const pixman_color_t *bg,
+    pixman_color_t *cursor_color, pixman_color_t *text_color,
+    bool gamma_correct);
+void draw_cursor(
+    const struct terminal *term, const struct cell *cell,
+    const struct fcft_font *font, pixman_image_t *pix,
+    pixman_color_t *fg, const pixman_color_t *bg,
+    int x, int y, int cols);

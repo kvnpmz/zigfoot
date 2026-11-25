@@ -204,6 +204,66 @@ bool terminal_shim_fcft_font_antialias(const struct fcft_font *font) {
     return font->antialias;
 }
 
+int terminal_shim_fcft_font_ascent(const struct fcft_font *font) {
+    return font->ascent;
+}
+
+int terminal_shim_fcft_font_descent(const struct fcft_font *font) {
+    return font->descent;
+}
+
+int terminal_shim_fcft_font_underline_position(const struct fcft_font *font) {
+    return font->underline.position;
+}
+
+int terminal_shim_fcft_font_underline_thickness(const struct fcft_font *font) {
+    return font->underline.thickness;
+}
+
+int terminal_shim_fcft_font_strikeout_position(const struct fcft_font *font) {
+    return font->strikeout.position;
+}
+
+int terminal_shim_fcft_font_strikeout_thickness(const struct fcft_font *font) {
+    return font->strikeout.thickness;
+}
+
+/* ── render.zig (D3a) ──────────────────────────────────────────────── */
+
+/*
+ * The curly underline is composited from two trapezoids. pixman_trapezoid_t
+ * is a library type we would rather not mirror, so the geometry comes in
+ * from Zig and the composite happens here.
+ */
+void render_shim_curly_underline(
+    pixman_image_t *pix, const pixman_color_t *color,
+    int x, int top, int bot, int half_x, int full_x, int th)
+{
+#define I(x) pixman_int_to_fixed(x)
+
+    /* characters sit on top of the curlies */
+    const pixman_trapezoid_t traps[] = {
+        {
+            I(top), I(bot),
+            {{I(x), I(bot - th)}, {I(half_x), I(top - th)}},
+            {{I(x), I(bot + th)}, {I(half_x), I(top + th)}},
+        },
+        {
+            I(top), I(bot),
+            {{I(half_x), I(top + th)}, {I(full_x), I(bot + th)}},
+            {{I(half_x), I(top - th)}, {I(full_x), I(bot - th)}},
+        },
+    };
+
+#undef I
+
+    pixman_image_t *fill = pixman_image_create_solid_fill(color);
+    pixman_composite_trapezoids(
+        PIXMAN_OP_OVER, fill, pix, PIXMAN_a8, 0, 0, 0, 0,
+        sizeof(traps) / sizeof(traps[0]), traps);
+    pixman_image_unref(fill);
+}
+
 /* ── font loading (terminal.zig) ─────────────────────────────────── */
 
 /* Headless harness has no wayland object; foot itself always does. */
