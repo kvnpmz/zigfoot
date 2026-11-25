@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const build_options = @import("build_options");
 
 /// Mirrors `#if defined(FOOT_GRAPHEME_CLUSTERING)` in `struct vt`
@@ -2557,10 +2558,13 @@ pub const ClientIpcSigusr = extern struct {
     signo: i32,
 };
 
-/// Linux struct sockaddr_un (AF_UNIX path socket).
+/// struct sockaddr_un (AF_UNIX path socket). FreeBSD reserves one fewer
+/// path byte than Linux. The native ABI probe checks the selected layout.
+pub const SockaddrUnPathMax: usize = if (builtin.os.tag == .freebsd) 104 else 108;
+
 pub const SockaddrUn = extern struct {
-    sun_family: u16,
-    sun_path: [108]u8,
+    sun_family: std.posix.sa_family_t,
+    sun_path: [SockaddrUnPathMax]u8,
 };
 
 test "server layout matches C probe" {

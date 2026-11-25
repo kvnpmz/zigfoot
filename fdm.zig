@@ -1,28 +1,53 @@
 const std = @import("std");
 const builtin = @import("builtin");
 
-comptime {
-    if (builtin.os.tag != .linux)
-        @compileError("fdm.zig uses Linux-specific constants");
-}
+const SigSet = std.c.sigset_t;
+const KSigaction = std.c.Sigaction;
 
-const SigSet = extern struct { bits: [16]u64 }; // 128 bytes, glibc/musl
-const KSigaction = extern struct { handler: usize, mask: SigSet, flags: c_int, restorer: ?*anyopaque };
-
-const EpollEvent = if (builtin.cpu.arch == .x86_64)
+// Linux packs epoll_event. The epoll-shim ABI on FreeBSD follows the
+// natural alignment of its epoll_data_t member instead.
+const EpollEvent = if (builtin.os.tag == .linux)
     extern struct { events: u32 align(1), data: u64 align(1) }
 else
     extern struct { events: u32, data: u64 };
 
-const EPOLL_CLOEXEC: c_int = 0o2000000;
-const EPOLL_CTL_ADD: c_int = 1;
-const EPOLL_CTL_DEL: c_int = 2;
-const EPOLL_CTL_MOD: c_int = 3;
-const SIG_BLOCK: c_int = 0;
-const SIG_UNBLOCK: c_int = 1;
-const SIG_SETMASK: c_int = 2;
-const SIG_DFL: usize = 0;
-const EINTR: c_int = 4;
+comptime {
+    if (builtin.os.tag == .linux) {
+        if (@sizeOf(EpollEvent) != 12)
+            @compileError("Linux epoll_event size must be 12");
+        if (@offsetOf(EpollEvent, "events") != 0)
+            @compileError("Linux epoll_event.events offset must be 0");
+        if (@offsetOf(EpollEvent, "data") != 4)
+            @compileError("Linux epoll_event.data offset must be 4");
+    } else {
+        if (@sizeOf(EpollEvent) != 16)
+            @compileError("epoll-shim epoll_event size must be 16");
+        if (@offsetOf(EpollEvent, "data") != 8)
+            @compileError("epoll-shim epoll_event.data offset must be 8");
+    }
+}
+
+const EPOLL_CLOEXEC: c_int = if (builtin.os.tag == .linux)
+    @intCast(std.os.linux.EPOLL.CLOEXEC)
+else
+    0o2000000; // epoll-shim API value
+const EPOLL_CTL_ADD: c_int = if (builtin.os.tag == .linux)
+    @intCast(std.os.linux.EPOLL.CTL_ADD)
+else
+    1; // epoll-shim API value
+const EPOLL_CTL_DEL: c_int = if (builtin.os.tag == .linux)
+    @intCast(std.os.linux.EPOLL.CTL_DEL)
+else
+    2; // epoll-shim API value
+const EPOLL_CTL_MOD: c_int = if (builtin.os.tag == .linux)
+    @intCast(std.os.linux.EPOLL.CTL_MOD)
+else
+    3; // epoll-shim API value
+const SIG_BLOCK: c_int = std.posix.SIG.BLOCK;
+const SIG_UNBLOCK: c_int = std.posix.SIG.UNBLOCK;
+const SIG_SETMASK: c_int = std.posix.SIG.SETMASK;
+const SIG_DFL: ?std.c.Sigaction.handler_fn = std.posix.SIG.DFL;
+const EINTR: c_int = @intFromEnum(std.posix.E.INTR);
 const LOG_CLASS_ERROR: c_int = 1;
 const LOG_CLASS_WARNING: c_int = 2;
 
@@ -30,8 +55,6 @@ extern fn log_msg(class: c_int, module: [*:0]const u8, file: [*:0]const u8, line
 extern fn log_errno(class: c_int, module: [*:0]const u8, file: [*:0]const u8, lineno: c_int, fmt: [*:0]const u8, ...) void;
 extern fn log_errno_provided(class: c_int, module: [*:0]const u8, file: [*:0]const u8, lineno: c_int, errnum: c_int, fmt: [*:0]const u8, ...) void;
 
-extern fn __errno_location() *c_int;
-extern fn __libc_current_sigrtmax() c_int;
 extern fn sigabbrev_np(sig: c_int) ?[*:0]const u8;
 extern fn malloc(n: usize) ?*anyopaque;
 extern fn calloc(n: usize, size: usize) ?*anyopaque;
@@ -45,6 +68,7 @@ extern fn sigemptyset(set: *SigSet) c_int;
 extern fn sigaddset(set: *SigSet, signo: c_int) c_int;
 extern fn sigprocmask(how: c_int, set: ?*const SigSet, old: ?*SigSet) c_int;
 extern fn sigaction(sig: c_int, act: ?*const KSigaction, old: ?*KSigaction) c_int;
+extern fn __libc_current_sigrtmax() c_int;
 
 const FdCb = *const fn (*Fdm, c_int, c_int, ?*anyopaque) callconv(.c) bool;
 const SigCb = *const fn (*Fdm, c_int, ?*anyopaque) callconv(.c) bool;
@@ -106,8 +130,8 @@ const Fdm = struct {
     events_cap: usize,
 };
 
-var got_signal: c_int = 0;
-var received_signals: ?[*]volatile c_int = null;
+var got_signal: std.c.sig_atomic_t = 0;
+var received_signals: ?[*]volatile std.c.sig_atomic_t = null;
 
 fn gs() *volatile c_int {
     return &got_signal;
@@ -140,7 +164,16 @@ fn sigabbrev(sig: c_int) [*:0]const u8 {
 }
 
 fn zeroSet() SigSet {
-    return .{ .bits = [_]u64{0} ** 16 };
+    return std.mem.zeroes(SigSet);
+}
+
+fn signalCount() usize {
+    if (comptime builtin.os.tag == .linux) {
+        if (comptime builtin.abi.isGnu())
+            return @intCast(__libc_current_sigrtmax());
+        return @intCast(std.os.linux.sigrtmax());
+    }
+    return @intCast(std.posix.SIG.RTMAX);
 }
 
 export fn fdm_init() ?*Fdm {
@@ -156,7 +189,7 @@ export fn fdm_init() ?*Fdm {
         return null;
     }
 
-    const rtmax: usize = @intCast(__libc_current_sigrtmax());
+    const rtmax = signalCount();
 
     const rs = calloc(rtmax, @sizeOf(c_int)) orelse {
         logErrno(@src(), "calloc() failed", .{});
@@ -197,7 +230,7 @@ export fn fdm_destroy(fdm_opt: ?*Fdm) void {
     if (fdm.fds.len > 0)
         logWarn(@src(), "FD list not empty", .{});
 
-    const rtmax: usize = @intCast(__libc_current_sigrtmax());
+    const rtmax = signalCount();
     var i: usize = 0;
     while (i < rtmax) : (i += 1) {
         if (fdm.signal_handlers[i].callback != null)
@@ -376,7 +409,7 @@ export fn fdm_signal_add(fdm: *Fdm, signo: c_int, handler: SigCb, data: ?*anyopa
         return false;
     }
 
-    var action = KSigaction{ .handler = @intFromPtr(&signalHandler), .mask = zeroSet(), .flags = 0, .restorer = null };
+    var action = KSigaction{ .handler = .{ .handler = @ptrCast(&signalHandler) }, .mask = zeroSet(), .flags = 0 };
     _ = sigemptyset(&action.mask);
     if (sigaction(signo, &action, null) < 0) {
         logErrno(@src(), "failed to set signal handler for signal %d (SIG%s)", .{ signo, sigabbrev(signo) });
@@ -394,7 +427,7 @@ export fn fdm_signal_del(fdm: *Fdm, signo: c_int) bool {
     if (fdm.signal_handlers[idx].callback == null)
         return false;
 
-    var action = KSigaction{ .handler = SIG_DFL, .mask = zeroSet(), .flags = 0, .restorer = null };
+    var action = KSigaction{ .handler = .{ .handler = SIG_DFL }, .mask = zeroSet(), .flags = 0 };
     _ = sigemptyset(&action.mask);
     if (sigaction(signo, &action, null) < 0) {
         logErrno(@src(), "failed to restore signal handler for signal %d (SIG%s)", .{ signo, sigabbrev(signo) });
@@ -445,12 +478,12 @@ export fn fdm_poll(fdm: *Fdm) bool {
     }
 
     const r = epoll_pwait(fdm.epoll_fd, fdm.events, @intCast(n), -1, &fdm.sigmask);
-    const errno_copy = __errno_location().*;
+    const errno_copy = std.c._errno().*;
 
     if (gs().* != 0) {
         gs().* = 0;
 
-        const rtmax: usize = @intCast(__libc_current_sigrtmax());
+        const rtmax = signalCount();
         const rs = received_signals.?;
         var i: usize = 0;
         while (i < rtmax) : (i += 1) {

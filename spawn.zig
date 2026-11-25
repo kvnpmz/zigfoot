@@ -1,18 +1,14 @@
-const builtin = @import("builtin");
+const std = @import("std");
 
-comptime {
-    if (builtin.os.tag != .linux)
-        @compileError("spawn.zig uses Linux-specific constants");
-}
+const SigSet = std.c.sigset_t;
+const SignalHandler = std.c.Sigaction.handler_fn;
 
-const SigSet = extern struct { bits: [16]u64 }; // 128 bytes, glibc/musl
-
-const O_CLOEXEC: c_int = 0o2000000;
-const SIG_SETMASK: c_int = 2;
-const SIGHUP: c_int = 1;
-const SIGPIPE: c_int = 13;
-const SIG_DFL: usize = 0;
-const SIG_ERR: usize = ~@as(usize, 0);
+const O_CLOEXEC: c_int = @as(c_int, 1) << @bitOffsetOf(std.posix.O, "CLOEXEC");
+const SIG_SETMASK: c_int = std.posix.SIG.SETMASK;
+const SIGHUP: c_int = @intFromEnum(std.posix.SIG.HUP);
+const SIGPIPE: c_int = @intFromEnum(std.posix.SIG.PIPE);
+const SIG_DFL: ?SignalHandler = std.posix.SIG.DFL;
+const SIG_ERR: ?SignalHandler = std.posix.SIG.ERR;
 const LOG_CLASS_ERROR: c_int = 1;
 const LOG_CLASS_WARNING: c_int = 2;
 
@@ -21,7 +17,6 @@ extern fn log_errno(class: c_int, module: [*:0]const u8, file: [*:0]const u8, li
 extern fn log_errno_provided(class: c_int, module: [*:0]const u8, file: [*:0]const u8, lineno: c_int, errnum: c_int, fmt: [*:0]const u8, ...) void;
 extern fn reaper_add(reaper: ?*anyopaque, pid: c_int, cb: ?*const anyopaque, cb_data: ?*anyopaque) void;
 
-extern fn __errno_location() *c_int;
 extern fn strerror(e: c_int) [*:0]const u8;
 extern fn pipe2(fds: *[2]c_int, flags: c_int) c_int;
 extern fn fork() c_int;
@@ -29,7 +24,7 @@ extern fn close(fd: c_int) c_int;
 extern fn setsid() c_int;
 extern fn sigemptyset(set: *SigSet) c_int;
 extern fn sigprocmask(how: c_int, set: ?*const SigSet, old: ?*SigSet) c_int;
-extern fn signal(sig: c_int, handler: usize) usize;
+extern fn signal(sig: c_int, handler: ?SignalHandler) ?SignalHandler;
 extern fn setenv(name: [*c]const u8, value: [*c]const u8, overwrite: c_int) c_int;
 extern fn getenv(name: [*c]const u8) [*c]u8;
 extern fn chdir(path: [*c]const u8) c_int;
@@ -41,7 +36,7 @@ extern fn waitpid(pid: c_int, status: ?*c_int, options: c_int) c_int;
 extern fn _exit(code: c_int) noreturn;
 
 inline fn errnoPtr() *c_int {
-    return __errno_location();
+    return std.c._errno();
 }
 
 fn childErr(wfd: c_int) noreturn {
@@ -64,7 +59,7 @@ fn child(
 
     if (setsid() < 0) childErr(w);
 
-    var mask: SigSet = .{ .bits = [_]u64{0} ** 16 };
+    var mask: SigSet = std.mem.zeroes(SigSet);
     _ = sigemptyset(&mask);
     if (sigprocmask(SIG_SETMASK, &mask, null) < 0) childErr(w);
 
