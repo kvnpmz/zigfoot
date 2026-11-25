@@ -2125,6 +2125,15 @@ fn fdmReceiveDecoderUri(ctx: *ClipboardReceive, data: [*]u8, size: usize) void {
         ctx.buf.sz = new_sz;
     }
 
+    // C did `memcpy(&ctx->buf.data[idx], data, size)` even when nothing was
+    // buffered yet; with size == 0 that is a no-op on a NULL pointer. In Zig
+    // it would be an unwrap of null, so a zero-length chunk on an empty
+    // buffer returns early: there is nothing to copy and nothing to scan.
+    if (ctx.buf.data == null) {
+        std.debug.assert(size == 0 and ctx.buf.idx == 0);
+        return;
+    }
+
     const buf = ctx.buf.data.?;
     @memcpy(buf[ctx.buf.idx .. ctx.buf.idx + size], data[0..size]);
     ctx.buf.idx += size;
