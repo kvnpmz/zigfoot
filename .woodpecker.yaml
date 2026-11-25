@@ -164,7 +164,9 @@ steps:
           scripts/smoke.sh ./"$dir"/foot
         done
       # Release mode must build and pass the same tests.
-      - meson setup bld/zig-release --buildtype=release -Dgrapheme-clustering=enabled -Dime=disabled
+      # `ime` is a boolean option and meson refuses `false` (the Zig wayland.h
+      # mirrors assume IME support), so the release job keeps it on.
+      - meson setup bld/zig-release --buildtype=release -Dgrapheme-clustering=enabled -Dime=true
       - ninja -v -C bld/zig-release
       - meson test -C bld/zig-release --print-errorlogs
       - ./bld/zig-release/foot --version

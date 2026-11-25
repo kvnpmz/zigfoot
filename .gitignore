@@ -4,3 +4,13 @@
 /subprojects/*/
 /subprojects/.wraplock
 __pycache__/
+
+# Local investigation artifacts (never part of the tree)
+/capture/
+/inbox/
+/investigation.cany/
+/squashfs-root/
+/craft.json
+/feed.json
+/usage.json
+/build-activity.log
