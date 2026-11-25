@@ -1,4 +1,5 @@
 const std = @import("std");
+const tll = @import("tll.zig");
 const types = @import("terminal_types.zig");
 
 extern fn free(ptr: ?*anyopaque) callconv(.c) void;
@@ -7,6 +8,14 @@ extern fn unlink(path: [*:0]const u8) callconv(.c) c_int;
 extern fn mkostemp(template: [*:0]u8, flags: c_int) callconv(.c) c_int;
 extern fn xstrdup(s: [*:0]const u8) callconv(.c) ?[*:0]u8;
 extern fn notify_xstrjoin(a: [*:0]const u8, b: [*:0]const u8) callconv(.c) ?[*:0]u8;
+extern fn spawn_expand_template(
+    template: *const types.ConfigSpawnTemplate,
+    key_count: usize,
+    key_names: ?[*]const ?[*:0]const u8,
+    key_values: ?[*]const ?[*:0]const u8,
+    argc: *usize,
+    argv: *?[*:null]?[*:0]u8,
+) callconv(.c) bool;
 
 const O_CLOEXEC: c_int = 0x80000;
 
@@ -101,8 +110,18 @@ export fn notify_icon_free(icon: *types.NotificationIcon) callconv(.c) void {
     icon.tmp_file_fd = -1;
 }
 
-// ── notify-shim.c additions ───────────────────────────────────────
-extern fn notify_tll_free_and_free_actions(notif: *types.Notification) callconv(.c) void;
+// ── notify-shim.c: tll(char *) action list ────────────────────────
+fn actions(notif: *types.Notification) *tll.Tll(?[*:0]u8) {
+    return @ptrCast(&notif.actions);
+}
+
+fn freeAction(s: ?[*:0]u8) callconv(.c) void {
+    if (s) |p| free(@ptrCast(@constCast(p)));
+}
+
+export fn notify_tll_free_and_free_actions(notif: *types.Notification) callconv(.c) void {
+    actions(notif).freeListAndFree(freeAction);
+}
 
 // ── consume_stdout ────────────────────────────────────────────────
 export fn consume_stdout(notif: *types.Notification, eof: bool) callconv(.c) void {
@@ -132,11 +151,11 @@ export fn consume_stdout(notif: *types.Notification, eof: bool) callconv(.c) voi
 
         if ((notif.external_id == 0 and to_integer(line, len, &maybe_id)) or
             (len > 3 and std.mem.eql(u8, line[0..3], "id=") and
-             to_integer(line + 3, len - 3, &maybe_id)))
+                to_integer(line + 3, len - 3, &maybe_id)))
         {
             notif.external_id = maybe_id;
         } else if ((len == 7 and std.mem.eql(u8, line[0..7], "default")) or
-                   (len == 14 and std.mem.eql(u8, line[0..14], "action=default")))
+            (len == 14 and std.mem.eql(u8, line[0..14], "action=default")))
         {
             notif.activated = true;
         } else if (len > 7 and std.mem.eql(u8, line[0..7], "action=")) {
@@ -145,9 +164,9 @@ export fn consume_stdout(notif: *types.Notification, eof: bool) callconv(.c) voi
                 notif.activated_button = maybe_button_nr;
             }
         } else if (notif.external_id > 0 and
-                   to_integer(line, len, &maybe_button_nr) and
-                   maybe_button_nr > 0 and
-                   maybe_button_nr <= notif.button_count)
+            to_integer(line, len, &maybe_button_nr) and
+            maybe_button_nr > 0 and
+            maybe_button_nr <= notif.button_count)
         {
             notif.activated = true;
             notif.activated_button = maybe_button_nr;
@@ -234,9 +253,38 @@ export fn notify_icon_del(term: *types.Terminal, id: [*:0]const u8) callconv(.c)
 
 // ── chunk B-1 ─────────────────────────────────────────────────────
 extern fn read(fd: c_int, buf: *anyopaque, count: usize) callconv(.c) isize;
-extern fn notify_active_first(term: *types.Terminal) callconv(.c) ?*types.Notification;
-extern fn notify_active_next(term: *types.Terminal, prev: *types.Notification) callconv(.c) ?*types.Notification;
-extern fn notify_spawn_expand_action_arg(term: *types.Terminal, name: [*:0]const u8, label: [*:0]const u8, argc: *usize, argv: *?[*:null]?[*:0]u8) callconv(.c) bool;
+fn active(term: *types.Terminal) *tll.Tll(types.Notification) {
+    return @ptrCast(&term.active_notifications);
+}
+
+export fn notify_active_first(term: *types.Terminal) callconv(.c) ?*types.Notification {
+    const list = active(term);
+    if (list.len() == 0) return null;
+    return list.front();
+}
+
+export fn notify_active_next(term: *types.Terminal, prev: *types.Notification) callconv(.c) ?*types.Notification {
+    var it = active(term).foreach();
+    while (it.next()) |node| {
+        if (&node.item == prev) {
+            const next = node.next orelse return null;
+            return &next.item;
+        }
+    }
+    return null;
+}
+
+export fn notify_spawn_expand_action_arg(
+    term: *types.Terminal,
+    name: [*:0]const u8,
+    label: [*:0]const u8,
+    argc: *usize,
+    argv: *?[*:null]?[*:0]u8,
+) callconv(.c) bool {
+    const names = [2]?[*:0]const u8{ "action-name", "action-label" };
+    const values = [2]?[*:0]const u8{ name, label };
+    return spawn_expand_template(&term.conf.?.desktop_notifications.command_action_arg, names.len, &names, &values, argc, argv);
+}
 extern fn fdm_add(fdm: *anyopaque, fd: c_int, events: c_int, handler: *const fn (*anyopaque, c_int, c_int, ?*anyopaque) callconv(.c) bool, data: ?*anyopaque) callconv(.c) bool;
 extern fn fdm_del(fdm: *anyopaque, fd: c_int) callconv(.c) bool;
 extern fn xrealloc(ptr: ?*anyopaque, size: usize) callconv(.c) ?*anyopaque;
@@ -248,13 +296,20 @@ const EINTR: c_int = 4;
 
 extern fn __errno_location() callconv(.c) *c_int;
 
+export fn notify_fdm_add_stdout(fdm: *anyopaque, fd: c_int, term: *types.Terminal) callconv(.c) void {
+    _ = fdm_add(fdm, fd, EPOLLIN, &fdm_notify_stdout, @ptrCast(term));
+}
+
 export fn fdm_notify_stdout(fdm: *anyopaque, fd: c_int, events: c_int, data: ?*anyopaque) callconv(.c) bool {
     const term: *types.Terminal = @ptrCast(@alignCast(data.?));
 
     var notif: ?*types.Notification = null;
     var it = notify_active_first(term);
     while (it) |n| {
-        if (n.stdout_fd == fd) { notif = n; break; }
+        if (n.stdout_fd == fd) {
+            notif = n;
+            break;
+        }
         it = notify_active_next(term, n);
     }
 
@@ -273,7 +328,7 @@ export fn fdm_notify_stdout(fdm: *anyopaque, fd: c_int, events: c_int, data: ?*a
                 } else {
                     n.stdout_data = @ptrCast(xrealloc(@ptrCast(n.stdout_data), n.stdout_sz + c) orelse return false);
                 }
-                @memcpy(n.stdout_data.?[n.stdout_sz..n.stdout_sz + c], buf[0..c]);
+                @memcpy(n.stdout_data.?[n.stdout_sz .. n.stdout_sz + c], buf[0..c]);
                 n.stdout_sz += c;
                 consume_stdout(n, false);
             }
@@ -307,7 +362,7 @@ export fn expand_action_to_argv(
     const new_ptr: ?[*]?[*:0]u8 = @ptrCast(@alignCast(xrealloc(old_ptr, new_size) orelse return false));
     argv.* = @ptrCast(new_ptr);
     if (expanded) |e| {
-        @memcpy(new_ptr.?[argc.*..argc.* + count], e[0..count]);
+        @memcpy(new_ptr.?[argc.* .. argc.* + count], e[0..count]);
     }
     argc.* += count;
     if (expanded) |e| free(@ptrCast(e));
@@ -315,8 +370,27 @@ export fn expand_action_to_argv(
 }
 
 // ── chunk B-2 ─────────────────────────────────────────────────────
-extern fn notify_active_remove(term: *types.Terminal, notif: *types.Notification) callconv(.c) void;
-extern fn notify_spawn_expand_close(term: *types.Terminal, id: [*:0]const u8, argc: *usize, argv: *?[*:null]?[*:0]u8) callconv(.c) bool;
+export fn notify_active_remove(term: *types.Terminal, notif: *types.Notification) callconv(.c) void {
+    const list = active(term);
+    var it = list.foreach();
+    while (it.next()) |node| {
+        if (&node.item == notif) {
+            list.removeNode(node);
+            return;
+        }
+    }
+}
+
+export fn notify_spawn_expand_close(
+    term: *types.Terminal,
+    id: [*:0]const u8,
+    argc: *usize,
+    argv: *?[*:null]?[*:0]u8,
+) callconv(.c) bool {
+    const names = [1]?[*:0]const u8{"id"};
+    const values = [1]?[*:0]const u8{id};
+    return spawn_expand_template(&term.conf.?.desktop_notifications.close, names.len, &names, &values, argc, argv);
+}
 extern fn xsnprintf(buf: [*]u8, size: usize, fmt: [*:0]const u8, ...) callconv(.c) c_int;
 extern fn kill(pid: c_int, sig: c_int) callconv(.c) c_int;
 extern fn open(path: [*:0]const u8, flags: c_int, ...) callconv(.c) c_int;
@@ -363,8 +437,33 @@ export fn notify_close(term: *types.Terminal, id: [*:0]const u8) callconv(.c) vo
 }
 
 // ── chunk B-3a ────────────────────────────────────────────────────
-extern fn notify_wayl_terms_first(wayl: *anyopaque) callconv(.c) ?*types.Terminal;
-extern fn notify_wayl_terms_next(wayl: *anyopaque, prev: *types.Terminal) callconv(.c) ?*types.Terminal;
+fn waylTerms(wayl: *anyopaque) *tll.Tll(?*anyopaque) {
+    const wl: *types.Wayland = @ptrCast(@alignCast(wayl));
+    return @ptrCast(&wl.terms);
+}
+
+fn asTerminal(item: ?*anyopaque) ?*types.Terminal {
+    const p = item orelse return null;
+    return @ptrCast(@alignCast(p));
+}
+
+export fn notify_wayl_terms_first(wayl: *anyopaque) callconv(.c) ?*types.Terminal {
+    const list = waylTerms(wayl);
+    if (list.len() == 0) return null;
+    return asTerminal(list.head.?.item);
+}
+
+export fn notify_wayl_terms_next(wayl: *anyopaque, prev: *types.Terminal) callconv(.c) ?*types.Terminal {
+    const target: ?*anyopaque = @ptrCast(prev);
+    var it = waylTerms(wayl).foreach();
+    while (it.next()) |node| {
+        if (node.item == target) {
+            const next = node.next orelse return null;
+            return asTerminal(next.item);
+        }
+    }
+    return null;
+}
 extern fn wayl_win_set_urgent(window: *anyopaque) callconv(.c) bool;
 extern fn wayl_activate(wayl: *anyopaque, window: *anyopaque, token: [*:0]const u8) callconv(.c) void;
 extern fn term_to_slave(term: *types.Terminal, data: *const anyopaque, len: usize) callconv(.c) bool;
@@ -385,7 +484,10 @@ export fn notif_done(_reaper: ?*anyopaque, pid: c_int, _status: c_int, data: ?*a
     var term: ?*types.Terminal = null;
     var tit = notify_wayl_terms_first(wayl);
     while (tit) |t| : (tit = notify_wayl_terms_next(wayl, t)) {
-        if (t == wanted_term) { term = t; break; }
+        if (t == wanted_term) {
+            term = t;
+            break;
+        }
     }
 
     const found_term = term orelse return;
@@ -429,15 +531,87 @@ export fn notif_done(_reaper: ?*anyopaque, pid: c_int, _status: c_int, data: ?*a
 }
 
 // ── chunk B-3b ────────────────────────────────────────────────────
-extern fn notify_active_push_back(term: *types.Terminal, notif: *types.Notification) callconv(.c) void;
-extern fn notify_active_back(term: *types.Terminal) callconv(.c) ?*types.Notification;
-extern fn notify_actions_first(notif: *types.Notification) callconv(.c) ?[*:0]const u8;
-extern fn notify_actions_next(notif: *types.Notification, prev: [*:0]const u8) callconv(.c) ?[*:0]const u8;
-extern fn notify_actions_len(notif: *types.Notification) callconv(.c) usize;
-extern fn notify_actions_zero(notif: *types.Notification) callconv(.c) void;
-extern fn notify_spawn_expand_command(term: *types.Terminal, app_id: [*:0]const u8, window_title: [*:0]const u8, icon: [*:0]const u8, title: [*:0]const u8, body: [*:0]const u8, category: [*:0]const u8, urgency: [*:0]const u8, muted: [*:0]const u8, sound_name: [*:0]const u8, expire_time: [*:0]const u8, replace_id: [*:0]const u8, action_argument: [*:0]const u8, argc: *usize, argv: *?[*:null]?[*:0]u8) callconv(.c) bool;
+export fn notify_active_push_back(term: *types.Terminal, notif: *types.Notification) callconv(.c) void {
+    active(term).pushBack(notif.*);
+}
+
+export fn notify_active_back(term: *types.Terminal) callconv(.c) ?*types.Notification {
+    const list = active(term);
+    if (list.len() == 0) return null;
+    return list.back();
+}
+
+export fn notify_active_len(term: *types.Terminal) callconv(.c) usize {
+    return active(term).len();
+}
+
+// C: &tll_back(...) with no length check — its caller pushes first. The
+// mirror's tail is optional, so a violation returns null rather than UB.
+export fn notify_active_back_after_push(term: *types.Terminal) callconv(.c) ?*types.Notification {
+    const list = active(term);
+    if (list.tail == null) return null;
+    return list.back();
+}
+
+fn actionStrings(notif: *types.Notification) *tll.Tll(?[*:0]const u8) {
+    return @ptrCast(&notif.actions);
+}
+
+export fn notify_actions_first(notif: *types.Notification) callconv(.c) ?[*:0]const u8 {
+    const list = actionStrings(notif);
+    if (list.len() == 0) return null;
+    return list.head.?.item;
+}
+
+export fn notify_actions_next(notif: *types.Notification, prev: [*:0]const u8) callconv(.c) ?[*:0]const u8 {
+    const target: ?[*:0]const u8 = prev;
+    var it = actionStrings(notif).foreach();
+    while (it.next()) |node| {
+        if (node.item == target) {
+            const next = node.next orelse return null;
+            return next.item;
+        }
+    }
+    return null;
+}
+
+export fn notify_actions_len(notif: *types.Notification) callconv(.c) usize {
+    return actionStrings(notif).len();
+}
+
+export fn notify_actions_zero(notif: *types.Notification) callconv(.c) void {
+    @memset(std.mem.asBytes(&notif.actions), 0);
+}
+
+export fn notify_spawn_expand_command(
+    term: *types.Terminal,
+    app_id: [*:0]const u8,
+    window_title: [*:0]const u8,
+    icon: [*:0]const u8,
+    title: [*:0]const u8,
+    body: [*:0]const u8,
+    category: [*:0]const u8,
+    urgency: [*:0]const u8,
+    muted: [*:0]const u8,
+    sound_name: [*:0]const u8,
+    expire_time: [*:0]const u8,
+    replace_id: [*:0]const u8,
+    action_argument: [*:0]const u8,
+    argc: *usize,
+    argv: *?[*:null]?[*:0]u8,
+) callconv(.c) bool {
+    const names = [12]?[*:0]const u8{
+        "app-id",  "window-title", "icon",       "title",       "body",       "category",
+        "urgency", "muted",        "sound-name", "expire-time", "replace-id", "action-argument",
+    };
+    const values = [12]?[*:0]const u8{
+        app_id,  window_title, icon,       title,       body,       category,
+        urgency, muted,        sound_name, expire_time, replace_id, action_argument,
+    };
+    return spawn_expand_template(&term.conf.?.desktop_notifications.command, names.len, &names, &values, argc, argv);
+}
+
 extern fn notify_pipe2(fds: [*]c_int, flags: c_int) callconv(.c) c_int;
-extern fn notify_fdm_add_stdout(fdm: *anyopaque, fd: c_int, term: *types.Terminal) callconv(.c) void;
 
 const O_NONBLOCK: c_int = 0x800;
 const NOTIFY_ALWAYS: types.NotifyWhen = .always;
@@ -452,18 +626,13 @@ export fn notify_notify(term: *types.Terminal, notif_in: *types.Notification) ca
 
     if (term.conf.?.desktop_notifications.command.argv.args == null) return false;
 
-    if ((term.conf.?.desktop_notifications.inhibit_when_focused or notif.when != NOTIFY_ALWAYS)
-        and term.kbd_focus)
-    {
+    if ((term.conf.?.desktop_notifications.inhibit_when_focused or notif.when != NOTIFY_ALWAYS) and term.kbd_focus) {
         return false;
     }
 
-    const app_id: [*:0]const u8 = if (notif.app_id) |a| a
-        else if (term.app_id) |a| a
-        else term.conf.?.app_id orelse "";
+    const app_id: [*:0]const u8 = if (notif.app_id) |a| a else if (term.app_id) |a| a else term.conf.?.app_id orelse "";
 
-    const title: [*:0]const u8 = if (notif.title) |t| t
-        else if (notif.body) |b| b else "";
+    const title: [*:0]const u8 = if (notif.title) |t| t else if (notif.body) |b| b else "";
 
     const body: [*:0]const u8 = if (notif.title != null and notif.body != null) notif.body.? else "";
 
@@ -508,8 +677,7 @@ export fn notify_notify(term: *types.Terminal, notif_in: *types.Notification) ca
     const rn = xsnprintf(&replaces_id_buf, replaces_id_buf.len, "%u", replaces_id);
     replaces_id_buf[@intCast(rn)] = 0;
 
-    const urgency_str: [*:0]const u8 = if (notif.urgency == NOTIFY_URGENCY_LOW) "low"
-        else if (notif.urgency == NOTIFY_URGENCY_NORMAL) "normal" else "critical";
+    const urgency_str: [*:0]const u8 = if (notif.urgency == NOTIFY_URGENCY_LOW) "low" else if (notif.urgency == NOTIFY_URGENCY_NORMAL) "normal" else "critical";
 
     var argv: ?[*:null]?[*:0]u8 = null;
     var argc: usize = 0;
@@ -547,12 +715,7 @@ export fn notify_notify(term: *types.Terminal, notif_in: *types.Notification) ca
     const muted_str: [*:0]const u8 = if (notif.muted) "true" else "false";
     const sound_name: [*:0]const u8 = notif.sound_name orelse "";
 
-    if (!notify_spawn_expand_command(term,
-        app_id, window_title, icon_name_or_path, title, body, category,
-        urgency_str, muted_str, sound_name,
-        @ptrCast(&expire_time_buf), @ptrCast(&replaces_id_buf),
-        "${action-argument}", &argc, &argv))
-    {
+    if (!notify_spawn_expand_command(term, app_id, window_title, icon_name_or_path, title, body, category, urgency_str, muted_str, sound_name, @ptrCast(&expire_time_buf), @ptrCast(&replaces_id_buf), "${action-argument}", &argc, &argv)) {
         return false;
     }
 
