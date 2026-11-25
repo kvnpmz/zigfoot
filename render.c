@@ -223,7 +223,7 @@ static const struct wp_presentation_feedback_listener presentation_feedback_list
     .discarded = &discarded,
 };
 
-static int
+int
 render_cell(struct terminal *term, pixman_image_t *pix,
             pixman_region32_t *damage, struct row *row, int row_no, int col,
             bool has_cursor)
@@ -732,118 +732,6 @@ draw_cursor:
 
     pixman_image_set_clip_region32(pix, NULL);
     return cell_cols;
-}
-
-static void
-render_row(struct terminal *term, pixman_image_t *pix,
-           pixman_region32_t *damage, struct row *row,
-           int row_no, int cursor_col)
-{
-    for (int col = term->cols - 1; col >= 0; col--)
-        render_cell(term, pix, damage, row, row_no, col, cursor_col == col);
-}
-
-static void
-render_urgency(struct terminal *term, struct buffer *buf)
-{
-    uint32_t red = term->colors.table[1];
-    pixman_color_t bg = color_hex_to_pixman(
-        red, wayl_do_linear_blending(term->wl, term->conf));
-
-    int width = min(min(term->margins.left, term->margins.right),
-                    min(term->margins.top, term->margins.bottom));
-
-    pixman_image_fill_rectangles(
-        PIXMAN_OP_SRC, buf->pix[0], &bg, 4,
-        (pixman_rectangle16_t[]){
-            /* Top */
-            {0, 0, term->width, width},
-
-            /* Bottom */
-            {0, term->height - width, term->width, width},
-
-            /* Left */
-            {0, width, width, term->height - 2 * width},
-
-            /* Right */
-            {term->width - width, width, width, term->height - 2 * width},
-        });
-}
-
-static void
-render_margin(struct terminal *term, struct buffer *buf,
-              int start_line, int end_line, bool apply_damage)
-{
-    /* Fill area outside the cell grid with the default background color */
-    const int rmargin = term->width - term->margins.right;
-    const int bmargin = term->height - term->margins.bottom;
-    const int line_count = end_line - start_line;
-
-    const bool gamma_correct = wayl_do_linear_blending(term->wl, term->conf);
-    const uint32_t _bg = !term->reverse ? term->colors.bg : term->colors.fg;
-    uint16_t alpha = term->colors.alpha;
-
-    if (term->window->is_fullscreen) {
-        /* Disable alpha in fullscreen - see render_cell() for details */
-        alpha = 0xffff;
-    }
-
-    pixman_color_t bg = color_hex_to_pixman_with_alpha(_bg, alpha, gamma_correct);
-
-    pixman_image_fill_rectangles(
-        PIXMAN_OP_SRC, buf->pix[0], &bg, 4,
-        (pixman_rectangle16_t[]){
-            /* Top */
-            {0, 0, term->width, term->margins.top},
-
-            /* Bottom */
-            {0, bmargin, term->width, term->margins.bottom},
-
-            /* Left */
-            {0, term->margins.top + start_line * term->cell_height,
-             term->margins.left, line_count * term->cell_height},
-
-            /* Right */
-            {rmargin, term->margins.top + start_line * term->cell_height,
-             term->margins.right, line_count * term->cell_height},
-    });
-
-    if (term->render.urgency)
-        render_urgency(term, buf);
-
-    /* Ensure the updated regions are copied to the next frame's
-     * buffer when we're double buffering */
-    pixman_region32_union_rect(
-        &buf->dirty[0], &buf->dirty[0], 0, 0, term->width, term->margins.top);
-    pixman_region32_union_rect(
-        &buf->dirty[0], &buf->dirty[0], 0, bmargin, term->width, term->margins.bottom);
-    pixman_region32_union_rect(
-        &buf->dirty[0], &buf->dirty[0], 0, 0, term->margins.left, term->height);
-    pixman_region32_union_rect(
-        &buf->dirty[0], &buf->dirty[0],
-        rmargin, 0, term->margins.right, term->height);
-
-    if (apply_damage) {
-        /* Top */
-        wl_surface_damage_buffer(
-            term->window->surface.surf, 0, 0, term->width, term->margins.top);
-
-        /* Bottom */
-        wl_surface_damage_buffer(
-            term->window->surface.surf, 0, bmargin, term->width, term->margins.bottom);
-
-        /* Left */
-        wl_surface_damage_buffer(
-            term->window->surface.surf,
-            0, term->margins.top + start_line * term->cell_height,
-            term->margins.left, line_count * term->cell_height);
-
-        /* Right */
-        wl_surface_damage_buffer(
-            term->window->surface.surf,
-            rmargin, term->margins.top + start_line * term->cell_height,
-            term->margins.right, line_count * term->cell_height);
-    }
 }
 
 static void

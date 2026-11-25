@@ -21,6 +21,18 @@ enum resize_options {
 bool render_resize(
     struct terminal *term, int width, int height, uint8_t resize_options);
 
+struct row;
+int render_cell(
+    struct terminal *term, pixman_image_t *pix, pixman_region32_t *damage,
+    struct row *row, int row_no, int col, bool has_cursor);
+void render_row(
+    struct terminal *term, pixman_image_t *pix, pixman_region32_t *damage,
+    struct row *row, int row_no, int cursor_col);
+void render_urgency(struct terminal *term, struct buffer *buf);
+void render_margin(
+    struct terminal *term, struct buffer *buf,
+    int start_line, int end_line, bool apply_damage);
+
 void dirty_old_cursor(struct terminal *term);
 void dirty_cursor(struct terminal *term);
 void render_update_title(struct terminal *term);

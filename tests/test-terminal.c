@@ -4143,6 +4143,87 @@ test_render_refresh(void)
     free(rows[1]);
 }
 
+/* D3c: margin and urgency painting on a real buffer */
+static void
+test_render_margin(void)
+{
+    enum { W = 64, H = 64 };
+    uint32_t pixels[W * H] = {0};
+    pixman_image_t *pix = pixman_image_create_bits(PIXMAN_a8r8g8b8, W, H, pixels, W * 4);
+    if (pix == NULL) {
+        printf("skip: pixman_image_create_bits() failed\n");
+        return;
+    }
+
+    pixman_image_t *pix_arr[1] = {pix};
+    pixman_region32_t dirty;
+    pixman_region32_init(&dirty);
+
+    struct buffer buf = {0};
+    buf.width = W;
+    buf.height = H;
+    buf.stride = W * 4;
+    buf.pix = pix_arr;
+    buf.pix_instances = 1;
+    buf.dirty = &dirty;
+
+    struct terminal term = {0};
+    struct config conf = {0};
+    struct wl_window win = {0};
+    term.conf = &conf;
+    term.window = &win;
+    term.wl = NULL;
+
+    term.width = W;
+    term.height = H;
+    term.margins.top = term.margins.bottom = 4;
+    term.margins.left = term.margins.right = 4;
+    term.colors.bg = 0x00112233;
+    term.colors.fg = 0x00445566;
+    term.colors.alpha = 0xffff;
+    term.cell_height = 8;
+
+    render_margin(&term, &buf, 0, 7, false);
+    check(pix_pixel(pix, 0, 0) == 0xff112233,
+          "render_margin() fills the top margin with the background");
+    check(pix_pixel(pix, 32, 32) == 0,
+          "render_margin() leaves the cell grid untouched");
+    check(pix_pixel(pix, 0, 32) == 0xff112233 && pix_pixel(pix, 63, 32) == 0xff112233,
+          "render_margin() fills the side margins");
+    check(pixman_region32_not_empty(&dirty),
+          "render_margin() adds the margins to the buffer damage");
+
+    /* reversed terminal swaps fg/bg */
+    memset(pixels, 0, sizeof(pixels));
+    term.reverse = true;
+    render_margin(&term, &buf, 0, 7, false);
+    check(pix_pixel(pix, 0, 0) == 0xff445566,
+          "a reversed terminal uses the foreground for the margins");
+    term.reverse = false;
+
+    /* urgency: border painted in the "red" palette entry */
+    memset(pixels, 0, sizeof(pixels));
+    term.colors.table[1] = 0x00ff0000;
+    term.render.urgency = true;
+    render_margin(&term, &buf, 0, 7, false);
+    check(pix_pixel(pix, 0, 0) == 0xffff0000,
+          "the urgency hint paints the margin red");
+    term.render.urgency = false;
+
+    /* fullscreen drops the background alpha */
+    memset(pixels, 0, sizeof(pixels));
+    win.is_fullscreen = true;
+    term.colors.alpha = 0x8000;
+    render_margin(&term, &buf, 0, 7, false);
+    check(pix_pixel(pix, 0, 0) == 0xff112233,
+          "fullscreen margins stay opaque even with a translucent background");
+    win.is_fullscreen = false;
+    term.colors.alpha = 0xffff;
+
+    pixman_region32_fini(&dirty);
+    pixman_image_unref(pix);
+}
+
 int
 main(void)
 {
@@ -4168,6 +4249,7 @@ main(void)
     test_csd_visibility();
     test_render_primitives();
     test_render_refresh();
+    test_render_margin();
     test_configure();
     test_surface_listener();
     test_small_listeners();

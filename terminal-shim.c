@@ -228,7 +228,20 @@ int terminal_shim_fcft_font_strikeout_thickness(const struct fcft_font *font) {
     return font->strikeout.thickness;
 }
 
-/* ── render.zig (D3a) ──────────────────────────────────────────────── */
+/* ── render.zig (D3a/D3c) ──────────────────────────────────────────── */
+
+/* pixman_region32_t is not mirrored in Zig; only union_rect() is needed. */
+void render_shim_region_union_rect(
+    pixman_region32_t *region, int x, int y, int width, int height)
+{
+    pixman_region32_union_rect(region, region, x, y, width, height);
+}
+
+void wayland_shim_surface_damage_buffer(
+    struct wl_surface *surface, int x, int y, int width, int height)
+{
+    wl_surface_damage_buffer(surface, x, y, width, height);
+}
 
 /*
  * The curly underline is composited from two trapezoids. pixman_trapezoid_t

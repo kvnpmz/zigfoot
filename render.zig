@@ -704,3 +704,135 @@ export fn render_refresh_icon(term: *Terminal) callconv(.c) void {
     wayland_shim_toplevel_icon_set(
         term.wl.?.toplevel_icon_manager, term.window.?.xdg_toplevel, icon_name);
 }
+
+// ─────────────────────────────────────────────────────────────────────────
+// Row / margin painting (D3c)
+// ─────────────────────────────────────────────────────────────────────────
+
+const Buffer = types.Buffer;
+
+extern fn render_cell(
+    term: *Terminal,
+    pix: *PixmanImage,
+    damage: ?*anyopaque,
+    row: *types.Row,
+    row_no: c_int,
+    col: c_int,
+    has_cursor: bool,
+) callconv(.c) c_int;
+extern fn render_shim_region_union_rect(
+    region: ?*anyopaque,
+    x: c_int,
+    y: c_int,
+    width: c_int,
+    height: c_int,
+) callconv(.c) void;
+extern fn wayland_shim_surface_damage_buffer(
+    surface: ?*anyopaque,
+    x: c_int,
+    y: c_int,
+    width: c_int,
+    height: c_int,
+) callconv(.c) void;
+
+export fn render_row(
+    term: *Terminal,
+    pix: *PixmanImage,
+    damage: ?*anyopaque,
+    row: *types.Row,
+    row_no: c_int,
+    cursor_col: c_int,
+) callconv(.c) void {
+    var col = term.cols - 1;
+    while (col >= 0) : (col -= 1)
+        _ = render_cell(term, pix, damage, row, row_no, col, cursor_col == col);
+}
+
+fn bufferPix(buf: *Buffer) *PixmanImage {
+    return @ptrCast(@alignCast(buf.pix.?[0].?));
+}
+
+export fn render_urgency(term: *Terminal, buf: *Buffer) callconv(.c) void {
+    const red = term.colors.table[1];
+    const bg = color_hex_to_pixman(red, wayl_do_linear_blending(term.wl, term.conf.?));
+
+    const width = @min(
+        @min(term.margins.left, term.margins.right),
+        @min(term.margins.top, term.margins.bottom),
+    );
+
+    fillRect(bufferPix(buf), &bg, &.{
+        // Top
+        .{ .x = 0, .y = 0, .width = @intCast(term.width), .height = @intCast(width) },
+        // Bottom
+        .{ .x = 0, .y = @intCast(term.height - width), .width = @intCast(term.width), .height = @intCast(width) },
+        // Left
+        .{ .x = 0, .y = @intCast(width), .width = @intCast(width), .height = @intCast(term.height - 2 * width) },
+        // Right
+        .{ .x = @intCast(term.width - width), .y = @intCast(width), .width = @intCast(width), .height = @intCast(term.height - 2 * width) },
+    });
+}
+
+export fn render_margin(
+    term: *Terminal,
+    buf: *Buffer,
+    start_line: c_int,
+    end_line: c_int,
+    apply_damage: bool,
+) callconv(.c) void {
+    // Fill area outside the cell grid with the default background color
+    const rmargin = term.width - term.margins.right;
+    const bmargin = term.height - term.margins.bottom;
+    const line_count = end_line - start_line;
+
+    const gamma_correct = wayl_do_linear_blending(term.wl, term.conf.?);
+    const _bg = if (!term.reverse) term.colors.bg else term.colors.fg;
+    var alpha = term.colors.alpha;
+
+    if (term.window.?.is_fullscreen) {
+        // Disable alpha in fullscreen - see render_cell() for details
+        alpha = 0xffff;
+    }
+
+    const bg = color_hex_to_pixman_with_alpha(_bg, alpha, gamma_correct);
+
+    const y_ofs: i16 = @intCast(term.margins.top + start_line * term.cell_height);
+
+    fillRect(bufferPix(buf), &bg, &.{
+        // Top
+        .{ .x = 0, .y = 0, .width = @intCast(term.width), .height = @intCast(term.margins.top) },
+        // Bottom
+        .{ .x = 0, .y = @intCast(bmargin), .width = @intCast(term.width), .height = @intCast(term.margins.bottom) },
+        // Left
+        .{ .x = 0, .y = y_ofs, .width = @intCast(term.margins.left), .height = @intCast(line_count * term.cell_height) },
+        // Right
+        .{ .x = @intCast(rmargin), .y = y_ofs, .width = @intCast(term.margins.right), .height = @intCast(line_count * term.cell_height) },
+    });
+
+    if (term.render.urgency)
+        render_urgency(term, buf);
+
+    // Ensure the updated regions are copied to the next frame's buffer when
+    // we're double buffering
+    render_shim_region_union_rect(buf.dirty, 0, 0, term.width, term.margins.top);
+    render_shim_region_union_rect(buf.dirty, 0, bmargin, term.width, term.margins.bottom);
+    render_shim_region_union_rect(buf.dirty, 0, 0, term.margins.left, term.height);
+    render_shim_region_union_rect(buf.dirty, rmargin, 0, term.margins.right, term.height);
+
+    if (apply_damage) {
+        const surf = term.window.?.surface.surf;
+
+        // Top
+        wayland_shim_surface_damage_buffer(surf, 0, 0, term.width, term.margins.top);
+        // Bottom
+        wayland_shim_surface_damage_buffer(surf, 0, bmargin, term.width, term.margins.bottom);
+        // Left
+        wayland_shim_surface_damage_buffer(
+            surf, 0, term.margins.top + start_line * term.cell_height,
+            term.margins.left, line_count * term.cell_height);
+        // Right
+        wayland_shim_surface_damage_buffer(
+            surf, rmargin, term.margins.top + start_line * term.cell_height,
+            term.margins.right, line_count * term.cell_height);
+    }
+}
