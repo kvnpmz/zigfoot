@@ -869,238 +869,27 @@ fdm_wayl(struct fdm *fdm, int fd, int events, void *data)
     return event_count != -1;
 }
 
-struct wayland *
-wayl_init(struct fdm *fdm, struct key_binding_manager *key_binding_manager,
-          bool presentation_timings)
+/* wayland.zig: fdm_hook, the registry listener and fdm_wayl are still
+ * static here, so wayl_init()/wayl_destroy() reach them through these. */
+bool wayland_shim_hook_add(struct fdm *fdm, struct wayland *wayl)
 {
-    struct wayland *wayl = calloc(1, sizeof(*wayl));
-    if (unlikely(wayl == NULL)) {
-        LOG_ERRNO("calloc() failed");
-        return NULL;
-    }
-
-    wayl->fdm = fdm;
-    wayl->key_binding_manager = key_binding_manager;
-    wayl->fd = -1;
-    wayl->presentation_timings = presentation_timings;
-
-    if (!fdm_hook_add(fdm, &fdm_hook, wayl, FDM_HOOK_PRIORITY_LOW)) {
-        LOG_ERR("failed to add FDM hook");
-        goto out;
-    }
-
-    wayl->display = wl_display_connect(NULL);
-    if (wayl->display == NULL) {
-        LOG_ERR("failed to connect to wayland; no compositor running?");
-        goto out;
-    }
-
-    wayl->registry = wl_display_get_registry(wayl->display);
-    if (wayl->registry == NULL) {
-        LOG_ERR("failed to get wayland registry");
-        goto out;
-    }
-
-    wl_registry_add_listener(wayl->registry, &registry_listener, wayl);
-    wl_display_roundtrip(wayl->display);
-
-    if (wayl->compositor == NULL) {
-        LOG_ERR("no compositor");
-        goto out;
-    }
-    if (wayl->sub_compositor == NULL) {
-        LOG_ERR("no sub compositor");
-        goto out;
-    }
-    if (wayl->shm == NULL) {
-        LOG_ERR("no shared memory buffers interface");
-        goto out;
-    }
-    if (wayl->shell == NULL) {
-        LOG_ERR("no XDG shell interface");
-        goto out;
-    }
-    if (wayl->data_device_manager == NULL) {
-        LOG_ERR("no clipboard available "
-                "(wl_data_device_manager not implemented by server)");
-        goto out;
-    }
-    if (tll_length(wayl->seats) == 0) {
-        LOG_ERR("no seats available (wl_seat interface too old?)");
-        goto out;
-    }
-    if (tll_length(wayl->monitors) == 0) {
-        LOG_ERR("no monitors available");
-        goto out;
-    }
-
-    if (presentation_timings && wayl->presentation == NULL) {
-        LOG_ERR("compositor does not implement the presentation time interface");
-        goto out;
-    }
-
-    if (wayl->primary_selection_device_manager == NULL)
-        LOG_WARN("compositor does not implement the primary selection interface");
-
-    if (wayl->xdg_activation == NULL) {
-        LOG_WARN(
-            "compositor does not implement XDG activation, "
-            "bell.urgent will fall back to coloring the window margins red");
-    }
-
-    if (wayl->fractional_scale_manager == NULL || wayl->viewporter == NULL)
-        LOG_WARN("compositor does not implement fractional scaling");
-
-    if (wayl->cursor_shape_manager == NULL) {
-        LOG_WARN("compositor does not implement server-side cursors, "
-                 "falling back to client-side cursors");
-    }
-
-    if (wayl->toplevel_icon_manager == NULL) {
-        LOG_WARN("compositor does not implement the xdg-toplevel-icon protocol");
-    }
-
-#if defined(FOOT_IME_ENABLED) && FOOT_IME_ENABLED
-    if (wayl->text_input_manager == NULL) {
-        LOG_WARN("text input interface not implemented by compositor; "
-                 "IME will be disabled");
-    }
-#endif
-
-    /* Trigger listeners registered when handling globals */
-    wl_display_roundtrip(wayl->display);
-
-    tll_foreach(wayl->monitors, it) {
-        LOG_INFO(
-            "%s: %dx%d+%dx%d@%dHz %s %.2f\" scale=%d, DPI=%.2f/%.2f (physical/scaled)",
-            it->item.name, it->item.dim.px_real.width, it->item.dim.px_real.height,
-            it->item.x, it->item.y, (int)roundf(it->item.refresh),
-            it->item.model != NULL ? it->item.model : it->item.description,
-            it->item.inch, it->item.scale,
-            it->item.dpi.physical, it->item.dpi.scaled);
-    }
-
-    wayl->fd = wl_display_get_fd(wayl->display);
-    if (fcntl(wayl->fd, F_SETFL, fcntl(wayl->fd, F_GETFL) | O_NONBLOCK) < 0) {
-        LOG_ERRNO("failed to make Wayland socket non-blocking");
-        goto out;
-    }
-
-    if (!fdm_add(fdm, wayl->fd, EPOLLIN, &fdm_wayl, wayl))
-        goto out;
-
-    if (wl_display_prepare_read(wayl->display) != 0) {
-        LOG_ERRNO("failed to prepare for reading wayland events");
-        goto out;
-    }
-
-    return wayl;
-
-out:
-    if (wayl != NULL)
-        wayl_destroy(wayl);
-    return NULL;
+    return fdm_hook_add(fdm, &fdm_hook, wayl, FDM_HOOK_PRIORITY_LOW);
 }
 
-void
-wayl_destroy(struct wayland *wayl)
+bool wayland_shim_hook_del(struct fdm *fdm)
 {
-    if (wayl == NULL)
-        return;
+    return fdm_hook_del(fdm, &fdm_hook, FDM_HOOK_PRIORITY_LOW);
+}
 
-    tll_foreach(wayl->terms, it) {
-        static bool have_warned = false;
-        if (!have_warned) {
-            have_warned = true;
-            LOG_WARN("there are terminals still running");
-            term_destroy(it->item);
-        }
-    }
+void wayland_shim_add_registry_listener(
+    struct wl_registry *registry, struct wayland *wayl)
+{
+    wl_registry_add_listener(registry, &registry_listener, wayl);
+}
 
-    tll_free(wayl->terms);
-
-    fdm_hook_del(wayl->fdm, &fdm_hook, FDM_HOOK_PRIORITY_LOW);
-
-    tll_foreach(wayl->monitors, it) {
-        monitor_destroy(&it->item);
-        tll_remove(wayl->monitors, it);
-    }
-
-    tll_foreach(wayl->seats, it) {
-        seat_destroy(&it->item);
-        tll_remove(wayl->seats, it);
-    }
-
-#if defined(FOOT_IME_ENABLED) && FOOT_IME_ENABLED
-    if (wayl->text_input_manager != NULL)
-        zwp_text_input_manager_v3_destroy(wayl->text_input_manager);
-#endif
-
-#if defined(HAVE_XDG_TOPLEVEL_TAG)
-    if (wayl->toplevel_tag_manager != NULL)
-        xdg_toplevel_tag_manager_v1_destroy(wayl->toplevel_tag_manager);
-#endif
-#if defined(HAVE_EXT_BACKGROUND_EFFECT)
-    if (wayl->background_effect_manager != NULL)
-        ext_background_effect_manager_v1_destroy(wayl->background_effect_manager);
-#endif
-
-    if (wayl->color_management.img_description != NULL)
-        wp_image_description_v1_destroy(wayl->color_management.img_description);
-    if (wayl->color_management.manager != NULL)
-        wp_color_manager_v1_destroy(wayl->color_management.manager);
-    if (wayl->system_bell != NULL)
-        xdg_system_bell_v1_destroy(wayl->system_bell);
-    if (wayl->toplevel_icon_manager != NULL)
-        xdg_toplevel_icon_manager_v1_destroy(wayl->toplevel_icon_manager);
-    if (wayl->single_pixel_manager != NULL)
-        wp_single_pixel_buffer_manager_v1_destroy(wayl->single_pixel_manager);
-    if (wayl->fractional_scale_manager != NULL)
-        wp_fractional_scale_manager_v1_destroy(wayl->fractional_scale_manager);
-    if (wayl->viewporter != NULL)
-        wp_viewporter_destroy(wayl->viewporter);
-    if (wayl->cursor_shape_manager != NULL)
-        wp_cursor_shape_manager_v1_destroy(wayl->cursor_shape_manager);
-    if (wayl->xdg_activation != NULL)
-        xdg_activation_v1_destroy(wayl->xdg_activation);
-    if (wayl->xdg_output_manager != NULL)
-        zxdg_output_manager_v1_destroy(wayl->xdg_output_manager);
-    if (wayl->shell != NULL)
-        xdg_wm_base_destroy(wayl->shell);
-    if (wayl->xdg_decoration_manager != NULL)
-        zxdg_decoration_manager_v1_destroy(wayl->xdg_decoration_manager);
-    if (wayl->presentation != NULL)
-        wp_presentation_destroy(wayl->presentation);
-    if (wayl->data_device_manager != NULL)
-        wl_data_device_manager_destroy(wayl->data_device_manager);
-    if (wayl->primary_selection_device_manager != NULL)
-        zwp_primary_selection_device_manager_v1_destroy(wayl->primary_selection_device_manager);
-    if (wayl->shm != NULL) {
-#if defined(WL_SHM_RELEASE_SINCE_VERSION)
-        if (wayl->use_shm_release)
-            wl_shm_release(wayl->shm);
-        else
-#endif
-            wl_shm_destroy(wayl->shm);
-    }
-    if (wayl->sub_compositor != NULL)
-        wl_subcompositor_destroy(wayl->sub_compositor);
-    if (wayl->compositor != NULL)
-        wl_compositor_destroy(wayl->compositor);
-#if defined(WL_FIXES_INTERFACE)
-    if (wayl->fixes != NULL)
-        wl_fixes_destroy(wayl->fixes);
-#endif
-    if (wayl->registry != NULL)
-        wl_registry_destroy(wayl->registry);
-    if (wayl->fd != -1)
-        fdm_del_no_close(wayl->fdm, wayl->fd);
-    if (wayl->display != NULL) {
-        wayl_flush(wayl);
-        wl_display_disconnect(wayl->display);
-    }
-
-    free(wayl);
+bool wayland_shim_fdm_add(struct fdm *fdm, struct wayland *wayl)
+{
+    return fdm_add(fdm, wayl->fd, EPOLLIN, &fdm_wayl, wayl);
 }
 
 static const struct wp_fractional_scale_v1_listener fractional_scale_listener = {

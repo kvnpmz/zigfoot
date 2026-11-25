@@ -257,6 +257,7 @@ const char *terminal_shim_thrd_err_as_string(int thrd_err)
 /* sys/wait.h's status macros cannot be expressed in Zig; keep the platform's
  * own encoding instead of hard-coding the Linux one. */
 #include <sys/wait.h>
+#include <fcntl.h>
 int terminal_shim_wifexited(int status)
 {
     return WIFEXITED(status);
@@ -444,6 +445,169 @@ void wayland_shim_ack_configure(struct xdg_surface *xdg_surface, uint32_t serial
 {
     xdg_surface_ack_configure(xdg_surface, serial);
 }
+
+/* wayland.zig: wayl_init()/wayl_destroy() (D2k5). */
+struct wl_registry *wayland_shim_display_get_registry(
+    struct wl_display *display)
+{
+    return wl_display_get_registry(display);
+}
+
+int wayland_shim_fcntl_getfl(int fd)
+{
+    return fcntl(fd, F_GETFL);
+}
+
+int wayland_shim_fcntl_setfl(int fd, int flags)
+{
+    return fcntl(fd, F_SETFL, flags);
+}
+
+void wayland_shim_text_input_manager_destroy(struct zwp_text_input_manager_v3 *m)
+{
+    zwp_text_input_manager_v3_destroy(m);
+}
+
+void wayland_shim_toplevel_tag_manager_destroy(
+    struct xdg_toplevel_tag_manager_v1 *m)
+{
+#if defined(HAVE_XDG_TOPLEVEL_TAG)
+    xdg_toplevel_tag_manager_v1_destroy(m);
+#else
+    (void)m;
+#endif
+}
+
+void wayland_shim_background_effect_manager_destroy(
+    struct ext_background_effect_manager_v1 *m)
+{
+#if defined(HAVE_EXT_BACKGROUND_EFFECT)
+    ext_background_effect_manager_v1_destroy(m);
+#else
+    (void)m;
+#endif
+}
+
+void wayland_shim_image_description_destroy(
+    struct wp_image_description_v1 *desc)
+{
+    wp_image_description_v1_destroy(desc);
+}
+
+void wayland_shim_color_manager_destroy(struct wp_color_manager_v1 *m)
+{
+    wp_color_manager_v1_destroy(m);
+}
+
+void wayland_shim_system_bell_destroy(struct xdg_system_bell_v1 *bell)
+{
+    xdg_system_bell_v1_destroy(bell);
+}
+
+void wayland_shim_toplevel_icon_manager_destroy(
+    struct xdg_toplevel_icon_manager_v1 *m)
+{
+    xdg_toplevel_icon_manager_v1_destroy(m);
+}
+
+void wayland_shim_single_pixel_manager_destroy(
+    struct wp_single_pixel_buffer_manager_v1 *m)
+{
+    wp_single_pixel_buffer_manager_v1_destroy(m);
+}
+
+void wayland_shim_fractional_scale_manager_destroy(
+    struct wp_fractional_scale_manager_v1 *m)
+{
+    wp_fractional_scale_manager_v1_destroy(m);
+}
+
+void wayland_shim_viewporter_destroy(struct wp_viewporter *viewporter)
+{
+    wp_viewporter_destroy(viewporter);
+}
+
+void wayland_shim_cursor_shape_manager_destroy(
+    struct wp_cursor_shape_manager_v1 *m)
+{
+    wp_cursor_shape_manager_v1_destroy(m);
+}
+
+void wayland_shim_activation_destroy(struct xdg_activation_v1 *activation)
+{
+    xdg_activation_v1_destroy(activation);
+}
+
+void wayland_shim_output_manager_destroy(struct zxdg_output_manager_v1 *m)
+{
+    zxdg_output_manager_v1_destroy(m);
+}
+
+void wayland_shim_wm_base_destroy(struct xdg_wm_base *shell)
+{
+    xdg_wm_base_destroy(shell);
+}
+
+void wayland_shim_decoration_manager_destroy(
+    struct zxdg_decoration_manager_v1 *m)
+{
+    zxdg_decoration_manager_v1_destroy(m);
+}
+
+void wayland_shim_presentation_destroy(struct wp_presentation *presentation)
+{
+    wp_presentation_destroy(presentation);
+}
+
+void wayland_shim_data_device_manager_destroy(
+    struct wl_data_device_manager *m)
+{
+    wl_data_device_manager_destroy(m);
+}
+
+void wayland_shim_primary_selection_device_manager_destroy(
+    struct zwp_primary_selection_device_manager_v1 *m)
+{
+    zwp_primary_selection_device_manager_v1_destroy(m);
+}
+
+void wayland_shim_shm_destroy(struct wl_shm *shm, bool use_release)
+{
+#if defined(WL_SHM_RELEASE_SINCE_VERSION)
+    if (use_release) {
+        wl_shm_release(shm);
+        return;
+    }
+#else
+    (void)use_release;
+#endif
+    wl_shm_destroy(shm);
+}
+
+void wayland_shim_subcompositor_destroy(struct wl_subcompositor *sub_compositor)
+{
+    wl_subcompositor_destroy(sub_compositor);
+}
+
+void wayland_shim_compositor_destroy(struct wl_compositor *compositor)
+{
+    wl_compositor_destroy(compositor);
+}
+
+void wayland_shim_fixes_destroy(struct wl_fixes *fixes)
+{
+#if defined(WL_FIXES_INTERFACE)
+    wl_fixes_destroy(fixes);
+#else
+    (void)fixes;
+#endif
+}
+
+void wayland_shim_registry_destroy(struct wl_registry *registry)
+{
+    wl_registry_destroy(registry);
+}
+
 
 void *wayland_shim_fractional_scale_get(struct wp_fractional_scale_manager_v1 *m,
                                         struct wl_surface *surf)

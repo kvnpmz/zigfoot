@@ -3762,6 +3762,35 @@ test_small_listeners(void)
     check(win.scale == 1.5f, "an unchanged fractional scale is ignored");
 }
 
+
+static void
+test_wayl_init_failure(void)
+{
+    struct fdm *fdm = fdm_init();
+    struct key_binding_manager *kbm = key_binding_manager_new();
+
+    /* Point at a socket that does not exist so the connect fails and the
+     * whole wayl_init() error path (which ends in wayl_destroy()) runs. */
+    const char *old_display = getenv("WAYLAND_DISPLAY");
+    char *saved = old_display != NULL ? strdup(old_display) : NULL;
+    setenv("WAYLAND_DISPLAY", "wayland-does-not-exist", 1);
+
+    struct wayland *wayl = wayl_init(fdm, kbm, false);
+    check(wayl == NULL, "wayl_init() fails without a compositor");
+
+    if (saved != NULL) {
+        setenv("WAYLAND_DISPLAY", saved, 1);
+        free(saved);
+    } else
+        unsetenv("WAYLAND_DISPLAY");
+
+    wayl_destroy(NULL);
+    check(true, "wayl_destroy(NULL) is a no-op");
+
+    key_binding_manager_destroy(kbm);
+    fdm_destroy(fdm);
+}
+
 int
 main(void)
 {
@@ -3788,6 +3817,7 @@ main(void)
     test_configure();
     test_surface_listener();
     test_small_listeners();
+    test_wayl_init_failure();
     test_wayland_misc();
     test_osc8();
     test_size_notifications();

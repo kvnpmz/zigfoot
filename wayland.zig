@@ -2057,3 +2057,293 @@ export fn ext_background_capabilities(data: ?*anyopaque, manager: ?*anyopaque, f
 
     log_msg(LOG_CLASS_DEBUG, "wayland", "wayland.zig", @intCast(@src().line), "compositor supports background blur: %s", @as([*:0]const u8, if (wayl.have_background_blur) "yes" else "no"));
 }
+
+// ─────────────────────────────────────────────────────────────────────────
+// wayl_init() / wayl_destroy()
+// ─────────────────────────────────────────────────────────────────────────
+
+extern fn wayland_shim_fcntl_getfl(fd: c_int) callconv(.c) c_int;
+extern fn wayland_shim_fcntl_setfl(fd: c_int, flags: c_int) callconv(.c) c_int;
+extern fn wayland_shim_text_input_manager_destroy(m: ?*anyopaque) callconv(.c) void;
+extern fn wayland_shim_toplevel_tag_manager_destroy(m: ?*anyopaque) callconv(.c) void;
+extern fn wayland_shim_background_effect_manager_destroy(m: ?*anyopaque) callconv(.c) void;
+extern fn wayland_shim_image_description_destroy(desc: ?*anyopaque) callconv(.c) void;
+extern fn wayland_shim_color_manager_destroy(m: ?*anyopaque) callconv(.c) void;
+extern fn wayland_shim_system_bell_destroy(bell: ?*anyopaque) callconv(.c) void;
+extern fn wayland_shim_toplevel_icon_manager_destroy(m: ?*anyopaque) callconv(.c) void;
+extern fn wayland_shim_single_pixel_manager_destroy(m: ?*anyopaque) callconv(.c) void;
+extern fn wayland_shim_fractional_scale_manager_destroy(m: ?*anyopaque) callconv(.c) void;
+extern fn wayland_shim_viewporter_destroy(viewporter: ?*anyopaque) callconv(.c) void;
+extern fn wayland_shim_cursor_shape_manager_destroy(m: ?*anyopaque) callconv(.c) void;
+extern fn wayland_shim_activation_destroy(activation: ?*anyopaque) callconv(.c) void;
+extern fn wayland_shim_output_manager_destroy(m: ?*anyopaque) callconv(.c) void;
+extern fn wayland_shim_wm_base_destroy(shell: ?*anyopaque) callconv(.c) void;
+extern fn wayland_shim_decoration_manager_destroy(m: ?*anyopaque) callconv(.c) void;
+extern fn wayland_shim_presentation_destroy(presentation: ?*anyopaque) callconv(.c) void;
+extern fn wayland_shim_data_device_manager_destroy(m: ?*anyopaque) callconv(.c) void;
+extern fn wayland_shim_primary_selection_device_manager_destroy(m: ?*anyopaque) callconv(.c) void;
+extern fn wayland_shim_shm_destroy(shm: ?*anyopaque, use_release: bool) callconv(.c) void;
+extern fn wayland_shim_subcompositor_destroy(sub_compositor: ?*anyopaque) callconv(.c) void;
+extern fn wayland_shim_compositor_destroy(compositor: ?*anyopaque) callconv(.c) void;
+extern fn wayland_shim_fixes_destroy(fixes: ?*anyopaque) callconv(.c) void;
+extern fn wayland_shim_registry_destroy(registry: ?*anyopaque) callconv(.c) void;
+
+extern fn wayland_shim_hook_add(fdm: ?*anyopaque, wayl: *types.Wayland) callconv(.c) bool;
+extern fn wayland_shim_hook_del(fdm: ?*anyopaque) callconv(.c) bool;
+extern fn wayland_shim_add_registry_listener(registry: ?*anyopaque, wayl: *types.Wayland) callconv(.c) void;
+
+extern fn wl_display_connect(name: [*c]const u8) callconv(.c) ?*anyopaque;
+extern fn wayland_shim_display_get_registry(display: ?*anyopaque) callconv(.c) ?*anyopaque;
+extern fn wl_display_get_fd(display: ?*anyopaque) callconv(.c) c_int;
+extern fn wl_display_disconnect(display: ?*anyopaque) callconv(.c) void;
+extern fn wayland_shim_fdm_add(fdm: ?*anyopaque, wayl: *types.Wayland) callconv(.c) bool;
+extern fn fdm_del_no_close(fdm: ?*anyopaque, fd: c_int) callconv(.c) bool;
+extern fn term_destroy(term: *types.Terminal) callconv(.c) c_int;
+
+const O_NONBLOCK: c_int = 0o4000;
+
+export fn wayl_init(
+    fdm: ?*anyopaque,
+    key_binding_manager: ?*anyopaque,
+    presentation_timings: bool,
+) callconv(.c) ?*types.Wayland {
+    const wayl: *types.Wayland = @ptrCast(@alignCast(calloc(1, @sizeOf(types.Wayland)) orelse {
+        log_errno(LOG_CLASS_ERROR, "wayland", "wayland.zig", @intCast(@src().line), "calloc() failed");
+        return null;
+    }));
+
+    wayl.fdm = fdm;
+    wayl.key_binding_manager = key_binding_manager;
+    wayl.fd = -1;
+    wayl.presentation_timings = presentation_timings;
+
+    if (!wayland_shim_hook_add(fdm, wayl)) {
+        log_msg(LOG_CLASS_ERROR, "wayland", "wayland.zig", @intCast(@src().line), "failed to add FDM hook");
+        return waylInitFail(wayl);
+    }
+
+    wayl.display = wl_display_connect(null);
+    if (wayl.display == null) {
+        log_msg(LOG_CLASS_ERROR, "wayland", "wayland.zig", @intCast(@src().line), "failed to connect to wayland; no compositor running?");
+        return waylInitFail(wayl);
+    }
+
+    wayl.registry = wayland_shim_display_get_registry(wayl.display);
+    if (wayl.registry == null) {
+        log_msg(LOG_CLASS_ERROR, "wayland", "wayland.zig", @intCast(@src().line), "failed to get wayland registry");
+        return waylInitFail(wayl);
+    }
+
+    wayland_shim_add_registry_listener(wayl.registry, wayl);
+    _ = wl_display_roundtrip(wayl.display);
+
+    if (wayl.compositor == null) {
+        log_msg(LOG_CLASS_ERROR, "wayland", "wayland.zig", @intCast(@src().line), "no compositor");
+        return waylInitFail(wayl);
+    }
+    if (wayl.sub_compositor == null) {
+        log_msg(LOG_CLASS_ERROR, "wayland", "wayland.zig", @intCast(@src().line), "no sub compositor");
+        return waylInitFail(wayl);
+    }
+    if (wayl.shm == null) {
+        log_msg(LOG_CLASS_ERROR, "wayland", "wayland.zig", @intCast(@src().line), "no shared memory buffers interface");
+        return waylInitFail(wayl);
+    }
+    if (wayl.shell == null) {
+        log_msg(LOG_CLASS_ERROR, "wayland", "wayland.zig", @intCast(@src().line), "no XDG shell interface");
+        return waylInitFail(wayl);
+    }
+    if (wayl.data_device_manager == null) {
+        log_msg(LOG_CLASS_ERROR, "wayland", "wayland.zig", @intCast(@src().line), "no clipboard available (wl_data_device_manager not implemented by server)");
+        return waylInitFail(wayl);
+    }
+    if (tllLengthPtr(&wayl.seats) == 0) {
+        log_msg(LOG_CLASS_ERROR, "wayland", "wayland.zig", @intCast(@src().line), "no seats available (wl_seat interface too old?)");
+        return waylInitFail(wayl);
+    }
+    if (tllLengthPtr(&wayl.monitors) == 0) {
+        log_msg(LOG_CLASS_ERROR, "wayland", "wayland.zig", @intCast(@src().line), "no monitors available");
+        return waylInitFail(wayl);
+    }
+
+    if (presentation_timings and wayl.presentation == null) {
+        log_msg(LOG_CLASS_ERROR, "wayland", "wayland.zig", @intCast(@src().line), "compositor does not implement the presentation time interface");
+        return waylInitFail(wayl);
+    }
+
+    if (wayl.primary_selection_device_manager == null)
+        log_msg(LOG_CLASS_WARNING, "wayland", "wayland.zig", @intCast(@src().line), "compositor does not implement the primary selection interface");
+
+    if (wayl.xdg_activation == null) {
+        log_msg(LOG_CLASS_WARNING, "wayland", "wayland.zig", @intCast(@src().line), "compositor does not implement XDG activation, bell.urgent will fall back to coloring the window margins red");
+    }
+
+    if (wayl.fractional_scale_manager == null or wayl.viewporter == null)
+        log_msg(LOG_CLASS_WARNING, "wayland", "wayland.zig", @intCast(@src().line), "compositor does not implement fractional scaling");
+
+    if (wayl.cursor_shape_manager == null) {
+        log_msg(LOG_CLASS_WARNING, "wayland", "wayland.zig", @intCast(@src().line), "compositor does not implement server-side cursors, falling back to client-side cursors");
+    }
+
+    if (wayl.toplevel_icon_manager == null) {
+        log_msg(LOG_CLASS_WARNING, "wayland", "wayland.zig", @intCast(@src().line), "compositor does not implement the xdg-toplevel-icon protocol");
+    }
+
+    if (wayl.text_input_manager == null) {
+        log_msg(LOG_CLASS_WARNING, "wayland", "wayland.zig", @intCast(@src().line), "text input interface not implemented by compositor; IME will be disabled");
+    }
+
+    // Trigger listeners registered when handling globals
+    _ = wl_display_roundtrip(wayl.display);
+
+    {
+        const monitors: *MonitorList = @ptrCast(&wayl.monitors);
+        var it = (@constCast(monitors)).foreach();
+        while (it.next()) |node| {
+            const mon = &node.item;
+            log_msg(
+                LOG_CLASS_INFO,
+                "wayland",
+                "wayland.zig",
+                @intCast(@src().line),
+                "%s: %dx%d+%dx%d@%dHz %s %.2f\" scale=%d, DPI=%.2f/%.2f (physical/scaled)",
+                mon.name,
+                mon.dim.px_real.width,
+                mon.dim.px_real.height,
+                mon.x,
+                mon.y,
+                @as(c_int, @intFromFloat(@round(mon.refresh))),
+                if (mon.model) |m| m else mon.description,
+                mon.inch,
+                mon.scale,
+                mon.dpi.physical,
+                mon.dpi.scaled,
+            );
+        }
+    }
+
+    wayl.fd = wl_display_get_fd(wayl.display);
+    if (wayland_shim_fcntl_setfl(wayl.fd, wayland_shim_fcntl_getfl(wayl.fd) | O_NONBLOCK) < 0) {
+        log_errno(LOG_CLASS_ERROR, "wayland", "wayland.zig", @intCast(@src().line), "failed to make Wayland socket non-blocking");
+        return waylInitFail(wayl);
+    }
+
+    if (!wayland_shim_fdm_add(fdm, wayl))
+        return waylInitFail(wayl);
+
+    if (wl_display_prepare_read(wayl.display) != 0) {
+        log_errno(LOG_CLASS_ERROR, "wayland", "wayland.zig", @intCast(@src().line), "failed to prepare for reading wayland events");
+        return waylInitFail(wayl);
+    }
+
+    return wayl;
+}
+
+fn waylInitFail(wayl: *types.Wayland) ?*types.Wayland {
+    wayl_destroy(wayl);
+    return null;
+}
+
+fn tllLengthPtr(list: *const anyopaque) usize {
+    // tll's third word is the length
+    const p: [*]const usize = @ptrCast(@alignCast(list));
+    return p[2];
+}
+
+export fn wayl_destroy(wayl_in: ?*types.Wayland) callconv(.c) void {
+    const wayl = wayl_in orelse return;
+
+    {
+        const TerminalList = tll.Tll(?*anyopaque);
+        const terms: *TerminalList = @ptrCast(&wayl.terms);
+        var it = (@constCast(terms)).foreach();
+        while (it.next()) |node| {
+            const S = struct {
+                var have_warned: bool = false;
+            };
+            if (!S.have_warned) {
+                S.have_warned = true;
+                log_msg(LOG_CLASS_WARNING, "wayland", "wayland.zig", @intCast(@src().line), "there are terminals still running");
+                _ = term_destroy(@ptrCast(@alignCast(node.item.?)));
+            }
+        }
+        terms.freeList();
+    }
+
+    _ = wayland_shim_hook_del(wayl.fdm);
+
+    {
+        const monitors: *MonitorList = @ptrCast(&wayl.monitors);
+        var it = monitors.foreach();
+        while (it.next()) |node| {
+            monitor_destroy(&node.item);
+            monitors.removeNode(node);
+        }
+    }
+
+    {
+        const SeatList = tll.Tll(types.Seat);
+        const seats: *SeatList = @ptrCast(&wayl.seats);
+        var it = seats.foreach();
+        while (it.next()) |node| {
+            seat_destroy(&node.item);
+            seats.removeNode(node);
+        }
+    }
+
+    if (wayl.text_input_manager != null)
+        wayland_shim_text_input_manager_destroy(wayl.text_input_manager);
+    if (wayl.toplevel_tag_manager != null)
+        wayland_shim_toplevel_tag_manager_destroy(wayl.toplevel_tag_manager);
+    if (wayl.background_effect_manager != null)
+        wayland_shim_background_effect_manager_destroy(wayl.background_effect_manager);
+
+    if (wayl.color_management.img_description != null)
+        wayland_shim_image_description_destroy(wayl.color_management.img_description);
+    if (wayl.color_management.manager != null)
+        wayland_shim_color_manager_destroy(wayl.color_management.manager);
+    if (wayl.system_bell != null)
+        wayland_shim_system_bell_destroy(wayl.system_bell);
+    if (wayl.toplevel_icon_manager != null)
+        wayland_shim_toplevel_icon_manager_destroy(wayl.toplevel_icon_manager);
+    if (wayl.single_pixel_manager != null)
+        wayland_shim_single_pixel_manager_destroy(wayl.single_pixel_manager);
+    if (wayl.fractional_scale_manager != null)
+        wayland_shim_fractional_scale_manager_destroy(wayl.fractional_scale_manager);
+    if (wayl.viewporter != null)
+        wayland_shim_viewporter_destroy(wayl.viewporter);
+    if (wayl.cursor_shape_manager != null)
+        wayland_shim_cursor_shape_manager_destroy(wayl.cursor_shape_manager);
+    if (wayl.xdg_activation != null)
+        wayland_shim_activation_destroy(wayl.xdg_activation);
+    if (wayl.xdg_output_manager != null)
+        wayland_shim_output_manager_destroy(wayl.xdg_output_manager);
+    if (wayl.shell != null)
+        wayland_shim_wm_base_destroy(wayl.shell);
+    if (wayl.xdg_decoration_manager != null)
+        wayland_shim_decoration_manager_destroy(wayl.xdg_decoration_manager);
+    if (wayl.presentation != null)
+        wayland_shim_presentation_destroy(wayl.presentation);
+    if (wayl.data_device_manager != null)
+        wayland_shim_data_device_manager_destroy(wayl.data_device_manager);
+    if (wayl.primary_selection_device_manager != null)
+        wayland_shim_primary_selection_device_manager_destroy(wayl.primary_selection_device_manager);
+    if (wayl.shm != null)
+        wayland_shim_shm_destroy(wayl.shm, wayl.use_shm_release);
+    if (wayl.sub_compositor != null)
+        wayland_shim_subcompositor_destroy(wayl.sub_compositor);
+    if (wayl.compositor != null)
+        wayland_shim_compositor_destroy(wayl.compositor);
+    if (wayl.fixes != null)
+        wayland_shim_fixes_destroy(wayl.fixes);
+    if (wayl.registry != null)
+        wayland_shim_registry_destroy(wayl.registry);
+    if (wayl.fd != -1)
+        _ = fdm_del_no_close(wayl.fdm, wayl.fd);
+    if (wayl.display != null) {
+        wayl_flush(wayl);
+        wl_display_disconnect(wayl.display);
+    }
+
+    free(@as(?*anyopaque, @ptrCast(wayl)));
+}
