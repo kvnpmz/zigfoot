@@ -49,6 +49,10 @@ void keyboard_key(void *data, struct wl_keyboard *wl_keyboard, uint32_t serial,
                   uint32_t time, uint32_t key, uint32_t state);
 void input_repeat(struct seat *seat, uint32_t key);
 void alternate_scroll(struct seat *seat, int amount, int button);
+const struct key_binding *match_mouse_binding(const struct seat *seat,
+                                             const struct terminal *term,
+                                             int button);
+void mouse_scroll(struct seat *seat, int amount, enum wl_pointer_axis axis);
 
 void key_press_release(struct seat *seat, struct terminal *term, uint32_t serial,
                        uint32_t key, uint32_t state);

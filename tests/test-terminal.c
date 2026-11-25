@@ -73,6 +73,11 @@ bool kitty_kbd_protocol(struct seat *seat, struct terminal *term,
                         const struct kbd_ctx *ctx);
 void mouse_coord_pixel_to_cell(struct seat *seat, const struct terminal *term,
                                int x, int y);
+const struct key_binding *match_mouse_binding(const struct seat *seat,
+                                             const struct terminal *term,
+                                             int button);
+void mouse_scroll(struct seat *seat, int amount,
+                  enum wl_pointer_axis axis);
 void mouse_button_state_reset(struct seat *seat);
 bool touch_is_active(const struct seat *seat);
 double mouse_scroll_multiplier(const struct terminal *term,
@@ -6271,6 +6276,101 @@ test_keyboard_modifiers(void)
     xkb_context_unref(ctx);
 }
 
+/*
+ * Mouse bindings and scrolling (input.zig, D4d2a).
+ */
+static void
+test_mouse_scroll(void)
+{
+    struct terminal *term = term_new();
+    struct seat seat;
+    memset(&seat, 0, sizeof(seat));
+    static struct config conf;
+    memset(&conf, 0, sizeof(conf));
+
+    term->conf = &conf;
+    term->kbd_focus = true;
+    term->margins.left = term->margins.top = 0;
+    term->margins.right = term->margins.bottom = 0;
+    term->cols = 4;
+    term->rows = 2;
+    term->cell_width = 10;
+    term->cell_height = 20;
+    term->width = 40;
+    term->height = 40;
+
+    seat.name = "mouse-test";
+    seat.wl_keyboard = NULL;   /* so the config bindings are used */
+    seat.kbd.xkb_state = NULL;
+    seat.mouse_focus = term;
+    seat.mouse.col = 1;
+    seat.mouse.row = 1;
+    seat.mouse.x = 15;
+    seat.mouse.y = 25;
+    seat.mouse.count = 1;
+
+    /* ── binding matching, no keyboard ────────────────────────────────── */
+    struct config_key_binding bindings[3];
+    memset(bindings, 0, sizeof(bindings));
+
+    bindings[0].action = 1234;
+    bindings[0].m.button = BTN_WHEEL_FORWARD;
+    bindings[0].m.count = 1;
+    memset(&bindings[0].modifiers, 0, sizeof(bindings[0].modifiers));
+
+    bindings[1].action = 5678;
+    bindings[1].m.button = BTN_WHEEL_FORWARD;
+    bindings[1].m.count = 2;   /* more clicks than the seat has */
+    memset(&bindings[1].modifiers, 0, sizeof(bindings[1].modifiers));
+
+    bindings[2].action = 9012;
+    bindings[2].m.button = BTN_LEFT;
+    bindings[2].m.count = 1;
+    memset(&bindings[2].modifiers, 0, sizeof(bindings[2].modifiers));
+
+    conf.bindings.mouse.count = 3;
+    conf.bindings.mouse.arr = bindings;
+
+    const struct key_binding *match =
+        match_mouse_binding(&seat, term, BTN_WHEEL_FORWARD);
+    check(match != NULL && match->action == 1234,
+          "a matching button/click-count binding wins");
+    check(match_mouse_binding(&seat, term, BTN_RIGHT) == NULL,
+          "an unbound button matches nothing");
+
+    /* A binding with modifiers is skipped when the seat has no keyboard. */
+    tll_push_back(bindings[0].modifiers, "Shift");
+    check(match_mouse_binding(&seat, term, BTN_WHEEL_FORWARD) == NULL,
+          "a modified binding is skipped without a keyboard");
+    tll_free(bindings[0].modifiers);
+
+    /* ── scrolling ────────────────────────────────────────────────────── */
+    int slave = term_capture_begin(term);
+    char buf[256];
+
+    term->mouse_tracking = MOUSE_CLICK;
+    term->mouse_reporting = MOUSE_SGR;
+
+    mouse_scroll(&seat, 1, WL_POINTER_AXIS_VERTICAL_SCROLL);
+    term_capture_read(slave, buf, sizeof(buf));
+    check_text(buf, "\033[<65;2;2M", "one wheel-down step is one SGR press");
+
+    mouse_scroll(&seat, -2, WL_POINTER_AXIS_VERTICAL_SCROLL);
+    term_capture_read(slave, buf, sizeof(buf));
+    check_text(buf, "\033[<64;2;2M\033[<64;2;2M",
+               "two wheel-up steps are two SGR presses");
+
+    /* Without mouse tracking the application gets nothing. */
+    term->mouse_tracking = MOUSE_NONE;
+    mouse_scroll(&seat, 1, WL_POINTER_AXIS_VERTICAL_SCROLL);
+    term_capture_read(slave, buf, sizeof(buf));
+    check_text(buf, "", "nothing is reported when mouse tracking is off");
+
+    term_capture_end(term, slave);
+    term->conf = NULL;
+    term_free(term);
+}
+
 int
 main(void)
 {
@@ -6316,6 +6416,7 @@ main(void)
     test_kbd_protocols();
     test_pointer_helpers();
     test_keyboard_modifiers();
+    test_mouse_scroll();
     test_scrollback_indicator();
     test_search_box_offset();
     test_url_label();

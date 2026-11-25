@@ -3236,3 +3236,159 @@ export fn alternate_scroll(seat: *Seat, amount: c_int, button: c_int) callconv(.
     key_press_release(seat, term, seat.kbd.serial, key, WL_KEYBOARD_KEY_STATE_RELEASED_C);
 }
 
+// ─────────────────────────────────────────────────────────────────────────
+// Mouse bindings and scrolling (D4d2a)
+// ─────────────────────────────────────────────────────────────────────────
+
+const BTN_WHEEL_BACK: c_int = 0x11c;
+const BTN_WHEEL_FORWARD: c_int = 0x11d;
+const BTN_WHEEL_LEFT: c_int = 0x11e;
+const BTN_WHEEL_RIGHT: c_int = 0x11f;
+
+const WL_POINTER_AXIS_VERTICAL_SCROLL: u32 = 0;
+
+extern fn term_mouse_down(
+    term: *Terminal,
+    button: c_int,
+    row_idx: c_int,
+    col: c_int,
+    row_pixels: c_int,
+    col_pixels: c_int,
+    shift: bool,
+    alt: bool,
+    ctrl: bool,
+) callconv(.c) void;
+extern fn term_mouse_up(
+    term: *Terminal,
+    button: c_int,
+    row_idx: c_int,
+    col: c_int,
+    row_pixels: c_int,
+    col_pixels: c_int,
+    shift: bool,
+    alt: bool,
+    ctrl: bool,
+) callconv(.c) void;
+
+/// The mouse binding matching `button` for this seat, if any.
+///
+/// With a keyboard, bindings are matched *with* modifiers (the selection
+/// overrides are masked out first) and the highest click count wins. Without
+/// one, the config's mouse bindings are matched without modifiers at all, and
+/// the result is a synthesized static binding.
+export fn match_mouse_binding(
+    seat: *const Seat,
+    term: *const Terminal,
+    button: c_int,
+) callconv(.c) ?*const types.KeyBinding {
+    if (seat.wl_keyboard != null and seat.kbd.xkb_state != null) {
+        // Seat has a keyboard: use mouse bindings *with* modifiers
+        const bindings = key_binding_for(
+            term.wl.?.key_binding_manager, term.conf.?, @constCast(seat)) orelse return null;
+
+        var mods: u32 = 0;
+        get_current_modifiers(seat, &mods, null, 0, true);
+
+        // Ignore the selection-override modifiers when matching
+        mods &= ~bindings.selection_overrides;
+
+        var result: ?*const types.KeyBinding = null;
+
+        const mouse_list: *tll.Tll(types.KeyBinding) = @ptrCast(
+            @constCast(&bindings.mouse));
+        var it = mouse_list.foreach();
+        while (it.next()) |node| {
+            const binding = &node.item;
+
+            if (binding._u.m.button != @as(u32, @intCast(button)))
+                continue; // Wrong button
+
+            if (binding.mods != mods)
+                continue; // Modifier mismatch
+
+            if (binding._u.m.count > seat.mouse.count)
+                continue; // Not the right click count
+
+            if (result == null or binding._u.m.count > result.?._u.m.count)
+                result = binding;
+        }
+
+        return result;
+    }
+
+    // Seat does NOT have a keyboard: use the config's mouse bindings
+    // *without* modifiers
+    var found: ?*const types.ConfigKeyBinding = null;
+    const conf = term.conf.?;
+
+    var i: usize = 0;
+    while (i < conf.bindings.mouse.count) : (i += 1) {
+        const binding = &conf.bindings.mouse.arr.?[i];
+
+        if (binding._u.m.button != button)
+            continue; // Wrong button
+
+        if (binding._u.m.count > seat.mouse.count)
+            continue; // Incorrect click count
+
+        const modifiers: *tll.Tll([*:0]u8) = @ptrCast(@constCast(&binding.modifiers));
+        if (modifiers.len() > 0)
+            continue; // Binding has modifiers
+
+        if (found == null or binding._u.m.count > found.?._u.m.count)
+            found = binding;
+    }
+
+    if (found) |match| {
+        const Static = struct {
+            var bind: types.KeyBinding = undefined;
+        };
+        Static.bind = std.mem.zeroes(types.KeyBinding);
+        Static.bind.action = match.action;
+        Static.bind.aux = @ptrCast(@constCast(&match.aux));
+        return &Static.bind;
+    }
+
+    return null;
+}
+
+/// Turn a scroll event into either a mouse report (if the application grabbed
+/// the mouse), a binding match, or plain button presses.
+export fn mouse_scroll(seat: *Seat, amount: c_int, axis: u32) callconv(.c) void {
+    const term = seat.mouse_focus orelse return;
+
+    const button: c_int = if (axis == WL_POINTER_AXIS_VERTICAL_SCROLL)
+        (if (amount < 0) BTN_WHEEL_BACK else BTN_WHEEL_FORWARD)
+    else
+        (if (amount < 0) BTN_WHEEL_LEFT else BTN_WHEEL_RIGHT);
+    const count = if (amount < 0) -amount else amount;
+
+    if (term_mouse_grabbed(term, seat)) {
+        seat.mouse.count = 1;
+
+        if (match_mouse_binding(seat, term, button)) |match| {
+            _ = execute_binding(seat, term, match, seat.pointer.serial, count);
+        }
+
+        seat.mouse.last_released_button = button;
+    } else if (seat.mouse.col >= 0 and seat.mouse.row >= 0) {
+        std.debug.assert(seat.mouse.col < term.cols);
+        std.debug.assert(seat.mouse.row < term.rows);
+
+        var i: c_int = 0;
+        while (i < count) : (i += 1) {
+            term_mouse_down(
+                term, button, seat.mouse.row, seat.mouse.col,
+                seat.mouse.y - term.margins.top,
+                seat.mouse.x - term.margins.left,
+                seat.kbd.shift, seat.kbd.alt, seat.kbd.ctrl);
+        }
+
+        term_mouse_up(
+            term, button, seat.mouse.row, seat.mouse.col,
+            seat.mouse.y - term.margins.top,
+            seat.mouse.x - term.margins.left,
+            seat.kbd.shift, seat.kbd.alt, seat.kbd.ctrl);
+    }
+}
+
