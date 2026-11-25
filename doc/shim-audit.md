@@ -2,6 +2,17 @@
 
 Base: `9f4f1def`. Audit date: 2026-11-25.
 
+> **Update after the sweep (A).** Every class-b deletion in this table has
+> since been applied: 56 wrappers in five batches (`dcs`/`selection`/`csi`/
+> fcft glyphs, `osc`, `notify`, `sixel`) plus the `grid-shim.c` deletion
+> above, so no `HOLD for module owner` row is still outstanding. Fourteen
+> class-c functions are also ported already (the eight `osc_theme_*`
+> getters, now that `term_theme_get()` is Zig, and the six sixel flag
+> bits). `wayland_shim_registry_bind()` and `wayland_shim_iface_id()` are
+> reclassified as class (a): they exist so the generated `wl_interface`
+> symbols stay in one C TU. The remaining class-c rows are being ported
+> now; the table stays as the audit record.
+
 ## Scope and result
 
 The checkout has 13 `*-shim.c` files, not 11. The files contain 390 functions and 3,417 lines.
