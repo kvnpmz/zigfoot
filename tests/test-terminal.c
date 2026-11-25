@@ -60,6 +60,8 @@ int render_url_format_label(char32_t *label, const char32_t *key,
                             const char32_t *url, bool show_url,
                             size_t entered_key_len, int max_cols);
 void render_dirty_overflowing_glyphs(struct terminal *term);
+void set_size_from_grid(struct terminal *term, int *width,
+                        int *height, int cols, int rows);
 size_t render_search_box_glyph_offset(
     size_t glyph_offset, size_t visible_cells, size_t total_cells,
     size_t cursor_cell_idx);
@@ -5630,6 +5632,49 @@ test_overflowing_glyphs(void)
     term_free(term);
 }
 
+/*
+ * set_size_from_grid() (render.zig, D3l3a): the window size a grid needs.
+ */
+static void
+test_set_size_from_grid(void)
+{
+    struct terminal *term = term_new();
+    static struct config conf;
+    memset(&conf, 0, sizeof(conf));
+
+    term->conf = &conf;
+    term->cell_width = 10;
+    term->cell_height = 20;
+    term->scale = 1.0f;
+
+    int w = -1, h = -1;
+    set_size_from_grid(term, &w, &h, 80, 24);
+    check(w == 800 && h == 480,
+          "a 80x24 grid is 800x480 at scale 1 without padding");
+
+    conf.pad_left = 3;
+    conf.pad_right = 5;
+    conf.pad_top = 2;
+    conf.pad_bottom = 4;
+    set_size_from_grid(term, &w, &h, 80, 24);
+    check(w == 808 && h == 486,
+          "padding is added on all four sides");
+    conf.pad_left = conf.pad_right = conf.pad_top = conf.pad_bottom = 0;
+
+    term->scale = 1.5f;
+    set_size_from_grid(term, &w, &h, 80, 24);
+    check(w == 800 && h == 480,
+          "a size that is already a multiple of the scale is unchanged");
+
+    /* One of the out-params may be NULL, and 0x0 is legal. */
+    h = -1;
+    set_size_from_grid(term, NULL, &h, 0, 0);
+    check(h == 0, "a zero-sized grid needs no pixels");
+
+    term->conf = NULL;
+    term_free(term);
+}
+
 int
 main(void)
 {
@@ -5665,6 +5710,7 @@ main(void)
     test_render_worker_thread();
     test_render_wait_for_preapply_damage();
     test_overflowing_glyphs();
+    test_set_size_from_grid();
     test_scrollback_indicator();
     test_search_box_offset();
     test_url_label();

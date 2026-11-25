@@ -4098,6 +4098,250 @@ export fn render_urls(term: *Terminal) callconv(.c) void {
 
 
 // ─────────────────────────────────────────────────────────────────────────
+// Size notifications (D3l3a)
+// ─────────────────────────────────────────────────────────────────────────
+
+extern fn render_shim_tiocswinsz(
+    ptmx: c_int, rows: c_int, cols: c_int, xpixel: c_int, ypixel: c_int) callconv(.c) c_int;
+extern fn term_send_size_notification(term: *Terminal) callconv(.c) void;
+extern fn term_ptmx_pause(term: *Terminal) callconv(.c) void;
+extern fn term_ptmx_resume(term: *Terminal) callconv(.c) void;
+extern fn sixel_reflow_grid(term: *Terminal, grid: *types.Grid) callconv(.c) void;
+extern fn grid_free(grid: ?*types.Grid) callconv(.c) void;
+extern fn grid_resize_and_reflow(
+    grid: *types.Grid,
+    term: *Terminal,
+    new_rows: c_int,
+    new_cols: c_int,
+    old_screen_rows: c_int,
+    new_screen_rows: c_int,
+    tracking_points_count: usize,
+    tracking_points: ?[*]const *types.Coord,
+) callconv(.c) void;
+extern fn fdm_add(
+    fdm: *anyopaque,
+    fd: c_int,
+    events: c_int,
+    handler: *const fn (*anyopaque, c_int, c_int, ?*anyopaque) callconv(.c) bool,
+    data: ?*anyopaque,
+) callconv(.c) bool;
+extern fn fdm_del(fdm: *anyopaque, fd: c_int) callconv(.c) bool;
+extern fn timerfd_create(clockid: c_int, flags: c_int) callconv(.c) c_int;
+extern fn close(fd: c_int) callconv(.c) c_int;
+
+const EPOLLIN: c_int = 0x001;
+const TFD_CLOEXEC: c_int = 0x80000;
+const TFD_NONBLOCK: c_int = 0x800;
+
+/// TIOCSWINSZ on the pty master, then the size-notification escape (if any).
+export fn tiocswinsz(term: *Terminal) callconv(.c) void {
+    if (term.ptmx < 0)
+        return;
+
+    if (render_shim_tiocswinsz(
+            term.ptmx,
+            term.rows,
+            term.cols,
+            term.cols * term.cell_width,
+            term.rows * term.cell_height) < 0)
+    {
+        log_errno(
+            LOG_CLASS_ERROR, "render", "render.zig", @intCast(@src().line),
+            "TIOCSWINSZ");
+    }
+
+    term_send_size_notification(term);
+}
+
+/// Finish an interactive resize: reflow the grid stashed when the resize
+/// started to the *current* dimensions, and swap it back in.
+export fn delayed_reflow_of_normal_grid(term: *Terminal) callconv(.c) void {
+    const resizing = &term.interactive_resizing;
+    if (resizing.grid == null)
+        return;
+
+    std.debug.assert(resizing.new_rows > 0);
+
+    if (term.grid == &term.normal)
+        term.selection.coords = resizing.selection_coords;
+
+    var tracking_points = [_]*types.Coord{
+        &term.selection.coords.start,
+        &term.selection.coords.end,
+    };
+
+    grid_resize_and_reflow(
+        resizing.grid.?,
+        term,
+        resizing.new_rows,
+        term.normal.num_cols,
+        resizing.old_screen_rows,
+        term.rows,
+        if (term.selection.coords.end.row >= 0) tracking_points.len else 0,
+        &tracking_points,
+    );
+
+    // Replace the current, truncated, "normal" grid with the reflowed one
+    grid_free(&term.normal);
+    term.normal = resizing.grid.?.*;
+    free(resizing.grid.?);
+
+    term.hide_cursor = resizing.old_hide_cursor != 0;
+
+    // Reset
+    resizing.grid = null;
+    resizing.old_screen_rows = 0;
+    resizing.new_rows = 0;
+    resizing.old_hide_cursor = 0;
+    resizing.selection_coords = .{
+        .start = .{ .col = -1, .row = -1 },
+        .end = .{ .col = -1, .row = -1 },
+    };
+
+    // Invalidate render pointers
+    render_wait_for_preapply_damage(term);
+    if (term.render.last_buf) |raw| {
+        shm_unref(@ptrCast(@alignCast(raw)));
+        term.render.last_buf = null;
+    }
+    term.render.last_cursor.row = null;
+
+    const scroll_damage: *tll.Tll(types.Damage) = @ptrCast(&term.normal.scroll_damage);
+    scroll_damage.freeList();
+
+    sixel_reflow_grid(term, &term.normal);
+
+    if (term.grid == &term.normal) {
+        term_damage_view(term);
+        render_refresh(term);
+    }
+
+    term_ptmx_resume(term);
+}
+
+/// The TIOCSWINSZ timer fired: the interactive resize paused long enough to
+/// apply the real size and reflow.
+export fn fdm_tiocswinsz(
+    fdm: ?*anyopaque,
+    fd: c_int,
+    events: c_int,
+    data: ?*anyopaque,
+) callconv(.c) bool {
+    _ = fd;
+    const term: *Terminal = @ptrCast(@alignCast(data orelse return false));
+
+    if (events & EPOLLIN != 0) {
+        tiocswinsz(term);
+        delayed_reflow_of_normal_grid(term);
+    }
+
+    const win = term.window.?;
+    if (win.resize_timeout_fd >= 0) {
+        _ = fdm_del(fdm.?, win.resize_timeout_fd);
+        win.resize_timeout_fd = -1;
+    }
+    return true;
+}
+
+/// Tell the client about the new terminal size: immediately, or after
+/// `resize_delay_ms` of silence while an interactive resize is in progress.
+export fn send_dimensions_to_client(term: *Terminal) callconv(.c) void {
+    const win = term.window.?;
+    const conf = term.conf.?;
+
+    if (!win.is_resizing or conf.resize_delay_ms == 0) {
+        // Send new dimensions to client immediately
+        tiocswinsz(term);
+        delayed_reflow_of_normal_grid(term);
+
+        // And make sure to reset and deallocate a lingering timer
+        if (win.resize_timeout_fd >= 0) {
+            _ = fdm_del(term.fdm.?, win.resize_timeout_fd);
+            win.resize_timeout_fd = -1;
+        }
+        return;
+    }
+
+    // Send new dimensions to client "in a while"
+    std.debug.assert(win.is_resizing and conf.resize_delay_ms > 0);
+
+    var fd = win.resize_timeout_fd;
+    const delay_ms: u16 = conf.resize_delay_ms;
+    var successfully_scheduled = false;
+
+    if (fd < 0) {
+        // Lazy create timer fd
+        fd = timerfd_create(CLOCK_MONOTONIC, TFD_CLOEXEC | TFD_NONBLOCK);
+        if (fd < 0) {
+            log_errno(
+                LOG_CLASS_ERROR, "render", "render.zig", @intCast(@src().line),
+                "failed to create TIOCSWINSZ timer");
+        } else if (!fdm_add(term.fdm.?, fd, EPOLLIN, &fdm_tiocswinsz, term)) {
+            _ = close(fd);
+            fd = -1;
+        }
+
+        win.resize_timeout_fd = fd;
+    }
+
+    if (fd >= 0) {
+        // Reset timeout
+        const timeout = Itimerspec{
+            .it_interval = .{ .tv_sec = 0, .tv_nsec = 0 },
+            .it_value = .{
+                .tv_sec = @intCast(@divTrunc(delay_ms, 1000)),
+                .tv_nsec = @intCast(@as(u32, delay_ms % 1000) * 1_000_000),
+            },
+        };
+
+        if (timerfd_settime(fd, 0, &timeout, null) < 0) {
+            log_errno(
+                LOG_CLASS_ERROR, "render", "render.zig", @intCast(@src().line),
+                "failed to arm TIOCSWINSZ timer");
+            _ = fdm_del(term.fdm.?, fd);
+            win.resize_timeout_fd = -1;
+        } else {
+            successfully_scheduled = true;
+        }
+    }
+
+    if (!successfully_scheduled) {
+        tiocswinsz(term);
+        delayed_reflow_of_normal_grid(term);
+    }
+}
+
+/// The window size a `cols` x `rows` grid needs, padding and scale included.
+/// (C keeps the running value in an `int`, so the padding term is truncated
+/// before the scale rounding - mirrored here with an int accumulator.)
+export fn set_size_from_grid(
+    term: *Terminal,
+    width: ?*c_int,
+    height: ?*c_int,
+    cols: c_int,
+    rows: c_int,
+) callconv(.c) void {
+    const conf = term.conf.?;
+    const scale: f64 = term.scale;
+
+    // Nominal grid dimensions
+    var new_width: c_int = cols * term.cell_width;
+    var new_height: c_int = rows * term.cell_height;
+
+    // Include any configured padding
+    const pad_w: f64 = @as(f64, @floatFromInt(conf.pad_left + conf.pad_right)) * scale;
+    const pad_h: f64 = @as(f64, @floatFromInt(conf.pad_top + conf.pad_bottom)) * scale;
+    new_width = @intFromFloat(@as(f64, @floatFromInt(new_width)) + pad_w);
+    new_height = @intFromFloat(@as(f64, @floatFromInt(new_height)) + pad_h);
+
+    // Round to multiples of scale
+    new_width = @intFromFloat(@round(scale * @round(@as(f64, @floatFromInt(new_width)) / scale)));
+    new_height = @intFromFloat(@round(scale * @round(@as(f64, @floatFromInt(new_height)) / scale)));
+
+    if (width) |w| w.* = new_width;
+    if (height) |h| h.* = new_height;
+}
+// ─────────────────────────────────────────────────────────────────────────
 // grid_render (D3l2)
 // ─────────────────────────────────────────────────────────────────────────
 

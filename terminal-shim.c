@@ -18,6 +18,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <threads.h>
+#include <sys/ioctl.h>
 #include <signal.h>
 #include <pthread.h>
 #include "terminal.h"
@@ -369,6 +370,19 @@ pixman_image_t *render_shim_solid_fill(const pixman_color_t *color)
 
 /* sigset_t and pthread_t are platform types; keep the two calls that need
  * them together. */
+/* struct winsize + the ioctl() call itself (C-only varargs). */
+int
+render_shim_tiocswinsz(int ptmx, int rows, int cols, int xpixel, int ypixel)
+{
+    struct winsize ws = {
+        .ws_row = rows,
+        .ws_col = cols,
+        .ws_xpixel = xpixel,
+        .ws_ypixel = ypixel,
+    };
+    return ioctl(ptmx, (unsigned int)TIOCSWINSZ, &ws);
+}
+
 void render_shim_block_all_signals(void)
 {
     sigset_t mask;

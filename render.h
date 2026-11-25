@@ -78,6 +78,11 @@ bool render_xcursor_is_valid(const struct seat *seat, const char *cursor);
 
 void render_overlay(struct terminal *term);
 void grid_render(struct terminal *term);
+
+void send_dimensions_to_client(struct terminal *term);
+void set_size_from_grid(struct terminal *term, int *width, int *height,
+                        int cols, int rows);
+void delayed_reflow_of_normal_grid(struct terminal *term);
 void render_search_box(struct terminal *term);
 void render_urls(struct terminal *term);
 void render_scrollback_position(struct terminal *term);
