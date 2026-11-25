@@ -1517,8 +1517,13 @@ fn textToClipboard(
     const manager = wayl.data_device_manager orelse return false;
 
     clipboard.data_source = wayland_shim_data_source_create(manager);
-    if (clipboard.data_source == null)
+    if (clipboard.data_source == null) {
+        log_msg(
+            LOG_CLASS_ERROR, "selection", "selection.zig", @intCast(@src().line),
+            "failed to create clipboard data source",
+        );
         return false;
+    }
 
     clipboard.text = text;
     for (MIME_TYPES) |mime|
@@ -1557,8 +1562,13 @@ fn textToPrimary(
     }
 
     primary.data_source = wayland_shim_primary_source_create(manager);
-    if (primary.data_source == null)
+    if (primary.data_source == null) {
+        log_msg(
+            LOG_CLASS_ERROR, "selection", "selection.zig", @intCast(@src().line),
+            "failed to create clipboard data source",
+        );
         return false;
+    }
 
     primary.text = text;
     for (MIME_TYPES) |mime|
@@ -2026,13 +2036,6 @@ fn receiveCb(ctx: *ClipboardReceive, data: [*]const u8, size: usize) void {
     ctx.cb(@constCast(data), size, ctx.user);
 }
 
-fn logMsg(fmt: []const u8, args: anytype) void {
-    _ = fmt;
-    _ = args;
-    // Formatting is done by the C logger; the receive path only logs at
-    // debug/warn level, which the migration keeps silent for now.
-}
-
 fn clipboardReceiveDone(fdm: *Fdm, ctx: *ClipboardReceive) void {
     _ = fdm_del(fdm, ctx.timeout_fd);
     _ = fdm_del(fdm, ctx.read_fd);
@@ -2057,6 +2060,12 @@ fn fdmReceiveTimeout(fdm_opaque: *Fdm, fd: c_int, events: c_int, data: ?*anyopaq
         return false;
     }
 
+    log_msg(
+        LOG_CLASS_WARNING, "selection", "selection.zig", @intCast(@src().line),
+        "no data received from clipboard in %llu seconds, aborting",
+        @as(c_ulonglong, @intCast(ctx.timeout.it_value.tv_sec)),
+    );
+
     clipboardReceiveDone(fdm_opaque, ctx);
     return true;
 }
@@ -2077,8 +2086,14 @@ fn decodeOneUri(ctx: *ClipboardReceive, uri: [*]u8, len: usize) bool {
     var host: [*c]u8 = null;
     var path: [*c]u8 = null;
 
-    if (!uri_parse(uri, len, &scheme, null, null, &host, null, &path, null, null))
+    if (!uri_parse(uri, len, &scheme, null, null, &host, null, &path, null, null)) {
+        log_msg(
+            LOG_CLASS_ERROR, "selection", "selection.zig", @intCast(@src().line),
+            "drag-and-drop: invalid URI: %.*s",
+            @as(c_int, @intCast(len)), uri,
+        );
         return false;
+    }
 
     if (ctx.add_space)
         receiveCb(ctx, " ", 1);
@@ -2407,8 +2422,17 @@ extern fn log_errno(
     fmt: [*:0]const u8,
     ...
 ) callconv(.c) void;
+extern fn log_msg(
+    class: c_int,
+    module: [*:0]const u8,
+    file: [*:0]const u8,
+    lineno: c_int,
+    fmt: [*:0]const u8,
+    ...
+) callconv(.c) void;
 
 const LOG_CLASS_ERROR: c_int = 1;
+const LOG_CLASS_WARNING: c_int = 2;
 
 fn freeSlice(p: anytype) void {
     if (p) |q| free(@ptrCast(q));
@@ -2821,6 +2845,7 @@ export fn selection_data_device_enter(
     std.debug.assert(offer == seat.clipboard.data_offer);
 
     if (seat.clipboard.mime_type != .unset) {
+        std.debug.assert(seat.clipboard.window == null);
         var it = terms(wayl);
         while (it.next()) |term| {
             // Remember _which_ terminal the current DnD offer is targeting
@@ -2896,12 +2921,17 @@ export fn selection_data_device_drop(
     const seat: *types.Seat = @ptrCast(@alignCast(data orelse return));
     const clipboard = &seat.clipboard;
 
+    if (clipboard.mime_type == .unset) {
+        log_msg(
+            LOG_CLASS_WARNING, "selection", "selection.zig", @intCast(@src().line),
+            "compositor called data_device::drop() even though we rejected the drag-and-drop",
+        );
+        return;
+    }
+
     const window = clipboard.window orelse return;
     const w: *types.WlWindow = @ptrCast(@alignCast(window));
     const term: *types.Terminal = @ptrCast(@alignCast(w.term orelse return));
-
-    if (clipboard.mime_type == .unset)
-        return;
 
     const raw = xmalloc(@sizeOf(DndContext)) orelse return;
     const ctx: *DndContext = @ptrCast(@alignCast(raw));

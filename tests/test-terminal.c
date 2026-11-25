@@ -4620,7 +4620,10 @@ test_render_primitives(void)
     term.colors.cursor_bg = 0;
     term.colors.cursor_fg = 0;
     term.cursor_style = CURSOR_BLOCK;
-    term.cursor_blink.state = CURSOR_BLINK_OFF;
+    /* C treats CURSOR_BLINK_ON (0) as the painted phase; setting OFF here
+     * asked for a blinking-off cursor and only passed while render.zig had
+     * the comparison inverted. */
+    term.cursor_blink.state = CURSOR_BLINK_ON;
     term.kbd_focus = true;
     pixman_color_t fg = red;
     pixman_color_t bg = {.red = 0, .green = 0, .blue = 0, .alpha = 0xffff};
@@ -5089,7 +5092,7 @@ test_render_cell(void)
     memset(pixels, 0, sizeof(pixels));
     term->kbd_focus = true;
     term->cursor_style = CURSOR_BLOCK;
-    term->cursor_blink.state = CURSOR_BLINK_OFF;
+    term->cursor_blink.state = CURSOR_BLINK_ON;
     row->cells[6].attrs.clean = 0;
     render_cell(term, pix, NULL, row, 1, 6, true);
     check(pix_pixel(pix, 65, 25) == fg_argb,

@@ -41,3 +41,25 @@ terminal_harness = executable(
   link_with: footlib)
 
 test('terminal-harness', terminal_harness)
+
+# Render parity corpus: paints the same cells/CSD/URL/OSD cases as a build of
+# origin/master and compares FNV-1a hashes per cell. See scripts/render-parity.sh
+# and doc/parity-report.md.
+render_parity_harness = executable(
+  'test-render-parity',
+  'test-render-parity.c',
+  client_harness_obj,
+  include_directories: '..',
+  dependencies: foot_deps,
+  link_with: footlib,
+  # The corpus paints through fake proxies, so the protocol inlines must be
+  # wrapped exactly as scripts/render-parity.sh wraps them.
+  link_args: [
+    '-Wl,--wrap=wl_surface_attach',
+    '-Wl,--wrap=wl_surface_damage_buffer',
+    '-Wl,--wrap=wl_surface_commit',
+    '-Wl,--wrap=wl_surface_set_buffer_scale',
+    '-Wl,--wrap=wayland_shim_viewport_set_destination',
+  ])
+
+test('render-parity', render_parity_harness)
