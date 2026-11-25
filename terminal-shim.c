@@ -440,6 +440,11 @@ void wayland_shim_seat_release(struct wl_seat *seat)
     wl_seat_release(seat);
 }
 
+void wayland_shim_ack_configure(struct xdg_surface *xdg_surface, uint32_t serial)
+{
+    xdg_surface_ack_configure(xdg_surface, serial);
+}
+
 void *wayland_shim_fractional_scale_get(struct wp_fractional_scale_manager_v1 *m,
                                         struct wl_surface *surf)
 {

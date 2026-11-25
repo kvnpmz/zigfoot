@@ -844,7 +844,7 @@ extern fn wayland_shim_wl_output_destroy(output: ?*anyopaque) callconv(.c) void;
 extern fn term_update_scale(term: *types.Terminal) callconv(.c) bool;
 extern fn term_font_dpi_changed(term: *types.Terminal, old_scale: f32) callconv(.c) bool;
 extern fn term_font_subpixel_changed(term: *types.Terminal) callconv(.c) void;
-extern fn render_resize(term: *types.Terminal, width: c_int, height: c_int, opts: c_int) callconv(.c) void;
+extern fn render_resize(term: *types.Terminal, width: c_int, height: c_int, opts: c_int) callconv(.c) bool;
 
 // render.h: enum resize_options
 const RESIZE_KEEP_GRID: c_int = 0x0;
@@ -896,7 +896,7 @@ fn updateTermForOutputChange(term: *types.Terminal) void {
         resize_opts |= RESIZE_FORCE;
     }
 
-    render_resize(
+    _ = render_resize(
         term,
         @intFromFloat(@round(logical_width)),
         @intFromFloat(@round(logical_height)),
@@ -1615,4 +1615,274 @@ export fn seat_destroy(seat_in: ?*types.Seat) callconv(.c) void {
     free(@as(?*anyopaque, @ptrCast(seat.primary.text)));
     free(@as(?*anyopaque, @ptrCast(seat.pointer.last_custom_xcursor)));
     free(@as(?*anyopaque, @ptrCast(seat.name)));
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// xdg_toplevel / xdg_surface configure
+// ─────────────────────────────────────────────────────────────────────────
+
+/// wayland-util.h: `struct wl_array`
+const WlArray = extern struct {
+    size: usize,
+    alloc: usize,
+    data: ?*anyopaque,
+};
+
+extern fn term_visual_focus_in(term: *types.Terminal) callconv(.c) void;
+extern fn term_visual_focus_out(term: *types.Terminal) callconv(.c) void;
+extern fn term_send_visibility_report(term: *types.Terminal) callconv(.c) void;
+extern fn term_window_configured(term: *types.Terminal) callconv(.c) void;
+extern fn term_shutdown(term: *types.Terminal) callconv(.c) bool;
+extern fn render_refresh(term: *types.Terminal) callconv(.c) void;
+extern fn wayland_shim_ack_configure(xdg_surface: ?*anyopaque, serial: u32) callconv(.c) void;
+
+// render.h: enum resize_options
+const RESIZE_BY_CELLS: c_int = 0x2;
+
+// xdg-shell.h: enum xdg_toplevel_state
+const STATE_MAXIMIZED: u32 = 1;
+const STATE_FULLSCREEN: u32 = 2;
+const STATE_RESIZING: u32 = 3;
+const STATE_ACTIVATED: u32 = 4;
+const STATE_TILED_LEFT: u32 = 5;
+const STATE_TILED_RIGHT: u32 = 6;
+const STATE_TILED_TOP: u32 = 7;
+const STATE_TILED_BOTTOM: u32 = 8;
+const STATE_SUSPENDED: u32 = 9;
+const STATE_CONSTRAINED_LEFT: u32 = 10;
+const STATE_CONSTRAINED_RIGHT: u32 = 11;
+const STATE_CONSTRAINED_TOP: u32 = 12;
+const STATE_CONSTRAINED_BOTTOM: u32 = 13;
+
+// xdg-shell.h: enum xdg_toplevel_wm_capabilities
+const CAP_WINDOW_MENU: u32 = 1;
+const CAP_MAXIMIZE: u32 = 2;
+const CAP_FULLSCREEN: u32 = 3;
+const CAP_MINIMIZE: u32 = 4;
+
+fn arrayElems(array: *const WlArray) []const u32 {
+    if (array.data == null or array.size == 0)
+        return &[_]u32{};
+    const ptr: [*]const u32 = @ptrCast(@alignCast(array.data.?));
+    return ptr[0 .. array.size / @sizeOf(u32)];
+}
+
+export fn xdg_toplevel_configure(
+    data: ?*anyopaque,
+    xdg_toplevel: ?*anyopaque,
+    width: i32,
+    height: i32,
+    states: ?*WlArray,
+) callconv(.c) void {
+    _ = xdg_toplevel;
+
+    var is_activated = false;
+    var is_fullscreen = false;
+    var is_maximized = false;
+    var is_resizing = false;
+    var is_tiled_top = false;
+    var is_tiled_bottom = false;
+    var is_tiled_left = false;
+    var is_tiled_right = false;
+    var is_constrained_top = false;
+    var is_constrained_bottom = false;
+    var is_constrained_left = false;
+    var is_constrained_right = false;
+    var is_suspended = false;
+
+    for (arrayElems(states.?)) |state| {
+        switch (state) {
+            STATE_MAXIMIZED => is_maximized = true,
+            STATE_FULLSCREEN => is_fullscreen = true,
+            STATE_RESIZING => is_resizing = true,
+            STATE_ACTIVATED => is_activated = true,
+            STATE_TILED_LEFT => is_tiled_left = true,
+            STATE_TILED_RIGHT => is_tiled_right = true,
+            STATE_TILED_TOP => is_tiled_top = true,
+            STATE_TILED_BOTTOM => is_tiled_bottom = true,
+            STATE_SUSPENDED => is_suspended = true,
+            STATE_CONSTRAINED_LEFT => is_constrained_left = true,
+            STATE_CONSTRAINED_RIGHT => is_constrained_right = true,
+            STATE_CONSTRAINED_TOP => is_constrained_top = true,
+            STATE_CONSTRAINED_BOTTOM => is_constrained_bottom = true,
+            else => {},
+        }
+    }
+
+    log_msg(LOG_CLASS_DEBUG, "wayland", "wayland.zig", @intCast(@src().line), "xdg-toplevel: configure: size=%dx%d", width, height);
+
+    // Changes done here are ignored until the configure event has been
+    // ack:ed in xdg_surface_configure(). So, just store the config data
+    // and apply it later, in xdg_surface_configure() after we've ack:ed
+    // the event.
+    const win: *types.WlWindow = @ptrCast(@alignCast(data.?));
+
+    win.configure.flags.is_activated = is_activated;
+    win.configure.flags.is_suspended = is_suspended;
+    win.configure.flags.is_fullscreen = is_fullscreen;
+    win.configure.flags.is_maximized = is_maximized;
+    win.configure.flags.is_resizing = is_resizing;
+    win.configure.flags.is_tiled_top = is_tiled_top;
+    win.configure.flags.is_tiled_bottom = is_tiled_bottom;
+    win.configure.flags.is_tiled_left = is_tiled_left;
+    win.configure.flags.is_tiled_right = is_tiled_right;
+    win.configure.flags.is_constrained_top = is_constrained_top;
+    win.configure.flags.is_constrained_bottom = is_constrained_bottom;
+    win.configure.flags.is_constrained_left = is_constrained_left;
+    win.configure.flags.is_constrained_right = is_constrained_right;
+    win.configure.width = width;
+    win.configure.height = height;
+}
+
+export fn xdg_toplevel_close(data: ?*anyopaque, xdg_toplevel: ?*anyopaque) callconv(.c) void {
+    _ = xdg_toplevel;
+    const win: *types.WlWindow = @ptrCast(@alignCast(data.?));
+    const term: *types.Terminal = @ptrCast(@alignCast(win.term.?));
+    log_msg(LOG_CLASS_DEBUG, "wayland", "wayland.zig", @intCast(@src().line), "xdg-toplevel: close");
+    _ = term_shutdown(term);
+}
+
+export fn xdg_toplevel_configure_bounds(
+    data: ?*anyopaque,
+    xdg_toplevel: ?*anyopaque,
+    width: i32,
+    height: i32,
+) callconv(.c) void {
+    // TODO: ensure we don't pick a bigger size
+    _ = data;
+    _ = xdg_toplevel;
+    _ = width;
+    _ = height;
+}
+
+export fn xdg_toplevel_wm_capabilities(
+    data: ?*anyopaque,
+    xdg_toplevel: ?*anyopaque,
+    caps: ?*WlArray,
+) callconv(.c) void {
+    _ = xdg_toplevel;
+    const win: *types.WlWindow = @ptrCast(@alignCast(data.?));
+
+    win.wm_capabilities.maximize = false;
+    win.wm_capabilities.minimize = false;
+
+    for (arrayElems(caps.?)) |cap| {
+        switch (cap) {
+            CAP_MAXIMIZE => win.wm_capabilities.maximize = true,
+            CAP_MINIMIZE => win.wm_capabilities.minimize = true,
+            CAP_WINDOW_MENU, CAP_FULLSCREEN => {},
+            else => {},
+        }
+    }
+}
+
+export fn xdg_surface_configure(
+    data: ?*anyopaque,
+    xdg_surface: ?*anyopaque,
+    serial: u32,
+) callconv(.c) void {
+    log_msg(LOG_CLASS_DEBUG, "wayland", "wayland.zig", @intCast(@src().line), "xdg-surface: configure");
+
+    const win: *types.WlWindow = @ptrCast(@alignCast(data.?));
+    const term: *types.Terminal = @ptrCast(@alignCast(win.term.?));
+
+    if (win.unmapped) {
+        // https://codeberg.org/dnkl/foot/issues/1249
+        // https://gitlab.freedesktop.org/wlroots/wlroots/-/issues/3487
+        // https://gitlab.freedesktop.org/wlroots/wlroots/-/merge_requests/3719
+        // https://gitlab.freedesktop.org/wayland/wayland-protocols/-/issues/108
+        return;
+    }
+
+    const wasnt_configured = !win.is_configured;
+    const was_resizing = win.is_resizing;
+    const was_fullscreen = win.is_fullscreen;
+    const was_suspended = win.is_suspended;
+    const csd_was_enabled = win.csd_mode == .yes and !win.is_fullscreen;
+    var new_width: c_int = win.configure.width;
+    var new_height: c_int = win.configure.height;
+
+    win.is_configured = true;
+    win.is_maximized = win.configure.flags.is_maximized;
+    win.is_fullscreen = win.configure.flags.is_fullscreen;
+    win.is_resizing = win.configure.flags.is_resizing;
+    win.is_suspended = win.configure.flags.is_suspended;
+
+    win.is_tiled_top = win.configure.flags.is_tiled_top;
+    win.is_tiled_bottom = win.configure.flags.is_tiled_bottom;
+    win.is_tiled_left = win.configure.flags.is_tiled_left;
+    win.is_tiled_right = win.configure.flags.is_tiled_right;
+
+    win.is_constrained_top = win.configure.flags.is_constrained_top;
+    win.is_constrained_bottom = win.configure.flags.is_constrained_bottom;
+    win.is_constrained_left = win.configure.flags.is_constrained_left;
+    win.is_constrained_right = win.configure.flags.is_constrained_right;
+
+    win.is_tiled = win.is_tiled_top or
+        win.is_tiled_bottom or
+        win.is_tiled_left or
+        win.is_tiled_right;
+
+    win.csd_mode = win.configure.csd_mode;
+
+    const enable_csd = win.csd_mode == .yes and !win.is_fullscreen;
+    if (!csd_was_enabled and enable_csd) {
+        csd_instantiate(win);
+    } else if (csd_was_enabled and !enable_csd) {
+        csd_destroy(win);
+    }
+
+    if (enable_csd and new_width > 0 and new_height > 0) {
+        if (wayl_win_csd_titlebar_visible(win))
+            new_height -= term.conf.?.csd.title_height;
+
+        if (wayl_win_csd_borders_visible(win)) {
+            new_height -= 2 * term.conf.?.csd.border_width_visible;
+            new_width -= 2 * term.conf.?.csd.border_width_visible;
+        }
+    }
+
+    wayland_shim_ack_configure(xdg_surface, serial);
+
+    var opts: c_int = RESIZE_BY_CELLS;
+
+    // TODO: decide if we should do the last "forced" call when ending an
+    // interactive resize. Without it, the last TIOCSWINSZ sent to the
+    // client will be a scheduled one, i.e. there will be a small delay
+    // after the user has *stopped* resizing before the client gets the
+    // final size.
+    if (was_resizing and !win.is_resizing)
+        opts |= RESIZE_FORCE;
+
+    const resized = render_resize(term, new_width, new_height, opts);
+
+    if (win.configure.flags.is_activated)
+        term_visual_focus_in(term)
+    else
+        term_visual_focus_out(term);
+
+    if (was_suspended != win.is_suspended and term.visibility_reports)
+        term_send_visibility_report(term);
+
+    // Update opaque region if fullscreen state changed, also need to
+    // render, since we use different buffer types with and without alpha
+    if (was_fullscreen != win.is_fullscreen) {
+        wayl_win_alpha_changed(win);
+        render_refresh(term);
+    }
+
+    const will_render_soon = resized or
+        term.render.refresh.grid or
+        term.render.pending.grid;
+
+    if (!will_render_soon) {
+        // If we didn't resize, and aren't refreshing for other reasons,
+        // we won't be committing a new surface anytime soon. Some
+        // compositors require a commit in combination with an ack - make
+        // them happy.
+        wayland_shim_surface_commit(win.surface.surf);
+    }
+
+    if (wasnt_configured)
+        term_window_configured(term);
 }

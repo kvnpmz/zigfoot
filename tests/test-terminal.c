@@ -3608,6 +3608,81 @@ test_wayland_misc(void)
     tll_free(s5.mouse.buttons);
 }
 
+
+static void
+test_configure(void)
+{
+    struct wl_window win = {0};
+    struct wl_array array;
+
+    /* xdg_toplevel.configure stores the state; nothing is applied yet */
+    wl_array_init(&array);
+    uint32_t *state = wl_array_add(&array, sizeof(uint32_t));
+    *state = XDG_TOPLEVEL_STATE_MAXIMIZED;
+    state = wl_array_add(&array, sizeof(uint32_t));
+    *state = XDG_TOPLEVEL_STATE_ACTIVATED;
+    state = wl_array_add(&array, sizeof(uint32_t));
+    *state = XDG_TOPLEVEL_STATE_TILED_LEFT;
+    state = wl_array_add(&array, sizeof(uint32_t));
+    *state = XDG_TOPLEVEL_STATE_CONSTRAINED_BOTTOM;
+
+    xdg_toplevel_configure(&win, NULL, 800, 600, &array);
+    wl_array_release(&array);
+
+    check(win.configure.width == 800 && win.configure.height == 600,
+          "toplevel configure stores the size");
+    check(win.configure.is_maximized, "toplevel configure sees maximized");
+    check(win.configure.is_activated, "toplevel configure sees activated");
+    check(win.configure.is_tiled_left, "toplevel configure sees tiled:left");
+    check(win.configure.is_constrained_bottom,
+          "toplevel configure sees constrained:bottom");
+    check(!win.configure.is_fullscreen,
+          "toplevel configure leaves unseen states false");
+    check(!win.configure.is_resizing, "toplevel configure clears resizing");
+
+    /* A second configure replaces the flags instead of accumulating them */
+    wl_array_init(&array);
+    state = wl_array_add(&array, sizeof(uint32_t));
+    *state = XDG_TOPLEVEL_STATE_FULLSCREEN;
+    xdg_toplevel_configure(&win, NULL, 1024, 768, &array);
+    wl_array_release(&array);
+
+    check(win.configure.is_fullscreen, "a new configure sets fullscreen");
+    check(!win.configure.is_maximized, "a new configure clears maximized");
+    check(win.configure.width == 1024, "a new configure updates the size");
+
+    /* An empty state array clears everything */
+    wl_array_init(&array);
+    xdg_toplevel_configure(&win, NULL, 0, 0, &array);
+    wl_array_release(&array);
+    check(!win.configure.is_fullscreen && win.configure.width == 0,
+          "an empty configure resets size and states");
+
+    /* WM capabilities */
+    win.wm_capabilities.maximize = true;
+    win.wm_capabilities.minimize = true;
+
+    wl_array_init(&array);
+    uint32_t *cap = wl_array_add(&array, sizeof(uint32_t));
+    *cap = XDG_TOPLEVEL_WM_CAPABILITIES_MAXIMIZE;
+    xdg_toplevel_wm_capabilities(&win, NULL, &array);
+    wl_array_release(&array);
+
+    check(win.wm_capabilities.maximize, "wm_capabilities sees maximize");
+    check(!win.wm_capabilities.minimize, "wm_capabilities clears unlisted caps");
+
+    wl_array_init(&array);
+    cap = wl_array_add(&array, sizeof(uint32_t));
+    *cap = XDG_TOPLEVEL_WM_CAPABILITIES_MINIMIZE;
+    cap = wl_array_add(&array, sizeof(uint32_t));
+    *cap = XDG_TOPLEVEL_WM_CAPABILITIES_FULLSCREEN;
+    xdg_toplevel_wm_capabilities(&win, NULL, &array);
+    wl_array_release(&array);
+
+    check(win.wm_capabilities.minimize, "wm_capabilities sees minimize");
+    check(!win.wm_capabilities.maximize, "wm_capabilities clears maximize");
+}
+
 int
 main(void)
 {
@@ -3631,6 +3706,7 @@ main(void)
     test_search();
     test_output();
     test_csd_visibility();
+    test_configure();
     test_wayland_misc();
     test_osc8();
     test_size_notifications();

@@ -615,3 +615,14 @@ void seat_add_primary_selection(struct seat *seat);
 void seat_add_text_input(struct seat *seat);
 void seat_add_key_bindings(struct seat *seat);
 void seat_destroy(struct seat *seat);
+
+void xdg_toplevel_configure(
+    void *data, struct xdg_toplevel *xdg_toplevel, int32_t width, int32_t height,
+    struct wl_array *states);
+void xdg_toplevel_close(void *data, struct xdg_toplevel *xdg_toplevel);
+void xdg_toplevel_configure_bounds(
+    void *data, struct xdg_toplevel *xdg_toplevel, int32_t width, int32_t height);
+void xdg_toplevel_wm_capabilities(
+    void *data, struct xdg_toplevel *xdg_toplevel, struct wl_array *caps);
+void xdg_surface_configure(
+    void *data, struct xdg_surface *xdg_surface, uint32_t serial);
