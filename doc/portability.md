@@ -49,3 +49,15 @@ directories are found automatically.
 `Passwd` and `sigaction` mirrors. Those files are outside this worktree's
 ownership. They are Linux-only mirrors and do not block the two cross
 targets used by the gate.
+
+## What is verified, and how
+
+| Claim | Status | Evidence / limit |
+|---|---|---|
+| FreeBSD cross-compile: 5 files x 1 target | verified | `scripts/check-targets.sh` compiles fdm.zig, spawn.zig, slave.zig, main.zig and server.zig for x86_64-freebsd with zig build-obj; same 5 files also compile for aarch64-linux-gnu. |
+| aarch64 epoll_event: Zig mirror size 12, events offset 0, data offset 4 | verified | comptime assertions at `fdm.zig:14-21` run during the aarch64 cross compile; a mismatch fails the gate. |
+| aarch64 epoll_event: C ABI match | inferred | The 12/4 layout comes from the packed C struct and the audit, not from an aarch64 C probe run on this host. |
+| Runtime ABI probe | verified | `abi_probe.c` is compiled and executed by meson on Linux only. No FreeBSD headers exist in the cross gate, so no FreeBSD probe runs. |
+| FreeBSD EpollEvent layout | inferred | `fdm.zig:9` and `fdm.zig:22-26` pin 16 bytes and data offset 8 by comptime constants instead of a FreeBSD C probe. |
+| FreeBSD epoll-shim constants | unverified | `server.zig:104` and `fdm.zig:30-49` use explicit Linux-compatible API values; no FreeBSD C header value is checked here. |
+| Private layout mirrors in unowned files | unverified | `client.zig:82` Stat, `client.zig:100` sockaddr_un, `config.zig:4486` Passwd and `terminal.zig:4550` sigaction have no C_TYPES entry or expectAbi call on this branch. Native Linux tests exercise behaviour, not those layouts. |
