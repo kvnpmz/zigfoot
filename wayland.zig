@@ -353,14 +353,6 @@ export fn wayl_win_csd_borders_visible(win: *const types.WlWindow) callconv(.c) 
 // Urgency, activation and the system bell
 // ─────────────────────────────────────────────────────────────────────────
 
-extern fn wayl_get_activation_token(
-    wayl: *types.Wayland,
-    seat: ?*types.Seat,
-    serial: u32,
-    win: *types.WlWindow,
-    cb: types.ActivationTokenCb,
-    cb_data: ?*anyopaque,
-) callconv(.c) bool;
 extern fn wayland_shim_xdg_system_bell_ring(bell: ?*anyopaque, surface: ?*anyopaque) callconv(.c) void;
 extern fn wayland_shim_xdg_activation_activate(activation: ?*anyopaque, token: [*:0]const u8, surface: ?*anyopaque) callconv(.c) void;
 
@@ -1147,8 +1139,6 @@ extern fn wayland_shim_add_fractional_scale_listener(scale: ?*anyopaque, win: *t
 extern fn wayland_shim_add_xdg_surface_listener(xdg_surface: ?*anyopaque, win: *types.WlWindow) callconv(.c) void;
 extern fn wayland_shim_add_xdg_toplevel_listener(toplevel: ?*anyopaque, win: *types.WlWindow) callconv(.c) void;
 extern fn wayland_shim_add_decoration_listener(decoration: ?*anyopaque, win: *types.WlWindow) callconv(.c) void;
-extern fn wayl_win_alpha_changed(win: *types.WlWindow) callconv(.c) void;
-extern fn wayl_activate(wayl: *types.Wayland, win: *types.WlWindow, token: [*c]const u8) callconv(.c) void;
 
 const ZXDG_TOPLEVEL_DECORATION_V1_MODE_CLIENT_SIDE: u32 = 1;
 const ZXDG_TOPLEVEL_DECORATION_V1_MODE_SERVER_SIDE: u32 = 2;
@@ -1310,4 +1300,149 @@ fn winInitFail(win: *types.WlWindow) ?*types.WlWindow {
 
 fn waylandOf2(term: *types.Terminal) *types.Wayland {
     return @ptrCast(@alignCast(term.wl.?));
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Transparency region and XDG activation
+// ─────────────────────────────────────────────────────────────────────────
+
+extern fn wayland_shim_region_add(region: ?*anyopaque, x: i32, y: i32, w: i32, h: i32) callconv(.c) void;
+extern fn wayland_shim_surface_set_opaque_region(surf: ?*anyopaque, region: ?*anyopaque) callconv(.c) void;
+extern fn wayland_shim_set_blur_region(effect: ?*anyopaque, region: ?*anyopaque) callconv(.c) void;
+extern fn term_theme_get(term: *const types.Terminal) callconv(.c) *const types.ColorTheme;
+extern fn wayland_shim_activation_get_token(activation: ?*anyopaque) callconv(.c) ?*anyopaque;
+extern fn wayland_shim_activation_token_set_serial(token: ?*anyopaque, serial: u32, seat: ?*anyopaque) callconv(.c) void;
+extern fn wayland_shim_activation_token_set_surface(token: ?*anyopaque, surf: ?*anyopaque) callconv(.c) void;
+extern fn wayland_shim_add_activation_token_listener(token: ?*anyopaque, ctx: ?*anyopaque) callconv(.c) void;
+extern fn wayland_shim_activation_token_commit(token: ?*anyopaque) callconv(.c) void;
+extern fn xmalloc(size: usize) callconv(.c) ?*anyopaque;
+
+const INT32_MAX: i32 = 0x7fffffff;
+
+export fn wayl_win_alpha_changed(win: *types.WlWindow) callconv(.c) void {
+    const term: *types.Terminal = @ptrCast(@alignCast(win.term.?));
+    const wayl = waylandOf(win);
+
+    // When fullscreened, transparency is disabled (see render.c).
+    // Update the opaque region to match.
+    const is_opaque = term.colors.alpha == 0xffff or win.is_fullscreen;
+
+    if (is_opaque) {
+        const region = wayland_shim_compositor_create_region(wayl.compositor);
+
+        if (region != null) {
+            wayland_shim_region_add(region, 0, 0, INT32_MAX, INT32_MAX);
+            wayland_shim_surface_set_opaque_region(win.surface.surf, region);
+            wayland_shim_region_destroy(region);
+        }
+    } else {
+        wayland_shim_surface_set_opaque_region(win.surface.surf, null);
+    }
+
+    if (term_theme_get(term).blur) {
+        if (wayl.have_background_blur) {
+            std.debug.assert(win.surface.background_effect != null);
+
+            if (is_opaque) {
+                // No transparency, disable blur
+                log_msg(LOG_CLASS_DEBUG, "wayland", "wayland.zig", @intCast(@src().line), "disabling background blur");
+                wayland_shim_set_blur_region(win.surface.background_effect, null);
+            } else {
+                // We have transparency, enable blur if user has enabled it
+                const region = wayland_shim_compositor_create_region(wayl.compositor);
+                if (region != null) {
+                    log_msg(LOG_CLASS_DEBUG, "wayland", "wayland.zig", @intCast(@src().line), "enabling background blur");
+
+                    wayland_shim_region_add(region, 0, 0, INT32_MAX, INT32_MAX);
+                    wayland_shim_set_blur_region(win.surface.background_effect, region);
+                    wayland_shim_region_destroy(region);
+                }
+            }
+        } else {
+            const S = struct {
+                var have_warned: bool = false;
+            };
+            if (!S.have_warned) {
+                log_msg(LOG_CLASS_WARNING, "wayland", "wayland.zig", @intCast(@src().line), "background blur requested, but compositor does not support it");
+                S.have_warned = true;
+            }
+        }
+    }
+}
+
+export fn activation_token_v1_done(data: ?*anyopaque, xdg_token: ?*anyopaque, token: [*c]const u8) callconv(.c) void {
+    log_msg(LOG_CLASS_DEBUG, "wayland", "wayland.zig", @intCast(@src().line), "XDG activation token done: %s", token);
+
+    const ctx: *types.XdgActivationTokenContext = @ptrCast(@alignCast(data.?));
+    const win: *types.WlWindow = @ptrCast(@alignCast(ctx.win.?));
+
+    ctx.cb(@ptrCast(token), ctx.cb_data);
+
+    const TokenList = tll.Tll(?*types.XdgActivationTokenContext);
+    const tokens: *TokenList = @ptrCast(&win.xdg_tokens);
+    var it = (@constCast(tokens)).foreach();
+    while (it.next()) |node| {
+        if (node.item.?.xdg_token != xdg_token)
+            continue;
+
+        std.debug.assert(win == @as(*types.WlWindow, @ptrCast(@alignCast(node.item.?.win.?))));
+
+        free(@as(?*anyopaque, @ptrCast(ctx)));
+        wayland_shim_xdg_activation_token_destroy(xdg_token);
+        tokens.removeNode(node);
+        return;
+    }
+
+    bug(@src().file, @intCast(@src().line), "activation_token_v1_done", "activation token not found in list");
+}
+
+export fn wayl_get_activation_token(
+    wayl: *types.Wayland,
+    seat: ?*types.Seat,
+    serial: u32,
+    win: *types.WlWindow,
+    cb: types.ActivationTokenCb,
+    cb_data: ?*anyopaque,
+) callconv(.c) bool {
+    if (wayl.xdg_activation == null)
+        return false;
+
+    const token = wayland_shim_activation_get_token(wayl.xdg_activation);
+
+    if (token == null) {
+        log_msg(LOG_CLASS_ERROR, "wayland", "wayland.zig", @intCast(@src().line), "failed to retrieve XDG activation token");
+        return false;
+    }
+
+    const ctx: *types.XdgActivationTokenContext = @ptrCast(@alignCast(xmalloc(@sizeOf(types.XdgActivationTokenContext)) orelse unreachable));
+    ctx.* = .{
+        .win = win,
+        .xdg_token = token,
+        .cb = cb,
+        .cb_data = cb_data,
+    };
+
+    {
+        const TokenList = tll.Tll(?*types.XdgActivationTokenContext);
+        const tokens: *TokenList = @ptrCast(&win.xdg_tokens);
+        tokens.pushBack(ctx);
+    }
+
+    if (seat != null and serial != 0)
+        wayland_shim_activation_token_set_serial(token, serial, seat.?.wl_seat);
+
+    wayland_shim_activation_token_set_surface(token, win.surface.surf);
+    wayland_shim_add_activation_token_listener(token, ctx);
+    wayland_shim_activation_token_commit(token);
+    return true;
+}
+
+export fn wayl_activate(wayl: *types.Wayland, win: *types.WlWindow, token: [*c]const u8) callconv(.c) void {
+    if (wayl.xdg_activation == null)
+        return;
+
+    if (token == null)
+        return;
+
+    wayland_shim_xdg_activation_activate(wayl.xdg_activation, @ptrCast(token), win.surface.surf);
 }

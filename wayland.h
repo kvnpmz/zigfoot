@@ -606,3 +606,6 @@ void xdg_output_handle_done(
     void *data, struct zxdg_output_v1 *xdg_output);
 void update_term_for_output_change(struct terminal *term);
 void monitor_destroy(struct monitor *mon);
+void activation_token_v1_done(
+    void *data, struct xdg_activation_token_v1 *xdg_token,
+    const char *token);

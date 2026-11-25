@@ -1751,136 +1751,16 @@ void wayland_shim_add_decoration_listener(
         decoration, &xdg_toplevel_decoration_listener, win);
 }
 
-void
-wayl_win_alpha_changed(struct wl_window *win)
-{
-    struct terminal *term = win->term;
-    struct wayland *wayl = term->wl;
-
-    /*
-     * When fullscreened, transparency is disabled (see render.c).
-     * Update the opaque region to match.
-     */
-    const bool is_opaque = term->colors.alpha == 0xffff || win->is_fullscreen;
-
-    if (is_opaque) {
-        struct wl_region *region = wl_compositor_create_region(wayl->compositor);
-
-        if (region != NULL) {
-            wl_region_add(region, 0, 0, INT32_MAX, INT32_MAX);
-            wl_surface_set_opaque_region(win->surface.surf, region);
-            wl_region_destroy(region);
-        }
-    } else
-        wl_surface_set_opaque_region(win->surface.surf, NULL);
-
-#if defined(HAVE_EXT_BACKGROUND_EFFECT)
-    if (term_theme_get(term)->blur) {
-        if (wayl->have_background_blur) {
-            xassert(win->surface.background_effect != NULL);
-
-            if (is_opaque) {
-                /* No transparency, disable blur */
-                LOG_DBG("disabling background blur");
-                ext_background_effect_surface_v1_set_blur_region(
-                    win->surface.background_effect, NULL);
-            } else {
-                /* We have transparency, enable blur if user has enabled it */
-                struct wl_region *region = wl_compositor_create_region(wayl->compositor);
-                if (region != NULL) {
-                    LOG_DBG("enabling background blur");
-
-                    wl_region_add(region, 0, 0, INT32_MAX, INT32_MAX);
-                    ext_background_effect_surface_v1_set_blur_region(
-                        win->surface.background_effect, region);
-                    wl_region_destroy(region);
-                }
-            }
-        } else {
-            static bool have_warned = false;
-            if (!have_warned) {
-                LOG_WARN("background blur requested, but compositor does not support it");
-                have_warned = true;
-            }
-        }
-    }
-#endif /* HAVE_EXT_BACKGROUND_EFFECT */
-}
-
-static void
-activation_token_done(void *data, struct xdg_activation_token_v1 *xdg_token,
-                      const char *token)
-{
-    LOG_DBG("XDG activation token done: %s", token);
-
-    struct xdg_activation_token_context *ctx = data;
-    struct wl_window *win = ctx->win;
-
-    ctx->cb(token, ctx->cb_data);
-
-    tll_foreach(win->xdg_tokens, it) {
-        if (it->item->xdg_token != xdg_token)
-            continue;
-
-        xassert(win == it->item->win);
-
-        free(ctx);
-        xdg_activation_token_v1_destroy(xdg_token);
-        tll_remove(win->xdg_tokens, it);
-        return;
-    }
-
-    BUG("activation token not found in list");
-}
 
 static const struct
 xdg_activation_token_v1_listener activation_token_listener = {
-    .done = &activation_token_done,
+    .done = &activation_token_v1_done,
 };
 
-bool
-wayl_get_activation_token(
-    struct wayland *wayl, struct seat *seat, uint32_t serial,
-    struct wl_window *win,
-    void (*cb)(const char *token, void *data), void *cb_data)
+void wayland_shim_add_activation_token_listener(
+    struct xdg_activation_token_v1 *token,
+    struct xdg_activation_token_context *ctx)
 {
-    if (wayl->xdg_activation == NULL)
-        return false;
-
-    struct xdg_activation_token_v1 *token =
-        xdg_activation_v1_get_activation_token(wayl->xdg_activation);
-
-    if (token == NULL) {
-        LOG_ERR("failed to retrieve XDG activation token");
-        return false;
-    }
-
-    struct xdg_activation_token_context *ctx = xmalloc(sizeof(*ctx));
-    *ctx = (struct xdg_activation_token_context){
-        .win = win,
-        .xdg_token = token,
-        .cb = cb,
-        .cb_data = cb_data,
-    };
-    tll_push_back(win->xdg_tokens, ctx);
-
-    if (seat != NULL && serial != 0)
-        xdg_activation_token_v1_set_serial(token, serial, seat->wl_seat);
-
-    xdg_activation_token_v1_set_surface(token, win->surface.surf);
-    xdg_activation_token_v1_add_listener(token, &activation_token_listener, ctx);
-    xdg_activation_token_v1_commit(token);
-    return true;
-}
-
-void
-wayl_activate(struct wayland *wayl, struct wl_window *win, const char *token)
-{
-    if (wayl->xdg_activation == NULL)
-        return;
-
-    if (token == NULL)
-        return;
-
-    xdg_activation_v1_activate(wayl->xdg_activation, token, win->surface.surf);
+    xdg_activation_token_v1_add_listener(
+        token, &activation_token_listener, ctx);
 }

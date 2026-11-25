@@ -310,6 +310,53 @@ bool terminal_shim_hasc32upper(const char32_t *s)
 
 /* Generated-protocol static inlines (wayland.zig cannot see them). */
 /* wayland.zig: window creation (D2i). */
+void wayland_shim_region_add(
+    struct wl_region *region, int32_t x, int32_t y, int32_t w, int32_t h)
+{
+    wl_region_add(region, x, y, w, h);
+}
+
+void wayland_shim_surface_set_opaque_region(
+    struct wl_surface *surf, struct wl_region *region)
+{
+    wl_surface_set_opaque_region(surf, region);
+}
+
+void wayland_shim_set_blur_region(
+    struct ext_background_effect_surface_v1 *effect, struct wl_region *region)
+{
+#if defined(HAVE_EXT_BACKGROUND_EFFECT)
+    ext_background_effect_surface_v1_set_blur_region(effect, region);
+#else
+    (void)effect;
+    (void)region;
+#endif
+}
+
+void *wayland_shim_activation_get_token(struct xdg_activation_v1 *activation)
+{
+    return xdg_activation_v1_get_activation_token(activation);
+}
+
+void wayland_shim_activation_token_set_serial(
+    struct xdg_activation_token_v1 *token, uint32_t serial,
+    struct wl_seat *seat)
+{
+    xdg_activation_token_v1_set_serial(token, serial, seat);
+}
+
+void wayland_shim_activation_token_set_surface(
+    struct xdg_activation_token_v1 *token, struct wl_surface *surf)
+{
+    xdg_activation_token_v1_set_surface(token, surf);
+}
+
+void wayland_shim_activation_token_commit(
+    struct xdg_activation_token_v1 *token)
+{
+    xdg_activation_token_v1_commit(token);
+}
+
 void *wayland_shim_fractional_scale_get(struct wp_fractional_scale_manager_v1 *m,
                                         struct wl_surface *surf)
 {
