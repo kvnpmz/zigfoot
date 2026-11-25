@@ -3194,7 +3194,9 @@ export fn keyboard_key(
     const seat: *Seat = @ptrCast(@alignCast(data orelse return));
     const term = seat.kbd_focus orelse return;
 
-    key_press_release(seat, term, serial, key + 8, state);
+    // C's unsigned addition wraps; ReleaseSafe `+` would trap on a
+    // malformed keycode near UINT32_MAX.
+    key_press_release(seat, term, serial, key +% 8, state);
 }
 
 /// The repeat timer fired: re-deliver the key as a press.

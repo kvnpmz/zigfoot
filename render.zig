@@ -4404,9 +4404,12 @@ export fn render_resize(
         !window.is_tiled;
 
     // Convert logical size to physical size
-    const scale: f64 = term.scale;
-    var width: c_int = roundF(@as(f64, @floatFromInt(width_in)) * scale);
-    var height: c_int = roundF(@as(f64, @floatFromInt(height_in)) * scale);
+    // C multiplies in `float` and only the round() call widens; a f64
+    // multiply can land on the other side of a rounding boundary at the
+    // fractional-scaling values (e.g. 1.05f: C 11, f64 10).
+    const scale: f32 = term.scale;
+    var width: c_int = roundF(@as(f64, @as(f32, @floatFromInt(width_in)) * scale));
+    var height: c_int = roundF(@as(f64, @as(f32, @floatFromInt(height_in)) * scale));
 
     // If the grid should be kept, the size should be overridden
     if (is_floating and (opts & RESIZE_KEEP_GRID) != 0)

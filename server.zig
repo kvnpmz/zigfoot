@@ -754,7 +754,9 @@ export fn server_init(
 
     const numeric_fd = if (end) |e| e[0] == 0 and configured_path[0] != 0 else false;
     if (numeric_fd) {
-        fd = @intCast(strtol(configured_path, &end, 10));
+        // C assigns strtol()'s long to an int: truncate, do not trap.
+        const pid_long = strtol(configured_path, &end, 10);
+        fd = @bitCast(@as(u32, @truncate(@as(u64, @bitCast(pid_long)))));
         if (!prepare_socket(fd))
             return initFail(null, fd);
         sock_path = null;

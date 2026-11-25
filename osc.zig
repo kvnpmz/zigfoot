@@ -190,8 +190,11 @@ export fn parse_legacy_color(
         const start: [*:0]const u8 = @ptrCast(string + 1);
 
         var end: [*:0]u8 = undefined;
+        // C resets errno and rejects an out-of-range value (e.g. a 20-digit
+        // alpha); Zig used to accept it and clamp to 100%.
+        __errno_location().* = 0;
         const percent = strtoul(start, &end, 10);
-        if (end[0] != ']') return false;
+        if (__errno_location().* != 0 or end[0] != ']') return false;
 
         have_alpha = true;
         const pct_capped: c_ulong = @min(percent, 100);
