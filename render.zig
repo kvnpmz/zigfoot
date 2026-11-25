@@ -3052,3 +3052,126 @@ export fn discarded(
     free(data);
 }
 
+
+
+// ─────────────────────────────────────────────────────────────────────────
+// Damage re-application (D3k2a)
+// ─────────────────────────────────────────────────────────────────────────
+
+extern fn term_damage_view(term: *Terminal) callconv(.c) void;
+fn freeDamageList(list: *types.DamageList) void {
+    var node = list.head;
+    while (node) |n| {
+        const next = n.next;
+        free(n);
+        node = next;
+    }
+
+    list.head = null;
+    list.tail = null;
+    list.length = 0;
+}
+
+export fn force_full_repaint(term: *Terminal, buf: *Buffer) callconv(.c) void {
+    freeDamageList(&term.grid.?.scroll_damage);
+    render_margin(term, buf, 0, term.rows, true);
+    term_damage_view(term);
+}
+
+export fn reapply_old_damage(term: *Terminal, new_buf: *Buffer, old: *Buffer) callconv(.c) void {
+    if (new_buf.age > 1) {
+        const len =
+            @as(usize, @intCast(new_buf.height)) * @as(usize, @intCast(new_buf.stride));
+        const dst: [*]u8 = @ptrCast(new_buf.data.?);
+        const src: [*]u8 = @ptrCast(old.data.?);
+        @memcpy(dst[0..len], src[0..len]);
+        return;
+    }
+
+    var dirty: Region32 = undefined;
+    render_shim_region_init(regionPtr(&dirty));
+
+    // Figure out the current frame's damage region.
+    //
+    // Without scroll damage we can subtract this frame's damage from the last
+    // frame's, so we don't copy areas that are about to be overwritten
+    // anyway. The scan is row based: a half-damaged row is copied whole and
+    // then partially overwritten while rendering.
+    //
+    // Since we're scanning the whole viewport anyway, also track whether
+    // *all* cells are to be updated - then just re-render everything.
+    var full_repaint_needed = true;
+
+    var r: c_int = 0;
+    while (r < term.rows) : (r += 1) {
+        const row = terminal_shim_grid_row_in_view(term.grid.?, r) orelse continue;
+
+        if (!row.dirty) {
+            full_repaint_needed = false;
+            continue;
+        }
+
+        var row_all_dirty = true;
+        var c: c_int = 0;
+        while (c < term.cols) : (c += 1) {
+            if (row.cells.?[@intCast(c)].attrs.clean) {
+                row_all_dirty = false;
+                full_repaint_needed = false;
+                break;
+            }
+        }
+
+        if (row_all_dirty) {
+            render_shim_region_union_rect(
+                regionPtr(&dirty),
+                term.margins.left,
+                term.margins.top + r * term.cell_height,
+                term.width - term.margins.left - term.margins.right,
+                term.cell_height,
+            );
+        }
+    }
+
+    if (full_repaint_needed) {
+        // C returns here without pixman_region32_fini(), leaking the region
+        // it just built; free it before taking the same branch.
+        render_shim_region_fini(regionPtr(&dirty));
+        force_full_repaint(term, new_buf);
+        return;
+    }
+
+    // TODO: re-apply last frame's scroll damage. We used to, but it was
+    // buggy; if it comes back, the buf->dirty updates in
+    // grid_render_scroll()/_reverse() have to go too.
+
+    const pix = bufferPix(new_buf);
+    const old_dirty = old.dirty.?;
+
+    if (term.grid.?.scroll_damage.length == 0) {
+        // The damage region computed above is only valid once this frame's
+        // scroll damage has been applied, so only subtract it when there is
+        // none.
+        render_shim_region_subtract(regionPtr(&dirty), old_dirty, regionPtr(&dirty));
+        render_shim_set_clip_region(pix, regionPtr(&dirty));
+    } else {
+        // Copy *all* of the last frame's damaged areas
+        render_shim_set_clip_region(pix, old_dirty);
+    }
+
+    render_shim_composite_op(
+        PIXMAN_OP_SRC,
+        optPix(old.pix.?[0]),
+        null,
+        pix,
+        0,
+        0,
+        0,
+        0,
+        term.width,
+        term.height,
+    );
+
+    render_shim_set_clip_region(pix, null);
+    render_shim_region_fini(regionPtr(&dirty));
+}
+

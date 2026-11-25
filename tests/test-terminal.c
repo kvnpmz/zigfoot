@@ -5227,6 +5227,103 @@ test_presentation_feedback(void)
 }
 
 
+/* D3k2a: reapply_old_damage() and force_full_repaint() */
+static void
+test_reapply_old_damage(void)
+{
+    struct terminal *term = term_new();
+    struct wl_window win = {0};
+    struct wayland wl = {0};
+    static struct config conf;
+    memset(&conf, 0, sizeof(conf));
+
+    enum { W = 8, H = 16 };
+    uint32_t old_pixels[W * H];
+    uint32_t new_pixels[W * H];
+    for (int i = 0; i < W * H; i++)
+        old_pixels[i] = 0xff000000u | (uint32_t)i;
+
+    pixman_image_t *old_pix =
+        pixman_image_create_bits(PIXMAN_a8r8g8b8, W, H, old_pixels, W * 4);
+    pixman_image_t *new_pix =
+        pixman_image_create_bits(PIXMAN_a8r8g8b8, W, H, new_pixels, W * 4);
+    if (old_pix == NULL || new_pix == NULL) {
+        printf("skip: pixman_image_create_bits() failed\n");
+        term_free(term);
+        return;
+    }
+
+    term->window = &win;
+    term->wl = &wl;
+    term->conf = &conf;
+    term->scale = 1.0f;
+    term->cols = 2;
+    term->rows = 2;
+    term->cell_width = W / 2;
+    term->cell_height = H / 2;
+    term->width = W;
+    term->height = H;
+    term->margins.top = term->margins.bottom = 0;
+    term->margins.left = term->margins.right = 0;
+    term->colors.bg = 0x000000ff;
+    term->colors.fg = 0x00ffffff;
+    term->colors.alpha = 0xffff;
+
+    pixman_region32_t old_dirty;
+    pixman_region32_t new_dirty;
+    pixman_region32_init_rect(&old_dirty, 0, 0, W, H);
+    pixman_region32_init(&new_dirty);
+
+    pixman_image_t *old_pixarr[1] = {old_pix};
+    pixman_image_t *new_pixarr[1] = {new_pix};
+
+    struct buffer old_buf = {
+        .width = W, .height = H, .stride = W * 4, .data = old_pixels,
+        .pix = old_pixarr, .pix_instances = 1, .dirty = &old_dirty,
+    };
+    struct buffer new_buf = {
+        .width = W, .height = H, .stride = W * 4, .data = new_pixels,
+        .pix = new_pixarr, .pix_instances = 1, .dirty = &new_dirty,
+    };
+
+    /* A buffer older than the previous frame is a straight memcpy. */
+    memset(new_pixels, 0, sizeof(new_pixels));
+    new_buf.age = 2;
+    reapply_old_damage(term, &new_buf, &old_buf);
+    check(memcmp(new_pixels, old_pixels, sizeof(new_pixels)) == 0,
+          "a two-frames-old buffer is copied wholesale");
+
+    /* With no dirty rows, the old frame's damage is composited. */
+    for (int r = 0; r < term->rows; r++)
+        grid_row_in_view(term->grid, r)->dirty = false;
+
+    memset(new_pixels, 0, sizeof(new_pixels));
+    new_buf.age = 0;
+    reapply_old_damage(term, &new_buf, &old_buf);
+    check(new_pixels[0] == old_pixels[0] &&
+          new_pixels[W * H - 1] == old_pixels[W * H - 1],
+          "an undamaged frame is copied from the old buffer");
+
+    /* force_full_repaint(): drops the pending scroll damage and re-dirties */
+    tll_push_back(term->grid->scroll_damage, ((struct damage){0}));
+    grid_row_in_view(term->grid, 0)->cells[0].attrs.clean = 1;
+
+    force_full_repaint(term, &new_buf);
+    check(tll_length(term->grid->scroll_damage) == 0,
+          "force_full_repaint() drops the pending scroll damage");
+    check(grid_row_in_view(term->grid, 0)->cells[0].attrs.clean == 0,
+          "force_full_repaint() re-dirties the view");
+
+    pixman_region32_fini(&old_dirty);
+    pixman_region32_fini(&new_dirty);
+    pixman_image_unref(old_pix);
+    pixman_image_unref(new_pix);
+    term->window = NULL;
+    term->wl = NULL;
+    term_free(term);
+}
+
+
 int
 main(void)
 {
@@ -5258,6 +5355,7 @@ main(void)
     test_render_overlay();
     test_render_init();
     test_presentation_feedback();
+    test_reapply_old_damage();
     test_grid_render_scroll();
     test_render_sixel();
     test_csd_buttons();
