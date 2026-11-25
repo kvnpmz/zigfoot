@@ -650,9 +650,9 @@ utmp backends where available.
 
 ## 13. Sequenced backlog (refreshed 2026-11-24)
 
-State: **32,933 of 48,830 C lines gone (67.4%)**, ~53% by effort, 34 modules
-ported, 477 harness assertions, `meson test` 5/5 in three build dirs.
-Remaining C: 15,897 lines, 1,938 of which are `*-shim.c` accessors.
+State: **33,065 of 48,830 C lines gone (67.7%)**, ~54% by effort, 34 modules
+ported, 487 harness assertions, `meson test` 5/5 in three build dirs.
+Remaining C: 15,765 lines, 1,938 of which are `*-shim.c` accessors.
 
 `smoke.sh` now launches **real windows**: weston's headless backend creates no
 `wl_seat`, so foot refused to start ("no seats available"). When `Xvfb` is
@@ -779,7 +779,8 @@ Order matters: `search` and `wayland` first (they unblock the rest), then
 | **D2k1** done | `wayland`: the seat wiring — `seat_add_data_device()`, `seat_add_primary_selection()`, `seat_add_text_input()` (the `#if FOOT_IME_ENABLED` guard is a constant here, as elsewhere), `seat_add_key_bindings()` and the full `seat_destroy()` teardown (buttons list, xkb objects, repeat timerfd, cursor theme/surface/viewport/callback, clipboard+primary sources/offers/devices, cursor-shape device, keymap/pointer/touch release, text input, seat release, IME pending state, four string frees). The data-device/primary-selection/text-input listener tables live in selection.c and ime.c, so three forwarders attach them. 3 new harness checks incl. the button-list drain | D2j | 1d |
 | **D2k2** done | `wayland`: the configure path — `xdg_toplevel_configure()` (all thirteen `xdg_toplevel_state` values decoded from the `wl_array`), `xdg_toplevel_close()`, `xdg_toplevel_configure_bounds()`, `xdg_toplevel_wm_capabilities()` and `xdg_surface_configure()` (CSD instantiate/destroy on transitions, titlebar/border size subtraction, ack, `RESIZE_BY_CELLS` vs `RESIZE_FORCE`, visual focus, visibility reports, the alpha/refresh pair on fullscreen changes, the compositor-appeasing commit, and `term_window_configured()` on the first configure). The listener tables stay in C. 15 new harness checks decode the state and capability arrays; maximized/fullscreen smoke launches drive the surfaces path | D2k1 | 2d |
 | **D2k3** done | `wayland`: the `wl_surface` listener — `surface_enter()`/`surface_leave()` (monitor lookup, the window's `on_outputs` list, and the DPI/font refresh) — plus `verify_iface_version()` and the two preferred-buffer callbacks. 4 new harness checks | D2k2 | 0.5d |
-| **D2k4** | `wayland`: `handle_global` (383 lines)/`handle_global_remove`, `wayl_init`/`wayl_destroy`, `seat_handle_capabilities`, `shm_format`, `fdm_wayl`/`fdm_repeat`, the decoration and colour-management listeners | D2k3 | 3–4d |
+| **D2k4** done | `wayland`: the small protocol listeners — `shm_format()` (the three 10/16-bit formats; the debug description block is compiled out by `LOG_ENABLE_DBG 0`), `seat_handle_name()`, `xdg_toplevel_decoration_configure()` (CSD/SSD mode → pending `csd_mode`), `fractional_scale_preferred_scale()` (÷120, no-op when unchanged) and `ext_background_capabilities()`. 10 new harness checks | D2k3 | 0.5d |
+| **D2k5** | `wayland`: `handle_global` (383 lines)/`handle_global_remove`, `wayl_init`/`wayl_destroy`, `seat_handle_capabilities`, `fdm_wayl`/`fdm_repeat`, `color_manager_*` | D2k4 | 3–4d |
 | **D2d** | `wayland`: `handle_global`/`handle_global_remove`, `wayl_init`/`wayl_destroy`, seat capabilities and data devices | D2c | 3–4d |
 | **D3** | `render` (5,479) — split into D3a chains/damage/cursor, D3b grid/csd/box-drawing glyph cache, D3c sixel/notifications/search-highlight | biggest module; do it after `wayland` so the surface/scale paths are Zig | 1.5–2w |
 | **D4** | `input` (3,687) — split into D4a keyboard/legacy+kitty protocols, D4b pointer/mouse/touch, D4c compose/IME plumbing | after B2 + key-binding | 1–1.5w |

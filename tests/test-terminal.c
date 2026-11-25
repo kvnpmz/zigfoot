@@ -3713,6 +3713,55 @@ test_surface_listener(void)
     check(true, "preferred_buffer_transform is a no-op");
 }
 
+
+static void
+test_small_listeners(void)
+{
+    struct wayland wayl = {0};
+
+    shm_format(&wayl, NULL, WL_SHM_FORMAT_ARGB2101010);
+    shm_format(&wayl, NULL, WL_SHM_FORMAT_ABGR16161616);
+    shm_format(&wayl, NULL, WL_SHM_FORMAT_XRGB8888);
+    check(wayl.shm_have_argb2101010, "shm_format() records ARGB2101010");
+    check(wayl.shm_have_abgr161616, "shm_format() records ABGR16161616");
+    check(!wayl.shm_have_abgr2101010, "shm_format() ignores unseen formats");
+
+    struct seat seat = {0};
+    seat_handle_name(&seat, NULL, "seat0");
+    check_text(seat.name, "seat0", "seat_handle_name() stores the name");
+    seat_handle_name(&seat, NULL, "seat1");
+    check_text(seat.name, "seat1", "seat_handle_name() replaces the name");
+    free(seat.name);
+
+    /* Decoration mode maps onto the pending CSD mode */
+    struct terminal term = {0};
+    struct config conf = {0};
+    struct wl_window win = {0};
+
+    term.conf = &conf;
+    win.term = &term;
+    conf.csd.preferred = CONF_CSD_PREFER_CLIENT;
+
+    xdg_toplevel_decoration_configure(&win, NULL,
+                                      ZXDG_TOPLEVEL_DECORATION_V1_MODE_SERVER_SIDE);
+    check(win.configure.csd_mode == CSD_NO, "server-side decoration mode disables CSDs");
+
+    xdg_toplevel_decoration_configure(&win, NULL,
+                                      ZXDG_TOPLEVEL_DECORATION_V1_MODE_CLIENT_SIDE);
+    check(win.configure.csd_mode == CSD_YES, "client-side decoration mode enables CSDs");
+
+    /* Background blur capability */
+    ext_background_capabilities(&wayl, NULL, 1);
+    check(wayl.have_background_blur, "the blur capability is recorded");
+    ext_background_capabilities(&wayl, NULL, 0);
+    check(!wayl.have_background_blur, "an empty capability set clears blur");
+
+    /* Fractional scale: the same value is a no-op */
+    win.scale = 1.5f;
+    fractional_scale_preferred_scale(&win, NULL, 180);
+    check(win.scale == 1.5f, "an unchanged fractional scale is ignored");
+}
+
 int
 main(void)
 {
@@ -3738,6 +3787,7 @@ main(void)
     test_csd_visibility();
     test_configure();
     test_surface_listener();
+    test_small_listeners();
     test_wayland_misc();
     test_osc8();
     test_size_notifications();

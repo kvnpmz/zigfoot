@@ -1971,3 +1971,89 @@ export fn surface_preferred_buffer_transform(data: ?*anyopaque, surface: ?*anyop
     _ = surface;
     _ = transform;
 }
+
+// ─────────────────────────────────────────────────────────────────────────
+// Small protocol listeners
+// ─────────────────────────────────────────────────────────────────────────
+
+// wayland-client: enum wl_shm_format
+const WL_SHM_FORMAT_ARGB2101010: u32 = 0x30335241; // 'A''R''3''0'
+const WL_SHM_FORMAT_ABGR2101010: u32 = 0x30334241; // 'A''B''3''0'
+const WL_SHM_FORMAT_ABGR16161616: u32 = 0x38344241; // 'A''B''4''8'
+
+export fn shm_format(data: ?*anyopaque, wl_shm: ?*anyopaque, format: u32) callconv(.c) void {
+    _ = wl_shm;
+    const wayl: *types.Wayland = @ptrCast(@alignCast(data.?));
+
+    switch (format) {
+        WL_SHM_FORMAT_ARGB2101010 => wayl._shm_format_bits.argb2101010 = true,
+        WL_SHM_FORMAT_ABGR2101010 => wayl._shm_format_bits.abgr2101010 = true,
+        WL_SHM_FORMAT_ABGR16161616 => wayl._shm_format_bits.abgr161616 = true,
+        else => {},
+    }
+}
+
+export fn seat_handle_name(data: ?*anyopaque, wl_seat: ?*anyopaque, name: [*c]const u8) callconv(.c) void {
+    _ = wl_seat;
+    const seat: *types.Seat = @ptrCast(@alignCast(data.?));
+    free(@as(?*anyopaque, @ptrCast(seat.name)));
+    seat.name = if (name == null) null else xstrdup(@ptrCast(name));
+}
+
+export fn xdg_toplevel_decoration_configure(
+    data: ?*anyopaque,
+    decoration: ?*anyopaque,
+    mode: u32,
+) callconv(.c) void {
+    _ = decoration;
+    const win: *types.WlWindow = @ptrCast(@alignCast(data.?));
+    const term: *types.Terminal = @ptrCast(@alignCast(win.term.?));
+
+    std.debug.assert(term.conf.?.csd.preferred != .prefer_none);
+
+    switch (mode) {
+        ZXDG_TOPLEVEL_DECORATION_V1_MODE_CLIENT_SIDE => {
+            log_msg(LOG_CLASS_INFO, "wayland", "wayland.zig", @intCast(@src().line), "using CSD decorations");
+            win.configure.csd_mode = .yes;
+        },
+
+        ZXDG_TOPLEVEL_DECORATION_V1_MODE_SERVER_SIDE => {
+            log_msg(LOG_CLASS_INFO, "wayland", "wayland.zig", @intCast(@src().line), "using SSD decorations");
+            win.configure.csd_mode = .no;
+        },
+
+        else => log_msg(LOG_CLASS_ERROR, "wayland", "wayland.zig", @intCast(@src().line), "unimplemented: unknown XDG toplevel decoration mode: %u", mode),
+    }
+}
+
+export fn fractional_scale_preferred_scale(
+    data: ?*anyopaque,
+    fractional_scale: ?*anyopaque,
+    scale: u32,
+) callconv(.c) void {
+    _ = fractional_scale;
+    const win: *types.WlWindow = @ptrCast(@alignCast(data.?));
+
+    const new_scale: f32 = @as(f32, @floatFromInt(scale)) / 120.0;
+
+    if (win.scale == new_scale)
+        return;
+
+    log_msg(LOG_CLASS_DEBUG, "wayland", "wayland.zig", @intCast(@src().line), "fractional scale: %.2f -> %.2f", win.scale, new_scale);
+
+    win.scale = new_scale;
+    updateTermForOutputChange(@ptrCast(@alignCast(win.term.?)));
+}
+
+// ext-background-effect-v1.h
+const EXT_BACKGROUND_EFFECT_MANAGER_V1_CAPABILITY_BLUR: u32 = 1;
+
+export fn ext_background_capabilities(data: ?*anyopaque, manager: ?*anyopaque, flags: u32) callconv(.c) void {
+    _ = manager;
+    const wayl: *types.Wayland = @ptrCast(@alignCast(data.?));
+
+    wayl.have_background_blur =
+        (flags & EXT_BACKGROUND_EFFECT_MANAGER_V1_CAPABILITY_BLUR) != 0;
+
+    log_msg(LOG_CLASS_DEBUG, "wayland", "wayland.zig", @intCast(@src().line), "compositor supports background blur: %s", @as([*:0]const u8, if (wayl.have_background_blur) "yes" else "no"));
+}

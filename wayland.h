@@ -636,3 +636,12 @@ void surface_preferred_buffer_scale(
     void *data, struct wl_surface *surface, int32_t scale);
 void surface_preferred_buffer_transform(
     void *data, struct wl_surface *surface, uint32_t transform);
+
+void shm_format(void *data, struct wl_shm *wl_shm, uint32_t format);
+void seat_handle_name(void *data, struct wl_seat *wl_seat, const char *name);
+void xdg_toplevel_decoration_configure(
+    void *data, struct zxdg_toplevel_decoration_v1 *decoration, uint32_t mode);
+void fractional_scale_preferred_scale(
+    void *data, struct wp_fractional_scale_v1 *fractional_scale, uint32_t scale);
+void ext_background_capabilities(
+    void *data, struct ext_background_effect_manager_v1 *manager, uint32_t flags);

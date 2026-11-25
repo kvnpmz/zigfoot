@@ -58,48 +58,6 @@ void wayland_shim_add_text_input_listener(
     zwp_text_input_v3_add_listener(ti, &text_input_listener, seat);
 }
 
-static void
-shm_format(void *data, struct wl_shm *wl_shm, uint32_t format)
-{
-    struct wayland *wayl = data;
-
-    switch (format) {
-    case WL_SHM_FORMAT_ARGB2101010: wayl->shm_have_argb2101010 = true; break;
-    case WL_SHM_FORMAT_ABGR2101010: wayl->shm_have_abgr2101010 = true; break;
-    case WL_SHM_FORMAT_ABGR16161616: wayl->shm_have_abgr161616 = true; break;
-    }
-
-#if defined(_DEBUG) && LOG_ENABLE_DBG == 1
-    bool have_description = false;
-    const char c4 = (format >> 24) & 0xff;
-    const char c3 = (format >> 16) & 0xff;
-    const char c2 = (format >> 8) & 0xff;
-    const char c1 = (format >> 0) & 0xff;
-
-    for (size_t i = 0; i < ALEN(shm_formats); i++) {
-        if (shm_formats[i].format == format) {
-            LOG_DBG("shm: 0x%08x: %c%c%c%c - %s",
-                    format,
-                    isprint(c1) ? c1 : ' ',
-                    isprint(c2) ? c2 : ' ',
-                    isprint(c3) ? c3 : ' ',
-                    isprint(c4) ? c4 : ' ',
-                    shm_formats[i].description);
-            have_description = true;
-            break;
-        }
-    }
-
-    if (!have_description)
-        LOG_DBG("shm: 0x%08x: %c%c%c%c - unknown",
-                format,
-                isprint(c1) ? c1 : ' ',
-                isprint(c2) ? c2 : ' ',
-                isprint(c3) ? c3 : ' ',
-                isprint(c4) ? c4 : ' ');
-#endif
-}
-
 static const struct wl_shm_listener shm_listener = {
     .format = &shm_format,
 };
@@ -218,14 +176,6 @@ seat_handle_capabilities(void *data, struct wl_seat *wl_seat,
 
         seat->touch.state = TOUCH_STATE_INHIBITED;
     }
-}
-
-static void
-seat_handle_name(void *data, struct wl_seat *wl_seat, const char *name)
-{
-    struct seat *seat = data;
-    free(seat->name);
-    seat->name = xstrdup(name);
 }
 
 static const struct wl_seat_listener seat_listener = {
@@ -364,51 +314,11 @@ static const struct xdg_surface_listener xdg_surface_listener = {
     .configure = &xdg_surface_configure,
 };
 
-static void
-xdg_toplevel_decoration_configure(void *data,
-                                  struct zxdg_toplevel_decoration_v1 *zxdg_toplevel_decoration_v1,
-                                  uint32_t mode)
-{
-    struct wl_window *win = data;
-
-    xassert(win->term->conf->csd.preferred != CONF_CSD_PREFER_NONE);
-    switch (mode) {
-    case ZXDG_TOPLEVEL_DECORATION_V1_MODE_CLIENT_SIDE:
-        LOG_INFO("using CSD decorations");
-        win->configure.csd_mode = CSD_YES;
-        break;
-
-    case ZXDG_TOPLEVEL_DECORATION_V1_MODE_SERVER_SIDE:
-        LOG_INFO("using SSD decorations");
-        win->configure.csd_mode = CSD_NO;
-        break;
-
-    default:
-        LOG_ERR("unimplemented: unknown XDG toplevel decoration mode: %u", mode);
-        break;
-    }
-}
-
 static const struct zxdg_toplevel_decoration_v1_listener xdg_toplevel_decoration_listener = {
     .configure = &xdg_toplevel_decoration_configure,
 };
 
 #if defined(HAVE_EXT_BACKGROUND_EFFECT)
-static void
-ext_background_capabilities(
-    void *data,
-    struct ext_background_effect_manager_v1 *ext_background_effect_manager_v1,
-    uint32_t flags)
-{
-    struct wayland *wayl = data;
-
-    wayl->have_background_blur =
-        !!(flags & EXT_BACKGROUND_EFFECT_MANAGER_V1_CAPABILITY_BLUR);
-
-    LOG_DBG("compositor supports background blur: %s",
-            wayl->have_background_blur ? "yes" : "no");
-}
-
 static const struct ext_background_effect_manager_v1_listener background_manager_listener = {
     .capabilities = &ext_background_capabilities,
 };
@@ -1191,24 +1101,6 @@ wayl_destroy(struct wayland *wayl)
     }
 
     free(wayl);
-}
-
-static void
-fractional_scale_preferred_scale(
-    void *data, struct wp_fractional_scale_v1 *wp_fractional_scale_v1,
-    uint32_t scale)
-{
-    struct wl_window *win = data;
-
-    const float new_scale = (float)scale / 120.;
-
-    if (win->scale == new_scale)
-        return;
-
-    LOG_DBG("fractional scale: %.2f -> %.2f", win->scale, new_scale);
-
-    win->scale = new_scale;
-    update_term_for_output_change(win->term);
 }
 
 static const struct wp_fractional_scale_v1_listener fractional_scale_listener = {
