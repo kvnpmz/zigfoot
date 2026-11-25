@@ -2874,3 +2874,365 @@ export fn keyboard_modifiers(
     }
 }
 
+// ─────────────────────────────────────────────────────────────────────────
+// key_press_release (D4b4): the dispatcher between key events, the binding
+// matchers and the two protocol encoders.
+// ─────────────────────────────────────────────────────────────────────────
+
+const XKB_KEYSYM_MAX: u32 = 0x1fffff;
+const WL_KEYBOARD_KEY_STATE_RELEASED_C: c_int = 0;
+const WL_KEYBOARD_KEY_STATE_PRESSED_C: c_int = 1;
+const XKB_COMPOSE_CANCELLED: c_int = 3;
+
+extern fn clock_gettime(clockid: c_int, tp: *Timespec) callconv(.c) c_int;
+extern fn xkb_keymap_key_repeats(keymap: ?*anyopaque, key: u32) callconv(.c) c_int;
+extern fn xkb_state_key_get_one_sym(state: ?*anyopaque, key: u32) callconv(.c) u32;
+extern fn xkb_compose_state_feed(state: ?*anyopaque, sym: u32) callconv(.c) c_int;
+extern fn xkb_compose_state_get_status(state: ?*anyopaque) callconv(.c) c_int;
+extern fn xkb_compose_state_get_utf8(
+    state: ?*anyopaque, buffer: ?[*]u8, size: usize) callconv(.c) c_int;
+extern fn xkb_state_key_get_utf8(
+    state: ?*anyopaque, key: u32, buffer: ?[*]u8, size: usize) callconv(.c) c_int;
+extern fn xkb_state_key_get_utf32(state: ?*anyopaque, key: u32) callconv(.c) u32;
+extern fn key_binding_for(
+    mgr: ?*anyopaque, conf: *const types.Config, seat: *Seat) callconv(.c) ?*types.KeyBindingSet;
+extern fn unicode_mode_input(seat: *Seat, term: *Terminal, sym: u32) callconv(.c) void;
+extern fn search_input(
+    seat: *Seat,
+    term: *Terminal,
+    bindings: *const types.KeyBindingSet,
+    key: u32,
+    sym: u32,
+    mods: u32,
+    consumed: u32,
+    raw_syms: [*c]const u32,
+    raw_count: usize,
+    serial: u32,
+) callconv(.c) void;
+extern fn urls_input(
+    seat: *Seat,
+    term: *Terminal,
+    bindings: *const types.KeyBindingSet,
+    key: u32,
+    sym: u32,
+    mods: u32,
+    consumed: u32,
+    raw_syms: [*c]const u32,
+    raw_count: usize,
+    serial: u32,
+) callconv(.c) void;
+extern fn execute_binding(
+    seat: *Seat,
+    term: *Terminal,
+    binding: *const types.KeyBinding,
+    serial: u32,
+    amount: c_int,
+) callconv(.c) bool;
+extern fn term_reset_view(term: *Terminal) callconv(.c) void;
+extern fn selection_cancel(term: *Terminal) callconv(.c) void;
+extern fn ambstoc32(src: [*c]const u8) callconv(.c) ?[*]u32;
+extern fn xmalloc(size: usize) callconv(.c) ?*anyopaque;
+extern fn xcalloc(n: usize, size: usize) callconv(.c) ?*anyopaque;
+extern fn terminal_shim_urls_mode_active(term: *const Terminal) callconv(.c) bool;
+
+fn bindingList(set: *const types.KeyBindingSet, comptime field: []const u8) *tll.Tll(types.KeyBinding) {
+    return @ptrCast(@constCast(&@field(set, field)));
+}
+
+export fn key_press_release(
+    seat: *Seat,
+    term: *Terminal,
+    serial: u32,
+    key: u32,
+    state: u32,
+) callconv(.c) void {
+    std.debug.assert(serial != 0);
+
+    seat.kbd.serial = serial;
+
+    const keymap = seat.kbd.xkb_keymap orelse return;
+    const xkb_state = seat.kbd.xkb_state orelse return;
+    if (seat.kbd.xkb == null)
+        return;
+
+    const pressed = state == WL_KEYBOARD_KEY_STATE_PRESSED_C;
+    const released = state == WL_KEYBOARD_KEY_STATE_RELEASED_C;
+
+    if (released)
+        _ = stop_repeater(seat, key);
+
+    if (pressed)
+        seat.kbd.last_shortcut_sym = XKB_KEYSYM_MAX + 1;
+
+    const should_repeat = pressed and xkb_keymap_key_repeats(keymap, key) != 0;
+
+    const sym = xkb_state_key_get_one_sym(xkb_state, key);
+
+    const conf = term.conf.?;
+
+    if (pressed and conf.mouse.hide_when_typing and !keysym_is_modifier(sym)) {
+        seat.pointer.hidden = true;
+        term_xcursor_update_for_seat(term, seat);
+    }
+
+    var compose_status: c_int = 0; // XKB_COMPOSE_NOTHING
+    if (seat.kbd.xkb_compose_state) |compose| {
+        if (pressed)
+            _ = xkb_compose_state_feed(compose, sym);
+        compose_status = xkb_compose_state_get_status(compose);
+    }
+
+    const composed = compose_status == XKB_COMPOSE_COMPOSED;
+
+    var mods: u32 = 0;
+    var consumed: u32 = 0;
+    get_current_modifiers(seat, &mods, &consumed, key, true);
+
+    const layout_idx = xkb_state_key_get_layout(xkb_state, key);
+
+    var raw_syms: ?[*]const u32 = null;
+    const raw_count_signed = xkb_keymap_key_get_syms_by_level(
+        keymap, key, layout_idx, 0, &raw_syms);
+    const raw_count: usize = @intCast(@max(raw_count_signed, 0));
+
+    const bindings = key_binding_for(
+        seat.wayl.?.key_binding_manager, conf, seat) orelse return;
+
+    if (term.unicode_mode.active) {
+        if (pressed)
+            unicode_mode_input(seat, term, sym);
+        return;
+    } else if (term.is_searching) {
+        if (pressed) {
+            if (should_repeat)
+                _ = start_repeater(seat, key);
+
+            search_input(
+                seat, term, bindings, key, sym, mods, consumed,
+                raw_syms, raw_count, serial);
+        }
+        return;
+    } else if (terminal_shim_urls_mode_active(term)) {
+        if (pressed) {
+            if (should_repeat)
+                _ = start_repeater(seat, key);
+
+            urls_input(
+                seat, term, bindings, key, sym, mods, consumed,
+                raw_syms, raw_count, serial);
+        }
+        return;
+    }
+
+    var handled = false;
+
+    maybe_repeat: {
+        // ── user configurable bindings ────────────────────────────────────
+        if (pressed) {
+            const key_bindings = bindingList(bindings, "key");
+
+            // Match untranslated symbols
+            var it = key_bindings.foreach();
+            while (it.next()) |node| {
+                const bind = &node.item;
+
+                if (bind.mods != mods or bind.mods == 0)
+                    continue;
+
+                var i: usize = 0;
+                while (i < raw_count) : (i += 1) {
+                    if (bind._u.k.sym == raw_syms.?[i] and
+                        execute_binding(seat, term, bind, serial, 1))
+                    {
+                        seat.kbd.last_shortcut_sym = sym;
+                        break :maybe_repeat;
+                    }
+                }
+            }
+
+            // Match translated symbol
+            var it2 = key_bindings.foreach();
+            while (it2.next()) |node| {
+                const bind = &node.item;
+
+                if (bind._u.k.sym == sym and
+                    bind.mods == (mods & ~consumed) and
+                    execute_binding(seat, term, bind, serial, 1))
+                {
+                    seat.kbd.last_shortcut_sym = sym;
+                    break :maybe_repeat;
+                }
+            }
+
+            // Match raw key code
+            var it3 = key_bindings.foreach();
+            while (it3.next()) |node| {
+                const bind = &node.item;
+
+                if (bind.mods != mods or bind.mods == 0)
+                    continue;
+
+                const codes: *tll.Tll(c_int) = @ptrCast(
+                    @constCast(&bind._u.k.key_codes));
+                var cit = codes.foreach();
+                while (cit.next()) |cnode| {
+                    if (cnode.item == @as(c_int, @intCast(key)) and
+                        execute_binding(seat, term, bind, serial, 1))
+                    {
+                        seat.kbd.last_shortcut_sym = sym;
+                        break :maybe_repeat;
+                    }
+                }
+            }
+        }
+
+        if (released and seat.kbd.last_shortcut_sym == sym) {
+            // Don't process a release event that corresponds to a triggered
+            // shortcut: the press was consumed, so its release must not emit
+            // an escape (which also used to reset the viewport).
+            break :maybe_repeat;
+        }
+
+        if (compose_status == XKB_COMPOSE_CANCELLED)
+            break :maybe_repeat;
+
+        // ── compose, and maybe emit "normal" characters ───────────────────
+        std.debug.assert(seat.kbd.xkb_compose_state != null or !composed);
+
+        var count_signed: c_int = 0;
+        if (composed) {
+            count_signed = xkb_compose_state_get_utf8(seat.kbd.xkb_compose_state, null, 0);
+        } else {
+            count_signed = xkb_state_key_get_utf8(xkb_state, key, null, 0);
+        }
+        const count: usize = @intCast(@max(count_signed, 0));
+
+        var buf: [32]u8 = undefined;
+        var heap_utf8: ?[*]u8 = null;
+        var utf8: [*]u8 = &buf;
+        if (count >= buf.len) {
+            heap_utf8 = @ptrCast(xmalloc(count + 1).?);
+            utf8 = heap_utf8.?;
+        }
+
+        var utf32: ?[*]u32 = null;
+
+        if (composed) {
+            _ = xkb_compose_state_get_utf8(
+                seat.kbd.xkb_compose_state, utf8, count + 1);
+
+            if (count > 0)
+                utf32 = ambstoc32(utf8);
+        } else {
+            _ = xkb_state_key_get_utf8(xkb_state, key, utf8, count + 1);
+
+            const allocated: [*]u32 = @ptrCast(@alignCast(xcalloc(2, @sizeOf(u32)).?));
+            allocated[0] = xkb_state_key_get_utf32(xkb_state, key);
+            allocated[1] = 0;
+            utf32 = allocated;
+        }
+
+        const ctx = KbdCtx{
+            .layout = layout_idx,
+            .key = key,
+            .sym = sym,
+            .level0_syms = .{ .syms = raw_syms, .count = raw_count },
+            .mods = mods,
+            .consumed = consumed,
+            .utf8 = .{ .buf = utf8, .count = count },
+            .utf32 = utf32,
+            .compose_status = compose_status,
+            .key_state = @intCast(state),
+        };
+
+        const flags: u32 = @bitCast(@intFromEnum(
+            term.grid.?.kitty_kbd.flags[term.grid.?.kitty_kbd.idx]));
+        handled = if (flags != 0)
+            kitty_kbd_protocol(seat, term, &ctx)
+        else
+            legacy_kbd_protocol(seat, term, &ctx);
+
+        if (composed and released)
+            xkb_compose_state_reset(seat.kbd.xkb_compose_state);
+
+        if (heap_utf8) |h|
+            free(h);
+
+        if (handled and !keysym_is_modifier(sym)) {
+            term_reset_view(term);
+            selection_cancel(term);
+        }
+
+        if (utf32) |u|
+            free(u);
+    }
+
+    // maybe_repeat:
+    _ = clock_gettime(
+        @intCast(term.wl.?.presentation_clock_id),
+        @ptrCast(@alignCast(&term.render.input_time)),
+    );
+
+    if (should_repeat)
+        _ = start_repeater(seat, key);
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// The last keyboard wrappers (D4b5): keyboard_key(), input_repeat() and
+// alternate_scroll(). With these, every keyboard entry point is Zig.
+// ─────────────────────────────────────────────────────────────────────────
+
+const BTN_FORWARD: c_int = 0x115;
+const BTN_BACK: c_int = 0x116;
+
+/// The wl_keyboard.key listener: evdev keycodes are 8 lower than xkb's.
+export fn keyboard_key(
+    data: ?*anyopaque,
+    wl_keyboard: ?*anyopaque,
+    serial: u32,
+    time: u32,
+    key: u32,
+    state: u32,
+) callconv(.c) void {
+    _ = wl_keyboard;
+    _ = time;
+
+    const seat: *Seat = @ptrCast(@alignCast(data orelse return));
+    const term = seat.kbd_focus orelse return;
+
+    key_press_release(seat, term, serial, key + 8, state);
+}
+
+/// The repeat timer fired: re-deliver the key as a press.
+export fn input_repeat(seat: *Seat, key: u32) callconv(.c) void {
+    // Should be cleared as soon as we lose focus
+    std.debug.assert(seat.kbd_focus != null);
+    const term = seat.kbd_focus.?;
+
+    key_press_release(seat, term, seat.kbd.serial, key, WL_KEYBOARD_KEY_STATE_PRESSED_C);
+}
+
+/// Alternate scrolling: on the alternate grid, a scroll is turned into Up/Down
+/// key presses (unless the application asked for mouse reporting).
+export fn alternate_scroll(seat: *Seat, amount: c_int, button: c_int) callconv(.c) void {
+    if (seat.wl_keyboard == null)
+        return;
+
+    // Should be cleared in the leave event
+    std.debug.assert(seat.mouse_focus != null);
+    const term = seat.mouse_focus.?;
+
+    std.debug.assert(button == BTN_BACK or button == BTN_FORWARD);
+
+    const key: u32 = if (button == BTN_BACK)
+        seat.kbd.key_arrow_up
+    else
+        seat.kbd.key_arrow_down;
+
+    var i: c_int = 0;
+    while (i < amount) : (i += 1)
+        key_press_release(seat, term, seat.kbd.serial, key, WL_KEYBOARD_KEY_STATE_PRESSED_C);
+
+    key_press_release(seat, term, seat.kbd.serial, key, WL_KEYBOARD_KEY_STATE_RELEASED_C);
+}
+

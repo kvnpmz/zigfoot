@@ -45,6 +45,17 @@ void modifier_string(xkb_mod_mask_t mods, size_t sz, char mod_str[static sz],
                      const struct seat *seat);
 void keyboard_repeat_info(void *data, struct wl_keyboard *wl_keyboard,
                           int32_t rate, int32_t delay);
+void keyboard_key(void *data, struct wl_keyboard *wl_keyboard, uint32_t serial,
+                  uint32_t time, uint32_t key, uint32_t state);
+void input_repeat(struct seat *seat, uint32_t key);
+void alternate_scroll(struct seat *seat, int amount, int button);
+
+void key_press_release(struct seat *seat, struct terminal *term, uint32_t serial,
+                       uint32_t key, uint32_t state);
+bool execute_binding(struct seat *seat, struct terminal *term,
+                     const struct key_binding *binding, uint32_t serial,
+                     int amount);
+
 void keyboard_modifiers(void *data, struct wl_keyboard *wl_keyboard,
                         uint32_t serial, uint32_t mods_depressed,
                         uint32_t mods_latched, uint32_t mods_locked,

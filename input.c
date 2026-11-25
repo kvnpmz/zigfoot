@@ -50,9 +50,7 @@ struct pipe_context {
     size_t left;
 };
 
-static void alternate_scroll(struct seat *seat, int amount, int button);
-
-static bool
+bool
 execute_binding(struct seat *seat, struct terminal *term,
                 const struct key_binding *binding, uint32_t serial, int amount)
 {
@@ -558,282 +556,12 @@ UNITTEST
 
 
 /* legacy_kbd_protocol() and kitty_kbd_protocol() are in input.zig (D4b2b). */
-static void
-key_press_release(struct seat *seat, struct terminal *term, uint32_t serial,
-                  uint32_t key, uint32_t state)
-{
-    xassert(serial != 0);
+/* key_press_release() is in input.zig (D4b4). */
 
-    seat->kbd.serial = serial;
-    if (seat->kbd.xkb == NULL ||
-        seat->kbd.xkb_keymap == NULL ||
-        seat->kbd.xkb_state == NULL)
-    {
-        return;
-    }
-
-    const bool pressed = state == WL_KEYBOARD_KEY_STATE_PRESSED;
-    //const bool repeated = pressed && seat->kbd.repeat.dont_re_repeat;
-    const bool released = state == WL_KEYBOARD_KEY_STATE_RELEASED;
-
-    if (released)
-        stop_repeater(seat, key);
-
-    if (pressed)
-        seat->kbd.last_shortcut_sym = XKB_KEYSYM_MAX + 1;
-
-    bool should_repeat =
-        pressed && xkb_keymap_key_repeats(seat->kbd.xkb_keymap, key);
-
-    xkb_keysym_t sym = xkb_state_key_get_one_sym(seat->kbd.xkb_state, key);
-
-    if (pressed && term->conf->mouse.hide_when_typing && !keysym_is_modifier(sym)) {
-        seat->pointer.hidden = true;
-        term_xcursor_update_for_seat(term, seat);
-    }
-
-    enum xkb_compose_status compose_status = XKB_COMPOSE_NOTHING;
-
-    if (seat->kbd.xkb_compose_state != NULL) {
-        if (pressed)
-            xkb_compose_state_feed(seat->kbd.xkb_compose_state, sym);
-        compose_status = xkb_compose_state_get_status(
-            seat->kbd.xkb_compose_state);
-    }
-
-    const bool composed = compose_status == XKB_COMPOSE_COMPOSED;
-
-    xkb_mod_mask_t mods, consumed;
-    get_current_modifiers(seat, &mods, &consumed, key, true);
-
-    xkb_layout_index_t layout_idx =
-        xkb_state_key_get_layout(seat->kbd.xkb_state, key);
-
-    const xkb_keysym_t *raw_syms = NULL;
-    size_t raw_count = xkb_keymap_key_get_syms_by_level(
-        seat->kbd.xkb_keymap, key, layout_idx, 0, &raw_syms);
-
-    const struct key_binding_set *bindings = key_binding_for(
-        seat->wayl->key_binding_manager, term->conf, seat);
-    xassert(bindings != NULL);
-
-    if (term->unicode_mode.active) {
-        if (pressed)
-            unicode_mode_input(seat, term, sym);
-        return;
-    }
-
-    else if (term->is_searching) {
-        if (pressed) {
-            if (should_repeat)
-                start_repeater(seat, key);
-
-            search_input(
-                seat, term, bindings, key, sym, mods, consumed,
-                raw_syms, raw_count, serial);
-        }
-        return;
-    }
-
-    else  if (urls_mode_is_active(term)) {
-        if (pressed) {
-            if (should_repeat)
-                start_repeater(seat, key);
-
-            urls_input(
-                seat, term, bindings, key, sym, mods, consumed,
-                raw_syms, raw_count, serial);
-        }
-        return;
-    }
-
-#if defined(_DEBUG) && defined(LOG_ENABLE_DBG) && LOG_ENABLE_DBG
-    char sym_name[100];
-    xkb_keysym_get_name(sym, sym_name, sizeof(sym_name));
-
-    char active_mods_str[256] = {0};
-    char consumed_mods_str[256] = {0};
-    char locked_mods_str[256] = {0};
-
-    const xkb_mod_mask_t locked =
-        xkb_state_serialize_mods(seat->kbd.xkb_state, XKB_STATE_MODS_LOCKED);
-
-    modifier_string(mods, sizeof(active_mods_str), active_mods_str, seat);
-    modifier_string(consumed, sizeof(consumed_mods_str), consumed_mods_str, seat);
-    modifier_string(locked, sizeof(locked_mods_str), locked_mods_str, seat);
-
-    LOG_DBG("%s: %s (%u/0x%x), seat=%s, term=%p, serial=%u, "
-            "mods=%s (0x%08x), consumed=%s (0x%08x), locked=%s (0x%08x), "
-            "repeats=%d",
-            pressed ? "pressed" : "released", sym_name, sym, sym,
-            seat->name, (void *)term, serial,
-            active_mods_str, mods, consumed_mods_str, consumed,
-            locked_mods_str, locked, should_repeat);
-#endif
-
-    /*
-     * User configurable bindings
-     */
-    if (pressed) {
-        /* Match untranslated symbols */
-        tll_foreach(bindings->key, it) {
-            const struct key_binding *bind = &it->item;
-
-            if (bind->mods != mods || bind->mods == 0)
-                continue;
-
-            for (size_t i = 0; i < raw_count; i++) {
-                if (bind->k.sym == raw_syms[i] &&
-                    execute_binding(seat, term, bind, serial, 1))
-                {
-                    seat->kbd.last_shortcut_sym = sym;
-                    goto maybe_repeat;
-                }
-            }
-        }
-
-        /* Match translated symbol */
-        tll_foreach(bindings->key, it) {
-            const struct key_binding *bind = &it->item;
-
-            if (bind->k.sym == sym &&
-                bind->mods == (mods & ~consumed) &&
-                execute_binding(seat, term, bind, serial, 1))
-            {
-                seat->kbd.last_shortcut_sym = sym;
-                goto maybe_repeat;
-            }
-        }
-
-        /* Match raw key code */
-        tll_foreach(bindings->key, it) {
-            const struct key_binding *bind = &it->item;
-
-            if (bind->mods != mods || bind->mods == 0)
-                continue;
-
-            tll_foreach(bind->k.key_codes, code) {
-                if (code->item == key &&
-                    execute_binding(seat, term, bind, serial, 1))
-                {
-                    seat->kbd.last_shortcut_sym = sym;
-                    goto maybe_repeat;
-                }
-            }
-        }
-    }
-
-    if (released && seat->kbd.last_shortcut_sym == sym) {
-        /*
-         * Don't process a release event, if it corresponds to a
-         * triggered shortcut.
-         *
-         * 1. If we consumed a key (press) event, we shouldn't emit an
-         *    escape for its release event.
-         * 2. Ignoring the incorrectness of doing so; this also caused
-         *    us to reset the viewport.
-         *
-         * Background: if the kitty keyboard protocol was enabled,
-         * then the viewport was instantly reset to the bottom, after
-         * scrolling up.
-         */
-        //seat->kbd.last_shortcut_sym = XKB_KEYSYM_MAX + 1;
-        goto maybe_repeat;
-    }
-
-    /*
-     * Keys generating escape sequences
-     */
-
-
-    /*
-     * Compose, and maybe emit "normal" character
-     */
-
-    xassert(seat->kbd.xkb_compose_state != NULL || !composed);
-
-    if (compose_status == XKB_COMPOSE_CANCELLED)
-        goto maybe_repeat;
-
-    int count = composed
-        ? xkb_compose_state_get_utf8(seat->kbd.xkb_compose_state, NULL, 0)
-        : xkb_state_key_get_utf8(seat->kbd.xkb_state, key, NULL, 0);
-
-    /* Buffer for translated key. Use a static buffer in most cases,
-     * and use a malloc:ed buffer when necessary */
-    uint8_t buf[32];
-    uint8_t *utf8 = count < sizeof(buf) ? buf : xmalloc(count + 1);
-    uint32_t *utf32 = NULL;
-
-    if (composed) {
-        xkb_compose_state_get_utf8(
-            seat->kbd.xkb_compose_state, (char *)utf8, count + 1);
-
-        if (count > 0)
-            utf32 = ambstoc32((const char *)utf8);
-    } else {
-        xkb_state_key_get_utf8(
-            seat->kbd.xkb_state, key, (char *)utf8, count + 1);
-
-        utf32 = xcalloc(2, sizeof(utf32[0]));
-        utf32[0] = xkb_state_key_get_utf32(seat->kbd.xkb_state, key);
-    }
-
-    struct kbd_ctx ctx = {
-        .layout = layout_idx,
-        .key = key,
-        .sym = sym,
-        .level0_syms = {
-            .syms = raw_syms,
-            .count = raw_count,
-        },
-        .mods = mods,
-        .consumed = consumed,
-        .utf8 = {
-            .buf = utf8,
-            .count = count,
-        },
-        .utf32 = utf32,
-        .compose_status = compose_status,
-        .key_state = state,
-    };
-
-    bool handled = term->grid->kitty_kbd.flags[term->grid->kitty_kbd.idx] != 0
-        ? kitty_kbd_protocol(seat, term, &ctx)
-        : legacy_kbd_protocol(seat, term, &ctx);
-
-    if (composed && released)
-        xkb_compose_state_reset(seat->kbd.xkb_compose_state);
-
-    if (utf8 != buf)
-        free(utf8);
-
-    if (handled && !keysym_is_modifier(sym)) {
-        term_reset_view(term);
-        selection_cancel(term);
-    }
-
-    free(utf32);
-
-maybe_repeat:
-    clock_gettime(
-        term->wl->presentation_clock_id, &term->render.input_time);
-
-    if (should_repeat)
-        start_repeater(seat, key);
-}
-
-static void
-keyboard_key(void *data, struct wl_keyboard *wl_keyboard, uint32_t serial,
-             uint32_t time, uint32_t key, uint32_t state)
-{
-    struct seat *seat = data;
-    key_press_release(seat, seat->kbd_focus, serial, key + 8, state);
-}
-
-/* keyboard_modifiers(), keyboard_key() and input_repeat() live in input.zig
- * (D4b3); this UNITTEST exercises them through the still-C key_press_release()
- * + the Zig protocol encoders. */
+/* keyboard_modifiers(), keyboard_key(), input_repeat() and
+ * key_press_release() live in input.zig (D4b3/D4b4); this UNITTEST still
+ * exercises them, with a real keymap and the kitty flag combinations, through
+ * the Zig protocol encoders. */
 
 UNITTEST
 {
@@ -1236,21 +964,8 @@ const struct wl_keyboard_listener keyboard_listener = {
     .repeat_info = &keyboard_repeat_info,
 };
 
-void
-input_repeat(struct seat *seat, uint32_t key)
-{
-    /* Should be cleared as soon as we loose focus */
-    xassert(seat->kbd_focus != NULL);
-    struct terminal *term = seat->kbd_focus;
-
-    key_press_release(seat, term, seat->kbd.serial, key, XKB_KEY_DOWN);
-}
-
 /* is_top_left() .. xcursor_for_csd_border(): ported to terminal.zig (chunk
  * C2). They are still called from here, via input.h. */
-
-
-
 
 static void
 wl_pointer_enter(void *data, struct wl_pointer *wl_pointer,
@@ -2094,25 +1809,6 @@ wl_pointer_button(void *data, struct wl_pointer *wl_pointer,
     }
 }
 
-static void
-alternate_scroll(struct seat *seat, int amount, int button)
-{
-    if (seat->wl_keyboard == NULL)
-        return;
-
-    /* Should be cleared in leave event */
-    xassert(seat->mouse_focus != NULL);
-    struct terminal *term = seat->mouse_focus;
-
-    assert(button == BTN_BACK || button == BTN_FORWARD);
-
-    xkb_keycode_t key = button == BTN_BACK
-        ? seat->kbd.key_arrow_up : seat->kbd.key_arrow_down;
-
-    for (int i = 0; i < amount; i++)
-        key_press_release(seat, term, seat->kbd.serial, key, XKB_KEY_DOWN);
-    key_press_release(seat, term, seat->kbd.serial, key, XKB_KEY_UP);
-}
 
 static void
 mouse_scroll(struct seat *seat, int amount, enum wl_pointer_axis axis)

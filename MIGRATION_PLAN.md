@@ -873,11 +873,11 @@ Measured on this checkout, not carried over from §1.
 
 | Metric | 2026-11-24 | 2026-11-25 | Δ |
 |---|---|---|---|
-| Branch | +167 commits | **+193 commits** vs `origin/master` | +26 |
-| Foot-owned module C | 12,960 | **8,470** of 48,924 | −4,490 |
-| C eliminated | 73.5% | **82.7%** (40,454 lines) | +9.2pt |
+| Branch | +167 commits | **+195 commits** vs `origin/master` | +28 |
+| Foot-owned module C | 12,960 | **8,168** of 48,924 | −4,792 |
+| C eliminated | 73.5% | **83.3%** (40,756 lines) | +9.8pt |
 | `*-shim.c` accessors | 2,545 | **2,910** (11 files; `render.c` itself is gone) | +365 |
-| Zig source | ~37.8k | **45,636** lines / 42 files | +7.9k |
+| Zig source | ~37.8k | **46,143** lines / 42 files | +8.5k |
 | Harness assertions | 603 | **735** call sites (672 `check`, 63 `check_text`) + 30 Zig `test` blocks | +132 |
 | `meson test` | 5/5 × 3 dirs | **5/5 × 3 dirs** (`build`, `build-disabled`, `build-release`) | ✅ |
 | Real window launches | not verified | **6/6 pass** against the live `wayland-1` socket | ✅ |
@@ -894,17 +894,17 @@ Per-module burn-down (share of that module's original C that is gone):
 | `shm` | 329 / 1,110 | 70% | globals, `wl_shm`/`wl_buffer` stubs, punch-hole `#ifdef`s |
 | `debug` | 22 / 47 | 53% | ASAN stack-trace hook |
 | `render` | 0 / 5,479 | **100%** | `render.c` deleted in D3l4; `render.zig` is the module |
-| `input` | 2,472 / 3,687 | **33%** | D4a/b1/b2/b3/d1 done; D4c (`execute_binding`), D4d2, D4e left |
+| `input` | 2,168 / 3,687 | **41%** | keyboard path complete (D4a–D4b5); D4c (`execute_binding`), D4d2, D4e left |
 | `url-mode` | 833 / 833 | 0% | |
 | `main` | 770 / 770 | 0% | |
 | `server` / `client` | 707 / 679 | 0% | |
 | `key-binding` | 661 / 661 | 0% | |
 | `ime` | 540 / 540 | 0% | |
 
-**Percent complete: 81% by C volume, ~75% by effort (band 72–77%), 32/45
+**Percent complete: 83% by C volume, ~78% by effort (band 75–80%), 32/45
 top-level modules (47 counting `spawn_template`) with zero C left.**
-**Post-D4b3:** `input.c` is 3,618 → **2,472** (33% ported), module C 9,555 →
-**8,470**, harness 684 → **738** checks; `keymap.h` is down to 27 lines (types
+**Post-D4b5:** `input.c` is 3,618 → **2,168** (41% ported), module C 12,709 →
+**8,168**, harness 684 → **738** checks; every keyboard entry point is Zig. `keymap.h` is down to 27 lines (types
 only — its 78 key tables are Zig data now), and `kitty-keymap.h`'s table is
 Zig too. `render.c` is **deleted** — 3,154 lines of C replaced by
 `render.zig` (5,933 lines) plus 1,765 lines of C-only shim (statistics,
@@ -976,6 +976,8 @@ dump (§14.5.2) for the cell/URL/CSD paths.
 | **D4b2b** done | `input`: **`legacy_kbd_protocol()`** (the MOD_ANY key-table lookup, modifyOtherKeys=2's XTerm emulation including the "is the base symbol a-z?" check, the sparse CSI-27 modifier parameter table as a `modParam()` switch, and the three Alt strategies: ESC prefix / 8th bit via `c32rtomb()` / ignore) and **`kitty_kbd_protocol()`** (all five flag bits, the "delegate to legacy" rule, the modifier-key self-inclusion trick via `xkb_state_update_key()`, the locked-vs-consumed text rule, the `is_text` scan with `isc32print()`, the plain-text/control-character fast paths, the `encoded_mods` bit packing, the shifted/unshifted/base key resolution with `xkb_keysym_to_utf32()` + `xkb_keymap_key_get_syms_by_level()`, the level-0 symbol rule for unencodable modifiers, the `:event` sub-parameter, and the CSI-u/CSI-~ formatter with alternate and associated-text sub-parameters). `kitty-keymap.h`'s 110-entry sorted table is Zig too (binary search instead of `bsearch()`), and `struct kbd_ctx` moved to `input.h` so C and Zig share it. 12 new harness checks read the encoders' output back out of a real pty: legacy plain text, Ctrl+a (control byte), Ctrl+é (CSI 27;5;233~), Alt+Return from the key table, releases; kitty plain text, report-all (`CSI 97u`), Ctrl (`CSI 97;5u`), and releases both with and without the report-events flag. **Note:** one of my own first expectations was wrong — Ctrl+a really does send 0x01, because `is_control_key()` covers keysym 0x40..0x7f and xkb already resolved the control character. The C behaviour was kept | D4b2a | 2.5d |
 | **D4b** | `key_press_release` (262) + `legacy_kbd_protocol` (158) + `kitty_kbd_protocol` (327) — port the C `UNITTEST` blocks into the harness as you go | 2–3d |
 | **D4b4-mirror** done | `terminal_types.zig`: **`KeyBinding`** (`type`, `action`, `mods`, the anonymous union as `_u` — `k.sym`/`k.key_codes` and `m.button`/`m.count` — and `aux`) and **`KeyBindingSet`** (the four tll headers plus `selection_overrides`) are mirrored and pinned by `expectAbi()`, with `scripts/gen_abi_probe.py`'s `C_TYPES` table extended so the probe emits `KeyBinding__size`, `KeyBinding_aux`, `KeyBinding_k_sym`, `KeyBindingSet_selection_overrides`, ... The union cannot be probed by name (C's is anonymous; the Zig field is `_u` so `expectAbi()` skips it) — its size is still pinned through `aux`'s offset and the struct size. `terminal.zig` and `search.zig` now share `types.KeyBindingSet` instead of carrying two private 104-byte copies with hand-written asserts; `search.zig` casts the fields to its local `tll.Tll(KeyBinding)` before iterating. This is the groundwork `execute_binding()`, `key_press_release()` and the whole of `key-binding.c` need | D4b3 | 0.5d |
+| **D4b4** done | `input`: **`key_press_release()`** — the dispatcher. Repeat-timer handling on release, `last_shortcut_sym` reset on press, `xkb_keymap_key_repeats()`, `xkb_state_key_get_one_sym()`, the hide-when-typing pointer hide, compose feed/status, `get_current_modifiers()`, the layout + level-0 syms, `key_binding_for()`, the unicode-mode / search / URL early-outs, the **three binding matchers** (untranslated syms, translated sym with `mods & ~consumed`, raw keycodes) walking `types.KeyBindingSet`'s tlls, the release-after-shortcut suppression, the compose/utf8/utf32 buffer dance (`ambstoc32()` for composed text, stack buffer with a heap fallback), the `kbd_ctx` hand-off to the kitty-or-legacy encoder, the composed-release reset, and the `term_reset_view()` + `selection_cancel()` epilogue. C's three `goto maybe_repeat` paths became a labelled Zig block. `execute_binding()` lost its `static` (it is the next chunk) | D4b4-mirror | 2d |
+| **D4b5** done | `input`: the three wrappers that were waiting on it — `keyboard_key()` (the `+8` evdev→xkb keycode shift), `input_repeat()` (the repeat timer's re-press) and `alternate_scroll()` (BTN_BACK/FORWARD → Up/Down presses, then the release). With these, **every keyboard entry point in `input.c` is Zig**; what is left there is the pointer/touch listeners and `execute_binding` | D4b4 | 0.5d |
 | **D4c** | `execute_binding` (469) and the binding matchers | 1–1.5d |
 | **D4d1** done | `input`: the pointer helpers the listeners are built on — `mouse_button_state_reset()` (drops the button list and the double/triple-click counters and timer), `mouse_coord_pixel_to_cell()` (pixel → cell with the margins clamping to the first/last cell), `touch_is_active()` (idle/inhibited vs held/dragging/scrolling, plus the `wl_touch == NULL` short-circuit) and `mouse_scroll_multiplier()` (the configured scrollback multiplier on the normal grid, or on the alt grid only when the mouse is grabbed *and* alt-scrolling is on). 13 new harness checks, mostly around the coordinate clamping and the multiplier's four combinations | D4b2b | 0.5d |
 | **D4b3** done | `input`: **`keyboard_modifiers()`** — the virtual-modifier masking (Mutter), the `xkb_state_update_mask()` call, and the four cached `shift`/`alt`/`ctrl`/`super` flags via `xkb_state_mod_index_is_active(..., XKB_STATE_MODS_EFFECTIVE)`, then the cursor refresh when the pointer sits on the grid. 4 new harness checks (no modifiers, ctrl+shift, the untouched pair, and a virtual modifier being ignored) against a real keymap. The big `UNITTEST` block that follows it in `input.c` still drives the Zig function through the C `key_press_release()` + the new protocol encoders, and still passes | D4d1 | 0.5d |
