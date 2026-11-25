@@ -33,19 +33,8 @@
 
 #include <string.h>
 
-bool csi_xtsave_get(struct terminal *t, unsigned bit) {
-    uint32_t v;
-    memcpy(&v, &t->xtsave, sizeof(v));
-    return (v >> bit) & 1;
-}
+/* ── xtsave get/set: ported to csi.zig ──────────────────────────── */
 
-void csi_xtsave_set(struct terminal *t, unsigned bit, bool v) {
-    uint32_t bits;
-    memcpy(&bits, &t->xtsave, sizeof(bits));
-    if (v) bits |=  (1u << bit);
-    else   bits &= ~(1u << bit);
-    memcpy(&t->xtsave, &bits, sizeof(bits));
-}
 
 /* ── Direct bool fields on Terminal (not yet in terminal_types.zig) ─ */
 /* These are stored in the _font_state opaque blob or standalone
@@ -60,41 +49,7 @@ int csi_c32width(uint32_t c) {
 #endif
 }
 
-/* XTWINOPS: query first output's physical dimensions (case 15, 19) */
-int csi_window_first_output_px_width(struct terminal *t) {
-    if (t->window == NULL) return -1;
-    tll_foreach(t->window->on_outputs, it) {
-        return it->item->dim.px_real.width;
-    }
-    return -1;
-}
-
-int csi_window_first_output_px_height(struct terminal *t) {
-    if (t->window == NULL) return -1;
-    tll_foreach(t->window->on_outputs, it) {
-        return it->item->dim.px_real.height;
-    }
-    return -1;
-}
-
-int csi_window_on_outputs_count(struct terminal *t) {
-    if (t->window == NULL) return 0;
-    return (int)tll_length(t->window->on_outputs);
-}
-
-/* window_title_stack: tll(char *) — needs char* push/pop helpers */
-size_t csi_window_title_stack_len(struct terminal *t) {
-    return tll_length(t->window_title_stack);
-}
-
-void csi_window_title_stack_push(struct terminal *t, char *title) {
-    tll_push_back(t->window_title_stack, title);
-}
-
-char *csi_window_title_stack_pop(struct terminal *t) {
-    if (tll_length(t->window_title_stack) == 0) return NULL;
-    return tll_pop_back(t->window_title_stack);
-}
+/* ── XTWINOPS outputs and window_title_stack: ported to csi.zig ─── */
 
 /* Foot version (for XTVERSION and secondary DA replies) */
 #include "version.h"
