@@ -1,6 +1,6 @@
 # Render parity report
 
-Date: 2026-11-25. Branch: `render-parity` @ `39e70a77` plus the oracle work.
+Date: 2026-11-25. Branch: render-parity (parity follow-ups).
 C oracle: `origin/master` = `6b3f557d`, detached in
 `/tmp/agent-c/c-oracle`. `grim` is not installed, and there is no
 wayland connection in this container, so the oracle compares pixman images
@@ -14,8 +14,8 @@ zeroed `wl_window`/`wayland` pair (no compositor connection):
 
 - a 16×6 cell grid: bold, italic, reverse, selected, concealed, custom RGB
   fg/bg, strikethrough, URL underline, all five underline styles through
-  `row_ranges`, box drawing, block elements/braille, and a focused block
-  cursor;
+  row_ranges, box drawing, block elements/braille, and block-cursor cases
+  covering focused blink ON, focused blink OFF, and unfocused;
 - a URL-mode OSD label with a fractional-scale margin;
 - a render-timer OSD with the same margin;
 - CSD top and left borders plus a CSD title surface;
@@ -49,30 +49,16 @@ protocol requests with no-ops; none of those edits touch pixel arithmetic.
 PASS. Exact hashes:
 
     SCALE 1.04999995 margin=3 cell=10x20 atlas=320x320
-    TOTAL 4d7af90ae20b6e2d
+    TOTAL 988ac8ef344eb1a5
     SCALE 0.833333313 margin=3 cell=10x20 atlas=320x320
-    TOTAL 353c69151c9e6575
+    TOTAL 69a7dfb30f5f754d
 
-All 447 per-cell hashes match byte-for-byte. Accepted difference: the focused block-cursor blink phase is inverted in the port (see below).
+All 447 per-cell hashes match byte-for-byte. No accepted pixel differences.
 
-The first oracle run exposed two real port divergences. One was fixed
-in render.zig before the PASS above; the other is recorded as accepted
-below.
-
+The oracle exposed two real port divergences, both fixed:
 - dotted underlines: the closed-form spacing omitted the second thickness
   term, moving four dot pixels;
 - focused block cursors: CURSOR_BLINK_ON is 0, but the port tested
-  state != 0, so a blinking block cursor was not painted. That part could
-  not be fixed without editing tests/test-terminal.c, which Agent A owns:
-  tests/test-terminal.c:4623 and :5092 set CURSOR_BLINK_OFF and expect a
-  painted block cursor. The current corpus therefore paints the cursor
-  unfocused, where C and Zig agree. The port gap is listed in the final
-  report as found-but-not-fixed (render.zig:569, :581, :586, :591).
-
-## Registration
-
-Agent A must add the following line to `tests/meson.build`; this branch does
-not edit that file:
-
-    test('render-parity', executable('test-render-parity', 'test-render-parity.c', client_harness_obj, include_directories: '..', dependencies: foot_deps, link_with: footlib))
+  state != 0. The corpus now covers focused blink ON, focused blink OFF,
+  and unfocused cursors.
 

@@ -221,11 +221,32 @@ paint_grid(struct corpus *c)
 
     for (int r = 0; r < ROWS; r++) {
         for (int col = 0; col < COLS; col++) {
+            bool has_cursor = false;
+            c->term.kbd_focus = false;
+            c->term.cursor_blink.state = CURSOR_BLINK_OFF;
+
+            if (r == 4 && col == 5) {
+                /* focused block cursor, blink ON */
+                has_cursor = true;
+                c->term.kbd_focus = true;
+                c->term.cursor_blink.state = CURSOR_BLINK_ON;
+            } else if (r == 4 && col == 6) {
+                /* focused block cursor, blink OFF */
+                has_cursor = true;
+                c->term.kbd_focus = true;
+                c->term.cursor_blink.state = CURSOR_BLINK_OFF;
+            } else if (r == ROWS - 1 && col == 5) {
+                /* unfocused block cursor, blink OFF */
+                has_cursor = true;
+            }
+
             render_cell(
-                &c->term, c->pix, &c->damage, c->rows[r], r, col,
-                r == ROWS - 1 && col == 5);
+                &c->term, c->pix, &c->damage, c->rows[r], r, col, has_cursor);
         }
     }
+
+    c->term.kbd_focus = false;
+    c->term.cursor_blink.state = CURSOR_BLINK_ON;
 }
 
 static void
