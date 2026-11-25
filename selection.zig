@@ -2320,3 +2320,133 @@ export fn selection_primary_source_cancelled(
     freeSlice(primary.text);
     primary.text = null;
 }
+
+// ─────────────────────────────────────────────────────────────────────────
+// Data offers: mime-type ranking and offer bookkeeping (D5d-b1)
+//
+// Both clipboard and primary selection expose the same preference order:
+// text/uri-list always wins, utf8 flavours beat plain text, and the
+// X11-style names are the last resort. The offer reset helpers destroy the
+// protocol object (C-side inline) and clear the tracking state.
+// ─────────────────────────────────────────────────────────────────────────
+
+const mime_type_map = [_]?[*:0]const u8{
+    null, // DATA_OFFER_MIME_UNSET
+    "text/plain", // DATA_OFFER_MIME_TEXT_PLAIN
+    "text/plain;charset=utf-8", // DATA_OFFER_MIME_TEXT_UTF8
+    "text/uri-list", // DATA_OFFER_MIME_URI_LIST
+    "TEXT", // DATA_OFFER_MIME_TEXT_TEXT
+    "STRING", // DATA_OFFER_MIME_TEXT_STRING
+    "UTF8_STRING", // DATA_OFFER_MIME_TEXT_UTF8_STRING
+};
+
+extern fn selection_shim_data_offer_destroy(offer: ?*anyopaque) callconv(.c) void;
+extern fn selection_shim_primary_offer_destroy(offer: ?*anyopaque) callconv(.c) void;
+
+export fn selection_select_mime_type_for_offer(
+    mime_type_in: [*:0]const u8,
+    mime_type_out: *types.DataOfferMimeType,
+) callconv(.c) void {
+    const mime_type: types.DataOfferMimeType = blk: {
+        for (mime_type_map, 0..) |candidate, i| {
+            const candidate_z = candidate orelse continue;
+            if (std.mem.eql(u8, std.mem.span(mime_type_in), std.mem.span(candidate_z)))
+                break :blk @enumFromInt(i);
+        }
+        break :blk .unset;
+    };
+
+    // Mime-type transition; if the new mime-type is "better" than previously
+    // offered types, use the new type
+    switch (mime_type) {
+        .text_plain, .text_text, .text_string => {
+            // text/plain is our least preferred type. Only use if current type
+            // is unset.
+            switch (mime_type_out.*) {
+                .unset => mime_type_out.* = mime_type,
+                else => {},
+            }
+        },
+
+        .text_utf8, .text_utf8_string => {
+            // text/plain;charset=utf-8 is preferred over text/plain
+            switch (mime_type_out.*) {
+                .unset, .text_plain, .text_text, .text_string => mime_type_out.* = mime_type,
+                else => {},
+            }
+        },
+
+        .uri_list => {
+            // text/uri-list is always used when offered
+            mime_type_out.* = mime_type;
+        },
+
+        .unset => {},
+    }
+}
+
+export fn selection_data_offer_reset(clipboard: ?*types.WlClipboard) callconv(.c) void {
+    const c = clipboard orelse return;
+
+    if (c.data_offer != null) {
+        selection_shim_data_offer_destroy(c.data_offer);
+        c.data_offer = null;
+    }
+
+    c.window = null;
+    c.mime_type = .unset;
+}
+
+export fn selection_primary_offer_reset(primary: ?*types.WlPrimary) callconv(.c) void {
+    const p = primary orelse return;
+
+    if (p.data_offer != null) {
+        selection_shim_primary_offer_destroy(p.data_offer);
+        p.data_offer = null;
+    }
+
+    p.mime_type = .unset;
+}
+
+export fn selection_offer(
+    data: ?*anyopaque,
+    wl_data_offer: ?*anyopaque,
+    mime_type: ?[*:0]const u8,
+) callconv(.c) void {
+    _ = wl_data_offer;
+    const seat: *types.Seat = @ptrCast(@alignCast(data orelse return));
+
+    selection_select_mime_type_for_offer(mime_type orelse return, &seat.clipboard.mime_type);
+}
+
+// Debug-only in C (LOG_DBG), so empty here.
+export fn selection_offer_source_actions(
+    data: ?*anyopaque,
+    wl_data_offer: ?*anyopaque,
+    source_actions: u32,
+) callconv(.c) void {
+    _ = data;
+    _ = wl_data_offer;
+    _ = source_actions;
+}
+
+export fn selection_offer_action(
+    data: ?*anyopaque,
+    wl_data_offer: ?*anyopaque,
+    dnd_action: u32,
+) callconv(.c) void {
+    _ = data;
+    _ = wl_data_offer;
+    _ = dnd_action;
+}
+
+export fn selection_primary_offer(
+    data: ?*anyopaque,
+    zwp_primary_selection_offer: ?*anyopaque,
+    mime_type: ?[*:0]const u8,
+) callconv(.c) void {
+    _ = zwp_primary_selection_offer;
+    const seat: *types.Seat = @ptrCast(@alignCast(data orelse return));
+
+    selection_select_mime_type_for_offer(mime_type orelse return, &seat.primary.mime_type);
+}

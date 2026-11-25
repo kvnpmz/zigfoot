@@ -812,6 +812,7 @@ Order matters: `search` and `wayland` first (they unblock the rest), then
 | **D5b** done | `ime`: the whole module — pending preedit/commit/delete state, `ime_reset_pending`/`ime_reset_preedit`, `done()` applying the six protocol steps (commit to the search input or the slave, then the preedit → cells with the `mblen()`+`c32width()` byte→cell cursor mapping, wide-glyph spacers, and the outside-cursor underline), `ime_enable`/`ime_disable`/`ime_update_cursor_rect` (pending-vs-sent rect dedupe, beam-vs-block width, grid-row rebasing) and the six listeners. Five `terminal_shim_text_input_*` forwarders for the generated inlines; the listener table moved to `wayland.c`; `ime.h` declares the callbacks outside the feature guard, and the `#else` stubs are gone (meson refuses `-Dime=false`). 15 new harness checks | D5a | 0.5d |
 | **D5c** done | `url-mode`: the whole module — the url-mode binding dispatcher, activation (uri_parse, the local file: prefix strip, clipboard or launcher), the spawn-launcher + XDG activation-token callback, `urls_input()`'s three matchers and jump-label editing, `regex_detected()` (per-logical-line utf8 flattening with a byte→cell map, combining expansion, `c32rtomb()`), `osc8_uris()`, overlap removal, `generate_key_combos()`/`urls_assign_key_combos()` with duplicate reuse, `tag_cells_for_url()`, `urls_render()` and `urls_reset()`. `regexec()` stays in C (`url_shim_regex_match()`; `regex_t`/`regmatch_t` are libc-specific), `toc32lower()` added to `char32.zig`. 8 new harness checks | D5b | 1.5d |
 | **D5d-a** done | `selection`: the data-source send path — `target`, `send`, `cancelled`, the DnD stubs, `primary_send`/`primary_cancelled`, and `send_clipboard_or_primary()` (non-blocking fd, synchronous `async_write()`, EPOLLOUT `clipboard_send` context for the remainder, then close). Source listener tables stay in C (as with keyboard/pointer); two destroy-inline shims added. 3 new harness checks write into a real pipe. Also fixed `async_write()`'s NULL+len=0 cast. 157 of 844 lines gone | D5c | 1d |
+| **D5d-b1** done | `selection`: the data-offer half — mime-type ranking (uri-list always wins, utf-8 upgrades plain, X11 names last), `data_offer_reset()`/`primary_offer_reset()`, and the offer/source_actions/offer_action/primary_offer callbacks. Two destroy-inline shims. 10 new harness checks. 165 of 844 lines gone | D5d-a | 0.5d |
 | **D6** | `main` (770), `server` (707), `client` (679) | last; they tie everything together and are only fully testable once a window opens | 4–5d |
 
 ### Track E — endgame (~2–3 days)
@@ -892,7 +893,7 @@ Per-module burn-down (share of that module's original C that is gone):
 | 36 modules | 0 / — | **100%** | `async`…`box-drawing`, `search`, `terminal`, `log`, `grid`, `csi`, `sixel`, `osc`, `vt`, `input`, `key-binding`, `ime`, `url-mode`, `shm`… |
 | `config` | 35 / 4,374 | 99% | only `config_regex_compile()` (§6.3) |
 | `wayland` | 359 / 2,884 | 88% | 27 listener tables + forwarders + 3 FDM callbacks |
-| `selection` | 687 / 2,967 | **77%** | receive path, data-device/DND listeners, `selection-shim.c` |
+| `selection` | 522 / 2,967 | **82%** | receive path, data-device/DND listeners, `selection-shim.c` |
 | `slave` | 106 / 573 | **81%** | signal reset, terminfo path and execvpe left |
 | `shm` | 0 / 1,110 | **100%** | `shm.c` deleted in E2; generated protocol inlines + `#ifdef` platform tests live in `shm-shim.c`; `shm.zig` is 1,028 lines |
 | `debug` | 22 / 47 | 53% | ASAN stack-trace hook |
@@ -904,7 +905,7 @@ Per-module burn-down (share of that module's original C that is gone):
 | `key-binding` | 0 / 661 | **100%** | `key-binding.c` deleted in D5a; `key-binding.zig` is the module |
 | `ime` | 0 / 540 | **100%** | `ime.c` deleted in D5b; `ime.zig` is the module |
 
-**Percent complete: 93.1% by C volume (post-E2 merge), ~87% by effort (band
+**Percent complete: 93.5% by C volume (post-D5d-b1), ~87% by effort (band
 84–90%), 37/45 top-level modules (52 counting `spawn_template`) with zero C
 left.**
 **Post-D4d2a:** `input.c` is 3,618 → **2,040** (45% ported), module C 12,709 →
@@ -923,7 +924,18 @@ compositor. Real presentation feedback is still not delivered to these
 short-lived windows, so `presented()` is covered by the fabricated-context
 checks, not by the launches.
 
-**Post-E2 (merge of `agent-c`):** `shm.c` is **deleted** — the 37th module
+**Post-D5d-b1:** the data-offer half of selection is Zig: the mime-type
+ranking (text/uri-list always wins, utf-8 flavours upgrade plain text and
+the X11 names are the last resort), data_offer_reset() /
+primary_offer_reset(), and the offer / source_actions / offer_action /
+primary_offer callbacks (the DnD logging ones are debug-only in C and empty
+here, as before). Two more destroy-inline shims. Module C 3,355 ->
+**3,190** (93.5% eliminated), selection.c 687 -> **522**, Zig 50,587 ->
+**50,717**, harness -> **866**, shim -> **3,248**. 10 new harness checks: the
+full preference order and both reset helpers. Merged agent-c (shm) before
+this chunk; re-verified: full-check green, valgrind clean.
+
+**Post-E2 (merge of agent-c):** `shm.c` is **deleted** — the 37th module
 with no C. Module C 3,684 → **3,355** of 48,924 (93.1% eliminated). The
 remaining C glue moved to a dedicated `shm-shim.c` (208 lines): the
 generated `wl_shm`/`wl_buffer` request inlines and the `wl_buffer_listener`

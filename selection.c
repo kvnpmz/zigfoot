@@ -314,154 +314,10 @@ selection_selection_from_primary_c(struct seat *seat, struct terminal *term)
         seat, term, false, &receive_offer, &receive_offer_done, term);
 }
 
-static void
-select_mime_type_for_offer(const char *_mime_type,
-                           enum data_offer_mime_type *type)
-{
-    enum data_offer_mime_type mime_type = DATA_OFFER_MIME_UNSET;
-
-    /* Translate offered mime type to our mime type enum */
-    for (size_t i = 0; i < ALEN(mime_type_map); i++) {
-        if (mime_type_map[i] == NULL)
-            continue;
-
-        if (streq(_mime_type, mime_type_map[i])) {
-            mime_type = i;
-            break;
-        }
-    }
-
-    LOG_DBG("mime-type: %s -> %s (offered type was %s)",
-            mime_type_map[*type], mime_type_map[mime_type], _mime_type);
-
-    /* Mime-type transition; if the new mime-type is "better" than
-     * previously offered types, use the new type */
-
-    switch (mime_type) {
-    case DATA_OFFER_MIME_TEXT_PLAIN:
-    case DATA_OFFER_MIME_TEXT_TEXT:
-    case DATA_OFFER_MIME_TEXT_STRING:
-        /* text/plain is our least preferred type. Only use if current
-         * type is unset */
-        switch (*type) {
-        case DATA_OFFER_MIME_UNSET:
-            *type = mime_type;
-            break;
-
-        default:
-            break;
-        }
-        break;
-
-    case DATA_OFFER_MIME_TEXT_UTF8:
-    case DATA_OFFER_MIME_TEXT_UTF8_STRING:
-        /* text/plain;charset=utf-8 is preferred over text/plain */
-        switch (*type) {
-        case DATA_OFFER_MIME_UNSET:
-        case DATA_OFFER_MIME_TEXT_PLAIN:
-        case DATA_OFFER_MIME_TEXT_TEXT:
-        case DATA_OFFER_MIME_TEXT_STRING:
-            *type = mime_type;
-            break;
-
-        default:
-            break;
-        }
-        break;
-
-    case DATA_OFFER_MIME_URI_LIST:
-        /* text/uri-list is always used when offered */
-        *type = mime_type;
-        break;
-
-    case DATA_OFFER_MIME_UNSET:
-        break;
-    }
-}
-
-static void
-data_offer_reset(struct wl_clipboard *clipboard)
-{
-    if (clipboard->data_offer != NULL) {
-        wl_data_offer_destroy(clipboard->data_offer);
-        clipboard->data_offer = NULL;
-    }
-
-    clipboard->window = NULL;
-    clipboard->mime_type = DATA_OFFER_MIME_UNSET;
-}
-
-static void
-offer(void *data, struct wl_data_offer *wl_data_offer, const char *mime_type)
-{
-    struct seat *seat = data;
-    select_mime_type_for_offer(mime_type, &seat->clipboard.mime_type);
-}
-
-static void
-source_actions(void *data, struct wl_data_offer *wl_data_offer,
-                uint32_t source_actions)
-{
-#if defined(_DEBUG) && LOG_ENABLE_DBG
-    char actions_as_string[1024];
-    size_t idx = 0;
-
-    actions_as_string[0] = '\0';
-    actions_as_string[sizeof(actions_as_string) - 1] = '\0';
-
-    for (size_t i = 0; i < 31; i++) {
-        if (((source_actions >> i) & 1) == 0)
-            continue;
-
-        enum wl_data_device_manager_dnd_action action = 1 << i;
-
-        const char *s = NULL;
-
-        switch (action) {
-        case WL_DATA_DEVICE_MANAGER_DND_ACTION_NONE: s = NULL; break;
-        case WL_DATA_DEVICE_MANAGER_DND_ACTION_COPY: s = "copy"; break;
-        case WL_DATA_DEVICE_MANAGER_DND_ACTION_MOVE: s = "move"; break;
-        case WL_DATA_DEVICE_MANAGER_DND_ACTION_ASK: s = "ask"; break;
-        }
-
-        if (s == NULL)
-            continue;
-
-        strncat(actions_as_string, s, sizeof(actions_as_string) - idx - 1);
-        idx += strlen(s);
-        strncat(actions_as_string, ", ", sizeof(actions_as_string) - idx - 1);
-        idx += 2;
-    }
-
-    /* Strip trailing ", " */
-    if (strlen(actions_as_string) > 2)
-        actions_as_string[strlen(actions_as_string) - 2] = '\0';
-
-    LOG_DBG("DnD actions: %s (0x%08x)", actions_as_string, source_actions);
-#endif
-}
-
-static void
-offer_action(void *data, struct wl_data_offer *wl_data_offer, uint32_t dnd_action)
-{
-#if defined(_DEBUG) && LOG_ENABLE_DBG
-    const char *s = NULL;
-
-    switch (dnd_action) {
-    case WL_DATA_DEVICE_MANAGER_DND_ACTION_NONE: s = "<none>"; break;
-    case WL_DATA_DEVICE_MANAGER_DND_ACTION_COPY: s = "copy"; break;
-    case WL_DATA_DEVICE_MANAGER_DND_ACTION_MOVE: s = "move"; break;
-    case WL_DATA_DEVICE_MANAGER_DND_ACTION_ASK: s = "ask"; break;
-    }
-
-    LOG_DBG("DnD offer action: %s (0x%08x)", s, dnd_action);
-#endif
-}
-
 static const struct wl_data_offer_listener data_offer_listener = {
-    .offer = &offer,
-    .source_actions = &source_actions,
-    .action = &offer_action,
+    .offer = &selection_offer,
+    .source_actions = &selection_offer_source_actions,
+    .action = &selection_offer_action,
 };
 
 static void
@@ -469,7 +325,7 @@ data_offer(void *data, struct wl_data_device *wl_data_device,
            struct wl_data_offer *offer)
 {
     struct seat *seat = data;
-    data_offer_reset(&seat->clipboard);
+    selection_data_offer_reset(&seat->clipboard);
     seat->clipboard.data_offer = offer;
     wl_data_offer_add_listener(offer, &data_offer_listener, seat);
 }
@@ -615,7 +471,7 @@ selection(void *data, struct wl_data_device *wl_data_device,
     /* Selection offer from other client */
     struct seat *seat = data;
     if (offer == NULL)
-        data_offer_reset(&seat->clipboard);
+        selection_data_offer_reset(&seat->clipboard);
     else
         xassert(offer == seat->clipboard.data_offer);
 }
@@ -629,30 +485,9 @@ const struct wl_data_device_listener data_device_listener = {
     .selection = &selection,
 };
 
-static void
-primary_offer(void *data,
-              struct zwp_primary_selection_offer_v1 *zwp_primary_selection_offer,
-              const char *mime_type)
-{
-    LOG_DBG("primary offer: %s", mime_type);
-    struct seat *seat = data;
-    select_mime_type_for_offer(mime_type, &seat->primary.mime_type);
-}
-
 static const struct zwp_primary_selection_offer_v1_listener primary_selection_offer_listener = {
-    .offer = &primary_offer,
+    .offer = &selection_primary_offer,
 };
-
-static void
-primary_offer_reset(struct wl_primary *primary)
-{
-    if (primary->data_offer != NULL) {
-        zwp_primary_selection_offer_v1_destroy(primary->data_offer);
-        primary->data_offer = NULL;
-    }
-
-    primary->mime_type = DATA_OFFER_MIME_UNSET;
-}
 
 static void
 primary_data_offer(void *data,
@@ -660,7 +495,7 @@ primary_data_offer(void *data,
                    struct zwp_primary_selection_offer_v1 *offer)
 {
     struct seat *seat = data;
-    primary_offer_reset(&seat->primary);
+    selection_primary_offer_reset(&seat->primary);
     seat->primary.data_offer = offer;
     zwp_primary_selection_offer_v1_add_listener(
         offer, &primary_selection_offer_listener, seat);
@@ -675,7 +510,7 @@ primary_selection(void *data,
 
     struct seat *seat = data;
     if (offer == NULL)
-        primary_offer_reset(&seat->primary);
+        selection_primary_offer_reset(&seat->primary);
     else
         xassert(seat->primary.data_offer == offer);
 }

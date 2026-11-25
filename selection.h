@@ -36,6 +36,22 @@ void selection_primary_source_cancelled(
 /* Send `text` to `fd` (the compositor's pipe) as selection data. */
 void selection_send_clipboard_or_primary(
     struct seat *seat, int fd, const char *text, const char *source_name);
+
+/* Data offers (selection.zig, D5d-b1). */
+void selection_select_mime_type_for_offer(const char *mime_type,
+                                          enum data_offer_mime_type *type);
+void selection_data_offer_reset(struct wl_clipboard *clipboard);
+void selection_primary_offer_reset(struct wl_primary *primary);
+void selection_offer(void *data, struct wl_data_offer *wl_data_offer,
+                     const char *mime_type);
+void selection_offer_source_actions(void *data,
+                                    struct wl_data_offer *wl_data_offer,
+                                    uint32_t source_actions);
+void selection_offer_action(void *data, struct wl_data_offer *wl_data_offer,
+                            uint32_t dnd_action);
+void selection_primary_offer(
+    void *data, struct zwp_primary_selection_offer_v1 *offer,
+    const char *mime_type);
 void selection_start(
     struct terminal *term, int col, int row,
     enum selection_kind new_kind, bool spaces_only);

@@ -874,6 +874,15 @@ void selection_shim_primary_source_destroy(
 {
     zwp_primary_selection_source_v1_destroy(source);
 }
+void selection_shim_data_offer_destroy(struct wl_data_offer *offer)
+{
+    wl_data_offer_destroy(offer);
+}
+void selection_shim_primary_offer_destroy(
+    struct zwp_primary_selection_offer_v1 *offer)
+{
+    zwp_primary_selection_offer_v1_destroy(offer);
+}
 
 /* url-mode.zig (D5c): regex_t's internals (re_nsub, regmatch_t) are
  * libc-specific, so extracting one match's spans stays here. Returns false on

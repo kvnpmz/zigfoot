@@ -6326,6 +6326,61 @@ test_keymap_lookup(void)
 }
 
 /*
+ * Data-offer mime ranking and reset (selection.zig, D5d-b1).
+ */
+static void
+test_selection_offers(void)
+{
+    enum data_offer_mime_type t = DATA_OFFER_MIME_UNSET;
+
+    selection_select_mime_type_for_offer("text/plain", &t);
+    check(t == DATA_OFFER_MIME_TEXT_PLAIN,
+          "text/plain is accepted when nothing better is offered");
+
+    selection_select_mime_type_for_offer("text/plain;charset=utf-8", &t);
+    check(t == DATA_OFFER_MIME_TEXT_UTF8,
+          "utf-8 text upgrades a plain-text offer");
+
+    selection_select_mime_type_for_offer("text/plain", &t);
+    check(t == DATA_OFFER_MIME_TEXT_UTF8,
+          "a later text/plain does not downgrade utf-8");
+
+    selection_select_mime_type_for_offer("text/uri-list", &t);
+    check(t == DATA_OFFER_MIME_URI_LIST, "text/uri-list always wins");
+
+    t = DATA_OFFER_MIME_UNSET;
+    selection_select_mime_type_for_offer("TEXT", &t);
+    check(t == DATA_OFFER_MIME_TEXT_TEXT,
+          "the X11 TEXT target is a last resort");
+    selection_select_mime_type_for_offer("UTF8_STRING", &t);
+    check(t == DATA_OFFER_MIME_TEXT_UTF8_STRING,
+          "UTF8_STRING upgrades TEXT");
+    selection_select_mime_type_for_offer("STRING", &t);
+    check(t == DATA_OFFER_MIME_TEXT_UTF8_STRING,
+          "STRING does not downgrade UTF8_STRING");
+    selection_select_mime_type_for_offer("application/x-nope", &t);
+    check(t == DATA_OFFER_MIME_TEXT_UTF8_STRING,
+          "an unknown mime type is ignored");
+
+    struct wl_clipboard clipboard;
+    memset(&clipboard, 0, sizeof(clipboard));
+    clipboard.mime_type = DATA_OFFER_MIME_TEXT_UTF8;
+    clipboard.window = (void *)0x1;
+    selection_data_offer_reset(&clipboard);
+    check(clipboard.data_offer == NULL && clipboard.window == NULL &&
+          clipboard.mime_type == DATA_OFFER_MIME_UNSET,
+          "data_offer_reset() clears the offer, window and mime type");
+
+    struct wl_primary primary;
+    memset(&primary, 0, sizeof(primary));
+    primary.mime_type = DATA_OFFER_MIME_URI_LIST;
+    selection_primary_offer_reset(&primary);
+    check(primary.data_offer == NULL &&
+          primary.mime_type == DATA_OFFER_MIME_UNSET,
+          "primary_offer_reset() clears the offer and mime type");
+}
+
+/*
  * The data-source send path (selection.zig, D5d-a).
  *
  * The compositor hands us a pipe and we write the selection into it; the
@@ -7589,6 +7644,7 @@ main(void)
     test_keymap_lookup();
     test_kbd_protocols();
     test_keyboard_layouts();
+    test_selection_offers();
     test_selection_send();
     test_url_mode();
     test_slave_shims();
