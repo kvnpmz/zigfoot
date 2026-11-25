@@ -100,8 +100,8 @@ struct presentation_context {
     struct timeval commit;
 };
 
-/* TODO(shim-removal): the context is allocated by grid_render(), which is
- * still C. These accessors go away with grid_render() (D3l2). */
+/* The context is allocated by render_shim_presentation_ctx_new() because
+ * struct timeval is a C type; these accessors are how presented() reads it. */
 struct terminal *
 render_presentation_ctx_term(void *data)
 {
@@ -145,6 +145,51 @@ static const struct wp_presentation_feedback_listener presentation_feedback_list
     .discarded = &discarded,
 };
 
+/* grid_render() (Zig, D3l2) needs the generated protocol inlines, the two
+ * listener tables above/below and struct timeval; these shims are the
+ * C-only half. */
+
+void
+render_shim_presentation_commit_time(
+    const struct wayland *wayl, int64_t *sec, int64_t *nsec)
+{
+    struct timespec commit_time;
+    clock_gettime(wayl->presentation_clock_id, &commit_time);
+    *sec = commit_time.tv_sec;
+    *nsec = commit_time.tv_nsec;
+}
+
+struct wp_presentation_feedback *
+render_shim_presentation_feedback_new(
+    struct wayland *wayl, struct wl_surface *surf)
+{
+    return wp_presentation_feedback(wayl->presentation, surf);
+}
+
+void
+render_shim_presentation_feedback_add(
+    struct wp_presentation_feedback *feedback, void *ctx)
+{
+    wp_presentation_feedback_add_listener(
+        feedback, &presentation_feedback_listener, ctx);
+}
+
+/* struct presentation_context, with its two struct timeval fields, stays a
+ * C type: only the accessors in render_presentation_ctx_*() read it back. */
+void *
+render_shim_presentation_ctx_new(
+    struct terminal *term, int64_t input_sec, int64_t input_usec,
+    int64_t commit_sec, int64_t commit_usec)
+{
+    struct presentation_context *ctx = xmalloc(sizeof(*ctx));
+    *ctx = (struct presentation_context){
+        .term = term,
+        .input = {.tv_sec = input_sec, .tv_usec = input_usec},
+        .commit = {.tv_sec = commit_sec, .tv_usec = commit_usec},
+    };
+    return ctx;
+}
+
 /* render_ime_preedit() and its per-seat helper are in render.zig (D3j). */
 
 /* render_worker_thread() and render_wait_for_preapply_damage() are in
@@ -160,401 +205,23 @@ static const struct wl_callback_listener frame_listener = {
     .done = &frame_callback,
 };
 
+/* grid_render() (render.zig) installs the frame callback through this. */
+struct wl_callback *
+render_shim_add_frame_callback(struct wl_surface *surf, void *data)
+{
+    struct wl_callback *callback = wl_surface_frame(surf);
+    wl_callback_add_listener(callback, &frame_listener, data);
+    return callback;
+}
+
+
 /* force_full_repaint() and reapply_old_damage() are in render.zig (D3k2a). */
 
-static void
-grid_render(struct terminal *term)
-{
-    if (term->shutdown.in_progress)
-        return;
-
-    struct timespec start_time;
-    struct timespec start_wait_preapply = {0}, stop_wait_preapply = {0};
-    struct timespec start_double_buffering = {0}, stop_double_buffering = {0};
-
-    /* Might be a thread doing pre-applied damage */
-    if (unlikely(term->render.preapply_last_frame_damage &&
-                 term->render.workers.preapplied_damage.buf != NULL))
-    {
-        clock_gettime(CLOCK_MONOTONIC, &start_wait_preapply);
-        render_wait_for_preapply_damage(term);
-        clock_gettime(CLOCK_MONOTONIC, &stop_wait_preapply);
-    }
-
-    if (term->conf->tweak.render_timer != RENDER_TIMER_NONE)
-        clock_gettime(CLOCK_MONOTONIC, &start_time);
-
-    xassert(term->width > 0);
-    xassert(term->height > 0);
-
-    struct buffer_chain *chain = term->render.chains.grid;
-    struct buffer *buf = shm_get_buffer(chain, term->width, term->height);
-
-    /* Dirty old and current cursor cell, to ensure they're repainted */
-    dirty_old_cursor(term);
-    dirty_cursor(term);
-
-    LOG_DBG("buffer age: %u (%p)", buf->age, (void *)buf);
-
-    if (term->render.last_buf == NULL ||
-        term->render.last_buf->width != buf->width ||
-        term->render.last_buf->height != buf->height ||
-        term->render.margins)
-    {
-        force_full_repaint(term, buf);
-    }
-
-    else if (buf->age > 0) {
-        LOG_DBG("buffer age: %u (%p)", buf->age, (void *)buf);
-
-        xassert(term->render.last_buf != NULL);
-        xassert(term->render.last_buf != buf);
-        xassert(term->render.last_buf->width == buf->width);
-        xassert(term->render.last_buf->height == buf->height);
-
-        if (++term->render.frames_since_last_immediate_release > 10) {
-            static bool have_warned = false;
-
-            if (!term->render.preapply_last_frame_damage &&
-                term->conf->tweak.preapply_damage &&
-                term->render.workers.count > 0)
-            {
-                LOG_INFO("enabling pre-applied frame damage");
-                term->render.preapply_last_frame_damage = true;
-            } else if (!have_warned && !term->render.preapply_last_frame_damage) {
-                LOG_WARN("compositor is not releasing buffers immediately; "
-                         "expect lower rendering performance");
-                have_warned = true;
-            }
-        }
-
-        clock_gettime(CLOCK_MONOTONIC, &start_double_buffering);
-        reapply_old_damage(term, buf, term->render.last_buf);
-        clock_gettime(CLOCK_MONOTONIC, &stop_double_buffering);
-    } else if (!term->render.preapply_last_frame_damage) {
-        term->render.frames_since_last_immediate_release = 0;
-    }
-
-    if (term->render.last_buf != NULL) {
-        shm_unref(term->render.last_buf);
-        term->render.last_buf = NULL;
-    }
-
-    term->render.last_buf = buf;
-    shm_addref(buf);
-    buf->age = 0;
-
-    tll_foreach(term->grid->scroll_damage, it) {
-        switch (it->item.type) {
-        case DAMAGE_SCROLL:
-            if (term->grid->view == term->grid->offset)
-                grid_render_scroll(term, buf, &it->item);
-            break;
-
-        case DAMAGE_SCROLL_REVERSE:
-            if (term->grid->view == term->grid->offset)
-                grid_render_scroll_reverse(term, buf, &it->item);
-            break;
-
-        case DAMAGE_SCROLL_IN_VIEW:
-            grid_render_scroll(term, buf, &it->item);
-            break;
-
-        case DAMAGE_SCROLL_REVERSE_IN_VIEW:
-            grid_render_scroll_reverse(term, buf, &it->item);
-            break;
-        }
-
-        tll_remove(term->grid->scroll_damage, it);
-    }
-
-    /*
-     * Ensure selected cells have their 'selected' bit set. This is
-     * normally "automatically" true - the bit is set when the
-     * selection is made.
-     *
-     * However, if the cell is updated (printed to) while the
-     * selection is active, the 'selected' bit is cleared. Checking
-     * for this and re-setting the bit in term_print() is too
-     * expensive performance wise.
-     *
-     * Instead, we synchronize the selection bits here and now. This
-     * makes the performance impact linear to the number of selected
-     * cells rather than to the number of updated cells.
-     *
-     * (note that selection_dirty_cells() will not set the dirty flag
-     * on cells where the 'selected' bit is already set)
-     */
-    selection_dirty_cells(term);
-
-    /* Translate offset-relative row to view-relative, unless cursor
-     * is hidden, then we just set it to -1 */
-    struct coord cursor = {-1, -1};
-    if (!term->hide_cursor) {
-        cursor = term->grid->cursor.point;
-        cursor.row += term->grid->offset;
-        cursor.row -= term->grid->view;
-        cursor.row &= term->grid->num_rows - 1;
-    }
-
-    if (term->conf->tweak.overflowing_glyphs) {
-        /*
-         * Pre-pass to dirty cells affected by overflowing glyphs.
-         *
-         * Given any two pair of cells where the first cell is
-         * overflowing into the second, *both* cells must be
-         * re-rendered if any one of them is dirty.
-         *
-         * Thus, given a string of overflowing glyphs, with a single
-         * dirty cell in the middle, we need to re-render the entire
-         * string.
-         */
-        for (int r = 0; r < term->rows; r++) {
-            struct row *row = grid_row_in_view(term->grid, r);
-
-            if (!row->dirty)
-                continue;
-
-            /* Loop row from left to right, looking for dirty cells */
-            for (struct cell *cell = &row->cells[0];
-                 cell < &row->cells[term->cols];
-                 cell++)
-            {
-                if (cell->attrs.clean)
-                    continue;
-
-                /*
-                 * Cell is dirty, go back and dirty previous cells, if
-                 * they are overflowing.
-                 *
-                 * As soon as we see a non-overflowing cell we can
-                 * stop, since it isn't affecting the string of
-                 * overflowing glyphs that follows it.
-                 *
-                 * As soon as we see a dirty cell, we can stop, since
-                 * that means we've already handled it (remember the
-                 * outer loop goes from left to right).
-                 */
-                for (struct cell *c = cell - 1; c >= &row->cells[0]; c--) {
-                    if (c->attrs.confined)
-                        break;
-                    if (!c->attrs.clean)
-                        break;
-                    c->attrs.clean = false;
-                }
-
-                /*
-                 * Now move forward, dirtying all cells until we hit a
-                 * non-overflowing cell.
-                 *
-                 * Note that the first non-overflowing cell must be
-                 * re-rendered as well, but any cell *after* that is
-                 * unaffected by the string of overflowing glyphs
-                 * we're dealing with right now.
-                 *
-                 * For performance, this iterates the *outer* loop's
-                 * cell pointer - no point in re-checking all these
-                 * glyphs again, in the outer loop.
-                 */
-                for (; cell < &row->cells[term->cols]; cell++) {
-                    cell->attrs.clean = false;
-                    if (cell->attrs.confined)
-                        break;
-                }
-            }
-        }
-    }
-
-#if defined(_DEBUG)
-    for (int r = 0; r < term->rows; r++) {
-        const struct row *row = grid_row_in_view(term->grid, r);
-
-        if (row->dirty) {
-            bool all_clean = true;
-            for (int c = 0; c < term->cols; c++) {
-                if (!row->cells[c].attrs.clean) {
-                    all_clean = false;
-                    break;
-                }
-            }
-            if (all_clean)
-                BUG("row #%d is dirty, but all cells are marked as clean", r);
-        } else {
-            for (int c = 0; c < term->cols; c++) {
-                if (!row->cells[c].attrs.clean)
-                    BUG("row #%d is clean, but cell #%d is dirty", r, c);
-            }
-        }
-    }
-#endif
-
-    pixman_region32_t damage;
-    pixman_region32_init(&damage);
-
-    render_sixel_images(term, buf->pix[0], &damage, &cursor);
-
-    if (term->render.workers.count > 0) {
-        mtx_lock(&term->render.workers.lock);
-        term->render.workers.buf = buf;
-        for (size_t i = 0; i < term->render.workers.count; i++)
-            sem_post(&term->render.workers.start);
-
-        xassert(tll_length(term->render.workers.queue) == 0);
-    }
-
-    for (int r = 0; r < term->rows; r++) {
-        struct row *row = grid_row_in_view(term->grid, r);
-
-        if (!row->dirty)
-            continue;
-
-        row->dirty = false;
-
-        if (term->render.workers.count > 0)
-            tll_push_back(term->render.workers.queue, r);
-
-        else {
-            /* TODO: damage region */
-            int cursor_col = cursor.row == r ? cursor.col : -1;
-            render_row(term, buf->pix[0], &damage, row, r, cursor_col);
-        }
-    }
-
-    /* Signal workers the frame is done */
-    if (term->render.workers.count > 0) {
-        for (size_t i = 0; i < term->render.workers.count; i++)
-            tll_push_back(term->render.workers.queue, -1);
-        mtx_unlock(&term->render.workers.lock);
-
-        for (size_t i = 0; i < term->render.workers.count; i++)
-            sem_wait(&term->render.workers.done);
-        term->render.workers.buf = NULL;
-    }
-
-    for (size_t i = 0; i < term->render.workers.count; i++)
-        pixman_region32_union(&damage, &damage, &buf->dirty[i + 1]);
-
-    pixman_region32_union(&buf->dirty[0], &buf->dirty[0], &damage);
-
-    {
-        int box_count = 0;
-        pixman_box32_t *boxes = pixman_region32_rectangles(&damage, &box_count);
-
-        for (size_t i = 0; i < box_count; i++) {
-            wl_surface_damage_buffer(
-                term->window->surface.surf,
-                boxes[i].x1, boxes[i].y1,
-                boxes[i].x2 - boxes[i].x1, boxes[i].y2 - boxes[i].y1);
-        }
-    }
-
-    pixman_region32_fini(&damage);
-
-    render_overlay(term);
-    render_ime_preedit(term, buf);
-    render_scrollback_position(term);
-
-    if (term->conf->tweak.render_timer != RENDER_TIMER_NONE) {
-        struct timespec end_time;
-        clock_gettime(CLOCK_MONOTONIC, &end_time);
-
-        struct timespec wait_time;
-        timespec_sub(&stop_wait_preapply, &start_wait_preapply, &wait_time);
-
-        struct timespec render_time;
-        timespec_sub(&end_time, &start_time, &render_time);
-
-        struct timespec double_buffering_time;
-        timespec_sub(&stop_double_buffering, &start_double_buffering, &double_buffering_time);
-
-        struct timespec preapply_damage;
-        timespec_sub(&term->render.workers.preapplied_damage.stop,
-                     &term->render.workers.preapplied_damage.start,
-                     &preapply_damage);
-
-        struct timespec total_render_time;
-        timespec_add(&render_time, &double_buffering_time, &total_render_time);
-        timespec_add(&wait_time, &total_render_time, &total_render_time);
-
-        switch (term->conf->tweak.render_timer) {
-        case RENDER_TIMER_LOG:
-        case RENDER_TIMER_BOTH:
-            LOG_INFO(
-                "frame rendered in %lds %9ldns "
-                "(%lds %9ldns wait, %lds %9ldns rendering, %lds %9ldns double buffering) not included: %lds %ldns pre-apply damage",
-                (long)total_render_time.tv_sec,
-                total_render_time.tv_nsec,
-                (long)wait_time.tv_sec,
-                wait_time.tv_nsec,
-                (long)render_time.tv_sec,
-                render_time.tv_nsec,
-                (long)double_buffering_time.tv_sec,
-                double_buffering_time.tv_nsec,
-                (long)preapply_damage.tv_sec,
-                preapply_damage.tv_nsec);
-            break;
-
-        case RENDER_TIMER_OSD:
-        case RENDER_TIMER_NONE:
-            break;
-        }
-
-        switch (term->conf->tweak.render_timer) {
-        case RENDER_TIMER_OSD:
-        case RENDER_TIMER_BOTH:
-            render_render_timer(term, total_render_time);
-            break;
-
-        case RENDER_TIMER_LOG:
-        case RENDER_TIMER_NONE:
-            break;
-        }
-    }
-
-    xassert(term->grid->offset >= 0 && term->grid->offset < term->grid->num_rows);
-    xassert(term->grid->view >= 0 && term->grid->view < term->grid->num_rows);
-
-    xassert(term->window->frame_callback == NULL);
-    term->window->frame_callback = wl_surface_frame(term->window->surface.surf);
-    wl_callback_add_listener(term->window->frame_callback, &frame_listener, term);
-
-    wayl_win_scale(term->window, buf);
-
-    if (term->wl->presentation != NULL && term->conf->presentation_timings) {
-        struct timespec commit_time;
-        clock_gettime(term->wl->presentation_clock_id, &commit_time);
-
-        struct wp_presentation_feedback *feedback = wp_presentation_feedback(
-            term->wl->presentation, term->window->surface.surf);
-
-        if (feedback == NULL) {
-            LOG_WARN("failed to create presentation feedback");
-        } else {
-            struct presentation_context *ctx = xmalloc(sizeof(*ctx));
-            *ctx = (struct presentation_context){
-                .term = term,
-                .input.tv_sec = term->render.input_time.tv_sec,
-                .input.tv_usec = term->render.input_time.tv_nsec / 1000,
-                .commit.tv_sec = commit_time.tv_sec,
-                .commit.tv_usec = commit_time.tv_nsec / 1000,
-            };
-
-            wp_presentation_feedback_add_listener(
-                feedback, &presentation_feedback_listener, ctx);
-
-            term->render.input_time.tv_sec = 0;
-            term->render.input_time.tv_nsec = 0;
-        }
-    }
-
-    if (term->conf->tweak.damage_whole_window) {
-        wl_surface_damage_buffer(
-            term->window->surface.surf, 0, 0, INT32_MAX, INT32_MAX);
-    }
-
-    wl_surface_attach(term->window->surface.surf, buf->wl_buf, 0, 0);
-    wl_surface_commit(term->window->surface.surf);
-}
+/* grid_render() is in render.zig (D3l2). The two protocol listener tables
+ * below stay here: they reference generated wayland/presentation structs,
+ * and the shims at the top of this block are the only places that need
+ * them.
+ */
 
 /* render_search_box() is in render.zig (D3k3). */
 

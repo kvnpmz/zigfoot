@@ -77,6 +77,7 @@ bool render_xcursor_set(
 bool render_xcursor_is_valid(const struct seat *seat, const char *cursor);
 
 void render_overlay(struct terminal *term);
+void grid_render(struct terminal *term);
 void render_search_box(struct terminal *term);
 void render_urls(struct terminal *term);
 void render_scrollback_position(struct terminal *term);

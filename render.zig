@@ -4098,6 +4098,382 @@ export fn render_urls(term: *Terminal) callconv(.c) void {
 
 
 // ─────────────────────────────────────────────────────────────────────────
+// grid_render (D3l2)
+// ─────────────────────────────────────────────────────────────────────────
+
+extern fn selection_dirty_cells(term: *Terminal) callconv(.c) void;
+extern fn wayl_win_scale(win: *types.WlWindow, buf: *const Buffer) callconv(.c) void;
+extern fn timespec_add(a: *const Timespec, b: *const Timespec, res: *Timespec) callconv(.c) void;
+extern fn render_shim_region_rectangles(r: *anyopaque, count: *c_int) callconv(.c) ?[*]PixmanBox32;
+extern fn render_shim_add_frame_callback(surf: ?*anyopaque, data: *anyopaque) callconv(.c) ?*anyopaque;
+extern fn render_shim_presentation_commit_time(wl: *types.Wayland, sec: *i64, nsec: *i64) callconv(.c) void;
+extern fn render_shim_presentation_feedback_new(wl: *types.Wayland, surf: ?*anyopaque) callconv(.c) ?*anyopaque;
+extern fn render_shim_presentation_feedback_add(fb: *anyopaque, ctx: *anyopaque) callconv(.c) void;
+extern fn render_shim_presentation_ctx_new(
+    term: *Terminal,
+    input_sec: i64,
+    input_usec: i64,
+    commit_sec: i64,
+    commit_usec: i64,
+) callconv(.c) *anyopaque;
+
+/// Only set once the compositor has refused a buffer release 10 frames in a
+/// row; the warning is emitted at most once per process (C used a `static`).
+var have_warned_slow_release = false;
+
+fn renderQueueLen(term: *const Terminal) usize {
+    const queue: *const tll.Tll(c_int) = @ptrCast(&term.render.workers.queue);
+    return queue.len();
+}
+
+/// Dirty every cell that shares an overflowing glyph run with a dirty cell.
+///
+/// Given two adjacent cells where the first overflows into the second, both
+/// have to be re-rendered if either one is dirty - so a single dirty cell in
+/// the middle of a run re-dirties the whole run. Walking left to right: when a
+/// dirty cell is found, back-fill the clean, non-confined cells before it,
+/// then sweep forward (marking the first non-confined cell dirty as well) and
+/// resume the outer loop *after* the confined cell, which is what C's
+/// reuse-the-outer-pointer trick amounts to.
+fn dirtyOverflowingGlyphs(term: *Terminal) void {
+    const grid = term.grid.?;
+
+    var r: c_int = 0;
+    while (r < term.rows) : (r += 1) {
+        const row = terminal_shim_grid_row_in_view(grid, r) orelse unreachable;
+        if (!row.dirty)
+            continue;
+
+        const cells = row.cells.?;
+        var col: c_int = 0;
+        while (col < term.cols) : (col += 1) {
+            if (cells[@intCast(col)].attrs.clean)
+                continue;
+
+            var back: c_int = col - 1;
+            while (back >= 0) : (back -= 1) {
+                const c = &cells[@intCast(back)];
+                if (c.attrs.confined)
+                    break;
+                if (!c.attrs.clean)
+                    break;
+                c.attrs.clean = false;
+            }
+
+            var fwd: c_int = col;
+            while (fwd < term.cols) : (fwd += 1) {
+                const c = &cells[@intCast(fwd)];
+                c.attrs.clean = false;
+                if (c.attrs.confined)
+                    break;
+            }
+            col = fwd;
+        }
+    }
+}
+
+/// Harness entry point: the overflowing-glyph pre-pass without a frame.
+export fn render_dirty_overflowing_glyphs(term: *Terminal) callconv(.c) void {
+    dirtyOverflowingGlyphs(term);
+}
+
+/// Render one frame: buffer selection, damage bookkeeping, the worker hand-off
+/// and the wayland commit. `render.c` only keeps the protocol glue.
+export fn grid_render(term: *Terminal) callconv(.c) void {
+    if (term.shutdown.in_progress)
+        return;
+
+    var start_time: Timespec = undefined;
+    var start_wait_preapply: Timespec = .{ .tv_sec = 0, .tv_nsec = 0 };
+    var stop_wait_preapply = start_wait_preapply;
+    var start_double_buffering = start_wait_preapply;
+    var stop_double_buffering = start_wait_preapply;
+
+    // Might be a thread doing pre-applied damage
+    if (term.render.preapply_last_frame_damage and
+        term.render.workers.preapplied_damage.buf != null)
+    {
+        _ = clock_gettime(CLOCK_MONOTONIC, &start_wait_preapply);
+        render_wait_for_preapply_damage(term);
+        _ = clock_gettime(CLOCK_MONOTONIC, &stop_wait_preapply);
+    }
+
+    if (term.conf.?.tweak.render_timer != .none)
+        _ = clock_gettime(CLOCK_MONOTONIC, &start_time);
+
+    std.debug.assert(term.width > 0);
+    std.debug.assert(term.height > 0);
+
+    const chain: *types.ShmBufferChain = @ptrCast(@alignCast(term.render.chains.grid.?));
+    const buf = shm_get_buffer(chain, term.width, term.height).?;
+
+    // Dirty old and current cursor cell, to ensure they're repainted
+    dirty_old_cursor(term);
+    dirty_cursor(term);
+
+    log_msg(
+        LOG_CLASS_DEBUG, "render", "render.zig", @intCast(@src().line),
+        "buffer age: %u (%p)", @as(c_uint, buf.age), @as(*anyopaque, buf));
+
+    var last_buf: ?*Buffer = null;
+    if (term.render.last_buf) |raw|
+        last_buf = @ptrCast(@alignCast(raw));
+
+    if (last_buf == null or
+        last_buf.?.width != buf.width or
+        last_buf.?.height != buf.height or
+        term.render.margins)
+    {
+        force_full_repaint(term, buf);
+    } else if (buf.age > 0) {
+        const prev = last_buf.?;
+        std.debug.assert(prev != buf);
+        std.debug.assert(prev.width == buf.width);
+        std.debug.assert(prev.height == buf.height);
+
+        term.render.frames_since_last_immediate_release += 1;
+        if (term.render.frames_since_last_immediate_release > 10) {
+            if (!term.render.preapply_last_frame_damage and
+                term.conf.?.tweak.preapply_damage and
+                term.render.workers.count > 0)
+            {
+                log_msg(
+                    LOG_CLASS_INFO, "render", "render.zig", @intCast(@src().line),
+                    "enabling pre-applied frame damage");
+                term.render.preapply_last_frame_damage = true;
+            } else if (!have_warned_slow_release and
+                !term.render.preapply_last_frame_damage)
+            {
+                log_msg(
+                    LOG_CLASS_WARNING, "render", "render.zig", @intCast(@src().line),
+                    "compositor is not releasing buffers immediately; " ++
+                        "expect lower rendering performance");
+                have_warned_slow_release = true;
+            }
+        }
+
+        _ = clock_gettime(CLOCK_MONOTONIC, &start_double_buffering);
+        reapply_old_damage(term, buf, prev);
+        _ = clock_gettime(CLOCK_MONOTONIC, &stop_double_buffering);
+    } else if (!term.render.preapply_last_frame_damage) {
+        term.render.frames_since_last_immediate_release = 0;
+    }
+
+    if (term.render.last_buf) |raw| {
+        shm_unref(@ptrCast(@alignCast(raw)));
+        term.render.last_buf = null;
+    }
+
+    term.render.last_buf = buf;
+    shm_addref(buf);
+    buf.age = 0;
+
+    const grid = term.grid.?;
+
+    // Apply the pending scroll damage. A full-view scroll while the view is
+    // inside the scrollback has to be skipped: the rows it moved are not the
+    // ones on screen.
+    const scroll_damage: *tll.Tll(types.Damage) = @ptrCast(&grid.scroll_damage);
+    while (scroll_damage.len() > 0) {
+        const dmg = scroll_damage.popFront();
+        switch (dmg.type) {
+            .scroll => if (grid.view == grid.offset)
+                grid_render_scroll(term, buf, &dmg),
+            .scroll_reverse => if (grid.view == grid.offset)
+                grid_render_scroll_reverse(term, buf, &dmg),
+            .scroll_in_view => grid_render_scroll(term, buf, &dmg),
+            .scroll_reverse_in_view => grid_render_scroll_reverse(term, buf, &dmg),
+        }
+    }
+
+    // Selected cells normally have their 'selected' bit set when the
+    // selection is made. If a cell is printed to while the selection is
+    // active the bit is cleared, and checking for that in term_print() would
+    // be too expensive. Synchronise here instead: linear in selected cells
+    // rather than in updated cells.
+    selection_dirty_cells(term);
+
+    // Translate offset-relative row to view-relative, unless the cursor is
+    // hidden, in which case -1.
+    var cursor: types.Coord = .{ .col = -1, .row = -1 };
+    if (!term.hide_cursor) {
+        cursor = grid.cursor.point;
+        cursor.row += grid.offset;
+        cursor.row -= grid.view;
+        cursor.row &= grid.num_rows - 1;
+    }
+
+    if (term.conf.?.tweak.overflowing_glyphs)
+        dirtyOverflowingGlyphs(term);
+
+    // (C's _DEBUG row/cell consistency checks are not part of this port.)
+
+    var damage: Region32 = undefined;
+    render_shim_region_init(regionPtr(&damage));
+
+    render_sixel_images(term, bufferPix(buf), regionPtr(&damage), &cursor);
+
+    const lock: *anyopaque = @ptrCast(&term.render.workers.lock);
+    const start: *anyopaque = @ptrCast(&term.render.workers.start);
+    const done: *anyopaque = @ptrCast(&term.render.workers.done);
+    const queue: *tll.Tll(c_int) = @ptrCast(&term.render.workers.queue);
+    const worker_count: usize = term.render.workers.count;
+
+    if (worker_count > 0) {
+        _ = mtx_lock(lock);
+        term.render.workers.buf = buf;
+        var i: usize = 0;
+        while (i < worker_count) : (i += 1)
+            _ = sem_post(start);
+
+        std.debug.assert(renderQueueLen(term) == 0);
+    }
+
+    var r: c_int = 0;
+    while (r < term.rows) : (r += 1) {
+        const row = terminal_shim_grid_row_in_view(grid, r) orelse unreachable;
+        if (!row.dirty)
+            continue;
+
+        row.dirty = false;
+
+        if (worker_count > 0) {
+            queue.pushBack(r);
+        } else {
+            const cursor_col: c_int = if (cursor.row == r) cursor.col else -1;
+            render_row(term, bufferPix(buf), regionPtr(&damage), row, r, cursor_col);
+        }
+    }
+
+    // Signal the workers the frame is done
+    if (worker_count > 0) {
+        var i: usize = 0;
+        while (i < worker_count) : (i += 1)
+            queue.pushBack(-1);
+        _ = mtx_unlock(lock);
+
+        i = 0;
+        while (i < worker_count) : (i += 1)
+            _ = sem_wait(done);
+        term.render.workers.buf = null;
+    }
+
+    var i: usize = 0;
+    while (i < worker_count) : (i += 1) {
+        render_shim_region_union(
+            regionPtr(&damage), regionPtr(&damage), dirtyRegionPtr(buf, i + 1));
+    }
+    render_shim_region_union(
+        dirtyRegionPtr(buf, 0), dirtyRegionPtr(buf, 0), regionPtr(&damage));
+
+    const surf = term.window.?.surface.surf;
+    {
+        var box_count: c_int = 0;
+        if (render_shim_region_rectangles(regionPtr(&damage), &box_count)) |boxes| {
+            var b: usize = 0;
+            while (b < box_count) : (b += 1) {
+                const box = boxes[b];
+                wayland_shim_surface_damage_buffer(
+                    surf,
+                    box.x1, box.y1,
+                    box.x2 - box.x1, box.y2 - box.y1);
+            }
+        }
+    }
+
+    render_shim_region_fini(regionPtr(&damage));
+
+    render_overlay(term);
+    render_ime_preedit(term, buf);
+    render_scrollback_position(term);
+
+    if (term.conf.?.tweak.render_timer != .none) {
+        var end_time: Timespec = undefined;
+        _ = clock_gettime(CLOCK_MONOTONIC, &end_time);
+
+        var wait_time: Timespec = undefined;
+        timespec_sub(&stop_wait_preapply, &start_wait_preapply, &wait_time);
+
+        var render_time: Timespec = undefined;
+        timespec_sub(&end_time, &start_time, &render_time);
+
+        var double_buffering_time: Timespec = undefined;
+        timespec_sub(&stop_double_buffering, &start_double_buffering, &double_buffering_time);
+
+        const pre = &term.render.workers.preapplied_damage;
+        var preapply_damage: Timespec = undefined;
+        timespec_sub(workersTimespec(&pre.stop), workersTimespec(&pre.start), &preapply_damage);
+
+        var total_render_time: Timespec = undefined;
+        timespec_add(&render_time, &double_buffering_time, &total_render_time);
+        timespec_add(&wait_time, &total_render_time, &total_render_time);
+
+        switch (term.conf.?.tweak.render_timer) {
+            .log, .both => log_msg(
+                LOG_CLASS_INFO, "render", "render.zig", @intCast(@src().line),
+                "frame rendered in %lds %9ldns " ++
+                    "(%lds %9ldns wait, %lds %9ldns rendering, " ++
+                    "%lds %9ldns double buffering) not included: " ++
+                    "%lds %ldns pre-apply damage",
+                total_render_time.tv_sec, total_render_time.tv_nsec,
+                wait_time.tv_sec, wait_time.tv_nsec,
+                render_time.tv_sec, render_time.tv_nsec,
+                double_buffering_time.tv_sec, double_buffering_time.tv_nsec,
+                preapply_damage.tv_sec, preapply_damage.tv_nsec,
+            ),
+            .none, .osd => {},
+        }
+
+        switch (term.conf.?.tweak.render_timer) {
+            .osd, .both => render_render_timer(term, total_render_time),
+            .log, .none => {},
+        }
+    }
+
+    std.debug.assert(grid.offset >= 0 and grid.offset < grid.num_rows);
+    std.debug.assert(grid.view >= 0 and grid.view < grid.num_rows);
+
+    const window = term.window.?;
+    std.debug.assert(window.frame_callback == null);
+    window.frame_callback = render_shim_add_frame_callback(surf, term);
+
+    wayl_win_scale(window, buf);
+
+    if (term.wl.?.presentation != null and term.conf.?.presentation_timings) {
+        var commit_sec: i64 = 0;
+        var commit_nsec: i64 = 0;
+        render_shim_presentation_commit_time(term.wl.?, &commit_sec, &commit_nsec);
+
+        const feedback = render_shim_presentation_feedback_new(term.wl.?, surf);
+        if (feedback == null) {
+            log_msg(
+                LOG_CLASS_WARNING, "render", "render.zig", @intCast(@src().line),
+                "failed to create presentation feedback");
+        } else {
+            const input_time = workersTimespec(&term.render.input_time);
+            const ctx = render_shim_presentation_ctx_new(
+                term,
+                input_time.tv_sec,
+                @divTrunc(input_time.tv_nsec, 1000),
+                commit_sec,
+                @divTrunc(commit_nsec, 1000),
+            );
+            render_shim_presentation_feedback_add(feedback.?, ctx);
+
+            input_time.tv_sec = 0;
+            input_time.tv_nsec = 0;
+        }
+    }
+
+    if (term.conf.?.tweak.damage_whole_window) {
+        wayland_shim_surface_damage_buffer(surf, 0, 0, 0x7fffffff, 0x7fffffff);
+    }
+
+    wayland_shim_surface_attach(surf, buf.wl_buf, 0, 0);
+    wayland_shim_surface_commit(surf);
+}
+
+// ─────────────────────────────────────────────────────────────────────────
 // Render worker thread (D3l1)
 // ─────────────────────────────────────────────────────────────────────────
 

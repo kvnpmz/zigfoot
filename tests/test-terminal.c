@@ -59,6 +59,7 @@ unsigned render_presentation_frame_count(int64_t total_us, float refresh);
 int render_url_format_label(char32_t *label, const char32_t *key,
                             const char32_t *url, bool show_url,
                             size_t entered_key_len, int max_cols);
+void render_dirty_overflowing_glyphs(struct terminal *term);
 size_t render_search_box_glyph_offset(
     size_t glyph_offset, size_t visible_cells, size_t total_cells,
     size_t cursor_cell_idx);
@@ -5540,6 +5541,95 @@ test_render_wait_for_preapply_damage(void)
     term_free(term);
 }
 
+
+/*
+ * The overflowing-glyph pre-pass of grid_render() (render.zig, D3l2).
+ *
+ * Cells belonging to the same overflowing glyph run must be re-rendered as a
+ * unit: one dirty cell in the middle of a run dirties the whole run. The
+ * `confined` bit marks the last cell of such a run, which is where the scan
+ * stops in both directions.
+ */
+static void
+row_reset_clean(struct row *row, bool clean)
+{
+    for (int c = 0; c < COLS; c++) {
+        row->cells[c].attrs.clean = clean;
+        row->cells[c].attrs.confined = false;
+    }
+}
+
+static bool
+row_cells_clean(struct row *row, int from, int to, bool expected)
+{
+    for (int c = from; c <= to; c++) {
+        if (row->cells[c].attrs.clean != expected)
+            return false;
+    }
+    return true;
+}
+
+static void
+test_overflowing_glyphs(void)
+{
+    struct terminal *term = term_new();
+    struct row *row = grid_row_in_view(term->grid, 0);
+
+    /* With no confined cell anywhere the whole rest of the row is dirtied. */
+    row_reset_clean(row, true);
+    row->dirty = true;
+    row->cells[2].attrs.clean = false;
+
+    render_dirty_overflowing_glyphs(term);
+    check(row_cells_clean(row, 0, COLS - 1, false),
+          "a run without a confined cell dirties the whole row");
+
+    /* A confined cell stops the back-fill: it is the start of the run. */
+    row_reset_clean(row, true);
+    row->cells[0].attrs.confined = true;
+    row->cells[3].attrs.clean = false;
+
+    render_dirty_overflowing_glyphs(term);
+    check(row->cells[0].attrs.clean,
+          "the back-fill stops at a confined cell");
+    check(row_cells_clean(row, 1, 4, false),
+          "everything after the confined cell is re-rendered");
+
+    /* The forward sweep stops after the end of the run. */
+    row_reset_clean(row, true);
+    row->cells[1].attrs.clean = false;
+    row->cells[2].attrs.confined = true;   /* end of the run */
+
+    render_dirty_overflowing_glyphs(term);
+    check(row_cells_clean(row, 0, 2, false),
+          "the run containing the dirty cell is dirtied end to end");
+    check(row_cells_clean(row, 3, 4, true),
+          "the forward sweep stops after the confined cell");
+
+    /* ... and the outer loop resumes past it: a second run further right is
+     * still found, and its back-fill reaches back over the clean cell. */
+    row_reset_clean(row, true);
+    row->cells[1].attrs.clean = false;
+    row->cells[2].attrs.confined = true;
+    row->cells[4].attrs.clean = false;
+
+    render_dirty_overflowing_glyphs(term);
+    check(!row->cells[4].attrs.clean,
+          "the scan resumes after a run it already handled");
+    check(!row->cells[3].attrs.clean,
+          "the back-fill of the second run reaches back over clean cells");
+
+    /* Clean rows are left alone entirely. */
+    row_reset_clean(row, true);
+    row->dirty = false;
+
+    render_dirty_overflowing_glyphs(term);
+    check(row_cells_clean(row, 0, COLS - 1, true),
+          "a clean row is not touched");
+
+    term_free(term);
+}
+
 int
 main(void)
 {
@@ -5574,6 +5664,7 @@ main(void)
     test_reapply_old_damage();
     test_render_worker_thread();
     test_render_wait_for_preapply_damage();
+    test_overflowing_glyphs();
     test_scrollback_indicator();
     test_search_box_offset();
     test_url_label();

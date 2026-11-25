@@ -433,6 +433,13 @@ void render_shim_region_extents(
     *out = *pixman_region32_extents(r);
 }
 
+/* pixman_region32_rectangles() returns a borrowed array of boxes. */
+const pixman_box32_t *
+render_shim_region_rectangles(pixman_region32_t *r, int *count)
+{
+    return pixman_region32_rectangles(r, count);
+}
+
 void render_shim_set_clip_region(
     pixman_image_t *pix, const pixman_region32_t *r)
 {
