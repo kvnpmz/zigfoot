@@ -122,10 +122,16 @@ screenshot comparison are feasible here and in CI (with a headless compositor).
 
 ## 3. Definition of done
 
-1. No foot-owned `.c` module remains (generated `srgb.c` and wayland-scanner
-   protocol files excepted, or ported too if desired).
+1. No foot-owned `.c` module remains, apart from the two documented
+   exceptions (§12.9, written up in `doc/endgame-verification.md`):
+   `slave.c`'s 64-line `execvpe()` (Zig 0.16 has no `execvpeZ()`) and
+   `config.c`'s 35-line `regex_t` wrapper. Generated `srgb.c` and
+   wayland-scanner protocol files are excepted as well.
 2. One source of truth for every struct: Zig owns the definitions, no mirrors,
-   no opaque blobs, no `*-shim.c` accessors.
+   no opaque blobs. `*-shim.c` keeps only C-only knowledge — generated
+   protocol `static inline`s, macro/`#ifdef` tests and libc-only types
+   (`regex_t`, `termios`, `FILE`, `sigset_t`, `struct stat`). Every accessor
+   that exists only because a struct was not mirrored is deleted (§12.9).
 3. `meson test` covers the VT core (golden corpus + unit tests) and runs in CI
    on the full feature matrix.
 4. Behavior parity with the C baseline is demonstrated (escape-sequence corpus,
@@ -647,7 +653,37 @@ utmp backends where available.
    `__SIZEOF_POINTER__`/`FALLOC_FL_PUNCH_HOLE` one-liners, `slave.c`'s
    constants accessor, `debug.c`'s ASAN hook, `config.c`'s `regex_t`) stay:
    each encodes compile-time knowledge Zig does not get from meson. Track E1
-   only deletes the *struct-mirror* shims.
+   only deletes the *struct-mirror* shims (§12.9).
+
+### §12.9 — Shim audit rule (how `*-shim.c` shrinks, and what never will)
+
+The shim count does not go to zero, and should not: a generated protocol
+request (`wl_data_offer_receive()`, `zwp_primary_selection_device_v1_
+set_selection()`, …) is a `static inline` in a wayland-scanner header, and
+the listener tables are generated struct layouts. Both are C-only knowledge.
+So every shim function is classified before it is touched:
+
+  (a) **keep** — generated-protocol static inlines and listener tables,
+      macro/`#ifdef` tests that meson's `build_options` does not carry,
+      and libc-only types or struct layouts (`regex_t`, `termios`, `FILE`,
+      `sigset_t`, `struct stat`, `struct utsname`, `struct timeval`);
+  (b) **delete** — a struct-mirror accessor: `get`/`set`/`has`/`destroy`
+      wrappers that exist only because `terminal_types.zig` did not mirror
+      a field. They are replaced by direct field access at the call site,
+      nothing else. The mirror must be pinned by `expectAbi()` (and thus
+      appear in `scripts/gen_abi_probe.py`'s `C_TYPES`) before a wrapper
+      is removed;
+  (c) **port, do not delete** — a shim that carries behaviour. Moving the
+      body into the module's `.zig` is a port chunk (§9 recipe), with the
+      same commit discipline; deleting the wrapper without the body would
+      silently drop logic.
+
+Procedure: list every function per file; classify; for (b) delete the
+wrapper and rewrite its call sites; rebuild all three build dirs and run
+the harness (the probe is what guarantees the mirror was complete); never
+change semantics in the same commit. Record the table and the resulting
+per-file line count in `doc/shim-audit.md`. Expected end state: everything
+left is (a), and the count stabilises rather than reaching zero.
 
 ---
 
@@ -819,16 +855,18 @@ Order matters: `search` and `wayland` first (they unblock the rest), then
 
 ### Track E — endgame (~2–3 days)
 
-- **E1** delete the struct-mirror shims (not the compile-time-knowledge ones,
-  see §12.9); shrink `terminal-shim.c` (1,175) and `selection-shim.c` (243).
-  Several newer shims are generated-protocol static inlines rather than struct
-  mirrors — those stay (§12.9).
+- **E1** delete the struct-mirror shims only (§12.9) across all 11
+  `*-shim.c` files (3,417 lines; `terminal-shim.c` 1,974 and
+  `wayland-shim.c` 316 dominate). Generated-protocol static inlines,
+  listener tables and libc-only types stay. Deliverable:
+  `doc/shim-audit.md` (classification table + per-file line counts).
 - **E2** decisions to close: `ReleaseSafe` vs `ReleaseFast` (§12.4 — fuzz
   first), PGO, `translate-c` spike (§12.1 — recommend abandoning it: the
   probe + mirrors have not produced an ABI bug yet), meson vs `build.zig`
   (§12.3 — stay on meson).
 - **E3** refresh the LOC scoreboard, Definition-of-Done checklist, run the
-  full matrix + smoke, tag the branch.
+  full matrix + smoke + ASAN, document the two remaining C files
+  (`doc/endgame-verification.md`), tag the branch.
 
 ### Critical path and total
 
@@ -1303,9 +1341,17 @@ shared `types.KeyBindingSet`. The `selection` tail deletes
 are Zig. What is left of the C tree is `slave`'s `execvpe()` and `config`'s
 `regex_t` — 99 lines, both by design.
 
-**Track E — endgame (≈3–4 dev-days).** E1a/E1b done (slave constants, IUTF8, signals, terminfo; the debug ASAN hook is Zig, gated by the Meson `b_sanitize` option). E2 done (`shm.c` deleted, 329 → 0 — the `wl_shm` capabilities are read from the mirrored `struct wayland`, and only the generated protocol inlines and `#ifdef` platform tests stay in `shm-shim.c`). E3 done (`wayland.c` deleted, 370 → 0 — only the generated listener tables and `add_listener()` forwarders stay in `wayland-shim.c`). What is left is `slave`'s 64-line execvpe fallback and `config`'s 35-line regex shim; then delete every struct-mirror shim. Note the shim count has *grown*
-during D2/D3 (2,465 → 2,524) because generated protocol inlines need
-forwarders — E1 must keep those and delete only the mirrors (§12.9).
+**Track E — endgame (≈3–4 dev-days).** E1a/E1b done (slave constants, IUTF8,
+signals, terminfo; the debug ASAN hook is Zig, gated by the `b_sanitize`
+option). E2 done (`shm.c` deleted, 329 → 0) and E3 done (`wayland.c`
+deleted, 370 → 0; only generated listener tables and `add_listener()`
+forwarders stay in `wayland-shim.c`). All module ports are finished: the
+only C left is `slave`'s 64-line `execvpe()` and `config`'s 35-line regex
+wrapper. What remains is the shim sweep (§12.9 — in progress:
+`doc/shim-audit.md`) and E2/E3 (in progress: `doc/endgame-verification.md`,
+ASAN matrix, `ReleaseSafe` call, tag). Note the shim count *grew* during
+D2/D3 (2,465 → 3,417) because generated protocol inlines need forwarders —
+the sweep deletes only the mirrors (§12.9).
 
 **Total: ≈27–33 dev-days ≈ 5.5–6.5 weeks solo**, or ≈3 weeks with three
 workers (D3 tail ∥ D4a–b ∥ D5). The old "6–7 weeks total" headline in §13 is
@@ -1320,7 +1366,7 @@ D3j -> D3k1/k2 -> D3k3/k4 -> D3l1 -> D3l2 (grid_render) -> D3l3 (resize) -> D3l4
 D4a -> D4b -> D4c -> D4d -> D4e            (input; can start in parallel now)
 D5 (key-binding -> ime -> url-mode -> selection tail)   (parallel with D4)
 D6 (main -> server/client)  — gated on D3l2 and D5's key-binding
-E  (wayland/shm/slave/config/debug tails, shim sweep)
+E1 (shim sweep) -> E2/E3 (verification, remaining-C memo, tag)
 ```
 
 Nothing left is blocked on a missing mirror: `struct seat`, `struct wayland`,

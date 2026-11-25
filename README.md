@@ -71,7 +71,9 @@ The fast, lightweight and minimalistic Wayland terminal emulator.
 
 # Installing
 
-See [INSTALL.md](INSTALL.md).
+See [INSTALL.md](INSTALL.md). Note that building foot now requires Zig
+0.16 in addition to a C compiler: every foot-owned module is Zig, and the
+build runs `zig build-obj` through `compile_zig.py`.
 
 
 ## Configuration

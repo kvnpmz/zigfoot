@@ -65,12 +65,37 @@ In addition to the dev variant of the packages above, you need:
 
 * meson
 * ninja
+* [zig](https://ziglang.org/) **0.16** — the port targets this exact
+  series; `compile_zig.py` refuses any other version
 * wayland protocols
 * ncurses (needed to generate terminfo)
 * scdoc (for man page generation, not needed if documentation is disabled)
 * llvm (for PGO builds with Clang)
 * [tllist](https://codeberg.org/dnkl/tllist) [^1]
 * systemd (optional, foot will install systemd unit files if detected)
+
+**Zig is required**, not optional. Every foot-owned module is Zig; the
+remaining C is a set of libc-only shims plus two documented exceptions
+(`slave.c`'s `execvpe()`, which Zig 0.16 cannot express, and `config.c`'s
+35-line `regex_t` wrapper). Each Zig module is a meson `custom_target`
+that runs `compile_zig.py`, which:
+
+* picks the optimization mode from meson's `--buildtype` (debug →
+  `Debug`, release/debugoptimized → `ReleaseSafe`, minsize →
+  `ReleaseSmall`);
+* writes the module's `build_options` (feature flags, paths such as
+  `foot_terminfo_path`/`default_terminfo`, `asan_enabled`) and imports the
+  generated `c_layout.zig`;
+* runs `zig build-obj -lc`, so the objects link into the normal C/meson
+  build.
+
+`c_layout.zig` is generated from `abi_probe.c`, which
+`scripts/gen_abi_probe.py` regenerates from the Zig-side mirrors: the C
+compiler prints the real `sizeof`/`offsetof` for every mirrored struct and
+the Zig side checks them at compile time. `meson test` runs
+`abi-probe-up-to-date`, so a stale probe fails the test suite. Add
+`ZIG_GLOBAL_CACHE_DIR` to your build environment if you want the Zig cache
+somewhere other than `~/.cache/zig`.
 
 A note on compilers; in general, foot runs **much** faster when
 compiled with gcc instead of clang. A profile-guided gcc build can be
