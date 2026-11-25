@@ -4,7 +4,7 @@
 //! commit strings arrive as *pending* state and are only applied in `done()`,
 //! in the order the protocol prescribes. The preedit is turned into a row of
 //! cells here (with the cursor mapped from byte offsets to cell indices) and
-//! painted by render.zig; the listener table stays C-side in wayland.c.
+//! painted by render.zig; the listener table stays C-side in wayland-shim.c.
 //!
 //! This build requires `-Dime=true` (meson refuses `ime=false`, since the
 //! wayland.h mirrors assume it), so the `#else` stubs ime.c had are not

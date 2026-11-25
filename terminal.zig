@@ -1442,8 +1442,8 @@ export fn term_reverse_index(term: *types.Terminal) callconv(.c) void {
 }
 
 // ── Chunk C1: term_erase / term_fill / term_print / print_spacer ─
-// Hot path. Depends on grid row access, URI/underline ranges,
-// linewrap/insert helpers (all still C), and sixel_overwrite_* (Zig).
+// Hot path. Depends on grid row access, URI/underline ranges, the
+// print_linewrap/print_insert helpers below, and sixel_overwrite_* (sixel.zig).
 
 
 extern fn grid_row_uri_range_put(row: *types.Row, col: c_int, uri: [*:0]const u8, id: u64) callconv(.c) void;
@@ -3650,8 +3650,8 @@ export fn term_ime_set_cursor_rect(
 // the CSD border corner helpers (is_top_left() and friends) and
 // xcursor_for_csd_border() lived in input.c. All of them are pure decisions
 // over the terminal/seat/window mirrors, so they are ported here. The
-// dependencies that are still C are the modifier/key-binding lookups
-// (input.c/key-binding.c), the xcursor loader (render.c) and the server-side
+// remaining dependencies are the modifier/key-binding lookups
+// (input.zig/key-binding.zig), the xcursor loader (render.zig) and the
 // cursor-shape name mapping (cursor-shape.zig).
 //
 
@@ -4151,8 +4151,8 @@ export fn term_surface_kind(
 //
 // Chunk C4b — the shutdown sequence. shutdown_maybe_done(),
 // fdm_client_terminated(), fdm_shutdown(), fdm_terminate_timeout() and
-// term_shutdown() were static/global in terminal.c. term_destroy() is still C
-// (C5), so it stays an extern; everything else reads the mirrors.
+// term_shutdown() were static/global in terminal.c. term_destroy() was ported
+// in C5 and is exported from this file; everything else reads the mirrors.
 //
 
 extern fn wayl_win_destroy(win: ?*types.WlWindow) callconv(.c) void;

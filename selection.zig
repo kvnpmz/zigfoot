@@ -13,7 +13,7 @@ const CELL_COMB_CHARS_LO: u32 = 0x00200000;
 const CELL_COMB_CHARS_HI: u32 = CELL_COMB_CHARS_LO + 0x3fffffff;
 const CELL_SPACER: u32 = CELL_COMB_CHARS_HI + 1;
 
-// isword: still in C (misc.h)
+// isword: misc.zig (prototype in misc.h)
 extern fn free(ptr: ?*anyopaque) callconv(.c) void;
 extern fn isword(wc: u32, spaces_only: bool, delimiters: ?[*]const u32) callconv(.c) bool;
 // isc32space: static inline in char32.h -> port inline here
@@ -28,7 +28,7 @@ fn isc32space(c: u32) bool {
 // composed_lookup: exported from composed.zig
 extern fn composed_lookup(root: ?*types.Composed, key: u32) callconv(.c) ?*types.Composed;
 
-// extract: still in C
+// extract: extract.zig (prototype in extract.h)
 const ExtractionContext = anyopaque;
 extern fn extract_begin(kind: types.SelectionKind, strip_trailing_empty: bool) callconv(.c) ?*ExtractionContext;
 extern fn extract_one(

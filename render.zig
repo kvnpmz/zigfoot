@@ -2867,9 +2867,8 @@ extern fn fdm_hook_add(
 ) callconv(.c) bool;
 extern fn fdm_hook_del(fdm: *Fdm, hook: FdmHook, priority: c_int) callconv(.c) bool;
 
-/// render.c's `struct renderer`: two pointers. The C side has a
-/// `_Static_assert` pinning the same size; the hook (still C) reads
-/// `renderer->wayl`, so the layout has to agree.
+/// `struct renderer`: two pointers, matching the old C struct. `grid_render()`
+/// and the frame hook read `renderer.wayl`, so the layout has to agree.
 const Renderer = extern struct {
     fdm: *Fdm,
     wayl: *types.Wayland,
