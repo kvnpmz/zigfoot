@@ -17,7 +17,7 @@ const types = @import("terminal_types.zig");
 
 const LOG_CLASS_WARNING: c_int = 2;
 
-// State that used to be file-static in shm.c. main.c sets the first two
+// State that used to be file-static in shm.c. main.zig sets the first two
 // through shm_set_max_pool_size()/shm_set_min_stride_alignment().
 var max_pool_size: i64 = 512 * 1024 * 1024;
 var min_stride_alignment: usize = 0;

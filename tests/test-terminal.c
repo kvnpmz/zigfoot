@@ -6596,6 +6596,43 @@ test_selection_receive(void)
 }
 
 /*
+ * main.zig (D6) — the pieces that are testable without a process launch.
+ *
+ * main.c's UNITTEST block asserted xstrjoin()/xstrjoin3(), which stay static
+ * inlines in xmalloc.h; they are re-checked here so the coverage survives the
+ * deletion of main.c. The get_foot_exe()/usage/printer paths need a real
+ * process and are covered by the smoke test instead.
+ */
+bool main_shim_is_directory(const char *path);
+const char *foot_version_and_features(void);
+
+static void
+test_main_helpers(void)
+{
+    char *s = xstrjoin("foo", "bar");
+    check(strcmp(s, "foobar") == 0, "xstrjoin() joins two strings");
+    free(s);
+
+    s = xstrjoin3("foo", " ", "bar");
+    check(strcmp(s, "foo bar") == 0, "xstrjoin3() joins with a separator");
+    free(s);
+
+    s = xstrjoin3("foo", "bar", "baz");
+    check(strcmp(s, "foobarbaz") == 0, "xstrjoin3() joins three strings");
+    free(s);
+
+    check(main_shim_is_directory("/tmp"),
+          "main_shim_is_directory: /tmp is a directory");
+    check(!main_shim_is_directory("/dev/null"),
+          "main_shim_is_directory: /dev/null is not a directory");
+    check(!main_shim_is_directory("/nonexistent/for/sure"),
+          "main_shim_is_directory: a missing path is not a directory");
+
+    check(strncmp(foot_version_and_features(), "version: ", 9) == 0,
+          "foot_version_and_features() starts with 'version: '");
+}
+
+/*
  * URL mode (url-mode.zig, D5c).
  *
  * Detection runs over a real grid with a real POSIX regex; the jump-label
@@ -7835,6 +7872,7 @@ main(void)
     test_selection_offers();
     test_selection_send();
     test_selection_receive();
+    test_main_helpers();
     test_url_mode();
     test_slave_shims();
     test_ime_protocol();

@@ -27,3 +27,8 @@ export const version_and_features: [features.len:0]u8 = blk: {
     arr[features.len] = 0;
     break :blk arr;
 };
+
+/// Zig callers cannot name the array's length, so expose its address.
+export fn foot_version_and_features() [*:0]const u8 {
+    return &version_and_features;
+}

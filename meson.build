@@ -487,6 +487,19 @@ selection_obj = custom_target(
 )
 
 
+main_obj = custom_target(
+  'main_obj',
+  input: 'main.zig',
+  depend_files: files('terminal_types.zig'),
+  output: 'main.o',
+  depends: c_layout,
+  command: [
+    python, files('compile_zig.py'), '@INPUT@', '@OUTPUT@',
+    grapheme_clustering_zig,
+    'default_terminfo="' + get_option('default-terminfo') + '"',
+  ]
+)
+
 input_obj = custom_target(
   'input_obj',
   input: 'input.zig',
@@ -864,8 +877,8 @@ endif
 foot_deps = [math, threads, libepoll, pixman, wayland_client, wayland_cursor,
              xkb, fontconfig, utf8proc, tllist, fcft]
 
-# Everything except main.c, so tests can link the real code and supply their
-# own main().
+# Everything except main.zig (the entry point), so tests can link the real
+# code and supply their own main().
 footlib = static_library(
   'footlib',
   async_obj, 'async.h',
@@ -883,6 +896,7 @@ footlib = static_library(
   reaper_obj, 'reaper.h',
   render_obj, 'render.h',
   search_obj, 'search.h',
+  'main-shim.c',
   'server.c', 'server.h', 'client-protocol.h',
   shm_obj, 'shm-shim.c', 'shm.h',
   slave_obj, 'slave.c', 'slave.h',
@@ -899,7 +913,7 @@ footlib = static_library(
 
 executable(
   'foot',
-  'main.c',
+  main_obj,
   wl_proto_src + wl_proto_headers,
   dependencies: foot_deps,
   link_with: footlib,
