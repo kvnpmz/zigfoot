@@ -626,3 +626,13 @@ void xdg_toplevel_wm_capabilities(
     void *data, struct xdg_toplevel *xdg_toplevel, struct wl_array *caps);
 void xdg_surface_configure(
     void *data, struct xdg_surface *xdg_surface, uint32_t serial);
+
+bool verify_iface_version(const char *iface, uint32_t version, uint32_t wanted);
+void surface_enter(
+    void *data, struct wl_surface *wl_surface, struct wl_output *wl_output);
+void surface_leave(
+    void *data, struct wl_surface *wl_surface, struct wl_output *wl_output);
+void surface_preferred_buffer_scale(
+    void *data, struct wl_surface *surface, int32_t scale);
+void surface_preferred_buffer_transform(
+    void *data, struct wl_surface *surface, uint32_t transform);

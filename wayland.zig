@@ -1886,3 +1886,88 @@ export fn xdg_surface_configure(
     if (wasnt_configured)
         term_window_configured(term);
 }
+
+// ─────────────────────────────────────────────────────────────────────────
+// wl_surface listener
+// ─────────────────────────────────────────────────────────────────────────
+
+const MonitorList = tll.Tll(types.Monitor);
+const WindowOutputList = tll.Tll(?*const types.Monitor);
+
+export fn verify_iface_version(iface: [*c]const u8, version: u32, wanted: u32) callconv(.c) bool {
+    if (version >= wanted)
+        return true;
+
+    log_msg(
+        LOG_CLASS_ERROR,
+        "wayland",
+        "wayland.zig",
+        @intCast(@src().line),
+        "%s: need interface version %u, but compositor only implements %u",
+        iface,
+        wanted,
+        version,
+    );
+    return false;
+}
+
+export fn surface_enter(data: ?*anyopaque, wl_surface: ?*anyopaque, wl_output: ?*anyopaque) callconv(.c) void {
+    _ = wl_surface;
+    const win: *types.WlWindow = @ptrCast(@alignCast(data.?));
+    const term: *types.Terminal = @ptrCast(@alignCast(win.term.?));
+    const wayl = waylandOf(win);
+
+    const monitors: *MonitorList = @ptrCast(&wayl.monitors);
+    var it = (@constCast(monitors)).foreach();
+    while (it.next()) |node| {
+        if (node.item.output == wl_output) {
+            log_msg(LOG_CLASS_DEBUG, "wayland", "wayland.zig", @intCast(@src().line), "mapped on %s", node.item.name);
+            const outputs: *WindowOutputList = @ptrCast(&win.on_outputs);
+            outputs.pushBack(&node.item);
+            update_term_for_output_change(term);
+            return;
+        }
+    }
+
+    log_msg(LOG_CLASS_ERROR, "wayland", "wayland.zig", @intCast(@src().line), "mapped on unknown output");
+}
+
+export fn surface_leave(data: ?*anyopaque, wl_surface: ?*anyopaque, wl_output: ?*anyopaque) callconv(.c) void {
+    _ = wl_surface;
+    const win: *types.WlWindow = @ptrCast(@alignCast(data.?));
+    const term: *types.Terminal = @ptrCast(@alignCast(win.term.?));
+
+    const outputs: *WindowOutputList = @ptrCast(&win.on_outputs);
+    var it = outputs.foreach();
+    while (it.next()) |node| {
+        if (node.item.?.output != wl_output)
+            continue;
+
+        log_msg(LOG_CLASS_DEBUG, "wayland", "wayland.zig", @intCast(@src().line), "unmapped from %s", node.item.?.name);
+        outputs.removeNode(node);
+        update_term_for_output_change(term);
+        return;
+    }
+
+    log_msg(LOG_CLASS_WARNING, "wayland", "wayland.zig", @intCast(@src().line), "unmapped from unknown output");
+}
+
+export fn surface_preferred_buffer_scale(data: ?*anyopaque, surface: ?*anyopaque, scale: i32) callconv(.c) void {
+    _ = surface;
+    const win: *types.WlWindow = @ptrCast(@alignCast(data.?));
+
+    if (win.preferred_buffer_scale == scale)
+        return;
+
+    log_msg(LOG_CLASS_DEBUG, "wayland", "wayland.zig", @intCast(@src().line), "wl_surface preferred scale: %d -> %d", win.preferred_buffer_scale, scale);
+
+    win.preferred_buffer_scale = scale;
+    updateTermForOutputChange(@ptrCast(@alignCast(win.term.?)));
+}
+
+export fn surface_preferred_buffer_transform(data: ?*anyopaque, surface: ?*anyopaque, transform: u32) callconv(.c) void {
+    // TODO
+    _ = data;
+    _ = surface;
+    _ = transform;
+}

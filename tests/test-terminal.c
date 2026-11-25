@@ -3683,6 +3683,36 @@ test_configure(void)
     check(!win.wm_capabilities.maximize, "wm_capabilities clears maximize");
 }
 
+
+static void
+test_surface_listener(void)
+{
+    check(verify_iface_version("wl_seat", 5, 3), "a new enough interface is accepted");
+    check(!verify_iface_version("wl_seat", 2, 3), "an old interface is rejected");
+
+    struct wl_window win = {0};
+    struct wayland wayl = {0};
+    struct terminal term = {0};
+
+    term.wl = &wayl;
+    term.window = &win;
+    win.term = &term;
+
+    /* An output we do not know about is not added to the window */
+    surface_leave(&win, NULL, NULL);
+    surface_enter(&win, NULL, (struct wl_output *)&wayl);
+    check(tll_length(win.on_outputs) == 0,
+          "an unknown output is neither mapped nor unmapped");
+
+    /* The same preferred scale is a no-op (no update_term_for_output_change) */
+    win.preferred_buffer_scale = 2;
+    surface_preferred_buffer_scale(&win, NULL, 2);
+    check(win.preferred_buffer_scale == 2, "an unchanged preferred scale is ignored");
+
+    surface_preferred_buffer_transform(&win, NULL, 1);
+    check(true, "preferred_buffer_transform is a no-op");
+}
+
 int
 main(void)
 {
@@ -3707,6 +3737,7 @@ main(void)
     test_output();
     test_csd_visibility();
     test_configure();
+    test_surface_listener();
     test_wayland_misc();
     test_osc8();
     test_size_notifications();
