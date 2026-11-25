@@ -972,6 +972,20 @@ compositor. Real presentation feedback is still not delivered to these
 short-lived windows, so `presented()` is covered by the fabricated-context
 checks, not by the launches.
 
+**Post-E3 (merge of agent-c):** `doc/endgame-verification.md` landed (the
+remaining-C write-up, the matrix, the ReleaseSafe measurement, the
+execvpe coverage argument). §12's last open decisions are closed:
+translate-c abandoned, meson stays, `ReleaseSafe` stays (4.30 s harness mean,
+3 runs). Two follow-ups came out of its caveats, both fixed here: the
+harness's `-120 << 8` (UB under clang `-Werror`) is now `(-120) * 256`, so
+the ASAN target builds for the first time; and the leak ASAN then exposed in
+the new `test_config_load_from_xdg` (a partially loaded config was never
+freed — 8,411 B direct + 60,912 B indirect, `re_compile_internal` via
+`config_regex_compile()`) is fixed, leaving `test-config` at 0 bytes lost and
+0 valgrind errors. The terminal harness still cannot complete under clang
+ASAN in this container (ASAN's allocator aborts with `Failed to munmap`);
+the gate keeps valgrind, and the limitation is recorded in the doc.
+
 **Post-close-out checks (A, while E1/E3 ran):** upstream is clean
 (`git fetch origin`: 222 commits ahead, 0 behind — nothing to port). The
 CI Zig job would have failed at configure time: it passed `-Dime=disabled`,
