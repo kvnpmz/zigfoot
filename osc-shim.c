@@ -20,10 +20,6 @@
 #include "char32.h"
 #include "xmalloc.h"
 
-char **osc_term_cwd_ptr(struct terminal *term) {
-    return &term->cwd;
-}
-
 /* ── Chunk D: clipboard helpers ─────────────────────────────────── */
 
 #include <stdbool.h>
@@ -47,26 +43,9 @@ osc_seat_with_focus(struct terminal *term)
     return NULL;
 }
 
-uint32_t
-osc_seat_serial(struct seat *seat)
-{
-    return seat->kbd.serial;
-}
 
 
-bool
-osc_osc52_copy_allowed(struct terminal *term)
-{
-    return term->conf->security.osc52 == OSC52_ENABLED
-        || term->conf->security.osc52 == OSC52_COPY_ENABLED;
-}
 
-bool
-osc_osc52_paste_allowed(struct terminal *term)
-{
-    return term->conf->security.osc52 == OSC52_ENABLED
-        || term->conf->security.osc52 == OSC52_PASTE_ENABLED;
-}
 
 size_t
 osc_ptmx_buffers_len(struct terminal *term)
@@ -93,10 +72,6 @@ uint32_t osc_theme_selection_fg(struct terminal *t) { return term_theme_get(t)->
 void osc_theme_table_copy(struct terminal *t, uint32_t *out) {
     memcpy(out, term_theme_get(t)->table, sizeof(uint32_t) * 256);
 }
-bool osc_conf_colors_dark_use_custom_cursor(struct terminal *t) {
-    return t->conf->colors_dark.use_custom.cursor;
-}
-
 
 /* ── Chunk E: notification helpers ─────────────────────────────── */
 bool
@@ -106,23 +81,8 @@ osc_notify_utf8_valid(const char *s, size_t len)
 }
 
 /* ── Chunk E-2: kitty_notification helpers ─────────────────────── */
-struct notification *
-osc_kitty_notif_get(struct terminal *term)
-{
-    return &term->kitty_notification;
-}
 
-bool
-osc_kitty_osc_bel(struct terminal *term)
-{
-    return term->vt.osc.bel;
-}
 
-bool
-osc_kitty_conf_inhibit_when_focused(struct terminal *term)
-{
-    return term->conf->desktop_notifications.inhibit_when_focused;
-}
 
 char *
 osc_xstrjoin(const char *a, const char *b)
@@ -149,8 +109,3 @@ osc_c32len(const uint32_t *s)
     return c32len((const char32_t *)s);
 }
 
-int
-osc_conf_grapheme_width_method(struct terminal *term)
-{
-    return (int)term->conf->tweak.grapheme_width_method;
-}

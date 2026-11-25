@@ -68,7 +68,6 @@ extern fn uri_parse(
     fragment: ?*[*c]u8,
 ) callconv(.c) bool;
 
-extern fn osc_term_cwd_ptr(term: *types.Terminal) callconv(.c) *?[*:0]u8;
 
 fn sdbmHash(s: [*:0]const u8) u64 {
     var hash: u64 = 0;
@@ -118,7 +117,7 @@ export fn osc_set_pwd(term: *types.Terminal, string: [*:0]u8) callconv(.c) void 
 
     if (scheme != null and host != null and path != null) {
         if (streq(cStr(scheme), "file") and hostname_is_localhost(cStr(host))) {
-            const cwd_ptr = osc_term_cwd_ptr(term);
+            const cwd_ptr = &term.cwd;
             if (cwd_ptr.*) |old| free(@ptrCast(old));
             cwd_ptr.* = @ptrCast(path);
         } else {
@@ -336,14 +335,24 @@ extern fn xstrdup(s: [*:0]const u8) callconv(.c) ?[*:0]u8;
 extern fn xmalloc(size: usize) callconv(.c) ?*anyopaque;
 
 extern fn osc_seat_with_focus(term: *types.Terminal) callconv(.c) ?*anyopaque;
-extern fn osc_osc52_copy_allowed(term: *types.Terminal) callconv(.c) bool;
-extern fn osc_osc52_paste_allowed(term: *types.Terminal) callconv(.c) bool;
 extern fn osc_ptmx_buffers_len(term: *types.Terminal) callconv(.c) usize;
 extern fn osc_fdm_epollout_ptmx(term: *types.Terminal) callconv(.c) void;
 
 // ── Helpers ───────────────────────────────────────────────────────
-extern fn osc_seat_serial(seat: *anyopaque) callconv(.c) u32;
-fn termSeatSerial(seat: *anyopaque) u32 { return osc_seat_serial(seat); }
+fn osc52CopyAllowed(term: *types.Terminal) bool {
+    const p = term.conf.?.security.osc52;
+    return p == .enabled or p == .copy_enabled;
+}
+
+fn osc52PasteAllowed(term: *types.Terminal) bool {
+    const p = term.conf.?.security.osc52;
+    return p == .enabled or p == .paste_enabled;
+}
+
+fn termSeatSerial(seat: *anyopaque) u32 {
+    const s: *const types.Seat = @ptrCast(@alignCast(seat));
+    return s.kbd.serial;
+}
 
 // ── osc_to_clipboard ──────────────────────────────────────────────
 export fn osc_to_clipboard(
@@ -371,7 +380,7 @@ export fn osc_to_clipboard(
         return;
     }
 
-    if (!osc_osc52_copy_allowed(term)) {
+    if (!osc52CopyAllowed(term)) {
         std.debug.print("osc: ignoring copy request: disabled in configuration\n", .{});
         return;
     }
@@ -485,7 +494,7 @@ export fn osc_from_clipboard(term: *types.Terminal, source: [*:0]const u8) callc
         return;
     }
 
-    if (!osc_osc52_paste_allowed(term)) {
+    if (!osc52PasteAllowed(term)) {
         std.debug.print("osc: ignoring paste request: disabled in configuration\n", .{});
         return;
     }
@@ -599,7 +608,6 @@ extern fn osc_theme_cursor_cursor(term: *types.Terminal) callconv(.c) u32;
 extern fn osc_theme_selection_bg(term: *types.Terminal) callconv(.c) u32;
 extern fn osc_theme_selection_fg(term: *types.Terminal) callconv(.c) u32;
 extern fn osc_theme_table_copy(term: *types.Terminal, out: *[256]u32) callconv(.c) void;
-extern fn osc_conf_colors_dark_use_custom_cursor(term: *types.Terminal) callconv(.c) bool;
 
 fn unhandled(term: *types.Terminal) void {
     std.debug.print("osc: unhandled: OSC: {s}\n", .{term.vt.osc.data.?[0..term.vt.osc.idx]});
@@ -804,7 +812,7 @@ export fn osc_dispatch(term: *types.Terminal) callconv(.c) void {
         112 => {
             term.colors.cursor_fg = osc_theme_cursor_text(term);
             term.colors.cursor_bg = osc_theme_cursor_cursor(term);
-            if (osc_conf_colors_dark_use_custom_cursor(term)) {
+            if (term.conf.?.colors_dark.use_custom.cursor) {
                 term.colors.cursor_fg |= 1 << 31;
                 term.colors.cursor_bg |= 1 << 31;
             }
@@ -877,9 +885,6 @@ export fn osc_notify_impl(term: *types.Terminal, string: [*:0]u8) callconv(.c) v
 extern fn notify_notify(term: *types.Terminal, notif: *types.Notification) callconv(.c) bool;
 
 // ── chunk E-2: kitty_notification ─────────────────────────────────
-extern fn osc_kitty_notif_get(term: *types.Terminal) callconv(.c) *types.Notification;
-extern fn osc_kitty_osc_bel(term: *types.Terminal) callconv(.c) bool;
-extern fn osc_kitty_conf_inhibit_when_focused(term: *types.Terminal) callconv(.c) bool;
 extern fn osc_xstrjoin(a: [*:0]const u8, b: [*:0]const u8) callconv(.c) ?[*:0]u8;
 extern fn osc_xstrjoin3(a: [*:0]const u8, b: [*:0]const u8, c: [*:0]const u8) callconv(.c) ?[*:0]u8;
 extern fn osc_kitty_actions_push_back(notif: *types.Notification, s: [*:0]u8) callconv(.c) void;
@@ -1016,12 +1021,12 @@ export fn kitty_notification_impl(term: *types.Terminal, string: [*:0]u8) callco
                 else if (streqz(value, "buttons")) { payload_type = PAYLOAD_BUTTON; }
                 else if (streqz(value, "?")) {
                     const reply_id: [*:0]const u8 = if (id) |i| i else "0";
-                    const term_caps: [*:0]const u8 = if (osc_kitty_osc_bel(term)) "\x07" else "\x1b\\";
+                    const term_caps: [*:0]const u8 = if (term.vt.osc.bel) "\x07" else "\x1b\\";
                     var when_caps: [64]u8 = undefined;
                     const base = "unfocused";
                     @memcpy(when_caps[0..base.len], base);
                     var wlen: usize = base.len;
-                    if (!osc_kitty_conf_inhibit_when_focused(term)) {
+                    if (!term.conf.?.desktop_notifications.inhibit_when_focused) {
                         const extra = ",always";
                         @memcpy(when_caps[wlen..wlen + extra.len], extra);
                         wlen += extra.len;
@@ -1140,7 +1145,7 @@ export fn kitty_notification_impl(term: *types.Terminal, string: [*:0]u8) callco
         if (payload) |p| payload_size = strlen(p);
     }
 
-    const notif = osc_kitty_notif_get(term);
+    const notif = &term.kitty_notification;
 
     const same = (id == null and notif.id == null) or
                  (id != null and notif.id != null and streqz(id.?, notif.id.?));
@@ -1294,7 +1299,6 @@ extern fn notify_active_next(term: *types.Terminal, prev: *types.Notification) c
 // ── chunk E-3: kitty_text_size (OSC-66) ──────────────────────────
 extern fn ambstoc32(s: [*:0]const u8) callconv(.c) ?[*]u32;
 extern fn osc_c32len(s: [*]const u32) callconv(.c) usize;
-extern fn osc_conf_grapheme_width_method(term: *types.Terminal) callconv(.c) c_int;
 extern fn composed_key_from_chars(chars: [*]const u32, count: usize) callconv(.c) u32;
 extern fn composed_lookup_without_collision(root: ?*types.Composed, key: *u32, chars: [*]const u32, count: usize, last: u32, forced_width: c_int) callconv(.c) ?*types.Composed;
 extern fn composed_insert(root: *?*types.Composed, node: ?*types.Composed) callconv(.c) void;
@@ -1356,7 +1360,7 @@ export fn kitty_text_size_impl(term: *types.Terminal, string: [*:0]u8) callconv(
     }
 
     var calculated_width: usize = 0;
-    const method = osc_conf_grapheme_width_method(term);
+    const method = @intFromEnum(term.conf.?.tweak.grapheme_width_method);
     if (method == GRAPHEME_WIDTH_WCSWIDTH) calculated_width = all_cp_width
     else if (method == GRAPHEME_WIDTH_MAX) calculated_width = max_cp_width
     else if (method == GRAPHEME_WIDTH_DOUBLE) calculated_width = @min(max_cp_width, 2);
