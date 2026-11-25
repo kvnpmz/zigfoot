@@ -48,8 +48,14 @@ def check_version(version):
             f"compile_zig.py: Zig {ZIG_SERIES} is required (found {version})")
 
 
-def meson_buildtype():
-    root = os.environ.get("MESON_BUILD_ROOT")
+def meson_buildtype(build_dir=None):
+    """Read meson's buildtype.
+
+    Meson does not export MESON_BUILD_ROOT to custom_target commands, so
+    fall back to the directory the output object is written to - every Zig
+    object is emitted inside the build dir, next to meson-info/.
+    """
+    root = os.environ.get("MESON_BUILD_ROOT") or build_dir
     if not root:
         return None
     path = os.path.join(root, "meson-info", "intro-buildoptions.json")
@@ -105,7 +111,7 @@ def main():
 
     check_version(zig_version())
 
-    buildtype = meson_buildtype()
+    buildtype = meson_buildtype(os.path.dirname(os.path.abspath(output_file)))
     optimize = OPTIMIZE_MODES.get(buildtype or "", "ReleaseSafe")
 
     cmd = ["zig", "build-obj", "-O", optimize, "-fno-stack-check", "-lc"]

@@ -523,6 +523,33 @@ writer per phase, or partition by struct, and rebase daily.
 
 ## 10. Verification strategy
 
+**The loop** (added 2026-11-25, after measuring it):
+
+    scripts/dev-check.sh     # build/ only: ~15 s
+    scripts/full-check.sh    # the commit gate: 3 dirs + smoke, ~10 s warm
+
+Both are thin wrappers, but two things matter for speed:
+
+* `compile_zig.py` used to look for `MESON_BUILD_ROOT` to pick the optimize
+  mode. Meson does **not** export that to `custom_target` commands, so every
+  build dir silently compiled Zig in ReleaseSafe - the debug dir's
+  `config.zig` took 27 s instead of 0.8 s, and a `terminal_types.zig` touch
+  (21 dependent modules) took **215 s**. It now falls back to the directory
+  the object is written to, which is always inside the build dir. Same touch
+  is now **13 s**, a full 36-object rebuild 18 s.
+* Never run two ninja invocations against the same build dir: they serialise
+  on the build-dir lock and look like a hang.
+
+`full-check.sh` builds the two debug dirs in parallel and `build-release`
+afterwards - ReleaseSafe codegen dominates the wall time and running it
+alongside two debug builds only oversubscribes the machine.
+
+Side benefit of the fix: `build/` is a real Zig **Debug** build again, so the
+harness now runs with Zig's runtime safety checks (integer overflow, bogus
+pointer arithmetic) active - it caught nothing yet, and the box-drawing
+oracle output is byte-identical between Debug and ReleaseSafe.
+
+
 **A. Unit tests (fast, every commit).**
 `zig test` per module: grid reflow invariants, ABI layout, parser edge cases,
 selection boundary finders, base64/uri/tokenize.
