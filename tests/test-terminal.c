@@ -36,6 +36,7 @@
 #include <termios.h>
 #include <linux/input-event-codes.h>
 #include "input.h"
+#include "ime.h"
 #include "key-binding.h"
 #include "search.h"
 #include <sys/timerfd.h>
@@ -6169,6 +6170,113 @@ test_keymap_lookup(void)
 }
 
 /*
+ * The IME text-input path (ime.zig, D5b).
+ *
+ * No compositor is needed for the pending/state machine: done() applies the
+ * pending preedit into cells, which is exactly the part worth checking. The
+ * cursor-rect math is checked with a stub terminal and no text-input manager
+ * (ime_send_cursor_rect() then bails out, leaving the pending rect behind).
+ */
+static void
+test_ime_protocol(void)
+{
+    struct seat seat;
+    memset(&seat, 0, sizeof(seat));
+    seat.name = "seat0";
+
+    seat.ime.preedit.pending.text = xstrdup("pre");
+    seat.ime.commit.pending.text = xstrdup("com");
+    ime_reset_pending(&seat);
+    check(seat.ime.preedit.pending.text == NULL &&
+          seat.ime.commit.pending.text == NULL,
+          "ime_reset_pending() drops both pending strings");
+
+    uint32_t serial = seat.ime.serial;
+    ime_enable(&seat);
+    ime_disable(&seat);
+    check(seat.ime.serial == serial,
+          "ime_enable()/ime_disable() are no-ops without a text-input manager");
+
+    /* Apply a preedit with the cursor between the two characters */
+    seat.ime.preedit.pending.text = xstrdup("ab");
+    seat.ime.preedit.pending.cursor_begin = 1;
+    seat.ime.preedit.pending.cursor_end = 1;
+    ime_done(&seat, NULL, seat.ime.serial);
+
+    check(seat.ime.preedit.text != NULL && seat.ime.preedit.count == 2,
+          "done() turns the pending preedit into two cells");
+    check(seat.ime.preedit.text != NULL &&
+          seat.ime.preedit.text[0] == 'a' && seat.ime.preedit.text[1] == 'b',
+          "the preedit text is the UTF-32 pending string");
+    check(!seat.ime.preedit.cursor.hidden &&
+          seat.ime.preedit.cursor.start == 1 && seat.ime.preedit.cursor.end == 1,
+          "the preedit cursor maps byte offset 1 to cell 1");
+    check(seat.ime.preedit.pending.text == NULL,
+          "done() consumes the pending preedit string");
+
+    struct cell *cells = seat.ime.preedit.cells;
+    check(cells != NULL && cells[0].attrs.underline && cells[1].attrs.underline,
+          "a zero-width preedit cursor underlines the whole string");
+
+    ime_reset_preedit(&seat);
+    check(seat.ime.preedit.text == NULL && seat.ime.preedit.cells == NULL &&
+          seat.ime.preedit.count == 0,
+          "ime_reset_preedit() frees the cells and the text");
+
+    /* A wide character produces a spacer cell */
+    seat.ime.preedit.pending.text = xstrdup("\xe3\x81\x82"); /* あ */
+    seat.ime.preedit.pending.cursor_begin = -1;
+    seat.ime.preedit.pending.cursor_end = -1;
+    ime_done(&seat, NULL, seat.ime.serial);
+
+    check(seat.ime.preedit.count == 2,
+          "a wide preedit character takes two cells");
+    cells = seat.ime.preedit.cells;
+    check(cells != NULL && cells[0].wc == 0x3042 &&
+          cells[1].wc == 0x40200001 /* CELL_SPACER + 1 */,
+          "the second cell of a wide character is a spacer");
+    check(cells != NULL && cells[1].attrs.clean && !cells[0].attrs.clean,
+          "the spacer is marked clean, the leading cell is not");
+    check(seat.ime.preedit.cursor.hidden,
+          "a -1/-1 preedit cursor hides the cursor");
+
+    ime_reset_preedit(&seat);
+
+    /* Cursor rectangle from the grid */
+    {
+        struct terminal *term = term_new();
+        static struct config conf;
+        memset(&conf, 0, sizeof(conf));
+        term->conf = &conf;
+        term->cell_width = 10;
+        term->cell_height = 20;
+        term->margins.left = 2;
+        term->margins.top = 3;
+        term->grid->cursor.point.col = 4;
+        term->grid->cursor.point.row = 2;
+        term->cursor_style = CURSOR_BEAM;
+
+        seat.ime_focus = term;
+        ime_update_cursor_rect(&seat);
+
+        check(seat.ime.cursor_rect.pending.x == 2 + 4 * 10 &&
+              seat.ime.cursor_rect.pending.y == 3 + 2 * 20,
+              "ime_update_cursor_rect() places the rect at the grid cursor");
+        check(seat.ime.cursor_rect.pending.width == 1 &&
+              seat.ime.cursor_rect.pending.height == term->cell_height,
+              "a beam cursor reports a 1px-wide IME cursor rect");
+
+        term->cursor_style = CURSOR_BLOCK;
+        ime_update_cursor_rect(&seat);
+        check(seat.ime.cursor_rect.pending.width == term->cell_width,
+              "a block cursor reports a full-cell IME cursor rect");
+
+        seat.ime_focus = NULL;
+        term_free(term);
+    }
+}
+
+/*
  * The key-binding manager (key-binding.zig, D5).
  *
  * Builds one set for a seat with a real us keymap and two configured
@@ -7154,6 +7262,7 @@ main(void)
     test_keymap_lookup();
     test_kbd_protocols();
     test_keyboard_layouts();
+    test_ime_protocol();
     test_key_binding_manager();
     test_touch_listeners();
     test_pointer_helpers();

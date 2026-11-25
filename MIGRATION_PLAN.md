@@ -809,6 +809,7 @@ Order matters: `search` and `wayland` first (they unblock the rest), then
 | **D3l** | `render`: the worker thread, damage tracking, `grid_render()`, `render_resize()` and the remaining xcursor/tiocswinsz glue | D3k | 3–4d |
 | **D4** | `input` (3,687) — split into D4a keyboard/legacy+kitty protocols, D4b pointer/mouse/touch, D4c compose/IME plumbing | after B2 + key-binding | 1–1.5w |
 | **D5a** done | `key-binding`: the whole module — manager new/destroy, `key_binding_new_for_seat`/`_new_for_conf` (one `key_set` per (seat, conf), ref-counted), `key_binding_for` with the last-used cache, `key_binding_remove_seat`, `key_binding_unref`, `key_binding_load/unload_keymap`; `initialize_vmod_mappings()` (8 virtual modifiers through a scratch `xkb_state`), `key_codes_for_xkb_sym()` (every key code producing a symbol, for cross-layout matching), `maybe_repair_key_combo()` (the shifted-symbol/composed-modifier repair, logging the offending combo), `key_cmp()`/`sort_binding_list()` (most modifiers first, foot#1280), `mods_to_mask()` (config modifier names → mask, virtual→real), and the four config→runtime converters. `struct vmod_map`/`key_set`/`key_binding_manager` moved from the .c to `key-binding.h`; `terminal_types.zig` gained `VmodMap`/`KeySet`/`KeyBindingManager` mirrors pinned by the probe, and `search.zig` dropped its private `KeyBinding` for `types.KeyBinding`. 9 new harness checks (set build on a real us keymap, repair, sort order, unload, remove) | D4e | 1d |
+| **D5b** done | `ime`: the whole module — pending preedit/commit/delete state, `ime_reset_pending`/`ime_reset_preedit`, `done()` applying the six protocol steps (commit to the search input or the slave, then the preedit → cells with the `mblen()`+`c32width()` byte→cell cursor mapping, wide-glyph spacers, and the outside-cursor underline), `ime_enable`/`ime_disable`/`ime_update_cursor_rect` (pending-vs-sent rect dedupe, beam-vs-block width, grid-row rebasing) and the six listeners. Five `terminal_shim_text_input_*` forwarders for the generated inlines; the listener table moved to `wayland.c`; `ime.h` declares the callbacks outside the feature guard, and the `#else` stubs are gone (meson refuses `-Dime=false`). 15 new harness checks | D5a | 0.5d |
 | **D6** | `main` (770), `server` (707), `client` (679) | last; they tie everything together and are only fully testable once a window opens | 4–5d |
 
 ### Track E — endgame (~2–3 days)
@@ -886,7 +887,7 @@ Per-module burn-down (share of that module's original C that is gone):
 
 | Module | C left / original | % | Note |
 |---|---|---|---|
-| 33 modules | 0 / — | **100%** | `async`…`box-drawing`, `search`, `terminal`, `log`, `grid`, `csi`, `sixel`, `osc`, `vt`, `input`, `key-binding`… |
+| 34 modules | 0 / — | **100%** | `async`…`box-drawing`, `search`, `terminal`, `log`, `grid`, `csi`, `sixel`, `osc`, `vt`, `input`, `key-binding`, `ime`… |
 | `config` | 35 / 4,374 | 99% | only `config_regex_compile()` (§6.3) |
 | `wayland` | 359 / 2,884 | 88% | 27 listener tables + forwarders + 3 FDM callbacks |
 | `selection` | 844 / 2,967 | 72% | data-device / primary-selection listeners, DND |
@@ -899,10 +900,10 @@ Per-module burn-down (share of that module's original C that is gone):
 | `main` | 770 / 770 | 0% | |
 | `server` / `client` | 707 / 679 | 0% | |
 | `key-binding` | 0 / 661 | **100%** | `key-binding.c` deleted in D5a; `key-binding.zig` is the module |
-| `ime` | 540 / 540 | 0% | |
+| `ime` | 0 / 540 | **100%** | `ime.c` deleted in D5b; `ime.zig` is the module |
 
-**Percent complete: 89.2% by C volume (post-D5a), ~84% by effort (band
-81–86%), 34/45 top-level modules (49 counting `spawn_template`) with zero C
+**Percent complete: 90.3% by C volume (post-D5b), ~85% by effort (band
+82–87%), 35/45 top-level modules (50 counting `spawn_template`) with zero C
 left.**
 **Post-D4d2a:** `input.c` is 3,618 → **2,040** (45% ported), module C 12,709 →
 **7,968**, harness 684 → **744** checks; every keyboard entry point is Zig,
@@ -919,6 +920,26 @@ the six windows
 compositor. Real presentation feedback is still not delivered to these
 short-lived windows, so `presented()` is covered by the fabricated-context
 checks, not by the launches.
+
+**Post-D5b:** `ime.c` is **deleted** — the 35th module with no C.
+Module C **5,266 → 4,726** (90.3% of the original C gone), Zig 48,738 →
+**49,296** lines, harness 790 → **805** checks, shim 2,974 → **2,999**. The
+text-input-v3 side of IME is Zig: the pending preedit/commit/delete state,
+`done()` evaluating the protocol's six steps in order (commit into the search
+input or the pty, then the preedit turned into cells), the byte→cell cursor
+mapping through `mblen()` + `c32width()` (including the wide-glyph spacer
+cells and the underline of everything outside the cursor), the preedit-cursor
+hide/after-string/short-string cases, `ime_enable`/`ime_disable`/
+`ime_update_cursor_rect` with the pending-vs-sent rect dedupe and the
+beam-vs-block width, and the six listener callbacks. Five new
+`terminal_shim_text_input_*` forwarders cover the generated request inlines;
+the listener table moved to `wayland.c` next to
+`wayland_shim_add_text_input_listener()`, and `ime.h` now declares the
+callbacks outside the feature guard so the harness can drive them. The
+`#else` stub block is not reproduced (meson refuses `-Dime=false`). 15 new
+harness checks: the pending string reset, the no-manager no-ops, `done()`
+producing cells (ASCII and wide), the cursor offset mapping, underline,
+reset, and the cursor-rect math for beam and block.
 
 **Post-D5a:** `key-binding.c` is **deleted** — the 24th module port and
 the 34th with no C. Module C **5,927 → 5,266** (89.2% of the original C

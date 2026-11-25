@@ -52,6 +52,17 @@ void wayland_shim_add_primary_selection_device_listener(
         dev, &primary_selection_device_listener, seat);
 }
 
+#if defined(FOOT_IME_ENABLED) && FOOT_IME_ENABLED
+const struct zwp_text_input_v3_listener text_input_listener = {
+    .enter = &ime_enter,
+    .leave = &ime_leave,
+    .preedit_string = &ime_preedit_string,
+    .commit_string = &ime_commit_string,
+    .delete_surrounding_text = &ime_delete_surrounding_text,
+    .done = &ime_done,
+};
+#endif
+
 void wayland_shim_add_text_input_listener(
     struct zwp_text_input_v3 *ti, struct seat *seat)
 {

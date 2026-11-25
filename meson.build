@@ -497,6 +497,18 @@ input_obj = custom_target(
   ]
 )
 
+ime_obj = custom_target(
+  'ime_obj',
+  input: 'ime.zig',
+  depend_files: files('terminal_types.zig'),
+  output: 'ime.o',
+  depends: c_layout,
+  command: [
+    python, files('compile_zig.py'), '@INPUT@', '@OUTPUT@',
+    grapheme_clustering_zig,
+  ]
+)
+
 key_binding_obj = custom_target(
   'key_binding_obj',
   input: 'key-binding.zig',
@@ -849,7 +861,7 @@ footlib = static_library(
   extract_obj, 'extract.h',
   fdm_obj, 'fdm.h',
   foot_features_obj, 'foot-features.h',
-  'ime.c', 'ime.h',
+  ime_obj, 'ime.h',
   input_obj, 'input.h',
   key_binding_obj, 'key-binding.h',
   notify_obj, 'notify.h', 'notify-shim.c',

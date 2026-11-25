@@ -861,6 +861,31 @@ void wayland_shim_text_input_destroy(struct zwp_text_input_v3 *ti)
     zwp_text_input_v3_destroy(ti);
 }
 
+/* text-input-v3 requests are generated static inlines (ime.zig, D5b). */
+void terminal_shim_text_input_enable(struct zwp_text_input_v3 *ti)
+{
+    zwp_text_input_v3_enable(ti);
+}
+void terminal_shim_text_input_disable(struct zwp_text_input_v3 *ti)
+{
+    zwp_text_input_v3_disable(ti);
+}
+void terminal_shim_text_input_commit(struct zwp_text_input_v3 *ti)
+{
+    zwp_text_input_v3_commit(ti);
+}
+void terminal_shim_text_input_set_content_type(
+    struct zwp_text_input_v3 *ti, uint32_t hint, uint32_t purpose)
+{
+    zwp_text_input_v3_set_content_type(ti, hint, purpose);
+}
+void terminal_shim_text_input_set_cursor_rectangle(
+    struct zwp_text_input_v3 *ti, int32_t x, int32_t y,
+    int32_t width, int32_t height)
+{
+    zwp_text_input_v3_set_cursor_rectangle(ti, x, y, width, height);
+}
+
 void wayland_shim_seat_release(struct wl_seat *seat)
 {
     wl_seat_release(seat);
