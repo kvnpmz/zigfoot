@@ -10,6 +10,7 @@
 
 const std = @import("std");
 const types = @import("terminal_types.zig");
+const tll = @import("tll.zig");
 
 const Terminal = types.Terminal;
 const Attributes = types.Attributes;
@@ -1581,4 +1582,211 @@ export fn grid_render_scroll_reverse(term: *Terminal, buf: *Buffer, dmg: *const 
     );
 
     render_shim_region_union_rect(buf.dirty, 0, dst_y, buf.width, height);
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Sixel painting (D3g)
+// ─────────────────────────────────────────────────────────────────────────
+
+const Sixel = types.Sixel;
+const SixelList = tll.Tll(Sixel);
+
+extern fn sixel_sync_cache(term: *const Terminal, six: *Sixel) callconv(.c) void;
+extern fn render_shim_composite_op(
+    op: c_int,
+    src: ?*PixmanImage,
+    mask: ?*PixmanImage,
+    dest: *PixmanImage,
+    src_x: c_int,
+    src_y: c_int,
+    x: c_int,
+    y: c_int,
+    width: c_int,
+    height: c_int,
+) callconv(.c) void;
+
+fn renderSixelChunk(
+    term: *Terminal,
+    pix: *PixmanImage,
+    damage: ?*anyopaque,
+    sixel: *const Sixel,
+    term_start_row: c_int,
+    img_start_row: c_int,
+    count: c_int,
+) void {
+    // Translate row/column to x/y pixel values
+    const x = term.margins.left + sixel.pos.col * term.cell_width;
+    const y = term.margins.top + term_start_row * term.cell_height;
+
+    // Width/height, in pixels - and don't touch the window margins
+    const width = @max(0, @min(sixel.width, term.width - x - term.margins.right));
+    const height = @max(0, @min(
+        @min(count * term.cell_height, sixel.height - img_start_row * term.cell_height),
+        term.height - y - term.margins.bottom,
+    ));
+
+    // Verify we're not stepping outside the grid
+    std.debug.assert(x >= term.margins.left);
+    std.debug.assert(y >= term.margins.top);
+    std.debug.assert(width == 0 or x + width <= term.width - term.margins.right);
+    std.debug.assert(height == 0 or y + height <= term.height - term.margins.bottom);
+
+    render_shim_composite_op(
+        if (sixel.@"opaque") 0x01 else 0x03, // PIXMAN_OP_SRC : PIXMAN_OP_OVER
+        optPix(sixel.pix),
+        null,
+        pix,
+        0, img_start_row * term.cell_height,
+        x, y,
+        width, height,
+    );
+
+    if (damage) |d|
+        render_shim_region_union_rect(d, x, y, width, height);
+}
+
+fn renderSixel(
+    term: *Terminal,
+    pix: *PixmanImage,
+    damage: ?*anyopaque,
+    cursor: *const types.Coord,
+    sixel: *const Sixel,
+) void {
+    std.debug.assert(sixel.pix != null);
+    std.debug.assert(sixel.width >= 0);
+    std.debug.assert(sixel.height >= 0);
+
+    const grid = term.grid.?;
+    const view_end = (grid.view + term.rows - 1) & (grid.num_rows - 1);
+    const last_row_needs_erase = @rem(sixel.height, term.cell_height) != 0;
+    const last_col_needs_erase = @rem(sixel.width, term.cell_width) != 0;
+
+    var chunk_img_start: c_int = -1; // Image-relative start row of chunk
+    var chunk_term_start: c_int = -1; // Viewport relative start row of chunk
+    var chunk_row_count: c_int = 0; // Number of rows to emit
+
+    // Iterate all sixel rows:
+    //  - ignore rows that aren't visible on-screen
+    //  - ignore rows that aren't dirty (they have already been rendered)
+    //  - chunk consecutive dirty rows into a 'chunk'
+    //  - emit (render) chunk as soon as a row isn't visible, or is clean
+    //  - emit final chunk after we've iterated all rows
+    var _abs_row_no = sixel.pos.row;
+    while (_abs_row_no < sixel.pos.row + sixel.rows) : (_abs_row_no += 1) {
+        const abs_row_no = _abs_row_no & (grid.num_rows - 1);
+        const term_row_no =
+            (abs_row_no - grid.view + grid.num_rows) & (grid.num_rows - 1);
+
+        // Check if row is in the visible viewport
+        const visible = if (view_end >= grid.view)
+            // Not wrapped
+            abs_row_no >= grid.view and abs_row_no <= view_end
+        else
+            // Wrapped
+            abs_row_no >= grid.view or abs_row_no <= view_end;
+
+        if (!visible) {
+            if (chunk_row_count != 0) {
+                renderSixelChunk(term, pix, damage, sixel, chunk_term_start, chunk_img_start, chunk_row_count);
+                chunk_term_start = -1;
+                chunk_img_start = -1;
+                chunk_row_count = 0;
+            }
+            continue;
+        }
+
+        // Is the row dirty?
+        const row = grid.rows.?[@intCast(abs_row_no)] orelse unreachable;
+
+        if (!row.dirty) {
+            if (chunk_row_count != 0) {
+                renderSixelChunk(term, pix, damage, sixel, chunk_term_start, chunk_img_start, chunk_row_count);
+                chunk_term_start = -1;
+                chunk_img_start = -1;
+                chunk_row_count = 0;
+            }
+            continue;
+        }
+
+        const cursor_col: c_int = if (cursor.row == term_row_no) cursor.col else -1;
+
+        // If image contains transparent parts, render all (dirty) cells
+        // beneath it. If image is opaque, loop cells and set their 'clean'
+        // bit, to prevent the grid renderer from overwriting the sixel. If
+        // the last sixel row only partially covers the cell row, 'erase' the
+        // cell by rendering it.
+        if (!sixel.@"opaque") {
+            // TODO: multithreading
+            render_row(term, pix, damage, row, term_row_no, cursor_col);
+        } else {
+            const cells = row.cells.?;
+            var col = sixel.pos.col;
+            const end = @min(sixel.pos.col + sixel.cols, term.cols);
+            while (col < end) : (col += 1) {
+                const cell = &cells[@intCast(col)];
+
+                if (!cell.attrs.clean) {
+                    const last_row = abs_row_no == sixel.pos.row + sixel.rows - 1;
+                    const last_col = col == sixel.pos.col + sixel.cols - 1;
+
+                    if ((last_row_needs_erase and last_row) or
+                        (last_col_needs_erase and last_col))
+                    {
+                        _ = render_cell(term, pix, damage, row, term_row_no, col, cursor_col == col);
+                    } else {
+                        cell.attrs.clean = true;
+                        cell.attrs.confined = true;
+                    }
+                }
+            }
+        }
+
+        if (chunk_term_start == -1) {
+            std.debug.assert(chunk_img_start == -1);
+            chunk_term_start = term_row_no;
+            chunk_img_start = _abs_row_no - sixel.pos.row;
+            chunk_row_count = 1;
+        } else {
+            chunk_row_count += 1;
+        }
+    }
+
+    if (chunk_row_count != 0)
+        renderSixelChunk(term, pix, damage, sixel, chunk_term_start, chunk_img_start, chunk_row_count);
+}
+
+export fn render_sixel_images(
+    term: *Terminal,
+    pix: *PixmanImage,
+    damage: ?*anyopaque,
+    cursor: *const types.Coord,
+) callconv(.c) void {
+    const grid = term.grid.?;
+    const sixels: *SixelList = @ptrCast(&grid.sixel_images);
+
+    if (sixels.len() == 0)
+        return;
+
+    const scrollback_end = (grid.offset + term.rows) & (grid.num_rows - 1);
+    const view_start = (grid.view - scrollback_end + grid.num_rows) & (grid.num_rows - 1);
+    const view_end = view_start + term.rows - 1;
+
+    var it = sixels.foreach();
+    while (it.next()) |node| {
+        const six = &node.item;
+        const start = (six.pos.row - scrollback_end + grid.num_rows) & (grid.num_rows - 1);
+        const end = start + six.rows - 1;
+
+        if (start > view_end) {
+            // Sixel starts after view ends, no need to try to render it
+            continue;
+        } else if (end < view_start) {
+            // Image ends before view starts. Since the image list is sorted,
+            // we can safely stop here
+            break;
+        }
+
+        sixel_sync_cache(term, &node.item);
+        renderSixel(term, pix, damage, cursor, &node.item);
+    }
 }

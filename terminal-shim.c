@@ -273,6 +273,17 @@ void render_shim_image_unref(pixman_image_t *pix)
     pixman_image_unref(pix);
 }
 
+/* Sixel compositing needs an explicit operator and a source rect offset. */
+void render_shim_composite_op(
+    int op,
+    pixman_image_t *src, pixman_image_t *mask, pixman_image_t *dest,
+    int src_x, int src_y, int x, int y, int width, int height)
+{
+    pixman_image_composite32(
+        (pixman_op_t)op, src, mask, dest,
+        src_x, src_y, 0, 0, x, y, width, height);
+}
+
 void render_shim_composite(
     pixman_image_t *src, pixman_image_t *mask, pixman_image_t *dest,
     int x, int y, int width, int height)

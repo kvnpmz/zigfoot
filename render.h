@@ -28,6 +28,12 @@ void grid_render_scroll(
 void grid_render_scroll_reverse(
     struct terminal *term, struct buffer *buf, const struct damage *dmg);
 
+struct sixel;
+struct coord;
+void render_sixel_images(
+    struct terminal *term, pixman_image_t *pix, pixman_region32_t *damage,
+    const struct coord *cursor);
+
 struct row;
 int render_cell(
     struct terminal *term, pixman_image_t *pix, pixman_region32_t *damage,

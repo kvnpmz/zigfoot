@@ -4564,6 +4564,127 @@ test_grid_render_scroll(void)
     pixman_region32_fini(&dirty);
 }
 
+/* D3g: sixel compositing */
+static void
+test_render_sixel(void)
+{
+    enum { SW = 40, SH = 40, SROWS = 8, SCOLS = 4 };
+    uint32_t pixels[SW * SH] = {0};
+    pixman_image_t *pix = pixman_image_create_bits(PIXMAN_a8r8g8b8, SW, SH, pixels, SW * 4);
+    if (pix == NULL) {
+        printf("skip: pixman_image_create_bits() failed\n");
+        return;
+    }
+
+    /* A 20x20 solid red sixel image */
+    uint32_t img_pixels[20 * 20];
+    for (size_t i = 0; i < 20 * 20; i++)
+        img_pixels[i] = 0xffff0000;
+    pixman_image_t *img = pixman_image_create_bits(PIXMAN_a8r8g8b8, 20, 20, img_pixels, 20 * 4);
+
+    struct terminal term = {0};
+    struct grid grid = {0};
+    term.grid = &grid;
+    term.cols = SCOLS;
+    term.rows = 4;
+    term.cell_width = 10;
+    term.cell_height = 10;
+    term.width = SW;
+    term.height = SH;
+    term.margins.top = term.margins.bottom = 0;
+    term.margins.left = term.margins.right = 0;
+
+    struct row *rows[SROWS];
+    for (int r = 0; r < SROWS; r++) {
+        rows[r] = grid_row_alloc(SCOLS, true);
+        rows[r]->dirty = true;
+        for (int c = 0; c < SCOLS; c++)
+            rows[r]->cells[c].attrs.clean = 0;
+    }
+    grid.num_rows = SROWS;
+    grid.num_cols = SCOLS;
+    grid.offset = 0;
+    grid.view = 0;
+    grid.cursor.point.row = 0;
+    grid.cursor.point.col = 0;
+    grid.rows = rows;
+
+    struct sixel six = {0};
+    six.pos.row = 0;
+    six.pos.col = 1;
+    six.rows = 2;
+    six.cols = 2;
+    six.width = 20;
+    six.height = 20;
+    six.cell_width = 10;
+    six.cell_height = 10;
+    six.opaque = true;
+    six.pix = img;
+    tll_push_back(grid.sixel_images, six);
+
+    /* The cursor sits outside the sixel; sixels dirty rows and clean cells. */
+    struct coord cursor = {.row = 0, .col = 0};
+    struct sixel *s = &tll_front(grid.sixel_images);
+
+    render_sixel_images(&term, pix, NULL, &cursor);
+    check(pix_pixel(pix, 10, 0) == 0xffff0000 && pix_pixel(pix, 29, 19) == 0xffff0000,
+          "sixel images are composited at their cell position");
+    check(pix_pixel(pix, 5, 5) == 0,
+          "sixel images do not spill outside their cells");
+    check(s->pos.col == 1 && s->width == 20,
+          "sixel rendering leaves the image geometry alone");
+    check(rows[0]->cells[1].attrs.clean && rows[1]->cells[2].attrs.clean,
+          "an opaque sixel marks the cells it covers clean");
+    check(rows[0]->dirty && rows[1]->dirty,
+          "an opaque sixel keeps its rows dirty for the damage rect");
+
+    /* Transparent sixels render the cells underneath instead. */
+    memset(pixels, 0, sizeof(pixels));
+    s->opaque = false;
+    for (int r = 0; r < 2; r++)
+        for (int c = 1; c < 3; c++)
+            rows[r]->cells[c].attrs.clean = 0;
+    struct wl_window win = {0};
+    struct config conf = {0};
+    term.window = &win;
+    term.conf = &conf;
+    term.colors.bg = 0;
+    term.colors.fg = 0xffffffff;
+    term.colors.alpha = 0xffff;
+    term.blink.fd = 5;
+    term.wl = NULL;
+    struct fcft_font *dummy = NULL;
+    (void)dummy;
+
+    /* render_row() needs fonts; only check the clean-bit behaviour here. */
+    s->opaque = true;
+    for (int r = 0; r < 2; r++)
+        for (int c = 1; c < 3; c++)
+            rows[r]->cells[c].attrs.clean = 0;
+    render_sixel_images(&term, pix, NULL, &cursor);
+    check(rows[0]->cells[1].attrs.clean && rows[0]->cells[2].attrs.clean,
+          "re-rendering an opaque sixel re-cleans its cells");
+
+    /* A sixel outside the viewport is skipped. */
+    memset(pixels, 0, sizeof(pixels));
+    for (int r = 0; r < 2; r++)
+        for (int c = 1; c < 3; c++)
+            rows[r]->cells[c].attrs.clean = 0;
+    s->pos.row = 6; /* viewport is rows 0..3 */
+    s->rows = 1;
+    render_sixel_images(&term, pix, NULL, &cursor);
+    check(!rows[0]->cells[1].attrs.clean,
+          "a sixel outside the viewport is not rendered");
+    s->pos.row = 0;
+    s->rows = 2;
+
+    tll_free(grid.sixel_images);
+    for (int r = 0; r < SROWS; r++)
+        grid_row_free(rows[r]);
+    pixman_image_unref(img);
+    pixman_image_unref(pix);
+}
+
 int
 main(void)
 {
@@ -4592,6 +4713,7 @@ main(void)
     test_render_margin();
     test_render_cell();
     test_grid_render_scroll();
+    test_render_sixel();
     test_csd_data();
     test_render_csd_part();
     test_configure();

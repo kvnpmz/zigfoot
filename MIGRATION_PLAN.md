@@ -650,9 +650,9 @@ utmp backends where available.
 
 ## 13. Sequenced backlog (refreshed 2026-11-24)
 
-State: **35,318 of 48,830 C lines gone (72.3%)**, ~58% by effort, 35 modules
-ported, 574 harness assertions, `meson test` 5/5 in three build dirs.
-Remaining module C: 13,512 lines, plus 2,390 lines of `*-shim.c` accessors.
+State: **35,538 of 48,830 C lines gone (72.8%)**, ~58% by effort, 35 modules
+ported, 581 harness assertions, `meson test` 5/5 in three build dirs.
+Remaining module C: 13,292 lines, plus 2,425 lines of `*-shim.c` accessors.
 
 **`wayland` is done.** `wayland.c` is down from 2,884 lines to **359**, and what
 is left is glue rather than logic: the fourteen generated-protocol listener
@@ -797,7 +797,7 @@ Order matters: `search` and `wayland` first (they unblock the rest), then
 | **D3d** done | `render`: the CSD geometry and commit path — `get_csd_data()` (border/title/button widths from the scale, the fractional-scaling-safe offsets, the whole `enum csd_surface` switch) plus `csd_commit()` (scale, attach, damage, commit) and `render_csd_part()` (solid fill). `struct csd_data` is a 16-byte extern struct; the three wl_surface calls were already shimmed. 12 new harness checks walk every surface, the "no wm capability", maximized and too-narrow cases | D3c | 0.5d |
 | **D3e** done | `render`: **`render_cell()`** — the 510-line heart of the renderer. Colour-source resolution for fg/bg (default/base16/base256/RGB), selection colours with the invert-on-collision rule, reverse and the three alpha modes (with the fullscreen assertion), dim/bold-in-bright/blink, glyph selection through the four custom-glyph caches (box drawing, braille, octants, legacy — allocated lazily under the worker lock), composed characters with grapheme shaping and forced widths, spacers, the overflowing-glyph bleed bookkeeping, clip + damage, background, the early blink-timer arming, colour-emoji vs mask compositing, combining-character pen arithmetic, styled underlines from `row->extra->underline_ranges`, strikeout, url underlines and both cursor paths. Six new `render_shim_*` helpers keep `pixman_region32_t` and the `mtx_t` worker lock in C. 13 new harness checks render real cells onto a pixman image | D3d | 1.5d |
 | **D3f** done | `render`: `grid_render_scroll()` and `grid_render_scroll_reverse()` — the "SHM scroll or memmove" heuristic (`lines + region.start + (rows - region.end) < rows/2`, guarded by `shm_can_scroll()`), the margin restore after a successful SHM scroll, the memmove fallback (`copyForwards` for up, `copyBackwards` for down, matching `memmove()`'s overlap semantics), and the surface damage + buffer damage that follow. 6 new harness checks scroll a real byte buffer and read it back | D3e | 0.5d |
-| **D3g** | `render`: sixel painting (`render_sixel_chunk`/`render_sixel`/`render_sixel_images`) | D3f | 1d |
+| **D3g** done | `render`: the sixel path — `render_sixel_images()` (viewport-relative start/end with wrap-around, sorted-list early exits, `sixel_sync_cache()`), `render_sixel()` (chunking consecutive visible *dirty* rows to avoid recompositing, the opaque path that only marks cells clean unless the last row/column is partially covered, the transparent path that renders the cells underneath via `render_row()`), and the chunk compositor with its margin clamping. One new shim for a composite with an explicit operator and source offset. 8 new harness checks composite a real sixel image and check the clean/dirty bookkeeping | D3f | 1d |
 | **D3h** | `render`: OSD/CSD-button/overlay/IME-preedit painting | D3g | 2–3d |
 | **D3i** | `render`: search-box and url painting | D3h | 2d |
 | **D3j** | `render`: the worker thread, damage tracking, `grid_render()`, `render_resize()` and the remaining xcursor/tiocswinsz glue | D3i | 3–4d |
