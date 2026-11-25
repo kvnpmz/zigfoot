@@ -831,7 +831,7 @@ footlib = static_library(
   notify_obj, 'notify.h', 'notify-shim.c',
   quirks_obj, 'quirks.h',
   reaper_obj, 'reaper.h',
-  'render.c', render_obj, 'render.h',
+  render_obj, 'render.h',
   search_obj, 'search.h',
   'server.c', 'server.h', 'client-protocol.h',
   shm_obj, 'shm.c', 'shm.h',

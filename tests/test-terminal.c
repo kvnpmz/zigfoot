@@ -60,6 +60,9 @@ int render_url_format_label(char32_t *label, const char32_t *key,
                             const char32_t *url, bool show_url,
                             size_t entered_key_len, int max_cols);
 void render_dirty_overflowing_glyphs(struct terminal *term);
+bool render_xcursor_set(struct seat *seat, struct terminal *term,
+                       enum cursor_shape shape);
+void render_buffer_release_callback(struct buffer *buf, void *data);
 bool render_resize(struct terminal *term, int width, int height,
                    uint8_t opts);
 void set_size_from_grid(struct terminal *term, int *width,
@@ -5727,6 +5730,71 @@ test_render_resize_early_outs(void)
     term_free(term);
 }
 
+/*
+ * Cursor requests and the buffer-release pre-apply hook (render.zig, D3l4).
+ * Both have early-outs that need no compositor.
+ */
+static void
+test_xcursor_set_early_outs(void)
+{
+    struct terminal *term = term_new();
+    struct terminal *other = term_new();
+    struct wayland wl = {0};
+    struct seat seat;
+    memset(&seat, 0, sizeof(seat));
+    seat.wayl = &wl;
+
+    check(!render_xcursor_set(&seat, term, CURSOR_SHAPE_LEFT_PTR),
+          "no cursor theme and no cursor-shape-v1 means no cursor");
+
+    seat.pointer.theme = (void *)0x1;
+    seat.mouse_focus = NULL;
+    check(render_xcursor_set(&seat, term, CURSOR_SHAPE_LEFT_PTR),
+          "a seat without mouse focus accepts the request");
+    check(seat.pointer.shape == CURSOR_SHAPE_NONE,
+          "the shape is reset when there is no mouse focus");
+
+    seat.mouse_focus = term;
+    seat.pointer.shape = CURSOR_SHAPE_LEFT_PTR;
+    check(render_xcursor_set(&seat, term, CURSOR_SHAPE_LEFT_PTR),
+          "requesting the current shape is a no-op");
+    check(!seat.pointer.xcursor_pending,
+          "and does not schedule a cursor update");
+
+    seat.mouse_focus = other;
+    check(render_xcursor_set(&seat, term, CURSOR_SHAPE_TEXT),
+          "a terminal without mouse focus accepts the request");
+    check(seat.pointer.shape == CURSOR_SHAPE_LEFT_PTR,
+          "and leaves the seat's shape alone");
+
+    term_free(term);
+    term_free(other);
+}
+
+static void
+test_buffer_release_early_outs(void)
+{
+    struct terminal *term = term_new();
+    struct buffer buf = {0};
+
+    /* Pre-applied damage disabled: nothing happens. */
+    term->render.preapply_last_frame_damage = false;
+    buf.age = 1;
+    render_buffer_release_callback(&buf, term);
+    check(term->render.workers.preapplied_damage.buf == NULL,
+          "released buffers are ignored while pre-applied damage is off");
+
+    /* Only a buffer that is exactly one frame old is a candidate. */
+    term->render.preapply_last_frame_damage = true;
+    buf.age = 0;
+    render_buffer_release_callback(&buf, term);
+    check(term->render.workers.preapplied_damage.buf == NULL,
+          "a fresh buffer is not pre-applied");
+
+    term->render.preapply_last_frame_damage = false;
+    term_free(term);
+}
+
 int
 main(void)
 {
@@ -5764,6 +5832,8 @@ main(void)
     test_overflowing_glyphs();
     test_set_size_from_grid();
     test_render_resize_early_outs();
+    test_xcursor_set_early_outs();
+    test_buffer_release_early_outs();
     test_scrollback_indicator();
     test_search_box_offset();
     test_url_label();

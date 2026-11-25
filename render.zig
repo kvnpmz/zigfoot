@@ -581,7 +581,6 @@ extern fn timerfd_settime(fd: c_int, flags: c_int, new: *const Itimerspec, old: 
 extern fn timespec_sub(a: *const Timespec, b: *const Timespec, res: *Timespec) callconv(.c) void;
 extern fn terminal_shim_grid_row(grid: *types.Grid, row_no: c_int) callconv(.c) *types.Row;
 extern fn terminal_shim_urls_mode_active(term: *const Terminal) callconv(.c) bool;
-extern fn render_update_title(term: *Terminal) callconv(.c) void;
 extern fn term_icon(term: *const Terminal) callconv(.c) [*:0]const u8;
 extern fn wayland_shim_xdg_toplevel_set_app_id(toplevel: ?*anyopaque, app_id: [*:0]const u8) callconv(.c) void;
 extern fn wayland_shim_toplevel_icon_set(m: ?*anyopaque, toplevel: ?*anyopaque, name: [*:0]const u8) callconv(.c) void;
@@ -2867,7 +2866,6 @@ extern fn fdm_hook_add(
     fdm: *Fdm, hook: FdmHook, data: ?*anyopaque, priority: c_int,
 ) callconv(.c) bool;
 extern fn fdm_hook_del(fdm: *Fdm, hook: FdmHook, priority: c_int) callconv(.c) bool;
-extern fn fdm_hook_refresh_pending_terminals(fdm: *Fdm, data: ?*anyopaque) callconv(.c) void;
 
 /// render.c's `struct renderer`: two pointers. The C side has a
 /// `_Static_assert` pinning the same size; the hook (still C) reads
@@ -5448,5 +5446,488 @@ export fn render_wait_for_preapply_damage(term: *Terminal) callconv(.c) void {
         _ = cnd_wait(pre_cond, pre_lock);
     }
     _ = mtx_unlock(pre_lock);
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Cursor, frame callback and the FDM hooks (D3l4) — the last of render.c
+// ─────────────────────────────────────────────────────────────────────────
+
+extern fn render_shim_add_xcursor_callback(surf: ?*anyopaque, data: *anyopaque) callconv(.c) ?*anyopaque;
+extern fn render_shim_cursor_theme_get_cursor(theme: ?*anyopaque, name: [*:0]const u8) callconv(.c) ?*anyopaque;
+extern fn render_shim_cursor_image_0(
+    cursor: ?*anyopaque, width: *i32, height: *i32, hotspot_x: *i32, hotspot_y: *i32) callconv(.c) bool;
+extern fn render_shim_cursor_image_0_buffer(cursor: ?*anyopaque) callconv(.c) ?*anyopaque;
+extern fn render_shim_pointer_set_cursor(
+    pointer: ?*anyopaque, serial: u32, surf: ?*anyopaque, hotspot_x: i32, hotspot_y: i32) callconv(.c) void;
+extern fn render_shim_cursor_shape_device_v1_set_shape(
+    device: ?*anyopaque, serial: u32, shape: u32) callconv(.c) void;
+extern fn render_shim_xdg_toplevel_set_title(toplevel: ?*anyopaque, title: [*:0]const u8) callconv(.c) void;
+extern fn render_shim_callback_destroy(callback: ?*anyopaque) callconv(.c) void;
+extern fn cursor_shape_to_server_shape(shape: c_int) callconv(.c) c_int;
+extern fn cursor_string_to_server_shape(xcursor: [*:0]const u8, bound_version: c_int) callconv(.c) c_int;
+extern fn cursor_shape_to_string(shape: c_int) callconv(.c) [*c]const [*c]const u8;
+extern fn wayl_surface_scale_explicit_width_height(
+    win: *const types.WlWindow,
+    surf: *const types.WaylSurface,
+    width: c_int,
+    height: c_int,
+    scale: f32,
+) callconv(.c) void;
+extern fn ime_update_cursor_rect(seat: *types.Seat) callconv(.c) void;
+extern fn quirk_weston_csd_on(term: *Terminal) callconv(.c) void;
+extern fn quirk_weston_csd_off(term: *Terminal) callconv(.c) void;
+extern fn xstrdup(s: [*:0]const u8) callconv(.c) ?[*:0]u8;
+extern fn xstrndup(s: [*:0]const u8, n: usize) callconv(.c) [*:0]u8;
+
+fn streqOpt(a: ?[*:0]const u8, b: ?[*:0]const u8) bool {
+    if (a == null or b == null)
+        return a == null and b == null;
+    return std.mem.orderZ(u8, a.?, b.?) == .eq;
+}
+
+/// Truncate long UTF-8 strings to `max_len` bytes, on a codepoint boundary?
+/// C uses strlen()/xstrndup() directly - same here.
+export fn render_update_title(term: *Terminal) callconv(.c) void {
+    const max_len: usize = 2048;
+
+    var title: [*:0]const u8 = "foot";
+    if (term.window_title) |t|
+        title = t;
+
+    var copy: ?[*:0]u8 = null;
+    if (std.mem.len(title) > max_len) {
+        copy = xstrndup(title, max_len);
+        title = copy.?;
+    }
+
+    render_shim_xdg_toplevel_set_title(term.window.?.xdg_toplevel, title);
+    if (copy) |c|
+        free(c);
+}
+
+/// The compositor is ready for another frame: run the deferred work that was
+/// queued while the previous frame was in flight, then render.
+export fn frame_callback(
+    data: ?*anyopaque,
+    wl_callback: ?*anyopaque,
+    callback_data: u32,
+) callconv(.c) void {
+    _ = callback_data;
+    const term: *Terminal = @ptrCast(@alignCast(data orelse return));
+    const window = term.window.?;
+
+    std.debug.assert(window.frame_callback == wl_callback);
+    render_shim_callback_destroy(wl_callback);
+    window.frame_callback = null;
+
+    const grid = term.render.pending.grid;
+    const csd = term.render.pending.csd;
+    const search = term.is_searching and term.render.pending.search;
+    const urls = terminal_shim_urls_mode_active(term) and term.render.pending.urls;
+
+    term.render.pending.grid = false;
+    term.render.pending.csd = false;
+    term.render.pending.search = false;
+    term.render.pending.urls = false;
+
+    const original_grid = term.grid;
+    if (terminal_shim_urls_mode_active(term)) {
+        std.debug.assert(term.url.grid_snapshot != null);
+        term.grid = term.url.grid_snapshot;
+    }
+
+    if (csd and window.csd_mode == .yes) {
+        quirk_weston_csd_on(term);
+        render_csd(term);
+        quirk_weston_csd_off(term);
+    }
+
+    if (search)
+        render_search_box(term);
+
+    if (urls)
+        render_urls(term);
+
+    if ((grid and !term.delayed_render_timer.is_armed) or (csd or search or urls))
+        grid_render(term);
+
+    const seats: *tll.Tll(types.Seat) = @ptrCast(&term.wl.?.seats);
+    var it = seats.foreach();
+    while (it.next()) |node| {
+        const seat = &node.item;
+        if (seat.ime_focus == term)
+            ime_update_cursor_rect(seat);
+    }
+
+    term.grid = original_grid;
+}
+
+export fn render_xcursor_is_valid(
+    seat: *const types.Seat,
+    cursor: ?[*:0]const u8,
+) callconv(.c) bool {
+    if (cursor == null)
+        return false;
+    if (seat.pointer.theme == null)
+        return false;
+    return render_shim_cursor_theme_get_cursor(seat.pointer.theme, cursor.?) != null;
+}
+
+/// Install the cursor the seat asked for: cursor-shape-v1 when the compositor
+/// supports it, a client-side cursor surface otherwise.
+fn renderXcursorUpdate(seat: *types.Seat) void {
+    // If called from a frame callback, we may no longer have mouse focus
+    if (seat.mouse_focus == null)
+        return;
+
+    const pointer = &seat.pointer;
+    std.debug.assert(pointer.shape != .none);
+
+    const surf = pointer.surface.surf;
+
+    if (pointer.shape == .hidden) {
+        // Hide cursor
+        log_msg(
+            LOG_CLASS_DEBUG, "render", "render.zig", @intCast(@src().line),
+            "hiding cursor using client-side NULL-surface");
+        wayland_shim_surface_attach(surf, null, 0, 0);
+        render_shim_pointer_set_cursor(seat.wl_pointer, pointer.serial, surf, 0, 0);
+        wayland_shim_surface_commit(surf);
+        return;
+    }
+
+    const shape = pointer.shape;
+    const xcursor = pointer.last_custom_xcursor;
+
+    if (pointer.shape_device) |device| {
+        std.debug.assert(shape != .custom or xcursor != null);
+
+        const custom_shape: c_int = if (shape == .custom and xcursor != null)
+            cursor_string_to_server_shape(
+                xcursor.?, seat.wayl.?.shape_manager_version)
+        else
+            0;
+
+        if (shape != .custom or custom_shape != 0) {
+            std.debug.assert(custom_shape == 0 or shape == .custom);
+
+            const wp_shape: c_int = if (custom_shape != 0)
+                custom_shape
+            else
+                cursor_shape_to_server_shape(@intFromEnum(shape));
+
+            log_msg(
+                LOG_CLASS_DEBUG, "render", "render.zig", @intCast(@src().line),
+                "setting %scursor shape using cursor-shape-v1",
+                @as([*:0]const u8, if (custom_shape != 0) "custom " else ""));
+
+            render_shim_cursor_shape_device_v1_set_shape(
+                device, pointer.serial, @intCast(wp_shape));
+
+            return;
+        }
+    }
+
+    log_msg(
+        LOG_CLASS_DEBUG, "render", "render.zig", @intCast(@src().line),
+        "setting %scursor shape using a client-side cursor surface",
+        @as([*:0]const u8, if (pointer.shape == .custom) "custom " else ""));
+
+    if (pointer.cursor == null) {
+        // Normally we never get here with a NULL cursor: an update is only
+        // scheduled after the image loaded. But the pointer may move - and
+        // the new cursor fail to load - before the scheduled update runs.
+        return;
+    }
+
+    var width: i32 = 0;
+    var height: i32 = 0;
+    var hotspot_x: i32 = 0;
+    var hotspot_y: i32 = 0;
+    if (!render_shim_cursor_image_0(
+            pointer.cursor, &width, &height, &hotspot_x, &hotspot_y))
+    {
+        return;
+    }
+
+    const scale = pointer.scale;
+    const buf = render_shim_cursor_image_0_buffer(pointer.cursor);
+
+    wayl_surface_scale_explicit_width_height(
+        seat.mouse_focus.?.window.?, &pointer.surface, width, height, scale);
+
+    wayland_shim_surface_attach(surf, buf, 0, 0);
+
+    render_shim_pointer_set_cursor(
+        seat.wl_pointer,
+        pointer.serial,
+        surf,
+        @intFromFloat(@as(f64, @floatFromInt(hotspot_x)) / @as(f64, scale)),
+        @intFromFloat(@as(f64, @floatFromInt(hotspot_y)) / @as(f64, scale)),
+    );
+
+    wayland_shim_surface_damage_buffer(surf, 0, 0, 0x7fffffff, 0x7fffffff);
+
+    std.debug.assert(pointer.xcursor_callback == null);
+    pointer.xcursor_callback = render_shim_add_xcursor_callback(surf, seat);
+
+    wayland_shim_surface_commit(surf);
+}
+
+export fn xcursor_callback(
+    data: ?*anyopaque,
+    wl_callback: ?*anyopaque,
+    callback_data: u32,
+) callconv(.c) void {
+    _ = callback_data;
+    const seat: *types.Seat = @ptrCast(@alignCast(data orelse return));
+
+    std.debug.assert(seat.pointer.xcursor_callback == wl_callback);
+    render_shim_callback_destroy(wl_callback);
+    seat.pointer.xcursor_callback = null;
+
+    if (seat.pointer.xcursor_pending) {
+        renderXcursorUpdate(seat);
+        seat.pointer.xcursor_pending = false;
+    }
+}
+
+/// The render FDM hook: walk every terminal and render the ones with pending
+/// refresh flags, then flush pending cursor updates.
+export fn fdm_hook_refresh_pending_terminals(
+    fdm: *Fdm,
+    data: ?*anyopaque,
+) callconv(.c) void {
+    _ = fdm;
+    const renderer: *Renderer = @ptrCast(@alignCast(data orelse return));
+    const wayl = renderer.wayl;
+
+    const terms: *tll.Tll(?*anyopaque) = @ptrCast(&wayl.terms);
+    var it = terms.foreach();
+    while (it.next()) |node| {
+        const term: *Terminal = @ptrCast(@alignCast(node.item orelse continue));
+
+        if (term.shutdown.in_progress or !term.window.?.is_configured)
+            continue;
+
+        const grid = term.render.refresh.grid;
+        const csd = term.render.refresh.csd;
+        const search = term.is_searching and term.render.refresh.search;
+        const urls = terminal_shim_urls_mode_active(term) and term.render.refresh.urls;
+
+        if (!(grid or csd or search or urls))
+            continue;
+
+        if (term.render.app_sync_updates.enabled and !(csd or search or urls))
+            continue;
+
+        term.render.refresh.grid = false;
+        term.render.refresh.csd = false;
+        term.render.refresh.search = false;
+        term.render.refresh.urls = false;
+
+        const window = term.window.?;
+
+        if (window.frame_callback == null) {
+            const original_grid = term.grid;
+            if (terminal_shim_urls_mode_active(term)) {
+                std.debug.assert(term.url.grid_snapshot != null);
+                term.grid = term.url.grid_snapshot;
+            }
+
+            if (csd and window.csd_mode == .yes) {
+                quirk_weston_csd_on(term);
+                render_csd(term);
+                quirk_weston_csd_off(term);
+            }
+            if (search)
+                render_search_box(term);
+            if (urls)
+                render_urls(term);
+            if (grid or csd or search or urls)
+                grid_render(term);
+
+            const seats: *tll.Tll(types.Seat) = @ptrCast(&term.wl.?.seats);
+            var sit = seats.foreach();
+            while (sit.next()) |snode| {
+                const seat = &snode.item;
+                if (seat.ime_focus == term)
+                    ime_update_cursor_rect(seat);
+            }
+
+            term.grid = original_grid;
+        } else {
+            // Tells the frame callback to render again
+            term.render.pending.grid = term.render.pending.grid or grid;
+            term.render.pending.csd = term.render.pending.csd or csd;
+            term.render.pending.search = term.render.pending.search or search;
+            term.render.pending.urls = term.render.pending.urls or urls;
+        }
+    }
+
+    const seats: *tll.Tll(types.Seat) = @ptrCast(&wayl.seats);
+    var sit = seats.foreach();
+    while (sit.next()) |node| {
+        const seat = &node.item;
+        if (seat.pointer.xcursor_pending) {
+            if (seat.pointer.xcursor_callback == null) {
+                renderXcursorUpdate(seat);
+                seat.pointer.xcursor_pending = false;
+            } else {
+                // Frame callback will call renderXcursorUpdate()
+            }
+        }
+    }
+}
+
+/// Ask for `shape` on `seat`. Only records the request: the FDM hook (or the
+/// cursor's frame callback) does the actual work.
+export fn render_xcursor_set(
+    seat: *types.Seat,
+    term: *Terminal,
+    shape: types.CursorShape,
+) callconv(.c) bool {
+    const pointer = &seat.pointer;
+
+    if (pointer.theme == null and pointer.shape_device == null)
+        return false;
+
+    if (seat.mouse_focus == null) {
+        pointer.shape = .none;
+        return true;
+    }
+
+    if (seat.mouse_focus != term) {
+        // This terminal doesn't have mouse focus
+        return true;
+    }
+
+    if (pointer.shape == shape and
+        !(shape == .custom and
+            !streqOpt(pointer.last_custom_xcursor, term.mouse_user_cursor)))
+    {
+        return true;
+    }
+
+    if (shape == .hidden) {
+        pointer.cursor = null;
+        free(pointer.last_custom_xcursor);
+        pointer.last_custom_xcursor = null;
+    } else if (pointer.shape_device == null) {
+        pointer.cursor = null;
+
+        if (shape == .custom) {
+            const custom = term.mouse_user_cursor;
+            std.debug.assert(custom != null);
+            if (custom) |name| {
+                pointer.cursor = render_shim_cursor_theme_get_cursor(pointer.theme, name);
+                if (pointer.cursor != null) {
+                    log_msg(
+                        LOG_CLASS_DEBUG, "render", "render.zig", @intCast(@src().line),
+                        "loaded xcursor %s", name);
+                }
+            }
+        } else {
+            const names = cursor_shape_to_string(@intFromEnum(shape));
+            std.debug.assert(names[0] != null);
+
+            var i: usize = 0;
+            while (names[i] != null) : (i += 1) {
+                pointer.cursor = render_shim_cursor_theme_get_cursor(
+                    pointer.theme, names[i]);
+                if (pointer.cursor != null) {
+                    log_msg(
+                        LOG_CLASS_DEBUG, "render", "render.zig", @intCast(@src().line),
+                        "loaded xcursor %s", names[i]);
+                    break;
+                }
+            }
+        }
+
+        if (pointer.cursor == null) {
+            const first: [*:0]const u8 = if (shape == .custom)
+                term.mouse_user_cursor.?
+            else
+                cursor_shape_to_string(@intFromEnum(shape))[0];
+            log_msg(
+                LOG_CLASS_ERROR, "render", "render.zig", @intCast(@src().line),
+                "failed to load xcursor pointer '%s', and all of its fallbacks",
+                first);
+            return false;
+        }
+    } else {
+        // Server-side cursors - no need to load anything
+    }
+
+    if (shape == .custom) {
+        free(pointer.last_custom_xcursor);
+        pointer.last_custom_xcursor = xstrdup(term.mouse_user_cursor.?);
+    }
+
+    // FDM hook takes care of actual rendering
+    pointer.shape = shape;
+    pointer.xcursor_pending = true;
+    return true;
+}
+
+/// Called from shm.c when the compositor releases a buffer: pre-apply the
+/// last frame's damage to it, so the next frame starts with the diff already
+/// copied. That shortens the time between the frame callback and the commit,
+/// which is what lets the compositor push the callback closer to vblank.
+export fn render_buffer_release_callback(buf: ?*anyopaque, data: ?*anyopaque) callconv(.c) void {
+    const buffer: *Buffer = @ptrCast(@alignCast(buf orelse return));
+    const term: *Terminal = @ptrCast(@alignCast(data orelse return));
+
+    if (buffer.age != 1)
+        return;
+
+    if (!term.render.preapply_last_frame_damage)
+        return;
+
+    const last_buf: ?*Buffer = if (term.render.last_buf) |raw|
+        @ptrCast(@alignCast(raw))
+    else
+        null;
+
+    if (last_buf == null)
+        return;
+
+    if (last_buf.?.age != 0)
+        return;
+
+    if (buffer.width != last_buf.?.width)
+        return;
+
+    if (buffer.height != last_buf.?.height)
+        return;
+
+    const pre = &term.render.workers.preapplied_damage;
+    const pre_lock: *anyopaque = @ptrCast(@alignCast(&pre.lock));
+    const pre_cond_unused: *anyopaque = @ptrCast(@alignCast(&pre.cond));
+    _ = pre_cond_unused;
+
+    std.debug.assert(term.render.workers.count > 0);
+    std.debug.assert(last_buf.? != buffer);
+
+    _ = mtx_lock(pre_lock);
+    if (pre.buf != null) {
+        _ = mtx_unlock(pre_lock);
+        return;
+    }
+
+    std.debug.assert(pre.buf == null);
+    pre.buf = buffer;
+    workersTimespec(&pre.start).* = .{ .tv_sec = 0, .tv_nsec = 0 };
+    workersTimespec(&pre.stop).* = .{ .tv_sec = 0, .tv_nsec = 0 };
+    _ = mtx_unlock(pre_lock);
+
+    const lock: *anyopaque = @ptrCast(&term.render.workers.lock);
+    const queue: *tll.Tll(c_int) = @ptrCast(&term.render.workers.queue);
+
+    _ = mtx_lock(lock);
+    _ = sem_post(@ptrCast(&term.render.workers.start));
+    std.debug.assert(renderQueueLen(term) == 0);
+    queue.pushBack(-3);
+    _ = mtx_unlock(lock);
 }
 

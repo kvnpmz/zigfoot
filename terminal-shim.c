@@ -19,6 +19,11 @@
 #include <stdlib.h>
 #include <threads.h>
 #include <sys/ioctl.h>
+#include <wayland-cursor.h>
+#include <presentation-time.h>
+#include <cursor-shape.h>
+#include "render.h"
+#include "macros.h"
 #include <signal.h>
 #include <pthread.h>
 #include "terminal.h"
@@ -26,6 +31,9 @@
 #include "grid.h"
 #include "wayland.h"
 #include "shm.h"
+#define LOG_MODULE "render"
+#include "log.h"
+#include "xmalloc.h"
 
 /* ── struct seat kbd state (unicode-mode) ─────────────────────────── */
 
@@ -1532,3 +1540,226 @@ int terminal_shim_grid_row_absolute_in_view(const struct grid *grid, int row_no)
 {
     return grid_row_absolute_in_view(grid, row_no);
 }
+
+/* ======================================================================
+ * The last of render.c (D3l4). What is left here must stay C: the exit-time
+ * presentation statistics (a DESTRUCTOR attribute), struct presentation_context
+ * with its two struct timevals, and the protocol listener tables, which are
+ * generated-struct layout. Everything that was a *function* in render.c now
+ * lives in render.zig.
+ * ====================================================================== */
+
+static struct {
+    size_t total;
+    size_t zero;  /* commits presented in less than one frame interval */
+    size_t one;   /* commits presented in one frame interval */
+    size_t two;   /* commits presented in two or more frame intervals */
+} presentation_statistics = {0};
+
+void fdm_hook_refresh_pending_terminals(struct fdm *fdm, void *data);
+
+/* render_init()/render_destroy() are in render.zig (D3k1). */
+
+static void DESTRUCTOR
+log_presentation_statistics(void)
+{
+    if (presentation_statistics.total == 0)
+        return;
+
+    const size_t total = presentation_statistics.total;
+    LOG_INFO("presentation statistics: zero=%f%%, one=%f%%, two=%f%%",
+             100. * presentation_statistics.zero / total,
+             100. * presentation_statistics.one / total,
+             100. * presentation_statistics.two / total);
+}
+
+/* Ported to render.zig: the callbacks, not the tables. */
+void sync_output(
+    void *data, struct wp_presentation_feedback *wp_presentation_feedback,
+    struct wl_output *output);
+void presented(
+    void *data, struct wp_presentation_feedback *wp_presentation_feedback,
+    uint32_t tv_sec_hi, uint32_t tv_sec_lo, uint32_t tv_nsec,
+    uint32_t refresh, uint32_t seq_hi, uint32_t seq_lo, uint32_t flags);
+void discarded(
+    void *data, struct wp_presentation_feedback *wp_presentation_feedback);
+
+struct presentation_context {
+    struct terminal *term;
+    struct timeval input;
+    struct timeval commit;
+};
+
+struct terminal *
+render_presentation_ctx_term(void *data)
+{
+    return ((struct presentation_context *)data)->term;
+}
+
+void
+render_presentation_ctx_input(void *data, int64_t *sec, int64_t *usec)
+{
+    const struct presentation_context *ctx = data;
+    *sec = ctx->input.tv_sec;
+    *usec = ctx->input.tv_usec;
+}
+
+void
+render_presentation_ctx_commit(void *data, int64_t *sec, int64_t *usec)
+{
+    const struct presentation_context *ctx = data;
+    *sec = ctx->commit.tv_sec;
+    *usec = ctx->commit.tv_usec;
+}
+
+/* The counters and their DESTRUCTOR stay in C: the exit-time log is a C
+ * attribute (macros.h), not something Zig can portably express. */
+void
+render_shim_presentation_stat_add(unsigned frame_count)
+{
+    presentation_statistics.total++;
+
+    if (frame_count >= 2)
+        presentation_statistics.two++;
+    else if (frame_count >= 1)
+        presentation_statistics.one++;
+    else
+        presentation_statistics.zero++;
+}
+
+static const struct wp_presentation_feedback_listener presentation_feedback_listener = {
+    .sync_output = &sync_output,
+    .presented = &presented,
+    .discarded = &discarded,
+};
+
+void
+render_shim_presentation_commit_time(
+    const struct wayland *wayl, int64_t *sec, int64_t *nsec)
+{
+    struct timespec commit_time;
+    clock_gettime(wayl->presentation_clock_id, &commit_time);
+    *sec = commit_time.tv_sec;
+    *nsec = commit_time.tv_nsec;
+}
+
+struct wp_presentation_feedback *
+render_shim_presentation_feedback_new(
+    struct wayland *wayl, struct wl_surface *surf)
+{
+    return wp_presentation_feedback(wayl->presentation, surf);
+}
+
+void
+render_shim_presentation_feedback_add(
+    struct wp_presentation_feedback *feedback, void *ctx)
+{
+    wp_presentation_feedback_add_listener(
+        feedback, &presentation_feedback_listener, ctx);
+}
+
+void *
+render_shim_presentation_ctx_new(
+    struct terminal *term, int64_t input_sec, int64_t input_usec,
+    int64_t commit_sec, int64_t commit_usec)
+{
+    struct presentation_context *ctx = xmalloc(sizeof(*ctx));
+    *ctx = (struct presentation_context){
+        .term = term,
+        .input = {.tv_sec = input_sec, .tv_usec = input_usec},
+        .commit = {.tv_sec = commit_sec, .tv_usec = commit_usec},
+    };
+    return ctx;
+}
+
+void frame_callback(
+    void *data, struct wl_callback *wl_callback, uint32_t callback_data);
+
+static const struct wl_callback_listener frame_listener = {
+    .done = &frame_callback,
+};
+
+struct wl_callback *
+render_shim_add_frame_callback(struct wl_surface *surf, void *data)
+{
+    struct wl_callback *callback = wl_surface_frame(surf);
+    wl_callback_add_listener(callback, &frame_listener, data);
+    return callback;
+}
+
+void xcursor_callback(
+    void *data, struct wl_callback *wl_callback, uint32_t callback_data);
+
+static const struct wl_callback_listener xcursor_listener = {
+    .done = &xcursor_callback,
+};
+
+struct wl_callback *
+render_shim_add_xcursor_callback(struct wl_surface *surf, void *data)
+{
+    struct wl_callback *callback = wl_surface_frame(surf);
+    wl_callback_add_listener(callback, &xcursor_listener, data);
+    return callback;
+}
+
+/* Cursor handling: wayland-cursor and the cursor-shape-v1 inlines. */
+void *
+render_shim_cursor_theme_get_cursor(void *theme, const char *name)
+{
+    return wl_cursor_theme_get_cursor(theme, name);
+}
+
+bool
+render_shim_cursor_image_0(
+    void *cursor, int32_t *width, int32_t *height,
+    int32_t *hotspot_x, int32_t *hotspot_y)
+{
+    struct wl_cursor *c = cursor;
+    if (c == NULL || c->image_count == 0)
+        return false;
+
+    const struct wl_cursor_image *image = c->images[0];
+    *width = image->width;
+    *height = image->height;
+    *hotspot_x = image->hotspot_x;
+    *hotspot_y = image->hotspot_y;
+    return true;
+}
+
+void *
+render_shim_cursor_image_0_buffer(void *cursor)
+{
+    struct wl_cursor *c = cursor;
+    if (c == NULL || c->image_count == 0)
+        return NULL;
+    return wl_cursor_image_get_buffer(c->images[0]);
+}
+
+void
+render_shim_pointer_set_cursor(
+    struct wl_pointer *pointer, uint32_t serial, struct wl_surface *surface,
+    int32_t hotspot_x, int32_t hotspot_y)
+{
+    wl_pointer_set_cursor(pointer, serial, surface, hotspot_x, hotspot_y);
+}
+
+void
+render_shim_cursor_shape_device_v1_set_shape(
+    struct wp_cursor_shape_device_v1 *device, uint32_t serial, uint32_t shape)
+{
+    wp_cursor_shape_device_v1_set_shape(device, serial, shape);
+}
+
+void
+render_shim_xdg_toplevel_set_title(struct xdg_toplevel *toplevel, const char *title)
+{
+    xdg_toplevel_set_title(toplevel, title);
+}
+
+void
+render_shim_callback_destroy(struct wl_callback *callback)
+{
+    if (callback != NULL)
+        wl_callback_destroy(callback);
+}
+
