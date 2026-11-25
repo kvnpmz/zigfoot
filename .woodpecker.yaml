@@ -162,6 +162,7 @@ steps:
           meson test -C "$dir" --print-errorlogs
           ./"$dir"/foot --version
           scripts/smoke.sh ./"$dir"/foot
+          scripts/check-targets.sh
         done
       # Release mode must build and pass the same tests.
       # `ime` is a boolean option and meson refuses `false` (the Zig wayland.h

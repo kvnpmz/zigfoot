@@ -42,7 +42,9 @@ if utmp_backend == 'auto'
   if host_os == 'linux'
     utmp_backend = 'libutempter'
   elif host_os == 'freebsd'
-    utmp_backend = 'ulog'
+    # The Zig port does not provide the FreeBSD ulog helper integration.
+    # Keep the default build helper-free; -Dutmp-backend=ulog stays available.
+    utmp_backend = 'none'
   else
     utmp_backend = 'none'
   endif
