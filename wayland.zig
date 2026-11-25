@@ -775,7 +775,9 @@ fn csdReloadFont(win: *types.WlWindow, old_scale: f32) void {
         patterns[i] = conf.csd.font.arr.?[i].pattern.?;
 
     var pixelsize: [32]u8 = undefined;
-    const px: c_int = @intFromFloat(@round(@as(f32, @floatFromInt(conf.csd.title_height)) * scale));
+    // C: roundf(title_height * scale * 1 / 2) — the title-bar font is half
+    // the title height.
+    const px: c_int = @intFromFloat(@round(@as(f32, @floatFromInt(conf.csd.title_height)) * scale / 2.0));
     _ = snprintf(&pixelsize, pixelsize.len, "pixelsize=%u", @as(c_uint, @intCast(px)));
 
     log_msg(

@@ -123,10 +123,12 @@ export fn uri_parse(
             const port_len = path_segment - port_str_start;
             if (port_len == 0) return cleanup(scheme, user, password, host, path, query, fragment);
 
+            // C accumulates in a uint16_t, i.e. it wraps. Keep the wrap
+            // (`*%`/`+%`) instead of trapping in ReleaseSafe.
             var parsed_port: u16 = 0;
             for (slice[port_str_start..path_segment]) |ch| {
                 if (ch < '0' or ch > '9') return cleanup(scheme, user, password, host, path, query, fragment);
-                parsed_port = parsed_port * 10 + (ch - '0');
+                parsed_port = parsed_port *% 10 +% (ch - '0');
             }
 
             if (port) |pt| pt.* = parsed_port;

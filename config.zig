@@ -1992,6 +1992,11 @@ export fn value_to_key_combos(
     }
 
     if (failed) {
+        // The caller still owns `aux` and frees it on failure; clearing
+        // master_copy here keeps the payload from being freed twice (C frees
+        // it in both places and segfaults).
+        combos[0].aux.master_copy = false;
+
         // C frees `used_combos` entries: the failed one too, which was
         // zero-initialized above.
         var i: usize = 0;

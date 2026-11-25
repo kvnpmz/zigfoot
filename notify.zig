@@ -15,8 +15,12 @@ fn freePtr(p: anytype) void {
 }
 
 export fn notify_free(term: ?*types.Terminal, notif: *types.Notification) callconv(.c) void {
-    _ = term;
-    // TODO(chunk B): fdm_del(term->fdm, notif->stdout_fd) when pid > 0
+    // C: if (notif->pid > 0) fdm_del(term->fdm, notif->stdout_fd);
+    if (notif.pid > 0) {
+        if (term) |t| {
+            if (t.fdm) |fdm| _ = fdm_del(fdm, notif.stdout_fd);
+        }
+    }
     freePtr(notif.id);
     freePtr(notif.title);
     freePtr(notif.body);
