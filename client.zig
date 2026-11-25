@@ -2,6 +2,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const types = @import("terminal_types.zig");
 const build_options = @import("build_options");
+const abi = @import("c_layout");
 
 // footclient: command-line parsing and the setup packet sent to foot --server.
 // The process entry point is emitted only for the footclient build. The test
@@ -79,28 +80,65 @@ const ERANGE: c_int = 34;
 const ENOENT: c_int = @intFromEnum(std.c.E.ENOENT);
 const S_IFDIR: u32 = std.posix.S.IFDIR;
 
-const Stat = extern struct {
-    dev: u64,
-    ino: u64,
-    nlink: u64,
-    mode: u32,
-    uid: u32,
-    gid: u32,
-    pad: c_int,
-    rdev: u64,
-    size: i64,
-    blksize: i64,
-    blocks: i64,
-    atim: std.posix.timespec,
-    mtim: std.posix.timespec,
-    ctim: std.posix.timespec,
-    reserved: [3]i64,
+/// glibc x86_64 struct stat. std.c.Stat is void on Linux, so this one
+/// mirror has to stay; it is Linux-only and pinned below. Other targets use
+/// the libc type.
+pub const LinuxStat = extern struct {
+    st_dev: u64,
+    st_ino: u64,
+    st_nlink: u64,
+    st_mode: u32,
+    st_uid: u32,
+    st_gid: u32,
+    __pad0: c_int,
+    st_rdev: u64,
+    st_size: i64,
+    st_blksize: i64,
+    st_blocks: i64,
+    st_atim: std.posix.timespec,
+    st_mtim: std.posix.timespec,
+    st_ctim: std.posix.timespec,
+    __glibc_reserved: [3]i64,
 };
 
-const SockaddrUn = extern struct {
-    family: u16,
-    path: [108]u8,
-};
+const Stat = if (builtin.os.tag == .linux) LinuxStat else std.c.Stat;
+const SockaddrUn = std.c.sockaddr.un;
+
+fn expectAbi(comptime T: type, comptime prefix: []const u8) void {
+    comptime {
+        const size_key = prefix ++ "__size";
+        if (!@hasDecl(abi, size_key))
+            @compileError("abi_probe is missing " ++ size_key);
+        if (@sizeOf(T) != @field(abi, size_key))
+            @compileError("ABI size mismatch: " ++ size_key);
+
+        for (@typeInfo(T).@"struct".fields) |field| {
+            if (field.name.len > 0 and field.name[0] == '_') continue;
+            const key = prefix ++ "_" ++ field.name;
+            if (!@hasDecl(abi, key))
+                @compileError("abi_probe is missing " ++ key);
+            if (@offsetOf(T, field.name) != @field(abi, key))
+                @compileError("ABI offset mismatch: " ++ key);
+        }
+    }
+}
+
+comptime {
+    if (builtin.os.tag == .linux)
+        expectAbi(LinuxStat, "LinuxStat");
+}
+
+fn statMode(st: *const Stat) u32 {
+    return if (comptime builtin.os.tag == .linux) st.st_mode else @intCast(st.mode);
+}
+
+fn initSocketAddr() SockaddrUn {
+    var addr = std.mem.zeroes(SockaddrUn);
+    addr.family = @intCast(AF_UNIX);
+    if (comptime @hasField(SockaddrUn, "len"))
+        addr.len = @sizeOf(SockaddrUn);
+    return addr;
+}
 
 fn errno() c_int {
     return std.c._errno().*;
@@ -419,7 +457,7 @@ export fn footclient_main(argc: c_int, argv: [*][*:0]u8) callconv(.c) c_int {
 
                 if (custom_cwd) |cwd_path| {
                     var st: Stat = undefined;
-                    if (stat(cwd_path, &st) < 0 or (st.mode & S_IFDIR) == 0) {
+                    if (stat(cwd_path, &st) < 0 or (statMode(&st) & S_IFDIR) == 0) {
                         _ = fprintf(stderr, "error: %s: not a directory\n", optarg);
                         return ret;
                     }
@@ -493,7 +531,7 @@ export fn footclient_main(argc: c_int, argv: [*][*:0]u8) callconv(.c) c_int {
         return ret;
     }
 
-    var addr = SockaddrUn{ .family = AF_UNIX, .path = [_]u8{0} ** 108 };
+    var addr = initSocketAddr();
     if (server_socket_path) |path| {
         setSocketPath(&addr, path);
         if (connect(fd, &addr, @sizeOf(SockaddrUn)) < 0) {
