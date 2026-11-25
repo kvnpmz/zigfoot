@@ -91,6 +91,8 @@ C_TYPES: dict[str, str] = {
     "PixmanBox32": "pixman_box32_t",
     "PixmanPointFixed": "pixman_point_fixed_t",
     "PixmanTriangle": "pixman_triangle_t",
+    "PixmanLineFixed": "pixman_line_fixed_t",
+    "PixmanTrapezoid": "pixman_trapezoid_t",
     "PixmanRegion32": "pixman_region32_t",
     "BoxBuf": "struct buf",
     "FcftGlyph": "struct fcft_glyph",

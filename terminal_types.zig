@@ -2619,6 +2619,18 @@ pub const PixmanTriangle = extern struct {
     p3: PixmanPointFixed,
 };
 
+pub const PixmanLineFixed = extern struct {
+    p1: PixmanPointFixed,
+    p2: PixmanPointFixed,
+};
+
+pub const PixmanTrapezoid = extern struct {
+    top: i32,
+    bottom: i32,
+    left: PixmanLineFixed,
+    right: PixmanLineFixed,
+};
+
 pub const PixmanRegion32 = extern struct {
     extents: PixmanBox32,
     data: ?*anyopaque,
@@ -2715,6 +2727,8 @@ test "shm layout matches C probe" {
     expectAbi(PixmanBox32, "PixmanBox32");
     expectAbi(PixmanPointFixed, "PixmanPointFixed");
     expectAbi(PixmanTriangle, "PixmanTriangle");
+    expectAbi(PixmanLineFixed, "PixmanLineFixed");
+    expectAbi(PixmanTrapezoid, "PixmanTrapezoid");
     expectAbi(PixmanRegion32, "PixmanRegion32");
     expectAbi(Buffer, "Buffer");
     expectAbi(ShmBufferPool, "ShmBufferPool");

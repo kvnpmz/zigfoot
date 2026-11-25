@@ -65,9 +65,22 @@ extern fn terminal_shim_fcft_font_underline_thickness(font: *const anyopaque) ca
 extern fn terminal_shim_fcft_font_strikeout_position(font: *const anyopaque) callconv(.c) c_int;
 extern fn terminal_shim_fcft_font_strikeout_thickness(font: *const anyopaque) callconv(.c) c_int;
 
-/// The trapezoid path needs `pixman_trapezoid_t`, which C owns; keep the
-/// geometry computation here and the composite call in the shim.
-extern fn render_shim_curly_underline(
+const PIXMAN_a8: u32 = 0x08018000;
+
+extern fn pixman_composite_trapezoids(
+    op: c_int,
+    src: ?*PixmanImage,
+    dst: *PixmanImage,
+    mask_format: u32,
+    x_src: c_int,
+    y_src: c_int,
+    x_dst: c_int,
+    y_dst: c_int,
+    n_traps: c_int,
+    traps: [*]const types.PixmanTrapezoid,
+) callconv(.c) void;
+
+fn curlyUnderline(
     pix: *PixmanImage,
     color: *const PixmanColor,
     x: c_int,
@@ -76,7 +89,28 @@ extern fn render_shim_curly_underline(
     half_x: c_int,
     full_x: c_int,
     th: c_int,
-) callconv(.c) void;
+) void {
+    const I = pixmanIntToFixed;
+    // Characters sit on top of the curlies.
+    const traps = [2]types.PixmanTrapezoid{
+        .{
+            .top = I(top),
+            .bottom = I(bot),
+            .left = .{ .p1 = .{ .x = I(x), .y = I(bot - th) }, .p2 = .{ .x = I(half_x), .y = I(top - th) } },
+            .right = .{ .p1 = .{ .x = I(x), .y = I(bot + th) }, .p2 = .{ .x = I(half_x), .y = I(top + th) } },
+        },
+        .{
+            .top = I(top),
+            .bottom = I(bot),
+            .left = .{ .p1 = .{ .x = I(half_x), .y = I(top + th) }, .p2 = .{ .x = I(full_x), .y = I(bot + th) } },
+            .right = .{ .p1 = .{ .x = I(half_x), .y = I(top - th) }, .p2 = .{ .x = I(full_x), .y = I(bot - th) } },
+        },
+    };
+
+    const fill = pixman_image_create_solid_fill(color);
+    pixman_composite_trapezoids(PIXMAN_OP_OVER, fill, pix, PIXMAN_a8, 0, 0, 0, 0, 2, &traps);
+    pixman_image_unref(fill);
+}
 
 /// `srgb_decode_8_to_16_table[]` is generated into the build directory by
 /// `scripts/srgb.py`.
@@ -411,7 +445,7 @@ export fn draw_styled_underline(
             const hx_2 = @as(f64, @floatFromInt(ceil_w)) * @as(f64, @floatFromInt(ceil_w)) / 4.0;
             const th: c_int = @intFromFloat(@round(@sqrt(th_2 + (th_2 * bt_2 / hx_2)) / 2.0));
 
-            render_shim_curly_underline(pix, color, x, top, bot, half_x, full_x, th);
+            curlyUnderline(pix, color, x, top, bot, half_x, full_x, th);
         },
 
         .none, .single => unreachable,

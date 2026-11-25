@@ -419,40 +419,6 @@ void render_shim_workers_unlock(struct terminal *term)
     mtx_unlock(&term->render.workers.lock);
 }
 
-/*
- * The curly underline is composited from two trapezoids. pixman_trapezoid_t
- * is a library type we would rather not mirror, so the geometry comes in
- * from Zig and the composite happens here.
- */
-void render_shim_curly_underline(
-    pixman_image_t *pix, const pixman_color_t *color,
-    int x, int top, int bot, int half_x, int full_x, int th)
-{
-#define I(x) pixman_int_to_fixed(x)
-
-    /* characters sit on top of the curlies */
-    const pixman_trapezoid_t traps[] = {
-        {
-            I(top), I(bot),
-            {{I(x), I(bot - th)}, {I(half_x), I(top - th)}},
-            {{I(x), I(bot + th)}, {I(half_x), I(top + th)}},
-        },
-        {
-            I(top), I(bot),
-            {{I(half_x), I(top + th)}, {I(full_x), I(bot + th)}},
-            {{I(half_x), I(top - th)}, {I(full_x), I(bot - th)}},
-        },
-    };
-
-#undef I
-
-    pixman_image_t *fill = pixman_image_create_solid_fill(color);
-    pixman_composite_trapezoids(
-        PIXMAN_OP_OVER, fill, pix, PIXMAN_a8, 0, 0, 0, 0,
-        sizeof(traps) / sizeof(traps[0]), traps);
-    pixman_image_unref(fill);
-}
-
 /* ── font loading (terminal.zig) ─────────────────────────────────── */
 
 /* util.h's thrd_err_as_string() is a static inline switch, which Zig cannot
