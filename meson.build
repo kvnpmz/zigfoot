@@ -494,6 +494,10 @@ terminal_obj = custom_target(
   command: [
     python, files('compile_zig.py'), '@INPUT@', '@OUTPUT@',
     grapheme_clustering_zig,
+    'utmp_enabled=' + (utmp_backend != 'none').to_string(),
+    'utmp_add="' + utmp_add + '"',
+    'utmp_del="' + utmp_del + '"',
+    'utmp_del_have_argument=' + utmp_del_have_argument.to_string(),
   ],
 )
 

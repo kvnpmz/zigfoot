@@ -2225,11 +2225,6 @@ const PTMX_READ_BUFFER_SIZE: usize = 24 * 1024;
 
 extern fn term_shutdown(term: *types.Terminal) callconv(.c) void;
 extern fn vt_from_slave(term: *types.Terminal, data: [*]const u8, len: usize) callconv(.c) void;
-extern fn del_utmp_record(
-    conf: ?*const anyopaque,
-    reaper: ?*anyopaque,
-    ptmx: c_int,
-) callconv(.c) bool;
 
 // PTMX_TIMING is 0 in terminal.c; the timing instrumentation is omitted
 // until that build-time option exists in build_options.
@@ -4046,4 +4041,61 @@ export fn initialize_render_workers(term: *types.Terminal) callconv(.c) bool {
     }
 
     return true;
+}
+//
+// Chunk C3b — the utmp helper records. Both were static in terminal.c and are
+// only compiled in when meson found a utmp backend (UTMP_ADD/UTMP_DEL); that
+// is mirrored as build options, so the "no backend" build still returns true
+// without spawning anything, exactly like the old #else arm.
+//
+
+extern fn getenv(name: [*:0]const u8) callconv(.c) ?[*:0]u8;
+
+fn utmpHelperPath(conf: ?*const types.Config) ?[*:0]const u8 {
+    if (comptime !build_options.utmp_enabled) return null;
+    const c = conf orelse return null;
+    return c.utmp_helper_path;
+}
+
+export fn add_utmp_record(conf: ?*const types.Config, reaper: ?*anyopaque, ptmx: c_int) callconv(.c) bool {
+    if (comptime !build_options.utmp_enabled)
+        return true;
+
+    if (ptmx < 0)
+        return true;
+
+    const helper = utmpHelperPath(conf) orelse return true;
+
+    // NOTE: a NULL wayland display terminates argv early, which is what C's
+    // {helper, UTMP_ADD, getenv(...), NULL} does as well.
+    const argv = [_:null]?[*:0]const u8{
+        helper,
+        build_options.utmp_add,
+        getenv("WAYLAND_DISPLAY"),
+    };
+
+    return spawn(reaper, null, @ptrCast(&argv), ptmx, -1, -1, null, null, null) >= 0;
+}
+
+export fn del_utmp_record(conf: ?*const types.Config, reaper: ?*anyopaque, ptmx: c_int) callconv(.c) bool {
+    if (comptime !build_options.utmp_enabled)
+        return true;
+
+    if (ptmx < 0)
+        return true;
+
+    const helper = utmpHelperPath(conf) orelse return true;
+
+    const del_argument: ?[*:0]u8 = if (comptime build_options.utmp_del_have_argument)
+        getenv("WAYLAND_DISPLAY")
+    else
+        null;
+
+    const argv = [_:null]?[*:0]const u8{
+        helper,
+        build_options.utmp_del,
+        del_argument,
+    };
+
+    return spawn(reaper, null, @ptrCast(&argv), ptmx, -1, -1, null, null, null) >= 0;
 }

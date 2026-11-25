@@ -650,9 +650,9 @@ utmp backends where available.
 
 ## 13. Sequenced backlog (refreshed 2026-11-24)
 
-State: **28,313 of 48,830 C lines gone (58.0%)**, ~43% by effort, 31 modules
-ported, 346 harness assertions, `meson test` 5/5 in three build dirs.
-Remaining C: 20,517 lines, 1,392 of which are `*-shim.c` accessors.
+State: **28,350 of 48,830 C lines gone (58.1%)**, ~43% by effort, 31 modules
+ported, 350 harness assertions, `meson test` 5/5 in three build dirs.
+Remaining C: 20,480 lines, 1,392 of which are `*-shim.c` accessors.
 
 Track C is underway: C1 (the IME wrappers) is in (`1515fd13`), C2 (mouse grab
 and CSD cursor shapes) is in. The build loop was also measured and fixed - see
@@ -729,7 +729,7 @@ fabricates `struct terminal` today).
 | **C1** done | T4 IME accessors (`term_ime_is_enabled/enable/disable/reset/set_cursor_rect`, ~60 lines) | B2, ime.c | 0.5d |
 | **C2** done | T8 xcursor: `term_mouse_grabbed`, `term_xcursor_update_for_seat`, `term_xcursor_update` from `terminal.c` plus `xcursor_for_csd_border()` and its four corner helpers from `input.c` (~110 lines). `terminal.c` is 1,609 lines, `input.c` 3,618. 16 new harness checks | B2 | 0.5d |
 | **C3a** done | T11a part 1: `fdm_delayed_render`, `term_window_configured` and `initialize_render_workers` (~105 lines). The C11 thread calls are plain libc externs through the sem/mtx/cnd byte blobs in the mirror; `thrd_err_as_string()` is a `util.h` static inline, so it gets one shim. 7 new harness checks (a real timerfd pair and a real worker thread) | B1, render | 1d |
-| **C3b** | T11a part 2: `add_utmp_record`/`del_utmp_record`; needs `UTMP_ADD`/`UTMP_DEL` plumbed through `compile_zig.py` | C3a | 0.5d |
+| **C3b** done | T11a part 2: `add_utmp_record()`/`del_utmp_record()`. `UTMP_ADD`/`UTMP_DEL`/`UTMP_DEL_HAVE_ARGUMENT` now reach Zig as `utmp_add`/`utmp_del`/`utmp_del_have_argument` build options (plus `utmp_enabled` for the `-Dutmp-backend=none` arm, which still returns `true` without spawning). 4 new harness checks; the disabled configuration was compiled by hand to prove the `comptime` arm | C3a | 0.5d |
 | **C4** | T11b: `term_init` (342 lines) | C3, wayland, render | 1–2d |
 | **C5** | T11c: `term_shutdown`/`shutdown_maybe_done`/`fdm_shutdown`/`fdm_terminate_timeout`/`fdm_client_terminated` | C4 | 1d |
 | **C6** | T11d: `term_destroy`, `term_reset` (~600 lines) | C4 | 1d |

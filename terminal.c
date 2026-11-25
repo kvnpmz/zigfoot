@@ -94,6 +94,8 @@ extern bool term_ptmx_pause(struct terminal *term);
 extern bool term_ptmx_resume(struct terminal *term);
 extern bool fdm_ptmx_out(struct fdm *fdm, int fd, int events, void *data);
 extern bool fdm_delayed_render(struct fdm *fdm, int fd, int events, void *data);
+extern bool add_utmp_record(const struct config *conf, struct reaper *reaper, int ptmx);
+extern bool del_utmp_record(const struct config *conf, struct reaper *reaper, int ptmx);
 extern bool initialize_render_workers(struct terminal *term);
 
 /* enqueue_data_for_slave: ported to terminal.zig */
@@ -102,46 +104,7 @@ extern bool initialize_render_workers(struct terminal *term);
 /* term_to_slave: ported to terminal.zig */
 /* fdm_ptmx_out: ported to terminal.zig */
 
-static bool
-add_utmp_record(const struct config *conf, struct reaper *reaper, int ptmx)
-{
-#if defined(UTMP_ADD)
-    if (ptmx < 0)
-        return true;
-    if (conf->utmp_helper_path == NULL)
-        return true;
-
-    char *const argv[] = {conf->utmp_helper_path, UTMP_ADD, getenv("WAYLAND_DISPLAY"), NULL};
-    return spawn(reaper, NULL, argv, ptmx, -1, -1, NULL, NULL, NULL) >= 0;
-#else
-    return true;
-#endif
-}
-
-/* Externally visible for terminal.zig (was static) */
-bool
-del_utmp_record(const struct config *conf, struct reaper *reaper, int ptmx)
-{
-#if defined(UTMP_DEL)
-    if (ptmx < 0)
-        return true;
-    if (conf->utmp_helper_path == NULL)
-        return true;
-
-    char *del_argument =
-#if defined(UTMP_DEL_HAVE_ARGUMENT)
-        getenv("WAYLAND_DISPLAY")
-#else
-        NULL
-#endif
-        ;
-
-    char *const argv[] = {conf->utmp_helper_path, UTMP_DEL, del_argument, NULL};
-    return spawn(reaper, NULL, argv, ptmx, -1, -1, NULL, NULL, NULL) >= 0;
-#else
-    return true;
-#endif
-}
+/* add_utmp_record() / del_utmp_record(): ported to terminal.zig */
 
 #if PTMX_TIMING
 static struct timespec last = {0};

@@ -66,6 +66,8 @@ bool term_set_fonts(
     struct terminal *term, struct fcft_font *fonts[static 4], bool resize_grid);
 bool reload_fonts(struct terminal *term, bool resize_grid);
 bool load_fonts_from_conf(struct terminal *term);
+bool add_utmp_record(const struct config *conf, struct reaper *reaper, int ptmx);
+bool del_utmp_record(const struct config *conf, struct reaper *reaper, int ptmx);
 bool fdm_delayed_render(struct fdm *fdm, int fd, int events, void *data);
 bool initialize_render_workers(struct terminal *term);
 float get_font_dpi(const struct terminal *term);
@@ -2187,6 +2189,29 @@ test_render_workers(void)
 }
 
 static void
+test_utmp(void)
+{
+    struct terminal *term = term_new();
+    static struct config conf;
+    memset(&conf, 0, sizeof(conf));
+
+    term->conf = &conf;
+
+    check(add_utmp_record(&conf, NULL, -1),
+          "no pty means no utmp add record");
+    check(del_utmp_record(&conf, NULL, -1),
+          "no pty means no utmp del record");
+
+    check(add_utmp_record(&conf, NULL, 0),
+          "no utmp helper means no utmp add record");
+    check(del_utmp_record(&conf, NULL, 0),
+          "no utmp helper means no utmp del record");
+
+    term->conf = NULL;
+    term_free(term);
+}
+
+static void
 test_ime(void)
 {
     struct wayland wl = {0};
@@ -2995,6 +3020,7 @@ main(void)
     test_cursor_shape();
     test_delayed_render();
     test_render_workers();
+    test_utmp();
     test_quirks();
     test_version_and_features();
     test_log();
