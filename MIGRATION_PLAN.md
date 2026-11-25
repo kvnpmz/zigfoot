@@ -650,9 +650,9 @@ utmp backends where available.
 
 ## 13. Sequenced backlog (refreshed 2026-11-24)
 
-State: **31,807 of 48,830 C lines gone (65.1%)**, ~48% by effort, 34 modules
-ported, 446 harness assertions, `meson test` 5/5 in three build dirs.
-Remaining C: 17,023 lines, 1,571 of which are `*-shim.c` accessors.
+State: **31,883 of 48,830 C lines gone (65.3%)**, ~49% by effort, 34 modules
+ported, 451 harness assertions, `meson test` 5/5 in three build dirs.
+Remaining C: 16,947 lines, 1,571 of which are `*-shim.c` accessors.
 
 `smoke.sh` now launches **real windows**: weston's headless backend creates no
 `wl_seat`, so foot refused to start ("no seats available"). When `Xvfb` is
@@ -771,7 +771,8 @@ Order matters: `search` and `wayland` first (they unblock the rest), then
 | **D2c** done | `wayland`: urgency/activation (`wayl_win_set_urgent()` and its token callback), `wayl_win_ring_bell()` and `wayl_do_linear_blending()`. `xdg_system_bell_v1_ring()`/`xdg_activation_v1_activate()` are generated static inlines, so two more shims. 5 new harness checks | D2b | 0.5d |
 | **D2d** done | `wayland`: the window sub-surface lifecycle — `wayl_win_subsurface_new_with_custom_parent()`, `wayl_win_subsurface_new()`, `wayl_win_subsurface_destroy()` (colour management, viewport, `wl_subsurface`, `wl_surface`, empty input region for the non-interactive ones). 13 new `wayland_shim_*` forwarders for the generated `wl_surface`/`wl_region`/`wp_viewport`/`wp_color_*` inlines. Every smoke launch creates and tears down five sub-surfaces (search, url, notify trio), so this path has real runtime coverage | D2c | 1d |
 | **D2e** done | `wayland`: `wayl_flush()` (the EAGAIN/POLLOUT retry loop), `wayl_roundtrip()`, and `wayl_reload_xcursor_theme()` (XCURSOR_SIZE/XCURSOR_THEME parsing, server-side-cursor short circuit, scale-based reload). 3 new harness checks for the short-circuit paths; the flush/roundtrip pair runs on every smoke launch | D2d | 0.5d |
-| **D2f** | `wayland`: `wayl_win_init()`/`wayl_win_destroy()`, CSD instantiate/destroy/reload, `handle_global` and `wayl_init`/`wayl_destroy` | D2e | 3–4d |
+| **D2f** done | `wayland`: the CSD trio — `csd_instantiate()` (seven sub-surfaces, then the close/min/max buttons parented to the title bar), `csd_destroy()` and `csd_reload_font()` (`pixelsize=` from `csd.title_height` × scale). 5 new harness checks, including a real fcft font through `csd_destroy()` | D2e | 0.5d |
+| **D2g** | `wayland`: `wayl_win_init()`/`wayl_win_destroy()`, `handle_global`/`handle_global_remove`, `wayl_init`/`wayl_destroy`, seat capabilities and data devices | D2f | 3–4d |
 | **D2d** | `wayland`: `handle_global`/`handle_global_remove`, `wayl_init`/`wayl_destroy`, seat capabilities and data devices | D2c | 3–4d |
 | **D3** | `render` (5,479) — split into D3a chains/damage/cursor, D3b grid/csd/box-drawing glyph cache, D3c sixel/notifications/search-highlight | biggest module; do it after `wayland` so the surface/scale paths are Zig | 1.5–2w |
 | **D4** | `input` (3,687) — split into D4a keyboard/legacy+kitty protocols, D4b pointer/mouse/touch, D4c compose/IME plumbing | after B2 + key-binding | 1–1.5w |

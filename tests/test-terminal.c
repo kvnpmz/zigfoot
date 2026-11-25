@@ -3518,6 +3518,35 @@ test_wayland_misc(void)
     s3.pointer.shape_device = (struct wp_cursor_shape_device_v1 *)fake_theme;
     check(wayl_reload_xcursor_theme(&s3, 1.5f),
           "server-side cursors skip the client theme load");
+
+    /* CSD teardown drops the font and every surface */
+    struct terminal cterm = {0};
+    struct config cconf = {0};
+    struct wl_window cwin = {0};
+    struct buffer_chain csd_chain = {0};
+
+    cterm.conf = &cconf;
+    cterm.window = &cwin;
+    cwin.term = &cterm;
+    cterm.render.chains.csd = &csd_chain;
+
+    const char *csd_pattern = "monospace";
+    cwin.csd.font = fcft_from_name(1, &csd_pattern, "pixelsize=12");
+    check(cwin.csd.font != NULL, "a CSD font loads for the teardown test");
+    csd_destroy(&cwin);
+    check(cwin.csd.font == NULL, "csd_destroy() releases the CSD font");
+    check(cwin.csd.surface[CSD_SURF_TITLE].surface.surf == NULL,
+          "csd_destroy() clears the CSD surfaces");
+
+    /* csd_reload_font() does nothing without CSDs, or when they are hidden */
+    cwin.csd_mode = CSD_NO;
+    csd_reload_font(&cwin, -1.0f);
+    check(cwin.csd.font == NULL, "no CSD font is loaded when CSDs are off");
+
+    cwin.csd_mode = CSD_YES;
+    cwin.is_fullscreen = true;
+    csd_reload_font(&cwin, -1.0f);
+    check(cwin.csd.font == NULL, "no CSD font is loaded while fullscreen");
 }
 
 int

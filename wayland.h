@@ -569,6 +569,11 @@ void wayl_activate(struct wayland *wayl, struct wl_window *win, const char *toke
 
 bool wayl_do_linear_blending(const struct wayland *wayl, const struct config *conf);
 
+/* CSD helpers moved to wayland.zig; wayland.c still calls them. */
+void csd_instantiate(struct wl_window *win);
+void csd_destroy(struct wl_window *win);
+void csd_reload_font(struct wl_window *win, float old_scale);
+
 /* ── Ported to wayland.zig ─────────────────────────────────────────────
  * Generated-protocol listener callbacks; the listener tables in wayland.c
  * still point at these, so their prototypes live here. */

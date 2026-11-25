@@ -752,3 +752,91 @@ export fn wayl_reload_xcursor_theme(seat: *types.Seat, new_scale: f32) callconv(
     seat.pointer.scale = new_scale;
     return true;
 }
+
+// ─────────────────────────────────────────────────────────────────────────
+// Client-side decorations
+// ─────────────────────────────────────────────────────────────────────────
+
+extern fn fcft_destroy(font: ?*anyopaque) callconv(.c) void;
+extern fn fcft_from_name(count: usize, names: [*]const [*:0]const u8, attributes: [*:0]const u8) callconv(.c) ?*anyopaque;
+extern fn snprintf(buf: [*]u8, size: usize, fmt: [*:0]const u8, ...) callconv(.c) c_int;
+extern fn shm_purge(chain: ?*anyopaque) callconv(.c) void;
+
+fn csdReloadFont(win: *types.WlWindow, old_scale: f32) void {
+    const term: *types.Terminal = @ptrCast(@alignCast(win.term.?));
+    const conf = term.conf.?;
+
+    const scale = term.scale;
+
+    const enable_csd = win.csd_mode == .yes and !win.is_fullscreen;
+    if (!enable_csd)
+        return;
+    if (win.csd.font != null and scale == old_scale)
+        return;
+
+    fcft_destroy(win.csd.font);
+
+    var patterns_buf: [64][*:0]const u8 = undefined;
+    std.debug.assert(conf.csd.font.count <= patterns_buf.len);
+    const patterns = patterns_buf[0..conf.csd.font.count];
+    for (0..conf.csd.font.count) |i|
+        patterns[i] = conf.csd.font.arr.?[i].pattern.?;
+
+    var pixelsize: [32]u8 = undefined;
+    const px: c_int = @intFromFloat(@round(@as(f32, @floatFromInt(conf.csd.title_height)) * scale));
+    _ = snprintf(&pixelsize, pixelsize.len, "pixelsize=%u", @as(c_uint, @intCast(px)));
+
+    log_msg(
+        LOG_CLASS_DEBUG,
+        "wayland",
+        "wayland.zig",
+        @intCast(@src().line),
+        "loading CSD font \"%s:%s\" (old-scale=%.2f, scale=%.2f)",
+        patterns[0],
+        @as([*:0]const u8, @ptrCast(&pixelsize)),
+        old_scale,
+        scale,
+    );
+
+    win.csd.font = fcft_from_name(conf.csd.font.count, patterns.ptr, @ptrCast(&pixelsize));
+}
+
+export fn csd_instantiate(win: *types.WlWindow) callconv(.c) void {
+    const wayl = waylandOf(win);
+    std.debug.assert(@intFromPtr(wayl) != 0);
+
+    const minimize: usize = @intFromEnum(types.CsdSurface.minimize);
+    var i: usize = 0;
+    while (i < minimize) : (i += 1) {
+        const ret = wayl_win_subsurface_new(win, &win.csd.surface[i], true);
+        if (!ret) bug(@src().file, @intCast(@src().line), "csd_instantiate", "assertion failed");
+    }
+
+    while (i < types.CSD_SURF_COUNT) : (i += 1) {
+        const ret = wayl_win_subsurface_new_with_custom_parent(
+            win,
+            win.csd.surface[@intFromEnum(types.CsdSurface.title)].surface.surf,
+            &win.csd.surface[i],
+            true,
+        );
+        if (!ret) bug(@src().file, @intCast(@src().line), "csd_instantiate", "assertion failed");
+    }
+
+    csdReloadFont(win, -1.0);
+}
+
+export fn csd_destroy(win: *types.WlWindow) callconv(.c) void {
+    const term: *types.Terminal = @ptrCast(@alignCast(win.term.?));
+
+    const window = term.window.?;
+    fcft_destroy(window.csd.font);
+    window.csd.font = null;
+
+    for (&win.csd.surface) |*surface|
+        wayl_win_subsurface_destroy(surface);
+    shm_purge(term.render.chains.csd);
+}
+
+export fn csd_reload_font(win: *types.WlWindow, old_scale: f32) callconv(.c) void {
+    csdReloadFont(win, old_scale);
+}
