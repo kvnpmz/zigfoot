@@ -618,13 +618,22 @@ utmp backends where available.
    the C headers with `zig translate-c` (I verified it can translate
    `terminal.h` here with the exact meson flags; it produces ~18k lines). The
    generated-types route removes an entire bug class but is a bigger detour.
-   Recommendation: probe now, evaluate translate-c before Phase 3.
+   Recommendation: probe now, evaluate translate-c before Phase 3. **Closed
+   (E3): abandoned.** The probe + hand mirrors went through 43 modules and the
+   full D2–D6 surface without a single ABI bug; `translate-c` would add 18k
+   generated lines and a second source of truth for no measured gain.
 2. **Scope of "finish"** — does it include `footclient`/`--server`, utmp
    helpers, PGO, and the generated `srgb.c`? Assume yes unless told otherwise.
-3. **Build system** — stay on meson + `compile_zig.py` (recommended) or move to
+3. **Build system** — **closed (E3): stay on meson** + `compile_zig.py` — or move to
    `build.zig`. Meson already handles wayland-scanner/fcft; keep it.
 4. **Production safety mode** — `ReleaseSafe` (panics instead of UB) vs
    `ReleaseFast` for release. Decide before shipping; fuzzing informs it.
+   **Closed (E3): stay on `ReleaseSafe`.** Meson has no ReleaseFast buildtype,
+   so only ReleaseSafe is measurable through the build system: the harness runs
+   in 4.30 s mean (3 runs: 4.376 / 4.259 / 4.251) with overflow, bounds and
+   pointer checks on, and those checks are what caught the port bugs in D2–D6.
+   A ReleaseFast switch would trade a verified safety net for an unmeasured
+   speedup; revisit per-target only if a hot path is ever profiled.
 5. **Shim cleanup cadence** — delete shims per module once its struct is fully
    mirrored (recommended) vs a final sweep.
 6. **Port `config` before finishing `terminal`'s font/init chunks** —
@@ -1362,11 +1371,11 @@ option). E2 done (`shm.c` deleted, 329 → 0) and E3 done (`wayland.c`
 deleted, 370 → 0; only generated listener tables and `add_listener()`
 forwarders stay in `wayland-shim.c`). All module ports are finished: the
 only C left is `slave`'s 64-line `execvpe()` and `config`'s 35-line regex
-wrapper. What remains is the shim sweep (§12.9 — in progress:
-`doc/shim-audit.md`) and E2/E3 (in progress: `doc/endgame-verification.md`,
-ASAN matrix, `ReleaseSafe` call, tag). Note the shim count *grew* during
-D2/D3 (2,465 → 3,417) because generated protocol inlines need forwarders —
-the sweep deletes only the mirrors (§12.9).
+wrapper. **E2/E3 done** (`doc/endgame-verification.md`: matrix, valgrind,
+ReleaseSafe measurement, the two remaining-C write-ups, ASAN caveat); what is
+left is the shim sweep (§12.9, `doc/shim-audit.md`) and the tag. Note the shim
+count *grew* during D2/D3 (2,465 → 3,417) because generated protocol inlines
+need forwarders — the sweep deletes only the mirrors (§12.9).
 
 **Total: ≈27–33 dev-days ≈ 5.5–6.5 weeks solo**, or ≈3 weeks with three
 workers (D3 tail ∥ D4a–b ∥ D5). The old "6–7 weeks total" headline in §13 is
