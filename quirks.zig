@@ -15,15 +15,7 @@ const types = @import("terminal_types.zig");
 
 const LOG_CLASS_WARNING: c_int = 2;
 
-/// wayland.h: enum csd_mode
-const CSD_YES: c_int = 2;
-
 extern fn getenv(name: [*:0]const u8) ?[*:0]u8;
-
-extern fn terminal_shim_window_csd_mode(term: *types.Terminal) c_int;
-extern fn terminal_shim_window_is_fullscreen(term: *types.Terminal) bool;
-extern fn terminal_shim_window_csd_surface_count() c_int;
-extern fn terminal_shim_window_csd_sub(term: *types.Terminal, idx: c_int) ?*anyopaque;
 
 extern fn quirk_shim_subsurface_set_desync(sub: *anyopaque) void;
 extern fn quirk_shim_subsurface_set_sync(sub: *anyopaque) void;
@@ -73,26 +65,32 @@ export fn quirk_weston_subsurface_desync_off(sub: ?*anyopaque) callconv(.c) void
     quirk_shim_subsurface_set_sync(sub orelse return);
 }
 
+/// The CSD subsurfaces the workaround walks. Returns null when the window is
+/// missing (the headless harness runs without one), which is also the case
+/// where the quirk must stay inert.
+fn csdSurfaces(term: *types.Terminal) ?[]types.WaylSubSurface {
+    const win = term.window orelse return null;
+    return &win.csd.surface;
+}
+
 export fn quirk_weston_csd_on(term: *types.Terminal) callconv(.c) void {
-    if (terminal_shim_window_csd_mode(term) != CSD_YES)
+    const win = term.window orelse return;
+    if (win.csd_mode != .yes)
         return;
-    if (terminal_shim_window_is_fullscreen(term))
+    if (win.is_fullscreen)
         return;
 
-    const count = terminal_shim_window_csd_surface_count();
-    var i: c_int = 0;
-    while (i < count) : (i += 1)
-        quirk_weston_subsurface_desync_on(terminal_shim_window_csd_sub(term, i));
+    for (csdSurfaces(term) orelse return) |*surf|
+        quirk_weston_subsurface_desync_on(surf.sub);
 }
 
 export fn quirk_weston_csd_off(term: *types.Terminal) callconv(.c) void {
-    if (terminal_shim_window_csd_mode(term) != CSD_YES)
+    const win = term.window orelse return;
+    if (win.csd_mode != .yes)
         return;
-    if (terminal_shim_window_is_fullscreen(term))
+    if (win.is_fullscreen)
         return;
 
-    const count = terminal_shim_window_csd_surface_count();
-    var i: c_int = 0;
-    while (i < count) : (i += 1)
-        quirk_weston_subsurface_desync_off(terminal_shim_window_csd_sub(term, i));
+    for (csdSurfaces(term) orelse return) |*surf|
+        quirk_weston_subsurface_desync_off(surf.sub);
 }

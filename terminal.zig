@@ -433,24 +433,46 @@ export fn load_fonts_from_conf(term: *types.Terminal) callconv(.c) bool {
 //
 // Chunk T9d — DPI and subpixel selection.
 //
-// The policy lives here; the Wayland data it needs (the monitor tlls, the
-// window scale fields) stays behind terminal-shim.c accessors until
-// wayland.c is ported. That is deliberate: mirroring struct monitor and two
-// tllists now would duplicate the phase-3 work and add ABI surface for four
-// floats and an enum.
+// The policy lives here; the Wayland data it needs now comes straight from
+// the struct mirrors (Track B), so no terminal-shim.c accessors remain.
 //
 
-const Monitor = opaque {};
+/// tll_back() of win->on_outputs: the last output the window is mapped on.
+fn windowLastOutput(term: *const types.Terminal) ?*const types.Monitor {
+    const win = term.window orelse return null;
+    if (win.on_outputs.length == 0)
+        return null;
 
-extern fn terminal_shim_window_last_output(term: *const types.Terminal) callconv(.c) ?*const Monitor;
-extern fn terminal_shim_first_monitor(term: *const types.Terminal) callconv(.c) ?*const Monitor;
-extern fn terminal_shim_monitor_scale(mon: *const Monitor) callconv(.c) f32;
-extern fn terminal_shim_monitor_dpi_physical(mon: *const Monitor) callconv(.c) f32;
-extern fn terminal_shim_monitor_dpi_scaled(mon: *const Monitor) callconv(.c) f32;
-extern fn terminal_shim_monitor_subpixel(mon: *const Monitor) callconv(.c) c_int;
-extern fn terminal_shim_has_fractional_scale_manager(term: *const types.Terminal) callconv(.c) bool;
-extern fn terminal_shim_window_scale(term: *const types.Terminal) callconv(.c) f32;
-extern fn terminal_shim_window_preferred_buffer_scale(term: *const types.Terminal) callconv(.c) c_int;
+    const node: *const types.TllNode(?*const types.Monitor) =
+        @ptrCast(@alignCast(win.on_outputs.tail.?));
+    return node.item;
+}
+
+/// tll_front() of wayl->monitors: the first available output.
+fn firstMonitor(term: *const types.Terminal) ?*types.Monitor {
+    const wayl = term.wl orelse return null;
+    if (wayl.monitors.length == 0)
+        return null;
+
+    const node: *types.TllNode(types.Monitor) =
+        @ptrCast(@alignCast(wayl.monitors.head.?));
+    return &node.item;
+}
+
+fn hasFractionalScaleManager(term: *const types.Terminal) bool {
+    const wayl = term.wl orelse return false;
+    return wayl.fractional_scale_manager != null and wayl.viewporter != null;
+}
+
+fn windowScale(term: *const types.Terminal) f32 {
+    const win = term.window orelse return 0.0;
+    return win.scale;
+}
+
+fn windowPreferredBufferScale(term: *const types.Terminal) c_int {
+    const win = term.window orelse return 0;
+    return win.preferred_buffer_scale;
+}
 
 // fcft_subpixel and wl_output_subpixel have the same ordering, but map
 // explicitly: a change in either enum must not silently change rendering.
@@ -469,16 +491,16 @@ const WL_OUTPUT_SUBPIXEL_VERTICAL_RGB: c_int = 4;
 const WL_OUTPUT_SUBPIXEL_VERTICAL_BGR: c_int = 5;
 
 export fn term_fractional_scaling(term: *const types.Terminal) callconv(.c) bool {
-    return terminal_shim_has_fractional_scale_manager(term) and
-        terminal_shim_window_scale(term) > 0.0;
+    return hasFractionalScaleManager(term) and
+        windowScale(term) > 0.0;
 }
 
 export fn term_preferred_buffer_scale(term: *const types.Terminal) callconv(.c) bool {
-    return terminal_shim_window_preferred_buffer_scale(term) > 0;
+    return windowPreferredBufferScale(term) > 0;
 }
 
 fn getFontDpi(term: *const types.Terminal) f32 {
-    var mon = terminal_shim_window_last_output(term);
+    var mon = windowLastOutput(term);
 
     if (mon == null) {
         // Prefer the last known good DPI; avoids flicker when a window is
@@ -486,14 +508,14 @@ fn getFontDpi(term: *const types.Terminal) f32 {
         if (term.font_dpi_before_unmap > 0.0)
             return term.font_dpi_before_unmap;
 
-        mon = terminal_shim_first_monitor(term);
+        mon = firstMonitor(term);
     }
 
     const monitor_dpi: f32 = if (mon) |m|
         if (term_fractional_scaling(term))
-            terminal_shim_monitor_dpi_physical(m)
+            m.dpi.physical
         else
-            terminal_shim_monitor_dpi_scaled(m)
+            m.dpi.scaled
     else
         96.0;
 
@@ -511,10 +533,10 @@ fn getFontSubpixel(term: *const types.Terminal) c_int {
 
     var wl_subpixel: c_int = undefined;
 
-    if (terminal_shim_window_last_output(term)) |m|
-        wl_subpixel = terminal_shim_monitor_subpixel(m)
-    else if (terminal_shim_first_monitor(term)) |m|
-        wl_subpixel = terminal_shim_monitor_subpixel(m)
+    if (windowLastOutput(term)) |m|
+        wl_subpixel = @intFromEnum(m.subpixel)
+    else if (firstMonitor(term)) |m|
+        wl_subpixel = @intFromEnum(m.subpixel)
     else
         wl_subpixel = WL_OUTPUT_SUBPIXEL_UNKNOWN;
 
@@ -535,15 +557,15 @@ export fn get_font_subpixel(term: *const types.Terminal) callconv(.c) c_int {
 
 export fn term_update_scale(term: *types.Terminal) callconv(.c) bool {
     const new_scale: f32 = if (term_fractional_scaling(term))
-        terminal_shim_window_scale(term)
+        windowScale(term)
     else if (term_preferred_buffer_scale(term))
-        @floatFromInt(terminal_shim_window_preferred_buffer_scale(term))
-    else if (terminal_shim_window_last_output(term)) |m|
-        terminal_shim_monitor_scale(m)
+        @floatFromInt(windowPreferredBufferScale(term))
+    else if (windowLastOutput(term)) |m|
+        @floatFromInt(m.scale)
     else if (term.scale_before_unmap > 0.0)
         term.scale_before_unmap
-    else if (terminal_shim_first_monitor(term)) |m|
-        terminal_shim_monitor_scale(m)
+    else if (firstMonitor(term)) |m|
+        @floatFromInt(m.scale)
     else
         1.0;
 
@@ -1028,8 +1050,6 @@ extern fn timerfd_settime(fd: c_int, flags: c_int, new_value: *const types.Itime
 extern fn read(fd: c_int, buf: *anyopaque, count: usize) callconv(.c) isize;
 extern fn close(fd: c_int) callconv(.c) c_int;
 extern fn __errno_location() callconv(.c) *c_int;
-extern fn terminal_shim_window_surface(term: *types.Terminal) callconv(.c) ?*anyopaque;
-extern fn terminal_shim_window_is_configured(term: *types.Terminal) callconv(.c) bool;
 extern fn terminal_shim_grid_row_in_view(grid: *types.Grid, row: c_int) callconv(.c) ?*types.Row;
 extern fn terminal_shim_wl_surface_commit(surf: ?*anyopaque) callconv(.c) void;
 
@@ -1071,8 +1091,8 @@ export fn fdm_flash(fdm_opaque: *anyopaque, fd: c_int, events: c_int, data: ?*an
     term.flash.active = false;
     render_overlay(term);
 
-    const surf = terminal_shim_window_surface(term);
-    if (surf) |s| terminal_shim_wl_surface_commit(s);
+    if (term.window) |win|
+        terminal_shim_wl_surface_commit(win.surface.surf);
     return true;
 }
 
@@ -1144,7 +1164,8 @@ export fn term_arm_blink_timer(term: *types.Terminal) callconv(.c) void {
 
 // ── cursor_refresh ──────────────────────────────────────────────
 export fn cursor_refresh(term: *types.Terminal) callconv(.c) void {
-    if (!terminal_shim_window_is_configured(term)) return;
+    const win = term.window orelse return;
+    if (!win.is_configured) return;
     if (term.shutdown.in_progress) return;
 
     const grid = term.grid.?;
@@ -2643,7 +2664,6 @@ extern fn render_refresh_title(term: *types.Terminal) callconv(.c) void;
 extern fn render_refresh_icon(term: *types.Terminal) callconv(.c) void;
 extern fn render_refresh_app_id(term: *types.Terminal) callconv(.c) void;
 extern fn term_xcursor_update(term: *types.Terminal) callconv(.c) void;
-extern fn terminal_shim_window_is_suspended(term: *types.Terminal) callconv(.c) bool;
 extern fn xstrdup(s: [*:0]const u8) callconv(.c) ?[*:0]u8;
 
 export fn term_osc8_open(term: *types.Terminal, id: u64, uri: [*:0]const u8) void {
@@ -2682,7 +2702,7 @@ export fn term_set_user_mouse_cursor(term: *types.Terminal, cursor: ?[*:0]const 
 
 export fn term_send_visibility_report(term: *types.Terminal) void {
     // Both reports are 9 bytes; see also term_to_slave()'s length cast.
-    const report = if (terminal_shim_window_is_suspended(term))
+    const report = if (term.window != null and term.window.?.is_suspended)
         "\x1b[?999;2n"
     else
         "\x1b[?999;1n";

@@ -27,22 +27,13 @@
 
 /* struct seat is wayland.h's business; unicode-mode.zig only reads one flag
  * and sets one keysym. */
-bool terminal_shim_seat_kbd_ctrl(const struct seat *seat) {
-    return seat->kbd.ctrl;
-}
 
-void terminal_shim_seat_set_last_shortcut_sym(struct seat *seat, uint32_t sym) {
-    seat->kbd.last_shortcut_sym = sym;
-}
 
 /* MB_CUR_MAX is a C macro (it expands to a thread-local lookup). */
 size_t terminal_shim_mb_cur_max(void) {
     return MB_CUR_MAX;
 }
 
-struct wl_surface *terminal_shim_window_surface(struct terminal *term) {
-    return term->window->surface.surf;
-}
 
 /* urls_mode_is_active() is static inline in url-mode.h. */
 bool terminal_shim_urls_mode_active(const struct terminal *term) {
@@ -51,32 +42,12 @@ bool terminal_shim_urls_mode_active(const struct terminal *term) {
 
 /* The null checks are defensive: in foot itself `window` is always set, but
  * the headless harness runs these paths without a wayland window. */
-bool terminal_shim_window_is_suspended(struct terminal *term) {
-    return term->window != NULL && term->window->is_suspended;
-}
 
-bool terminal_shim_window_is_configured(struct terminal *term) {
-    return term->window != NULL && term->window->is_configured;
-}
 
 /* quirks.zig: the CSD subsurfaces the weston workaround walks. */
-int terminal_shim_window_csd_mode(struct terminal *term) {
-    return term->window != NULL ? term->window->csd_mode : 0;
-}
 
-bool terminal_shim_window_is_fullscreen(struct terminal *term) {
-    return term->window != NULL && term->window->is_fullscreen;
-}
 
-int terminal_shim_window_csd_surface_count(void) {
-    return CSD_SURF_COUNT;
-}
 
-struct wl_subsurface *terminal_shim_window_csd_sub(struct terminal *term, int idx) {
-    if (term->window == NULL || idx < 0 || idx >= CSD_SURF_COUNT)
-        return NULL;
-    return term->window->csd.surface[idx].sub;
-}
 
 void quirk_shim_subsurface_set_desync(struct wl_subsurface *sub) {
     wl_subsurface_set_desync(sub);
@@ -272,55 +243,4 @@ terminal_shim_fcft_font_options_configure(
         options->color_glyphs.format = PIXMAN_rgba_float;
 #endif
     }
-}
-
-/* ── output/scale accessors (terminal.zig DPI logic) ──────────────── */
-
-/* terminal.zig owns the DPI/scale policy; these keep struct monitor and the
- * two monitor tllists on the C side until wayland.c is ported. */
-
-const struct monitor *
-terminal_shim_window_last_output(const struct terminal *term)
-{
-    if (term->window == NULL || tll_length(term->window->on_outputs) == 0)
-        return NULL;
-    return tll_back(term->window->on_outputs);
-}
-
-const struct monitor *
-terminal_shim_first_monitor(const struct terminal *term)
-{
-    if (term->wl == NULL || tll_length(term->wl->monitors) == 0)
-        return NULL;
-    return &tll_front(term->wl->monitors);
-}
-
-float terminal_shim_monitor_scale(const struct monitor *mon) {
-    return mon->scale;
-}
-
-float terminal_shim_monitor_dpi_physical(const struct monitor *mon) {
-    return mon->dpi.physical;
-}
-
-float terminal_shim_monitor_dpi_scaled(const struct monitor *mon) {
-    return mon->dpi.scaled;
-}
-
-int terminal_shim_monitor_subpixel(const struct monitor *mon) {
-    return mon->subpixel;
-}
-
-bool terminal_shim_has_fractional_scale_manager(const struct terminal *term) {
-    return term->wl != NULL &&
-           term->wl->fractional_scale_manager != NULL &&
-           term->wl->viewporter != NULL;
-}
-
-float terminal_shim_window_scale(const struct terminal *term) {
-    return term->window != NULL ? term->window->scale : 0.0f;
-}
-
-int terminal_shim_window_preferred_buffer_scale(const struct terminal *term) {
-    return term->window != NULL ? term->window->preferred_buffer_scale : 0;
 }

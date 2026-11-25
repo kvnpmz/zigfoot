@@ -4,9 +4,9 @@ const types = @import("terminal_types.zig");
 //
 // unicode-mode.c ported to Zig: the Ctrl+Shift+u hexadecimal input mode.
 //
-// struct seat lives in wayland.h and is not mirrored, so the two keyboard
-// fields this file touches (kbd.ctrl and kbd.last_shortcut_sym) come from
-// accessors in terminal-shim.c, and MB_CUR_MAX (a C macro) is asked for.
+// struct seat is mirrored in terminal_types.zig (chunk B2), so the two
+// keyboard fields this file touches are read directly;
+// MB_CUR_MAX is still a C macro and comes from terminal-shim.c.
 //
 
 const LOG_CLASS_DEBUG: c_int = 4;
@@ -26,8 +26,6 @@ extern fn search_add_chars(term: *types.Terminal, text: [*]const u8, len: usize)
 extern fn search_find_next(term: *types.Terminal, direction: c_int) callconv(.c) void;
 extern fn term_to_slave(term: *types.Terminal, data: *const anyopaque, len: usize) callconv(.c) bool;
 
-extern fn terminal_shim_seat_kbd_ctrl(seat: *const anyopaque) callconv(.c) bool;
-extern fn terminal_shim_seat_set_last_shortcut_sym(seat: *anyopaque, sym: u32) callconv(.c) void;
 extern fn terminal_shim_mb_cur_max() callconv(.c) usize;
 
 const MbState = opaque {};
@@ -93,7 +91,7 @@ export fn unicode_mode_updated(term: ?*types.Terminal) callconv(.c) void {
 }
 
 export fn unicode_mode_input(
-    seat: *anyopaque,
+    seat: *types.Seat,
     term: *types.Terminal,
     sym: u32,
 ) callconv(.c) void {
@@ -125,14 +123,14 @@ export fn unicode_mode_input(
             }
         }
 
-        terminal_shim_seat_set_last_shortcut_sym(seat, sym);
+        seat.kbd.last_shortcut_sym = sym;
         unicode_mode_deactivate(term);
     } else if (sym == XKB_KEY_Escape or
         sym == XKB_KEY_q or
-        (terminal_shim_seat_kbd_ctrl(seat) and
+        (seat.kbd.ctrl and
             (sym == XKB_KEY_c or sym == XKB_KEY_d or sym == XKB_KEY_g)))
     {
-        terminal_shim_seat_set_last_shortcut_sym(seat, sym);
+        seat.kbd.last_shortcut_sym = sym;
         unicode_mode_deactivate(term);
     } else if (sym == XKB_KEY_BackSpace) {
         if (term.unicode_mode.count > 0) {
