@@ -3547,6 +3547,37 @@ test_wayland_misc(void)
     cwin.is_fullscreen = true;
     csd_reload_font(&cwin, -1.0f);
     check(cwin.csd.font == NULL, "no CSD font is loaded while fullscreen");
+
+    /* monitor_destroy() frees every string and tolerates absent globals */
+    struct monitor mon2 = {0};
+    mon2.make = xstrdup("make");
+    mon2.model = xstrdup("model");
+    mon2.name = xstrdup("NAME-1");
+    mon2.description = xstrdup("desc");
+    monitor_destroy(&mon2);
+    check(true, "monitor_destroy() frees the strings and survives no wl objects");
+
+    /* update_term_for_output_change() walks on_outputs; a shut-down terminal
+     * is skipped, which is what keeps the harness out of the render code. */
+    struct wayland wl2 = {0};
+    struct terminal t2 = {0};
+    struct config c2 = {0};
+    struct wl_window w2 = {0};
+
+    t2.conf = &c2;
+    t2.wl = &wl2;
+    mon2.wayl = &wl2;
+    t2.window = &w2;
+    t2.shutdown.in_progress = true;
+    w2.term = &t2;
+    tll_push_back(w2.on_outputs, &mon2);
+    tll_push_back(wl2.terms, &t2);
+
+    output_done(&mon2, NULL);
+    check(true, "output_done() skips terminals that are shutting down");
+
+    tll_free(w2.on_outputs);
+    tll_free(wl2.terms);
 }
 
 int

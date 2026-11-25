@@ -309,6 +309,21 @@ bool terminal_shim_hasc32upper(const char32_t *s)
 }
 
 /* Generated-protocol static inlines (wayland.zig cannot see them). */
+void wayland_shim_zxdg_output_destroy(struct zxdg_output_v1 *xdg_output)
+{
+    zxdg_output_v1_destroy(xdg_output);
+}
+
+void wayland_shim_wl_output_destroy(struct wl_output *output)
+{
+    wl_output_destroy(output);
+}
+
+void wayland_shim_wl_output_release(struct wl_output *output)
+{
+    wl_output_release(output);
+}
+
 struct wl_surface *wayland_shim_compositor_create_surface(
     struct wl_compositor *compositor)
 {

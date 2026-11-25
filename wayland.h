@@ -601,3 +601,8 @@ void xdg_output_handle_description(
 
 void clock_id(
     void *data, struct wp_presentation *wp_presentation, uint32_t clk_id);
+void output_done(void *data, struct wl_output *wl_output);
+void xdg_output_handle_done(
+    void *data, struct zxdg_output_v1 *xdg_output);
+void update_term_for_output_change(struct terminal *term);
+void monitor_destroy(struct monitor *mon);

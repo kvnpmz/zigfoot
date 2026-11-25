@@ -346,80 +346,6 @@ static const struct wl_seat_listener seat_listener = {
     .name = seat_handle_name,
 };
 
-static void
-update_term_for_output_change(struct terminal *term)
-{
-    const float old_scale = term->scale;
-    const float logical_width = term->width / old_scale;
-    const float logical_height = term->height / old_scale;
-
-    /* Note: order matters! term_update_scale() must come first */
-    bool scale_updated = term_update_scale(term);
-    bool fonts_updated = term_font_dpi_changed(term, old_scale);
-    term_font_subpixel_changed(term);
-
-    csd_reload_font(term->window, old_scale);
-
-    enum resize_options resize_opts = RESIZE_KEEP_GRID;
-
-    if (fonts_updated) {
-        /*
-         * If the fonts have been updated, the cell dimensions have
-         * changed. This requires a "forced" resize, since the surface
-         * buffer dimensions may not have been updated (in which case
-         * render_resize() normally shortcuts and returns early).
-         */
-        resize_opts |= RESIZE_FORCE;
-    } else if (!scale_updated) {
-        /* No need to resize if neither scale nor fonts have changed */
-        return;
-    } else if (term->conf->dpi_aware) {
-        /*
-         * If fonts are sized according to DPI, it is possible for the
-         * cell size to remain the same when display scale
-         * changes. This will not change the surface buffer
-         * dimensions, but will change the logical size of the
-         * window. To ensure that the compositor is made aware o the
-         * proper logical size, force a resize rather than allowing
-         * render_resize() to shortcut the notification if the buffer
-         * dimensions remain the same.
-         */
-        resize_opts |= RESIZE_FORCE;
-    }
-
-    render_resize(
-        term,
-        (int)roundf(logical_width),
-        (int)roundf(logical_height),
-        resize_opts);
-}
-
-static void
-update_terms_on_monitor(struct monitor *mon)
-{
-    struct wayland *wayl = mon->wayl;
-
-    tll_foreach(wayl->terms, it) {
-        struct terminal *term = it->item;
-        if (unlikely(term->shutdown.in_progress))
-            continue;
-
-        tll_foreach(term->window->on_outputs, it2) {
-            if (it2->item == mon) {
-                update_term_for_output_change(term);
-                break;
-            }
-        }
-    }
-}
-
-static void
-output_done(void *data, struct wl_output *wl_output)
-{
-    struct monitor *mon = data;
-    update_terms_on_monitor(mon);
-}
-
 static const struct wl_output_listener output_listener = {
     .geometry = &output_geometry,
     .mode = &output_mode,
@@ -432,13 +358,6 @@ static const struct wl_output_listener output_listener = {
     .description = &output_description,
 #endif
 };
-
-static void
-xdg_output_handle_done(void *data, struct zxdg_output_v1 *xdg_output)
-{
-    struct monitor *mon = data;
-    update_terms_on_monitor(mon);
-}
 
 static const struct zxdg_output_v1_listener xdg_output_listener = {
     .logical_position = xdg_output_handle_logical_position,
@@ -1409,22 +1328,6 @@ handle_global(void *data, struct wl_registry *registry,
 
 }
 
-static void
-monitor_destroy(struct monitor *mon)
-{
-    if (mon->xdg != NULL)
-        zxdg_output_v1_destroy(mon->xdg);
-    if (mon->output != NULL) {
-        if (mon->use_output_release)
-            wl_output_release(mon->output);
-        else
-            wl_output_destroy(mon->output);
-    }
-    free(mon->make);
-    free(mon->model);
-    free(mon->name);
-    free(mon->description);
-}
 
 static void
 handle_global_remove(void *data, struct wl_registry *registry, uint32_t name)

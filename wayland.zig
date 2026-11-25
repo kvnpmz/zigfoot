@@ -6,6 +6,7 @@
 
 const std = @import("std");
 const types = @import("terminal_types.zig");
+const tll = @import("tll.zig");
 
 const LOG_CLASS_WARNING: c_int = 2;
 const LOG_CLASS_DEBUG: c_int = 4;
@@ -839,4 +840,117 @@ export fn csd_destroy(win: *types.WlWindow) callconv(.c) void {
 
 export fn csd_reload_font(win: *types.WlWindow, old_scale: f32) callconv(.c) void {
     csdReloadFont(win, old_scale);
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Monitor lifecycle / output changes
+// ─────────────────────────────────────────────────────────────────────────
+
+extern fn wayland_shim_zxdg_output_destroy(xdg: ?*anyopaque) callconv(.c) void;
+extern fn wayland_shim_wl_output_release(output: ?*anyopaque) callconv(.c) void;
+extern fn wayland_shim_wl_output_destroy(output: ?*anyopaque) callconv(.c) void;
+extern fn term_update_scale(term: *types.Terminal) callconv(.c) bool;
+extern fn term_font_dpi_changed(term: *types.Terminal, old_scale: f32) callconv(.c) bool;
+extern fn term_font_subpixel_changed(term: *types.Terminal) callconv(.c) void;
+extern fn render_resize(term: *types.Terminal, width: c_int, height: c_int, opts: c_int) callconv(.c) void;
+
+// render.h: enum resize_options
+const RESIZE_KEEP_GRID: c_int = 0x0;
+const RESIZE_FORCE: c_int = 0x1;
+
+export fn monitor_destroy(mon: *types.Monitor) callconv(.c) void {
+    if (mon.xdg != null)
+        wayland_shim_zxdg_output_destroy(mon.xdg);
+    if (mon.output != null) {
+        if (mon.use_output_release)
+            wayland_shim_wl_output_release(mon.output)
+        else
+            wayland_shim_wl_output_destroy(mon.output);
+    }
+    freeString(mon.make);
+    freeString(mon.model);
+    freeString(mon.name);
+    freeString(mon.description);
+}
+
+fn updateTermForOutputChange(term: *types.Terminal) void {
+    const old_scale = term.scale;
+    const logical_width = @as(f32, @floatFromInt(term.width)) / old_scale;
+    const logical_height = @as(f32, @floatFromInt(term.height)) / old_scale;
+
+    // Note: order matters! term_update_scale() must come first
+    const scale_updated = term_update_scale(term);
+    const fonts_updated = term_font_dpi_changed(term, old_scale);
+    term_font_subpixel_changed(term);
+
+    csd_reload_font(term.window.?, old_scale);
+
+    var resize_opts: c_int = RESIZE_KEEP_GRID;
+
+    if (fonts_updated) {
+        // If the fonts have been updated, the cell dimensions have
+        // changed. This requires a "forced" resize, since the surface
+        // buffer dimensions may not have been updated (in which case
+        // render_resize() normally shortcuts and returns early).
+        resize_opts |= RESIZE_FORCE;
+    } else if (!scale_updated) {
+        // No need to resize if neither scale nor fonts have changed
+        return;
+    } else if (term.conf.?.dpi_aware) {
+        // If fonts are sized according to DPI, it is possible for the
+        // cell size to remain the same when display scale changes. This
+        // will not change the surface buffer dimensions, but will change
+        // the logical size of the window, so force a resize.
+        resize_opts |= RESIZE_FORCE;
+    }
+
+    render_resize(
+        term,
+        @intFromFloat(@round(logical_width)),
+        @intFromFloat(@round(logical_height)),
+        resize_opts,
+    );
+}
+
+fn updateTermsOnMonitor(mon: *types.Monitor) void {
+    const wayl: *types.Wayland = @ptrCast(@alignCast(mon.wayl.?));
+
+    // terminal_types.zig mirrors only the three-word tll head; the operating
+    // list type (with iteration) is tll.zig's.
+    const TerminalList = tll.Tll(?*anyopaque);
+    const terms: *const TerminalList = @ptrCast(&wayl.terms);
+
+    var it = (@constCast(terms)).foreach();
+    while (it.next()) |node| {
+        const term: *types.Terminal = @ptrCast(@alignCast(node.item.?));
+        if (term.shutdown.in_progress)
+            continue;
+
+        const OutputList = tll.Tll(?*const types.Monitor);
+        const outputs: *const OutputList = @ptrCast(&term.window.?.on_outputs);
+
+        var it2 = (@constCast(outputs)).foreach();
+        while (it2.next()) |node2| {
+            if (node2.item == mon) {
+                updateTermForOutputChange(term);
+                break;
+            }
+        }
+    }
+}
+
+export fn update_term_for_output_change(term: *types.Terminal) callconv(.c) void {
+    updateTermForOutputChange(term);
+}
+
+export fn output_done(data: ?*anyopaque, wl_output: ?*anyopaque) callconv(.c) void {
+    _ = wl_output;
+    const mon: *types.Monitor = @ptrCast(@alignCast(data.?));
+    updateTermsOnMonitor(mon);
+}
+
+export fn xdg_output_handle_done(data: ?*anyopaque, xdg_output: ?*anyopaque) callconv(.c) void {
+    _ = xdg_output;
+    const mon: *types.Monitor = @ptrCast(@alignCast(data.?));
+    updateTermsOnMonitor(mon);
 }
