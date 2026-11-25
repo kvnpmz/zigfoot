@@ -2417,6 +2417,21 @@ test_term_reset(void)
 }
 
 static void
+test_term_init_failure(void)
+{
+    static struct config conf;
+    memset(&conf, 0, sizeof(conf));
+    struct wayland wl = {0};
+
+    /* The pty is opened before anything else is touched, so a bogus path
+     * exercises term_init()'s first error path (and its close_fds cleanup). */
+    struct terminal *term = term_init(
+        &conf, NULL, NULL, &wl, "foot", "/tmp", NULL, "/nonexistent/pty",
+        0, NULL, NULL, 0, NULL, NULL, NULL);
+    check(term == NULL, "a terminal whose pty cannot be opened is not created");
+}
+
+static void
 test_ime(void)
 {
     struct wayland wl = {0};
@@ -3231,6 +3246,7 @@ main(void)
     test_shutdown();
     test_destroy();
     test_term_reset();
+    test_term_init_failure();
     test_quirks();
     test_version_and_features();
     test_log();

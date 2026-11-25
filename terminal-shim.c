@@ -272,3 +272,15 @@ int terminal_shim_wtermsig(int status)
 {
     return WTERMSIG(status);
 }
+
+/* xdg-shell's xdg_toplevel_set_maximized()/set_fullscreen() are static
+ * inlines in the generated protocol header. */
+void terminal_shim_xdg_toplevel_set_maximized(struct xdg_toplevel *toplevel)
+{
+    xdg_toplevel_set_maximized(toplevel);
+}
+void terminal_shim_xdg_toplevel_set_fullscreen(struct xdg_toplevel *toplevel,
+                                               struct wl_output *output)
+{
+    xdg_toplevel_set_fullscreen(toplevel, output);
+}

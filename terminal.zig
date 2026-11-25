@@ -5029,3 +5029,390 @@ export fn term_reset(term: *types.Terminal, hard: bool) callconv(.c) void {
     term.sixel.private_palette = null;
     term.sixel.shared_palette = null;
 }
+//
+// Chunk C7 — term_init(). The last function in terminal.c: open the pty and
+// the timer FDs, register the FDM callbacks, build the terminal from the
+// config, spawn the slave, create the window, load fonts and start the render
+// workers. Everything it calls is either already Zig or a plain C extern.
+//
+
+extern fn ioctl(fd: c_int, request: c_ulong, ...) callconv(.c) c_int;
+extern fn fcntl(fd: c_int, cmd: c_int, ...) callconv(.c) c_int;
+extern fn posix_openpt(flags: c_int) callconv(.c) c_int;
+extern fn key_binding_new_for_conf(mgr: ?*anyopaque, wayl: ?*types.Wayland, conf: ?*const types.Config) callconv(.c) void;
+extern fn shm_chain_new(
+    wayl: ?*types.Wayland,
+    scrollable: bool,
+    pix_instances: usize,
+    desired_bit_depth: c_int,
+    release_cb: ?*const fn (?*anyopaque, ?*anyopaque) callconv(.c) void,
+    cb_data: ?*anyopaque,
+) callconv(.c) ?*anyopaque;
+extern fn render_buffer_release_callback(buf: ?*anyopaque, data: ?*anyopaque) callconv(.c) void;
+extern fn pixman_region32_init(region: *anyopaque) callconv(.c) void;
+extern fn slave_spawn(
+    ptmx: c_int,
+    argc: c_int,
+    cwd: ?[*:0]const u8,
+    argv: ?[*]?[*:0]u8,
+    envp: ?[*]?[*:0]const u8,
+    extra_env_vars: ?*const types.EnvVarList,
+    term_env: ?[*:0]const u8,
+    conf_shell: ?[*:0]const u8,
+    login_shell: bool,
+    notifications: ?*const types.UserNotifications,
+) callconv(.c) c_int;
+extern fn reaper_add(reaper: ?*anyopaque, pid: c_int, cb: *const fn (?*anyopaque, c_int, c_int, ?*anyopaque) callconv(.c) void, cb_data: ?*anyopaque) callconv(.c) void;
+extern fn wayl_win_init(term: *types.Terminal, token: ?[*:0]const u8) callconv(.c) ?*types.WlWindow;
+extern fn terminal_shim_xdg_toplevel_set_maximized(toplevel: ?*anyopaque) callconv(.c) void;
+extern fn terminal_shim_xdg_toplevel_set_fullscreen(toplevel: ?*anyopaque, output: ?*anyopaque) callconv(.c) void;
+
+// terminal.c's PTY_OPEN_FLAGS and the fcntl/ioctl constants, spelled out the
+// way the EPOLL* constants above already are (same values on Linux).
+const O_RDWR: c_int = 0o2;
+const O_NOCTTY: c_int = 0o400;
+const O_NONBLOCK: c_int = 0o4000;
+const F_GETFL: c_int = 3;
+const F_SETFL: c_int = 4;
+const TIOCSWINSZ: c_ulong = 0x5414;
+
+const Winsize = extern struct {
+    ws_row: u16,
+    ws_col: u16,
+    ws_xpixel: u16,
+    ws_ypixel: u16,
+};
+
+fn closeFds(
+    fdm: ?*anyopaque,
+    term: *types.Terminal,
+    ptmx: c_int,
+    flash_fd: c_int,
+    delay_lower_fd: c_int,
+    delay_upper_fd: c_int,
+    app_sync_updates_fd: c_int,
+    title_update_fd: c_int,
+    icon_update_fd: c_int,
+    app_id_update_fd: c_int,
+) ?*types.Terminal {
+    _ = close(ptmx);
+    if (fdm) |fdm_ptr| {
+        _ = fdm_del(fdm_ptr, flash_fd);
+        _ = fdm_del(fdm_ptr, delay_lower_fd);
+        _ = fdm_del(fdm_ptr, delay_upper_fd);
+        _ = fdm_del(fdm_ptr, app_sync_updates_fd);
+        _ = fdm_del(fdm_ptr, title_update_fd);
+        _ = fdm_del(fdm_ptr, icon_update_fd);
+        _ = fdm_del(fdm_ptr, app_id_update_fd);
+    }
+    std.c.free(term);
+    return null;
+}
+
+fn termInitFail(term: *types.Terminal) ?*types.Terminal {
+    term.shutdown.in_progress = true;
+    _ = term_destroy(term);
+    return null;
+}
+
+export fn term_init(
+    conf: *const types.Config,
+    fdm: ?*anyopaque,
+    reaper: ?*anyopaque,
+    wayl: *types.Wayland,
+    foot_exe: ?[*:0]const u8,
+    cwd: ?[*:0]const u8,
+    token: ?[*:0]const u8,
+    pty_path: ?[*:0]const u8,
+    slave_argc: c_int,
+    slave_argv: ?[*]?[*:0]u8,
+    slave_envp: ?[*]?[*:0]const u8,
+    foot_argc: c_int,
+    foot_argv: ?[*]?[*:0]const u8,
+    shutdown_cb: ?*const fn (?*anyopaque, c_int) callconv(.c) void,
+    shutdown_data: ?*anyopaque,
+) callconv(.c) ?*types.Terminal {
+    var flash_fd: c_int = -1;
+    var delay_lower_fd: c_int = -1;
+    var delay_upper_fd: c_int = -1;
+    var app_sync_updates_fd: c_int = -1;
+    var title_update_fd: c_int = -1;
+    var icon_update_fd: c_int = -1;
+    var app_id_update_fd: c_int = -1;
+
+    const term: *types.Terminal = @ptrCast(@alignCast(std.c.malloc(@sizeOf(types.Terminal)) orelse {
+        log_errno(LOG_CLASS_ERROR, "terminal", "terminal.zig", @intCast(@src().line), "malloc() failed");
+        return null;
+    }));
+
+    const ptmx = if (pty_path) |path|
+        open(path, O_RDWR | O_NOCTTY)
+    else
+        posix_openpt(O_RDWR | O_NOCTTY);
+    if (ptmx < 0) {
+        log_errno(LOG_CLASS_ERROR, "terminal", "terminal.zig", @intCast(@src().line), "failed to open PTY");
+        return closeFds(fdm, term, ptmx, flash_fd, delay_lower_fd, delay_upper_fd, app_sync_updates_fd, title_update_fd, icon_update_fd, app_id_update_fd);
+    }
+    flash_fd = timerfd_create(CLOCK_MONOTONIC, TFD_CLOEXEC | TFD_NONBLOCK);
+    if (flash_fd < 0) {
+        log_errno(LOG_CLASS_ERROR, "terminal", "terminal.zig", @intCast(@src().line), "failed to create flash timer FD");
+        return closeFds(fdm, term, ptmx, flash_fd, delay_lower_fd, delay_upper_fd, app_sync_updates_fd, title_update_fd, icon_update_fd, app_id_update_fd);
+    }
+    delay_lower_fd = timerfd_create(CLOCK_MONOTONIC, TFD_CLOEXEC | TFD_NONBLOCK);
+    delay_upper_fd = timerfd_create(CLOCK_MONOTONIC, TFD_CLOEXEC | TFD_NONBLOCK);
+    if (delay_lower_fd < 0 or delay_upper_fd < 0) {
+        log_errno(LOG_CLASS_ERROR, "terminal", "terminal.zig", @intCast(@src().line), "failed to create delayed rendering timer FDs");
+        return closeFds(fdm, term, ptmx, flash_fd, delay_lower_fd, delay_upper_fd, app_sync_updates_fd, title_update_fd, icon_update_fd, app_id_update_fd);
+    }
+
+    app_sync_updates_fd = timerfd_create(CLOCK_MONOTONIC, TFD_CLOEXEC | TFD_NONBLOCK);
+    if (app_sync_updates_fd < 0) {
+        log_errno(LOG_CLASS_ERROR, "terminal", "terminal.zig", @intCast(@src().line), "failed to create application synchronized updates timer FD");
+        return closeFds(fdm, term, ptmx, flash_fd, delay_lower_fd, delay_upper_fd, app_sync_updates_fd, title_update_fd, icon_update_fd, app_id_update_fd);
+    }
+
+    title_update_fd = timerfd_create(CLOCK_MONOTONIC, TFD_CLOEXEC | TFD_NONBLOCK);
+    if (title_update_fd < 0) {
+        log_errno(LOG_CLASS_ERROR, "terminal", "terminal.zig", @intCast(@src().line), "failed to create title update throttle timer FD");
+        return closeFds(fdm, term, ptmx, flash_fd, delay_lower_fd, delay_upper_fd, app_sync_updates_fd, title_update_fd, icon_update_fd, app_id_update_fd);
+    }
+
+    icon_update_fd = timerfd_create(CLOCK_MONOTONIC, TFD_CLOEXEC | TFD_NONBLOCK);
+    if (icon_update_fd < 0) {
+        log_errno(LOG_CLASS_ERROR, "terminal", "terminal.zig", @intCast(@src().line), "failed to create icon update throttle timer FD");
+        return closeFds(fdm, term, ptmx, flash_fd, delay_lower_fd, delay_upper_fd, app_sync_updates_fd, title_update_fd, icon_update_fd, app_id_update_fd);
+    }
+
+    app_id_update_fd = timerfd_create(CLOCK_MONOTONIC, TFD_CLOEXEC | TFD_NONBLOCK);
+    if (app_id_update_fd < 0) {
+        log_errno(LOG_CLASS_ERROR, "terminal", "terminal.zig", @intCast(@src().line), "failed to create app ID update throttle timer FD");
+        return closeFds(fdm, term, ptmx, flash_fd, delay_lower_fd, delay_upper_fd, app_sync_updates_fd, title_update_fd, icon_update_fd, app_id_update_fd);
+    }
+
+    var winsize = Winsize{ .ws_row = 24, .ws_col = 80, .ws_xpixel = 0, .ws_ypixel = 0 };
+    if (ioctl(ptmx, TIOCSWINSZ, &winsize) < 0) {
+        log_errno(LOG_CLASS_ERROR, "terminal", "terminal.zig", @intCast(@src().line), "failed to set initial TIOCSWINSZ");
+        return closeFds(fdm, term, ptmx, flash_fd, delay_lower_fd, delay_upper_fd, app_sync_updates_fd, title_update_fd, icon_update_fd, app_id_update_fd);
+    }
+
+    // Need to register *very* early (before the first failure return), so that
+    // term_destroy() doesn't unref a key-binding we haven't ref'd yet.
+    key_binding_new_for_conf(wayl.key_binding_manager, wayl, conf);
+
+    const ptmx_flags = fcntl(ptmx, F_GETFL);
+    if (ptmx_flags < 0 or fcntl(ptmx, F_SETFL, ptmx_flags | O_NONBLOCK) < 0) {
+        log_errno(LOG_CLASS_ERROR, "terminal", "terminal.zig", @intCast(@src().line), "failed to configure ptmx as non-blocking");
+        return termInitFail(term);
+    }
+
+    // Enable all FDM callbacks *except* ptmx - we can't do that until the
+    // window has been 'configured', since we don't have a size (and thus no
+    // grid) before then.
+    if (!fdm_add(fdm orelse unreachable, flash_fd, EPOLLIN, &fdm_flash, term) or
+        !fdm_add(fdm.?, delay_lower_fd, EPOLLIN, &fdm_delayed_render, term) or
+        !fdm_add(fdm.?, delay_upper_fd, EPOLLIN, &fdm_delayed_render, term) or
+        !fdm_add(fdm.?, app_sync_updates_fd, EPOLLIN, &fdm_app_sync_updates_timeout, term) or
+        !fdm_add(fdm.?, title_update_fd, EPOLLIN, &fdm_title_update_timeout, term) or
+        !fdm_add(fdm.?, icon_update_fd, EPOLLIN, &fdm_icon_update_timeout, term) or
+        !fdm_add(fdm.?, app_id_update_fd, EPOLLIN, &fdm_app_id_update_timeout, term))
+    {
+        return termInitFail(term);
+    }
+
+    const desired_bit_depth: types.ShmBitDepth = if (conf.tweak.surface_bit_depth == .auto)
+        (if (wayl_do_linear_blending(wayl, conf)) .depth16 else .depth8)
+    else
+        conf.tweak.surface_bit_depth;
+
+    const theme: *const types.ColorTheme = switch (conf.initial_color_theme) {
+        .dark => &conf.colors_dark,
+        .light => &conf.colors_light,
+        .color_theme_1, .color_theme_2 => {
+            bug(@src().file, @intCast(@src().line), "term_init", "COLOR_THEME_1/2 should not be used");
+        },
+    };
+
+    // Initialize configure-based terminal attributes. C uses a compound
+    // literal (which zeroes everything not designated); malloc + @memset followed
+    // by the same assignments is identical.
+    @memset(std.mem.asBytes(term), 0);
+
+    term.fdm = fdm;
+    term.reaper = reaper;
+    term.conf = conf;
+    term.slave = -1;
+    term.ptmx = ptmx;
+    term.font_sizes = .{
+        @ptrCast(@alignCast(xmalloc(@sizeOf(types.ConfigFont) * conf.fonts[0].count).?)),
+        @ptrCast(@alignCast(xmalloc(@sizeOf(types.ConfigFont) * conf.fonts[1].count).?)),
+        @ptrCast(@alignCast(xmalloc(@sizeOf(types.ConfigFont) * conf.fonts[2].count).?)),
+        @ptrCast(@alignCast(xmalloc(@sizeOf(types.ConfigFont) * conf.fonts[3].count).?)),
+    };
+    term.font_dpi = 0.0;
+    term.font_dpi_before_unmap = -1.0;
+    // Can't do subpixel rendering on a transparent background
+    term.font_subpixel = if (theme.alpha == 0xffff) FCFT_SUBPIXEL_DEFAULT else FCFT_SUBPIXEL_NONE;
+    term.cursor_keys_mode = .normal;
+    term.keypad_keys_mode = .numerical;
+    term.reverse_wrap = true;
+    term.auto_margin = true;
+    term.scale = 1.0;
+    term.scale_before_unmap = -1.0;
+    term.flash.fd = flash_fd;
+    term.blink.fd = -1;
+
+    term.colors.fg = theme.fg;
+    term.colors.bg = theme.bg;
+    term.colors.alpha = theme.alpha;
+    term.colors.cursor_fg = (if (theme.use_custom.cursor) @as(u32, 1 << 31) else 0) | theme.cursor.text;
+    term.colors.cursor_bg = (if (theme.use_custom.cursor) @as(u32, 1 << 31) else 0) | theme.cursor.cursor;
+    term.colors.selection_fg = theme.selection_fg;
+    term.colors.selection_bg = theme.selection_bg;
+    term.colors.active_theme = conf.initial_color_theme;
+
+    term.origin = .absolute;
+    term.cursor_style = conf.cursor.style;
+    term.cursor_blink.decset = false;
+    term.cursor_blink.deccsusr = conf.cursor.blink.enabled;
+    term.cursor_blink.state = CURSOR_BLINK_ON;
+    term.cursor_blink.fd = -1;
+
+    term.selection.coords.start = .{ .col = -1, .row = -1 };
+    term.selection.coords.end = .{ .col = -1, .row = -1 };
+    term.selection.pivot.start = .{ .col = -1, .row = -1 };
+    term.selection.pivot.end = .{ .col = -1, .row = -1 };
+    term.selection.auto_scroll.fd = -1;
+
+    term.grid = &term.normal;
+    term.alt_scrolling = conf.mouse.alternate_scroll_mode;
+    term.meta.esc_prefix = true;
+    term.meta.eight_bit = true;
+    term.num_lock_modifier = true;
+    term.bell_action_enabled = true;
+    term.wl = wayl;
+
+    term.render.chains.grid = shm_chain_new(wayl, true, 1 + conf.render_worker_count, @intFromEnum(desired_bit_depth), &render_buffer_release_callback, term);
+    term.render.chains.search = shm_chain_new(wayl, false, 1, @intFromEnum(desired_bit_depth), null, null);
+    term.render.chains.scrollback_indicator = shm_chain_new(wayl, false, 1, @intFromEnum(desired_bit_depth), null, null);
+    term.render.chains.render_timer = shm_chain_new(wayl, false, 1, @intFromEnum(desired_bit_depth), null, null);
+    term.render.chains.url = shm_chain_new(wayl, false, 1, @intFromEnum(desired_bit_depth), null, null);
+    term.render.chains.csd = shm_chain_new(wayl, false, 1, @intFromEnum(desired_bit_depth), null, null);
+    term.render.chains.overlay = shm_chain_new(wayl, false, 1, @intFromEnum(desired_bit_depth), null, null);
+
+    term.render.scrollback_lines = conf.scrollback.lines;
+    term.render.app_sync_updates.timer_fd = app_sync_updates_fd;
+    term.render.title.timer_fd = title_update_fd;
+    term.render.icon.timer_fd = icon_update_fd;
+    term.render.app_id.timer_fd = app_id_update_fd;
+    term.render.workers.count = conf.render_worker_count;
+
+    term.delayed_render_timer.is_armed = false;
+    term.delayed_render_timer.lower_fd = delay_lower_fd;
+    term.delayed_render_timer.upper_fd = delay_upper_fd;
+
+    var sixel_flags: SixelFlags = @bitCast(term.sixel._sixel_flags);
+    sixel_flags.scrolling = true;
+    sixel_flags.use_private_palette = true;
+    term.sixel._sixel_flags = @bitCast(sixel_flags);
+    term.sixel.palette_size = SIXEL_MAX_COLORS;
+    term.sixel.max_width = SIXEL_MAX_WIDTH;
+    term.sixel.max_height = SIXEL_MAX_HEIGHT;
+
+    term.shutdown.terminate_timeout_fd = -1;
+    term.shutdown.cb = @ptrCast(shutdown_cb);
+    term.shutdown.cb_data = shutdown_data;
+
+    term.foot_exe = if (foot_exe) |exe| xstrdup(exe) else null;
+    term.cwd = if (cwd) |c| xstrdup(c) else null;
+    term.grapheme_shaping = conf.tweak.grapheme_shaping;
+    term.ime_enabled = true; // meson enforces -Dime=true for Zig builds
+    term.argc = foot_argc;
+    term.argv = @ptrCast(@alignCast(xcalloc(@intCast(foot_argc), @sizeOf(?[*:0]u8)).?));
+
+    if (foot_argv) |argv| {
+        var i: usize = 0;
+        while (i < @as(usize, @intCast(foot_argc))) : (i += 1) {
+            if (argv[i]) |arg|
+                term.argv.?[i] = xstrdup(arg);
+        }
+    }
+
+    pixman_region32_init(@ptrCast(&term.render.last_overlay_clip));
+
+    term_update_ascii_printer(term);
+    @memcpy(&term.colors.table, &theme.table);
+
+    var i: usize = 0;
+    while (i < 4) : (i += 1) {
+        const font_list = conf.fonts[i];
+        const sizes: [*]types.ConfigFont = @ptrCast(term.font_sizes[i].?);
+        const list_arr = font_list.arr orelse continue;
+        var j: usize = 0;
+        while (j < font_list.count) : (j += 1) {
+            sizes[j] = .{ .pattern = null, .pt_size = list_arr[j].pt_size, .px_size = list_arr[j].px_size };
+        }
+    }
+
+    for (&term.notification_icons) |*icon|
+        icon.tmp_file_fd = -1;
+
+    _ = add_utmp_record(conf, reaper, ptmx);
+
+    if (pty_path == null) {
+        // Start the slave/client
+        term.slave = slave_spawn(
+            term.ptmx,
+            slave_argc,
+            term.cwd,
+            slave_argv,
+            slave_envp,
+            &conf.env_vars,
+            conf.term,
+            conf.shell,
+            conf.login_shell,
+            &conf.notifications,
+        );
+        if (term.slave == -1)
+            return termInitFail(term);
+
+        reaper_add(term.reaper, term.slave, &fdm_client_terminated, term);
+    }
+
+    // Guess scale; we're not mapped yet, so we don't know on which output
+    // we'll be. Use the scaling factor from the first monitor.
+    if (wayl.monitors.length > 0) {
+        const node: *const types.TllNode(types.Monitor) = @ptrCast(@alignCast(wayl.monitors.head.?));
+        term.scale = @floatFromInt(node.item.scale);
+    }
+
+    // Initialize the wayland window backend
+    term.window = wayl_win_init(term, token);
+    if (term.window == null)
+        return termInitFail(term);
+
+    // Load fonts
+    if (!term_font_dpi_changed(term, 0.0))
+        return termInitFail(term);
+
+    term.font_subpixel = get_font_subpixel(term);
+
+    if (conf.title) |title|
+        term_set_window_title(term, title);
+
+    // Let the wayland backend know we exist
+    {
+        const terms: *tll.Tll(?*anyopaque) = @ptrCast(@alignCast(&wayl.terms));
+        terms.pushBack(@ptrCast(term));
+    }
+
+    switch (conf.startup_mode) {
+        .windowed => {},
+        .maximized => terminal_shim_xdg_toplevel_set_maximized(term.window.?.xdg_toplevel),
+        .fullscreen => terminal_shim_xdg_toplevel_set_fullscreen(term.window.?.xdg_toplevel, null),
+    }
+
+    if (!initialize_render_workers(term))
+        return termInitFail(term);
+
+    return term;
+}
