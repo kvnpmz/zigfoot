@@ -650,9 +650,9 @@ utmp backends where available.
 
 ## 13. Sequenced backlog (refreshed 2026-11-24)
 
-State: **32,430 of 48,830 C lines gone (66.4%)**, ~51% by effort, 34 modules
-ported, 454 harness assertions, `meson test` 5/5 in three build dirs.
-Remaining C: 16,400 lines, 1,850 of which are `*-shim.c` accessors.
+State: **32,543 of 48,830 C lines gone (66.6%)**, ~52% by effort, 34 modules
+ported, 457 harness assertions, `meson test` 5/5 in three build dirs.
+Remaining C: 16,287 lines, 1,933 of which are `*-shim.c` accessors.
 
 `smoke.sh` now launches **real windows**: weston's headless backend creates no
 `wl_seat`, so foot refused to start ("no seats available"). When `Xvfb` is
@@ -776,7 +776,8 @@ Order matters: `search` and `wayland` first (they unblock the rest), then
 | **D2h** done | `wayland`: `wayl_win_destroy()` — the touch-focus reset, the "unmap every surface, then roundtrip" sequence that makes the compositor drop keyboard/pointer focus, the url/subsurface/CSD teardown, the six `shm_purge()` calls and the activation-token list. 10 new shims; `HAVE_EXT_BACKGROUND_EFFECT` is resolved inside `wayland_shim_destroy_background_effect()` so the conditional stays in C. Every smoke launch destroys a window | D2g | 1d |
 | **D2i** done | `wayland`: `wayl_win_init()` — surface + listener attachment, fractional scale, background effect, alpha region, xdg surface/toplevel, app-id, toplevel tag, icon, colour management (with its three warning variants), the CSD/SSD preference ladder, `wayl_activate()`, then the overlay and render-timer sub-surfaces. The listener *tables* are still `static` in wayland.c, so five tiny `wayland_shim_add_*_listener()` forwarders attach them. The five smoke launches are the regression test: without the listeners attached the window never receives a configure and the launch times out | D2h | 1.5d |
 | **D2j** done | `wayland`: `wayl_win_alpha_changed()` (opaque region, and the blur region with its one-shot "compositor does not support it" warning) plus the XDG activation flow — `wayl_get_activation_token()`, `activation_token_v1_done()` (which had to be renamed: url-mode.c has its own static `activation_token_done`) and `wayl_activate()`. The activation-token listener table stays in C with a forwarder | D2i | 0.5d |
-| **D2k** | `wayland`: `handle_global`/`handle_global_remove`, `wayl_init`/`wayl_destroy`, seat capabilities and the data-device/primary-selection/text-input setup | D2j | 3–4d |
+| **D2k1** done | `wayland`: the seat wiring — `seat_add_data_device()`, `seat_add_primary_selection()`, `seat_add_text_input()` (the `#if FOOT_IME_ENABLED` guard is a constant here, as elsewhere), `seat_add_key_bindings()` and the full `seat_destroy()` teardown (buttons list, xkb objects, repeat timerfd, cursor theme/surface/viewport/callback, clipboard+primary sources/offers/devices, cursor-shape device, keymap/pointer/touch release, text input, seat release, IME pending state, four string frees). The data-device/primary-selection/text-input listener tables live in selection.c and ime.c, so three forwarders attach them. 3 new harness checks incl. the button-list drain | D2j | 1d |
+| **D2k2** | `wayland`: `handle_global`/`handle_global_remove`, `wayl_init`/`wayl_destroy` | D2k1 | 3–4d |
 | **D2d** | `wayland`: `handle_global`/`handle_global_remove`, `wayl_init`/`wayl_destroy`, seat capabilities and data devices | D2c | 3–4d |
 | **D3** | `render` (5,479) — split into D3a chains/damage/cursor, D3b grid/csd/box-drawing glyph cache, D3c sixel/notifications/search-highlight | biggest module; do it after `wayland` so the surface/scale paths are Zig | 1.5–2w |
 | **D4** | `input` (3,687) — split into D4a keyboard/legacy+kitty protocols, D4b pointer/mouse/touch, D4c compose/IME plumbing | after B2 + key-binding | 1–1.5w |

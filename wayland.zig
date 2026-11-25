@@ -1446,3 +1446,173 @@ export fn wayl_activate(wayl: *types.Wayland, win: *types.WlWindow, token: [*c]c
 
     wayland_shim_xdg_activation_activate(wayl.xdg_activation, @ptrCast(token), win.surface.surf);
 }
+
+// ─────────────────────────────────────────────────────────────────────────
+// Seat setup / teardown
+// ─────────────────────────────────────────────────────────────────────────
+
+extern fn wayland_shim_data_device_manager_get_device(m: ?*anyopaque, seat: ?*anyopaque) callconv(.c) ?*anyopaque;
+extern fn wayland_shim_primary_selection_device_manager_get_device(m: ?*anyopaque, seat: ?*anyopaque) callconv(.c) ?*anyopaque;
+extern fn wayland_shim_text_input_manager_get_text_input(m: ?*anyopaque, seat: ?*anyopaque) callconv(.c) ?*anyopaque;
+extern fn wayland_shim_add_data_device_listener(dev: ?*anyopaque, seat: *types.Seat) callconv(.c) void;
+extern fn wayland_shim_add_primary_selection_device_listener(dev: ?*anyopaque, seat: *types.Seat) callconv(.c) void;
+extern fn wayland_shim_add_text_input_listener(ti: ?*anyopaque, seat: *types.Seat) callconv(.c) void;
+extern fn wayland_shim_data_source_destroy(src: ?*anyopaque) callconv(.c) void;
+extern fn wayland_shim_data_offer_destroy(offer: ?*anyopaque) callconv(.c) void;
+extern fn wayland_shim_data_device_release(dev: ?*anyopaque) callconv(.c) void;
+extern fn wayland_shim_primary_selection_source_destroy(src: ?*anyopaque) callconv(.c) void;
+extern fn wayland_shim_primary_selection_offer_destroy(offer: ?*anyopaque) callconv(.c) void;
+extern fn wayland_shim_primary_selection_device_destroy(dev: ?*anyopaque) callconv(.c) void;
+extern fn wayland_shim_cursor_shape_device_destroy(dev: ?*anyopaque) callconv(.c) void;
+extern fn wayland_shim_keyboard_release(kbd: ?*anyopaque) callconv(.c) void;
+extern fn wayland_shim_pointer_release(pointer: ?*anyopaque) callconv(.c) void;
+extern fn wayland_shim_touch_release(touch: ?*anyopaque) callconv(.c) void;
+extern fn wayland_shim_text_input_destroy(ti: ?*anyopaque) callconv(.c) void;
+extern fn wayland_shim_seat_release(seat: ?*anyopaque) callconv(.c) void;
+
+extern fn key_binding_new_for_seat(manager: ?*anyopaque, seat: *types.Seat) callconv(.c) void;
+extern fn key_binding_remove_seat(manager: ?*anyopaque, seat: *types.Seat) callconv(.c) void;
+extern fn xkb_compose_state_unref(state: ?*anyopaque) callconv(.c) void;
+extern fn xkb_compose_table_unref(table: ?*anyopaque) callconv(.c) void;
+extern fn xkb_keymap_unref(keymap: ?*anyopaque) callconv(.c) void;
+extern fn xkb_state_unref(state: ?*anyopaque) callconv(.c) void;
+extern fn xkb_context_unref(context: ?*anyopaque) callconv(.c) void;
+extern fn ime_reset_pending(seat: *types.Seat) callconv(.c) void;
+
+fn seatWayl(seat: *types.Seat) *types.Wayland {
+    return @ptrCast(@alignCast(seat.wayl.?));
+}
+
+export fn seat_add_data_device(seat: *types.Seat) callconv(.c) void {
+    const wayl = seatWayl(seat);
+
+    if (wayl.data_device_manager == null)
+        return;
+
+    if (seat.data_device != null) {
+        // TODO: destroy old device + clipboard data?
+        return;
+    }
+
+    const data_device = wayland_shim_data_device_manager_get_device(
+        wayl.data_device_manager,
+        seat.wl_seat,
+    );
+
+    if (data_device == null)
+        return;
+
+    seat.data_device = data_device;
+    wayland_shim_add_data_device_listener(data_device, seat);
+}
+
+export fn seat_add_primary_selection(seat: *types.Seat) callconv(.c) void {
+    const wayl = seatWayl(seat);
+
+    if (wayl.primary_selection_device_manager == null)
+        return;
+
+    if (seat.primary_selection_device != null)
+        return;
+
+    const dev = wayland_shim_primary_selection_device_manager_get_device(
+        wayl.primary_selection_device_manager,
+        seat.wl_seat,
+    );
+
+    if (dev == null)
+        return;
+
+    seat.primary_selection_device = dev;
+    wayland_shim_add_primary_selection_device_listener(dev, seat);
+}
+
+export fn seat_add_text_input(seat: *types.Seat) callconv(.c) void {
+    const wayl = seatWayl(seat);
+
+    if (wayl.text_input_manager == null)
+        return;
+
+    const text_input = wayland_shim_text_input_manager_get_text_input(
+        wayl.text_input_manager,
+        seat.wl_seat,
+    );
+
+    if (text_input == null)
+        return;
+
+    seat.wl_text_input = text_input;
+    wayland_shim_add_text_input_listener(text_input, seat);
+}
+
+export fn seat_add_key_bindings(seat: *types.Seat) callconv(.c) void {
+    key_binding_new_for_seat(seatWayl(seat).key_binding_manager, seat);
+}
+
+export fn seat_destroy(seat_in: ?*types.Seat) callconv(.c) void {
+    const seat = seat_in orelse return;
+    const wayl = seatWayl(seat);
+
+    {
+        const ButtonList = tll.Tll(types.ButtonTracker);
+        const buttons: *ButtonList = @ptrCast(&seat.mouse.buttons);
+        buttons.freeList();
+    }
+    key_binding_remove_seat(wayl.key_binding_manager, seat);
+
+    if (seat.kbd.xkb_compose_state != null)
+        xkb_compose_state_unref(seat.kbd.xkb_compose_state);
+    if (seat.kbd.xkb_compose_table != null)
+        xkb_compose_table_unref(seat.kbd.xkb_compose_table);
+    if (seat.kbd.xkb_keymap != null)
+        xkb_keymap_unref(seat.kbd.xkb_keymap);
+    if (seat.kbd.xkb_state != null)
+        xkb_state_unref(seat.kbd.xkb_state);
+    if (seat.kbd.xkb != null)
+        xkb_context_unref(seat.kbd.xkb);
+
+    if (seat.kbd.repeat.fd >= 0)
+        _ = fdm_del(wayl.fdm, seat.kbd.repeat.fd);
+
+    if (seat.pointer.theme != null)
+        wl_cursor_theme_destroy(seat.pointer.theme);
+    if (seat.pointer.surface.surf != null)
+        wayland_shim_surface_destroy(seat.pointer.surface.surf);
+    if (seat.pointer.surface.viewport != null)
+        wayland_shim_viewport_destroy(seat.pointer.surface.viewport);
+    if (seat.pointer.xcursor_callback != null)
+        wayland_shim_wl_callback_destroy(seat.pointer.xcursor_callback);
+
+    if (seat.clipboard.data_source != null)
+        wayland_shim_data_source_destroy(seat.clipboard.data_source);
+    if (seat.clipboard.data_offer != null)
+        wayland_shim_data_offer_destroy(seat.clipboard.data_offer);
+    if (seat.primary.data_source != null)
+        wayland_shim_primary_selection_source_destroy(seat.primary.data_source);
+    if (seat.primary.data_offer != null)
+        wayland_shim_primary_selection_offer_destroy(seat.primary.data_offer);
+    if (seat.primary_selection_device != null)
+        wayland_shim_primary_selection_device_destroy(seat.primary_selection_device);
+    if (seat.data_device != null)
+        wayland_shim_data_device_release(seat.data_device);
+    if (seat.pointer.shape_device != null)
+        wayland_shim_cursor_shape_device_destroy(seat.pointer.shape_device);
+    if (seat.wl_keyboard != null)
+        wayland_shim_keyboard_release(seat.wl_keyboard);
+    if (seat.wl_pointer != null)
+        wayland_shim_pointer_release(seat.wl_pointer);
+    if (seat.wl_touch != null)
+        wayland_shim_touch_release(seat.wl_touch);
+
+    if (seat.wl_text_input != null)
+        wayland_shim_text_input_destroy(seat.wl_text_input);
+
+    if (seat.wl_seat != null)
+        wayland_shim_seat_release(seat.wl_seat);
+
+    ime_reset_pending(seat);
+    free(@as(?*anyopaque, @ptrCast(seat.clipboard.text)));
+    free(@as(?*anyopaque, @ptrCast(seat.primary.text)));
+    free(@as(?*anyopaque, @ptrCast(seat.pointer.last_custom_xcursor)));
+    free(@as(?*anyopaque, @ptrCast(seat.name)));
+}

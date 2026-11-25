@@ -3581,6 +3581,31 @@ test_wayland_misc(void)
 
     wayl_win_destroy(NULL);
     check(true, "wayl_win_destroy(NULL) is a no-op");
+
+    /* seat_destroy() walks the mouse-button list and every wl object */
+    struct key_binding_manager *mgr = key_binding_manager_new();
+    struct wayland wl4 = {0};
+    struct seat s4 = {0};
+
+    wl4.key_binding_manager = mgr;
+    s4.wayl = &wl4;
+    s4.name = xstrdup("seat0");
+    s4.clipboard.text = xstrdup("clipboard");
+    s4.kbd.repeat.fd = -1;
+
+    struct button_tracker tracker = {0};
+    tll_push_back(s4.mouse.buttons, tracker);
+    check(tll_length(s4.mouse.buttons) == 1, "the seat has one tracked button");
+
+    seat_destroy(&s4);
+    check(tll_length(s4.mouse.buttons) == 0, "seat_destroy() empties the button list");
+
+    struct seat s5 = {0};
+    s5.kbd.repeat.fd = -1;
+    tll_push_back(s5.mouse.buttons, tracker);
+    seat_destroy(NULL);
+    check(tll_length(s5.mouse.buttons) == 1, "seat_destroy(NULL) leaves other seats alone");
+    tll_free(s5.mouse.buttons);
 }
 
 int

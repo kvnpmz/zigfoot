@@ -609,3 +609,9 @@ void monitor_destroy(struct monitor *mon);
 void activation_token_v1_done(
     void *data, struct xdg_activation_token_v1 *xdg_token,
     const char *token);
+
+void seat_add_data_device(struct seat *seat);
+void seat_add_primary_selection(struct seat *seat);
+void seat_add_text_input(struct seat *seat);
+void seat_add_key_bindings(struct seat *seat);
+void seat_destroy(struct seat *seat);

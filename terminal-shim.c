@@ -357,6 +357,89 @@ void wayland_shim_activation_token_commit(
     xdg_activation_token_v1_commit(token);
 }
 
+/* wayland.zig: seat setup/teardown (D2k). */
+void *wayland_shim_data_device_manager_get_device(
+    struct wl_data_device_manager *m, struct wl_seat *seat)
+{
+    return wl_data_device_manager_get_data_device(m, seat);
+}
+
+void *wayland_shim_primary_selection_device_manager_get_device(
+    struct zwp_primary_selection_device_manager_v1 *m, struct wl_seat *seat)
+{
+    return zwp_primary_selection_device_manager_v1_get_device(m, seat);
+}
+
+void *wayland_shim_text_input_manager_get_text_input(
+    struct zwp_text_input_manager_v3 *m, struct wl_seat *seat)
+{
+    return zwp_text_input_manager_v3_get_text_input(m, seat);
+}
+
+void wayland_shim_data_source_destroy(struct wl_data_source *src)
+{
+    wl_data_source_destroy(src);
+}
+
+void wayland_shim_data_offer_destroy(struct wl_data_offer *offer)
+{
+    wl_data_offer_destroy(offer);
+}
+
+void wayland_shim_data_device_release(struct wl_data_device *dev)
+{
+    wl_data_device_release(dev);
+}
+
+void wayland_shim_primary_selection_source_destroy(
+    struct zwp_primary_selection_source_v1 *src)
+{
+    zwp_primary_selection_source_v1_destroy(src);
+}
+
+void wayland_shim_primary_selection_offer_destroy(
+    struct zwp_primary_selection_offer_v1 *offer)
+{
+    zwp_primary_selection_offer_v1_destroy(offer);
+}
+
+void wayland_shim_primary_selection_device_destroy(
+    struct zwp_primary_selection_device_v1 *dev)
+{
+    zwp_primary_selection_device_v1_destroy(dev);
+}
+
+void wayland_shim_cursor_shape_device_destroy(
+    struct wp_cursor_shape_device_v1 *dev)
+{
+    wp_cursor_shape_device_v1_destroy(dev);
+}
+
+void wayland_shim_keyboard_release(struct wl_keyboard *kbd)
+{
+    wl_keyboard_release(kbd);
+}
+
+void wayland_shim_pointer_release(struct wl_pointer *pointer)
+{
+    wl_pointer_release(pointer);
+}
+
+void wayland_shim_touch_release(struct wl_touch *touch)
+{
+    wl_touch_release(touch);
+}
+
+void wayland_shim_text_input_destroy(struct zwp_text_input_v3 *ti)
+{
+    zwp_text_input_v3_destroy(ti);
+}
+
+void wayland_shim_seat_release(struct wl_seat *seat)
+{
+    wl_seat_release(seat);
+}
+
 void *wayland_shim_fractional_scale_get(struct wp_fractional_scale_manager_v1 *m,
                                         struct wl_surface *surf)
 {

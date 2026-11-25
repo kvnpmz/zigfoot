@@ -36,139 +36,26 @@
 #include "util.h"
 #include "xmalloc.h"
 
-static void
-seat_add_data_device(struct seat *seat)
+/* wayland.zig: the data-device / primary-selection / text-input listener
+ * tables are defined in selection.c and ime.c, so seat setup attaches them
+ * through these. */
+void wayland_shim_add_data_device_listener(
+    struct wl_data_device *dev, struct seat *seat)
 {
-    if (seat->wayl->data_device_manager == NULL)
-        return;
-
-    if (seat->data_device != NULL) {
-        /* TODO: destroy old device + clipboard data? */
-        return;
-    }
-
-    struct wl_data_device *data_device = wl_data_device_manager_get_data_device(
-        seat->wayl->data_device_manager, seat->wl_seat);
-
-    if (data_device == NULL)
-        return;
-
-    seat->data_device = data_device;
-    wl_data_device_add_listener(data_device, &data_device_listener, seat);
+    wl_data_device_add_listener(dev, &data_device_listener, seat);
 }
 
-static void
-seat_add_primary_selection(struct seat *seat)
+void wayland_shim_add_primary_selection_device_listener(
+    struct zwp_primary_selection_device_v1 *dev, struct seat *seat)
 {
-    if (seat->wayl->primary_selection_device_manager == NULL)
-        return;
-
-    if (seat->primary_selection_device != NULL)
-        return;
-
-    struct zwp_primary_selection_device_v1 *primary_selection_device
-        = zwp_primary_selection_device_manager_v1_get_device(
-            seat->wayl->primary_selection_device_manager, seat->wl_seat);
-
-    if (primary_selection_device == NULL)
-        return;
-
-    seat->primary_selection_device = primary_selection_device;
     zwp_primary_selection_device_v1_add_listener(
-        primary_selection_device, &primary_selection_device_listener, seat);
+        dev, &primary_selection_device_listener, seat);
 }
 
-static void
-seat_add_text_input(struct seat *seat)
+void wayland_shim_add_text_input_listener(
+    struct zwp_text_input_v3 *ti, struct seat *seat)
 {
-#if defined(FOOT_IME_ENABLED) && FOOT_IME_ENABLED
-    if (seat->wayl->text_input_manager == NULL)
-        return;
-
-    struct zwp_text_input_v3 *text_input
-        = zwp_text_input_manager_v3_get_text_input(
-            seat->wayl->text_input_manager, seat->wl_seat);
-
-    if (text_input == NULL)
-        return;
-
-    seat->wl_text_input = text_input;
-    zwp_text_input_v3_add_listener(text_input, &text_input_listener, seat);
-#endif
-}
-
-static void
-seat_add_key_bindings(struct seat *seat)
-{
-    key_binding_new_for_seat(seat->wayl->key_binding_manager, seat);
-}
-
-static void
-seat_destroy(struct seat *seat)
-{
-    if (seat == NULL)
-        return;
-
-    tll_free(seat->mouse.buttons);
-    key_binding_remove_seat(seat->wayl->key_binding_manager, seat);
-
-    if (seat->kbd.xkb_compose_state != NULL)
-        xkb_compose_state_unref(seat->kbd.xkb_compose_state);
-    if (seat->kbd.xkb_compose_table != NULL)
-        xkb_compose_table_unref(seat->kbd.xkb_compose_table);
-    if (seat->kbd.xkb_keymap != NULL)
-        xkb_keymap_unref(seat->kbd.xkb_keymap);
-    if (seat->kbd.xkb_state != NULL)
-        xkb_state_unref(seat->kbd.xkb_state);
-    if (seat->kbd.xkb != NULL)
-        xkb_context_unref(seat->kbd.xkb);
-
-    if (seat->kbd.repeat.fd >= 0)
-        fdm_del(seat->wayl->fdm, seat->kbd.repeat.fd);
-
-    if (seat->pointer.theme != NULL)
-        wl_cursor_theme_destroy(seat->pointer.theme);
-    if (seat->pointer.surface.surf != NULL)
-        wl_surface_destroy(seat->pointer.surface.surf);
-    if (seat->pointer.surface.viewport != NULL)
-        wp_viewport_destroy(seat->pointer.surface.viewport);
-    if (seat->pointer.xcursor_callback != NULL)
-        wl_callback_destroy(seat->pointer.xcursor_callback);
-
-    if (seat->clipboard.data_source != NULL)
-        wl_data_source_destroy(seat->clipboard.data_source);
-    if (seat->clipboard.data_offer != NULL)
-        wl_data_offer_destroy(seat->clipboard.data_offer);
-    if (seat->primary.data_source != NULL)
-        zwp_primary_selection_source_v1_destroy(seat->primary.data_source);
-    if (seat->primary.data_offer != NULL)
-        zwp_primary_selection_offer_v1_destroy(seat->primary.data_offer);
-    if (seat->primary_selection_device != NULL)
-        zwp_primary_selection_device_v1_destroy(seat->primary_selection_device);
-    if (seat->data_device != NULL)
-        wl_data_device_release(seat->data_device);
-    if (seat->pointer.shape_device != NULL)
-        wp_cursor_shape_device_v1_destroy(seat->pointer.shape_device);
-    if (seat->wl_keyboard != NULL)
-        wl_keyboard_release(seat->wl_keyboard);
-    if (seat->wl_pointer != NULL)
-        wl_pointer_release(seat->wl_pointer);
-    if (seat->wl_touch != NULL)
-        wl_touch_release(seat->wl_touch);
-
-#if defined(FOOT_IME_ENABLED) && FOOT_IME_ENABLED
-    if (seat->wl_text_input != NULL)
-        zwp_text_input_v3_destroy(seat->wl_text_input);
-#endif
-
-    if (seat->wl_seat != NULL)
-        wl_seat_release(seat->wl_seat);
-
-    ime_reset_pending(seat);
-    free(seat->clipboard.text);
-    free(seat->primary.text);
-    free(seat->pointer.last_custom_xcursor);
-    free(seat->name);
+    zwp_text_input_v3_add_listener(ti, &text_input_listener, seat);
 }
 
 static void
