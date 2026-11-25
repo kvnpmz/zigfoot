@@ -557,3 +557,150 @@ export fn draw_cursor(
     }
 
 }
+
+// ─────────────────────────────────────────────────────────────────────────
+// Cursor dirtiness and the refresh flags (D3b)
+// ─────────────────────────────────────────────────────────────────────────
+
+pub const Timespec = extern struct {
+    tv_sec: isize,
+    tv_nsec: isize,
+};
+
+const Itimerspec = extern struct {
+    it_interval: Timespec,
+    it_value: Timespec,
+};
+
+const CLOCK_MONOTONIC: c_int = 1;
+const LOG_CLASS_DEBUG: c_int = 4;
+
+extern fn clock_gettime(clockid: c_int, tp: *Timespec) callconv(.c) c_int;
+extern fn timerfd_settime(fd: c_int, flags: c_int, new: *const Itimerspec, old: ?*Itimerspec) callconv(.c) c_int;
+extern fn timespec_sub(a: *const Timespec, b: *const Timespec, res: *Timespec) callconv(.c) void;
+extern fn terminal_shim_grid_row(grid: *types.Grid, row_no: c_int) callconv(.c) *types.Row;
+extern fn terminal_shim_urls_mode_active(term: *const Terminal) callconv(.c) bool;
+extern fn render_update_title(term: *Terminal) callconv(.c) void;
+extern fn term_icon(term: *const Terminal) callconv(.c) [*:0]const u8;
+extern fn wayland_shim_xdg_toplevel_set_app_id(toplevel: ?*anyopaque, app_id: [*:0]const u8) callconv(.c) void;
+extern fn wayland_shim_toplevel_icon_set(m: ?*anyopaque, toplevel: ?*anyopaque, name: [*:0]const u8) callconv(.c) void;
+extern fn log_msg(
+    class: c_int,
+    module: [*:0]const u8,
+    file: [*:0]const u8,
+    lineno: c_int,
+    fmt: [*:0]const u8,
+    ...
+) callconv(.c) void;
+
+/// Rate limit for title/app-id/icon updates: at most one update per 8333 µs.
+const UPDATE_INTERVAL_NS: isize = 8333 * 1000;
+
+export fn dirty_old_cursor(term: *Terminal) callconv(.c) void {
+    if (term.render.last_cursor.row != null and !term.render.last_cursor.hidden) {
+        const row = term.render.last_cursor.row.?;
+        const cell = &row.cells.?[@intCast(term.render.last_cursor.col)];
+        cell.attrs.clean = false;
+        row.dirty = true;
+    }
+
+    // Remember current cursor position, for the next frame
+    term.render.last_cursor.row = terminal_shim_grid_row(term.grid.?, term.grid.?.cursor.point.row);
+    term.render.last_cursor.col = term.grid.?.cursor.point.col;
+    term.render.last_cursor.hidden = term.hide_cursor;
+}
+
+export fn dirty_cursor(term: *Terminal) callconv(.c) void {
+    if (term.hide_cursor)
+        return;
+
+    const cursor = &term.grid.?.cursor.point;
+    const row = terminal_shim_grid_row(term.grid.?, cursor.row);
+    const cell = &row.cells.?[@intCast(cursor.col)];
+    cell.attrs.clean = false;
+    row.dirty = true;
+}
+
+export fn render_refresh(term: *Terminal) callconv(.c) void {
+    term.render.refresh.grid = true;
+}
+
+export fn render_refresh_csd(term: *Terminal) callconv(.c) void {
+    if (term.window.?.csd_mode == .yes)
+        term.render.refresh.csd = true;
+}
+
+export fn render_refresh_search(term: *Terminal) callconv(.c) void {
+    if (term.is_searching)
+        term.render.refresh.search = true;
+}
+
+export fn render_refresh_urls(term: *Terminal) callconv(.c) void {
+    if (terminal_shim_urls_mode_active(term))
+        term.render.refresh.urls = true;
+}
+
+fn lastUpdate(raw: *[16]u8) *Timespec {
+    return @ptrCast(@alignCast(raw));
+}
+
+/// Shared by the title/app-id/icon updaters: if the previous update was less
+/// than one interval ago, arm `timer_fd` for the remainder and return false.
+fn rateLimit(last: *Timespec, timer_fd: c_int) bool {
+    var now: Timespec = undefined;
+    if (clock_gettime(CLOCK_MONOTONIC, &now) < 0)
+        return false;
+
+    var diff: Timespec = undefined;
+    timespec_sub(&now, last, &diff);
+
+    if (diff.tv_sec == 0 and diff.tv_nsec < UPDATE_INTERVAL_NS) {
+        const timeout = Itimerspec{
+            .it_interval = .{ .tv_sec = 0, .tv_nsec = 0 },
+            .it_value = .{ .tv_nsec = UPDATE_INTERVAL_NS - diff.tv_nsec, .tv_sec = 0 },
+        };
+        _ = timerfd_settime(timer_fd, 0, &timeout, null);
+        return false;
+    }
+
+    last.* = now;
+    return true;
+}
+
+export fn render_refresh_title(term: *Terminal) callconv(.c) void {
+    if (rateLimit(lastUpdate(&term.render.title.last_update), term.render.title.timer_fd))
+        render_update_title(term);
+
+    render_refresh_csd(term);
+}
+
+export fn render_refresh_app_id(term: *Terminal) callconv(.c) void {
+    if (!rateLimit(lastUpdate(&term.render.app_id.last_update), term.render.app_id.timer_fd))
+        return;
+
+    const app_id: [*:0]const u8 =
+        if (term.app_id) |id| id else term.conf.?.app_id.?;
+
+    wayland_shim_xdg_toplevel_set_app_id(term.window.?.xdg_toplevel, app_id);
+}
+
+export fn render_refresh_icon(term: *Terminal) callconv(.c) void {
+    if (term.wl.?.toplevel_icon_manager == null) {
+        log_msg(
+            LOG_CLASS_DEBUG, "render", "render.zig", @intCast(@src().line),
+            "compositor does not implement xdg-toplevel-icon: " ++
+                "ignoring request to refresh window icon",
+        );
+        return;
+    }
+
+    if (!rateLimit(lastUpdate(&term.render.icon.last_update), term.render.icon.timer_fd))
+        return;
+
+    const icon_name = term_icon(term);
+    log_msg(LOG_CLASS_DEBUG, "render", "render.zig", @intCast(@src().line),
+        "setting toplevel icon: %s", icon_name);
+
+    wayland_shim_toplevel_icon_set(
+        term.wl.?.toplevel_icon_manager, term.window.?.xdg_toplevel, icon_name);
+}

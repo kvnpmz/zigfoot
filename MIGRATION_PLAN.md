@@ -650,9 +650,9 @@ utmp backends where available.
 
 ## 13. Sequenced backlog (refreshed 2026-11-24)
 
-State: **34,265 of 48,830 C lines gone (70.2%)**, ~57% by effort, 35 modules
-ported, 523 harness assertions, `meson test` 5/5 in three build dirs.
-Remaining module C: 14,565 lines, plus 2,320 lines of `*-shim.c` accessors.
+State: **34,414 of 48,830 C lines gone (70.5%)**, ~57% by effort, 35 modules
+ported, 536 harness assertions, `meson test` 5/5 in three build dirs.
+Remaining module C: 14,416 lines, plus 2,330 lines of `*-shim.c` accessors.
 
 **`wayland` is done.** `wayland.c` is down from 2,884 lines to **359**, and what
 is left is glue rather than logic: the fourteen generated-protocol listener
@@ -792,9 +792,10 @@ Order matters: `search` and `wayland` first (they unblock the rest), then
 | **D2k7** done | `wayland`: `handle_global()` — all 23 interfaces, each with its required/preferred version (`min(version, preferred)`), including the seat's repeat timerfd + xkb compose setup and the "late global" re-scans (data device, primary selection, text input, xdg-output per monitor). Rather than mirror `struct wl_interface`, `wayland_shim_iface_id()` matches the name and `wayland_shim_registry_bind()` performs the bind in C, so Zig switches on an integer and the generated symbols stay in C. 5 new harness checks drive the unknown/too-old paths | D2k6 | 2d |
 | **D2k8** done | `wayland`: the tail — `handle_global_remove()` (monitor branch: log, `surface_leave()` for every terminal mapped there because compositors do not unmap first, then `monitor_destroy()`; seat branch: warn and synthesise the keyboard/pointer leave the compositor owed us, then `seat_destroy()`; unknown branch warns), the `fixes`-gated `wp_fixes_v1.ack_global_remove` helper, `colorManagerCreateImageDescription()` with the five `wp_color_manager_v1` callbacks (parametric creator → linear TF + sRGB primaries → image description), and `xdg_wm_base_ping()`. 3 new harness checks (unknown global, monitor removal, seat removal — the seat needs a real key-binding manager because `seat_destroy()` calls `key_binding_remove_seat()`). `wayland.c` is now 359 lines of listener tables + FDM glue | D2k7 | 1d |
 | **D3a** done | `render`: the drawing primitives — `attrs_to_font()`, the four `color_hex_to_pixman*()` variants (sRGB decode table vs linear expansion, alpha premultiply), `color_blend_towards()`, `color_dim()` (custom-dim table + theme blend direction), `color_brighten()`, and the painters `draw_hollow_block()`, `draw_beam_cursor()`, `draw_underline_cursor()`, `draw_underline()`, `draw_styled_underline()` (double/dashed/dotted/curly), `draw_strikeout()`, `cursor_colors_for_cell()` and `draw_cursor()`. `pixman_color_t`/`pixman_rectangle16_t` are mirrored (comptime-sized); `pixman_trapezoid_t` is not — the curly underline passes its geometry to `render_shim_curly_underline()`. `fcft_font` metrics come from six `terminal_shim_fcft_font_*()` accessors rather than mirroring the library struct. 23 new harness checks, eleven of them reading pixels out of a real pixman image | D2k8 | 1d |
-| **D3b** | `render`: `render_cell()` (the big one: composed glyphs, graphemes, ligatures, underlines, strikeout, sixel/url ranges) and `render_row()` | D3a | 3–4d |
-| **D3c** | `render`: scroll/margin/urgency/OSD/CSD/overlay/search-box/url painting | D3b | 3–4d |
-| **D3d** | `render`: the worker thread, damage tracking, `grid_render()`, `render_resize()` and the refresh/xcursor/tiocswinsz glue | D3c | 3–4d |
+| **D3b** done | `render`: the frame bookkeeping — `dirty_cursor()`/`dirty_old_cursor()` (cell + row dirtying, plus remembering the cursor for the next frame), the four `render_refresh*()` flag setters, and the rate-limited title/app-id/icon updaters, which now share one `rateLimit()` helper (8333 µs window, `timerfd_settime()` for the remainder). `render_update_title()` lost its `static`; `grid_row()` and `urls_mode_is_active()` are static inlines in the headers, so two more `terminal_shim_*` accessors. 13 new harness checks, including a real timerfd proving the rate limiter arms itself | D3a | 0.5d |
+| **D3c** | `render`: `render_cell()` (the big one: composed glyphs, graphemes, ligatures, underlines, strikeout, sixel/url ranges) and `render_row()` | D3b | 3–4d |
+| **D3d** | `render`: scroll/margin/urgency/OSD/CSD/overlay/search-box/url painting | D3c | 3–4d |
+| **D3e** | `render`: the worker thread, damage tracking, `grid_render()`, `render_resize()` and the remaining xcursor/tiocswinsz glue | D3d | 3–4d |
 | **D4** | `input` (3,687) — split into D4a keyboard/legacy+kitty protocols, D4b pointer/mouse/touch, D4c compose/IME plumbing | after B2 + key-binding | 1–1.5w |
 | **D5** | `key-binding` (661), `ime` (540), `url-mode` (833), `selection` S1+S3 (~600) | after B2/D4 | 4–5d |
 | **D6** | `main` (770), `server` (707), `client` (679) | last; they tie everything together and are only fully testable once a window opens | 4–5d |

@@ -21,6 +21,10 @@ enum resize_options {
 bool render_resize(
     struct terminal *term, int width, int height, uint8_t resize_options);
 
+void dirty_old_cursor(struct terminal *term);
+void dirty_cursor(struct terminal *term);
+void render_update_title(struct terminal *term);
+
 void render_refresh(struct terminal *term);
 void render_refresh_app_id(struct terminal *term);
 void render_refresh_icon(struct terminal *term);

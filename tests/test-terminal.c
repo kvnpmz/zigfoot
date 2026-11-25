@@ -4034,6 +4034,115 @@ test_render_primitives(void)
         fcft_destroy(font);
 }
 
+/* D3b: cursor dirtying and the refresh flags */
+static void
+test_render_refresh(void)
+{
+    struct terminal term = {0};
+    struct config conf = {0};
+    struct wl_window win = {0};
+    struct grid grid = {0};
+
+    term.conf = &conf;
+    term.window = &win;
+    term.grid = &grid;
+
+    struct row *rows[2] = {
+        grid_row_alloc(4, true),
+        grid_row_alloc(4, true),
+    };
+    grid.num_rows = 2;
+    grid.num_cols = 4;
+    grid.offset = 0;
+    grid.view = 0;
+    grid.rows = rows;
+
+    for (int r = 0; r < 2; r++)
+        for (int c = 0; c < 4; c++)
+            rows[r]->cells[c].attrs.clean = true;
+
+    grid.cursor.point.row = 1;
+    grid.cursor.point.col = 2;
+    term.hide_cursor = false;
+    dirty_cursor(&term);
+    check(!rows[1]->cells[2].attrs.clean && rows[1]->dirty,
+          "dirty_cursor() dirties the cell under the cursor");
+    check(rows[1]->cells[1].attrs.clean,
+          "dirty_cursor() leaves the neighbouring cells alone");
+
+    term.hide_cursor = true;
+    rows[1]->dirty = false;
+    dirty_cursor(&term);
+    check(!rows[1]->dirty, "dirty_cursor() does nothing while the cursor is hidden");
+    term.hide_cursor = false;
+
+    /* dirty_old_cursor() both dirties the old position and remembers the
+     * new one. */
+    rows[0]->dirty = false;
+    rows[0]->cells[1].attrs.clean = true;
+    term.render.last_cursor.row = rows[0];
+    term.render.last_cursor.col = 1;
+    term.render.last_cursor.hidden = false;
+
+    dirty_old_cursor(&term);
+    check(!rows[0]->cells[1].attrs.clean && rows[0]->dirty,
+          "dirty_old_cursor() dirties the previous cursor cell");
+    check(term.render.last_cursor.row == rows[1] &&
+          term.render.last_cursor.col == 2,
+          "dirty_old_cursor() records the new cursor position");
+    check(!term.render.last_cursor.hidden,
+          "dirty_old_cursor() records the cursor visibility");
+
+    /* Refresh flags */
+    term.render.refresh.grid = false;
+    render_refresh(&term);
+    check(term.render.refresh.grid, "render_refresh() requests a grid repaint");
+
+    win.csd_mode = CSD_NO;
+    term.render.refresh.csd = false;
+    render_refresh_csd(&term);
+    check(!term.render.refresh.csd, "no CSDs -> no CSD repaint");
+    win.csd_mode = CSD_YES;
+    render_refresh_csd(&term);
+    check(term.render.refresh.csd, "CSDs -> CSD repaint requested");
+
+    term.is_searching = false;
+    render_refresh_search(&term);
+    check(!term.render.refresh.search, "not searching -> no search repaint");
+
+    /* The title/app-id updaters are rate limited; a real timerfd lets us
+     * drive the "too soon" branch without a wayland window. */
+    int tfd = timerfd_create(CLOCK_MONOTONIC, TFD_CLOEXEC);
+    if (tfd >= 0) {
+        struct timespec now;
+        clock_gettime(CLOCK_MONOTONIC, &now);
+        memcpy(&term.render.title.last_update, &now, sizeof(now));
+        memcpy(&term.render.app_id.last_update, &now, sizeof(now));
+        memcpy(&term.render.icon.last_update, &now, sizeof(now));
+        term.render.title.timer_fd = tfd;
+        term.render.app_id.timer_fd = tfd;
+        term.render.icon.timer_fd = tfd;
+        win.csd_mode = CSD_YES;
+        term.render.refresh.csd = false;
+
+        /* Would dereference term.window->xdg_toplevel if not rate limited. */
+        render_refresh_title(&term);
+        render_refresh_app_id(&term);
+        check(1, "the title/app-id updaters are rate limited");
+        check(term.render.refresh.csd,
+              "render_refresh_title() also refreshes the CSDs");
+
+        /* The timer must have been armed with the remaining interval. */
+        struct itimerspec its;
+        check(timerfd_gettime(tfd, &its) == 0 && its.it_value.tv_nsec > 0,
+              "the rate limiter arms the update timer");
+        close(tfd);
+    }
+
+    free(rows[0]);
+    free(rows[1]);
+}
+
 int
 main(void)
 {
@@ -4058,6 +4167,7 @@ main(void)
     test_output();
     test_csd_visibility();
     test_render_primitives();
+    test_render_refresh();
     test_configure();
     test_surface_listener();
     test_small_listeners();

@@ -2112,7 +2112,6 @@ render_csd_border(struct terminal *term, enum csd_surface surf_idx,
         const struct config *conf = term->conf;
         int x = 0, y = 0, w = 0, h = 0;
 
-
         switch (surf_idx) {
         case CSD_SURF_TOP:
         case CSD_SURF_BOTTOM:
@@ -2823,36 +2822,6 @@ reapply_old_damage(struct terminal *term, struct buffer *new, struct buffer *old
 }
 
 static void
-dirty_old_cursor(struct terminal *term)
-{
-    if (term->render.last_cursor.row != NULL && !term->render.last_cursor.hidden) {
-        struct row *row = term->render.last_cursor.row;
-        struct cell *cell = &row->cells[term->render.last_cursor.col];
-        cell->attrs.clean = 0;
-        row->dirty = true;
-    }
-
-    /* Remember current cursor position, for the next frame */
-    term->render.last_cursor.row = grid_row(term->grid, term->grid->cursor.point.row);
-    term->render.last_cursor.col = term->grid->cursor.point.col;
-    term->render.last_cursor.hidden = term->hide_cursor;
-}
-
-static void
-dirty_cursor(struct terminal *term)
-{
-    if (term->hide_cursor)
-        return;
-
-    const struct coord *cursor = &term->grid->cursor.point;
-
-    struct row *row = grid_row(term->grid, cursor->row);
-    struct cell *cell = &row->cells[cursor->col];
-    cell->attrs.clean = 0;
-    row->dirty = true;
-}
-
-static void
 grid_render(struct terminal *term)
 {
     if (term->shutdown.in_progress)
@@ -2933,7 +2902,6 @@ grid_render(struct terminal *term)
     term->render.last_buf = buf;
     shm_addref(buf);
     buf->age = 0;
-
 
     tll_foreach(term->grid->scroll_damage, it) {
         switch (it->item.type) {
@@ -3083,7 +3051,6 @@ grid_render(struct terminal *term)
     pixman_region32_init(&damage);
 
     render_sixel_images(term, buf->pix[0], &damage, &cursor);
-
 
     if (term->render.workers.count > 0) {
         mtx_lock(&term->render.workers.lock);
@@ -3823,7 +3790,7 @@ render_urls(struct terminal *term)
     }
 }
 
-static void
+void
 render_update_title(struct terminal *term)
 {
     static const size_t max_len = 2048;
@@ -4273,7 +4240,6 @@ render_resize(struct terminal *term, int width, int height, uint8_t opts)
         term->interactive_resizing.new_rows = new_normal_grid_rows;
         goto damage_view;
     }
-
 
     /*
      * Since text reflow is slow, don't do it *while* resizing. Only
@@ -4745,121 +4711,6 @@ fdm_hook_refresh_pending_terminals(struct fdm *fdm, void *data)
             }
         }
     }
-}
-
-void
-render_refresh_title(struct terminal *term)
-{
-    struct timespec now;
-    if (clock_gettime(CLOCK_MONOTONIC, &now) < 0)
-        return;
-
-    struct timespec diff;
-    timespec_sub(&now, &term->render.title.last_update, &diff);
-
-    if (diff.tv_sec == 0 && diff.tv_nsec < 8333 * 1000) {
-        const struct itimerspec timeout = {
-            .it_value = {.tv_nsec = 8333 * 1000 - diff.tv_nsec},
-        };
-
-        timerfd_settime(term->render.title.timer_fd, 0, &timeout, NULL);
-    } else {
-        term->render.title.last_update = now;
-        render_update_title(term);
-    }
-
-    render_refresh_csd(term);
-}
-
-void
-render_refresh_app_id(struct terminal *term)
-{
-    struct timespec now;
-    if (clock_gettime(CLOCK_MONOTONIC, &now) < 0)
-        return;
-
-    struct timespec diff;
-    timespec_sub(&now, &term->render.app_id.last_update, &diff);
-
-    if (diff.tv_sec == 0 && diff.tv_nsec < 8333 * 1000) {
-        const struct itimerspec timeout = {
-            .it_value = {.tv_nsec = 8333 * 1000 - diff.tv_nsec},
-        };
-
-        timerfd_settime(term->render.app_id.timer_fd, 0, &timeout, NULL);
-        return;
-    }
-
-    const char *app_id =
-        term->app_id != NULL ? term->app_id : term->conf->app_id;
-
-    xdg_toplevel_set_app_id(term->window->xdg_toplevel, app_id);
-    term->render.app_id.last_update = now;
-}
-
-void
-render_refresh_icon(struct terminal *term)
-{
-    if (term->wl->toplevel_icon_manager == NULL) {
-        LOG_DBG("compositor does not implement xdg-toplevel-icon: "
-                "ignoring request to refresh window icon");
-        return;
-    }
-
-    struct timespec now;
-    if (clock_gettime(CLOCK_MONOTONIC, &now) < 0)
-        return;
-
-    struct timespec diff;
-    timespec_sub(&now, &term->render.icon.last_update, &diff);
-
-    if (diff.tv_sec == 0 && diff.tv_nsec < 8333 * 1000) {
-        const struct itimerspec timeout = {
-            .it_value = {.tv_nsec = 8333 * 1000 - diff.tv_nsec},
-        };
-
-        timerfd_settime(term->render.icon.timer_fd, 0, &timeout, NULL);
-        return;
-    }
-
-    const char *icon_name = term_icon(term);
-    LOG_DBG("setting toplevel icon: %s", icon_name);
-
-    struct xdg_toplevel_icon_v1 *icon =
-        xdg_toplevel_icon_manager_v1_create_icon(term->wl->toplevel_icon_manager);
-    xdg_toplevel_icon_v1_set_name(icon, icon_name);
-    xdg_toplevel_icon_manager_v1_set_icon(
-        term->wl->toplevel_icon_manager, term->window->xdg_toplevel, icon);
-    xdg_toplevel_icon_v1_destroy(icon);
-
-    term->render.icon.last_update = now;
-}
-
-void
-render_refresh(struct terminal *term)
-{
-    term->render.refresh.grid = true;
-}
-
-void
-render_refresh_csd(struct terminal *term)
-{
-    if (term->window->csd_mode == CSD_YES)
-        term->render.refresh.csd = true;
-}
-
-void
-render_refresh_search(struct terminal *term)
-{
-    if (term->is_searching)
-        term->render.refresh.search = true;
-}
-
-void
-render_refresh_urls(struct terminal *term)
-{
-    if (urls_mode_is_active(term))
-        term->render.refresh.urls = true;
 }
 
 bool
