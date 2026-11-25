@@ -650,9 +650,9 @@ utmp backends where available.
 
 ## 13. Sequenced backlog (refreshed 2026-11-24)
 
-State: **31,984 of 48,830 C lines gone (65.5%)**, ~49% by effort, 34 modules
-ported, 453 harness assertions, `meson test` 5/5 in three build dirs.
-Remaining C: 16,846 lines, 1,598 of which are `*-shim.c` accessors.
+State: **32,130 of 48,830 C lines gone (65.8%)**, ~50% by effort, 34 modules
+ported, 454 harness assertions, `meson test` 5/5 in three build dirs.
+Remaining C: 16,700 lines, 1,702 of which are `*-shim.c` accessors.
 
 `smoke.sh` now launches **real windows**: weston's headless backend creates no
 `wl_seat`, so foot refused to start ("no seats available"). When `Xvfb` is
@@ -773,7 +773,8 @@ Order matters: `search` and `wayland` first (they unblock the rest), then
 | **D2e** done | `wayland`: `wayl_flush()` (the EAGAIN/POLLOUT retry loop), `wayl_roundtrip()`, and `wayl_reload_xcursor_theme()` (XCURSOR_SIZE/XCURSOR_THEME parsing, server-side-cursor short circuit, scale-based reload). 3 new harness checks for the short-circuit paths; the flush/roundtrip pair runs on every smoke launch | D2d | 0.5d |
 | **D2f** done | `wayland`: the CSD trio — `csd_instantiate()` (seven sub-surfaces, then the close/min/max buttons parented to the title bar), `csd_destroy()` and `csd_reload_font()` (`pixelsize=` from `csd.title_height` × scale). 5 new harness checks, including a real fcft font through `csd_destroy()` | D2e | 0.5d |
 | **D2g** done | `wayland`: `monitor_destroy()`, `update_term_for_output_change()` (scale → fonts → CSD font → forced-resize ordering), `update_terms_on_monitor()` and the two `*_done` listeners that call it — the monitor listener set is now complete. `terminal_types.zig`'s `Tll` mirror is head-only, so iteration uses `tll.zig` via a pointer cast. 2 new harness checks | D2f | 0.5d |
-| **D2h** | `wayland`: `wayl_win_init()`/`wayl_win_destroy()`, `handle_global`/`handle_global_remove`, `wayl_init`/`wayl_destroy`, seat capabilities and data devices | D2g | 3–4d |
+| **D2h** done | `wayland`: `wayl_win_destroy()` — the touch-focus reset, the "unmap every surface, then roundtrip" sequence that makes the compositor drop keyboard/pointer focus, the url/subsurface/CSD teardown, the six `shm_purge()` calls and the activation-token list. 10 new shims; `HAVE_EXT_BACKGROUND_EFFECT` is resolved inside `wayland_shim_destroy_background_effect()` so the conditional stays in C. Every smoke launch destroys a window | D2g | 1d |
+| **D2i** | `wayland`: `wayl_win_init()`, `handle_global`/`handle_global_remove`, `wayl_init`/`wayl_destroy`, seat capabilities and data devices | D2h | 3–4d |
 | **D2d** | `wayland`: `handle_global`/`handle_global_remove`, `wayl_init`/`wayl_destroy`, seat capabilities and data devices | D2c | 3–4d |
 | **D3** | `render` (5,479) — split into D3a chains/damage/cursor, D3b grid/csd/box-drawing glyph cache, D3c sixel/notifications/search-highlight | biggest module; do it after `wayland` so the surface/scale paths are Zig | 1.5–2w |
 | **D4** | `input` (3,687) — split into D4a keyboard/legacy+kitty protocols, D4b pointer/mouse/touch, D4c compose/IME plumbing | after B2 + key-binding | 1–1.5w |

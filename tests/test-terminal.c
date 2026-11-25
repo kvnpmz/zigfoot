@@ -3578,6 +3578,9 @@ test_wayland_misc(void)
 
     tll_free(w2.on_outputs);
     tll_free(wl2.terms);
+
+    wayl_win_destroy(NULL);
+    check(true, "wayl_win_destroy(NULL) is a no-op");
 }
 
 int

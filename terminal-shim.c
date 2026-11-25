@@ -309,6 +309,65 @@ bool terminal_shim_hasc32upper(const char32_t *s)
 }
 
 /* Generated-protocol static inlines (wayland.zig cannot see them). */
+void wayland_shim_surface_attach(
+    struct wl_surface *surf, struct wl_buffer *buffer, int32_t x, int32_t y)
+{
+    wl_surface_attach(surf, buffer, x, y);
+}
+
+void wayland_shim_surface_commit(struct wl_surface *surf)
+{
+    wl_surface_commit(surf);
+}
+
+void *wayland_shim_surface_get_user_data(struct wl_surface *surf)
+{
+    return wl_surface_get_user_data(surf);
+}
+
+void wayland_shim_wl_callback_destroy(struct wl_callback *callback)
+{
+    wl_callback_destroy(callback);
+}
+
+void wayland_shim_xdg_surface_destroy(struct xdg_surface *xdg_surface)
+{
+    xdg_surface_destroy(xdg_surface);
+}
+
+void wayland_shim_xdg_toplevel_destroy(struct xdg_toplevel *xdg_toplevel)
+{
+    xdg_toplevel_destroy(xdg_toplevel);
+}
+
+void wayland_shim_xdg_toplevel_decoration_destroy(
+    struct zxdg_toplevel_decoration_v1 *decoration)
+{
+    zxdg_toplevel_decoration_v1_destroy(decoration);
+}
+
+void wayland_shim_fractional_scale_destroy(
+    struct wp_fractional_scale_v1 *scale)
+{
+    wp_fractional_scale_v1_destroy(scale);
+}
+
+void wayland_shim_destroy_background_effect(
+    struct ext_background_effect_surface_v1 *effect)
+{
+#if defined(HAVE_EXT_BACKGROUND_EFFECT)
+    ext_background_effect_surface_v1_destroy(effect);
+#else
+    (void)effect;
+#endif
+}
+
+void wayland_shim_xdg_activation_token_destroy(
+    struct xdg_activation_token_v1 *token)
+{
+    xdg_activation_token_v1_destroy(token);
+}
+
 void wayland_shim_zxdg_output_destroy(struct zxdg_output_v1 *xdg_output)
 {
     zxdg_output_v1_destroy(xdg_output);

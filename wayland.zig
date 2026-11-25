@@ -954,3 +954,176 @@ export fn xdg_output_handle_done(data: ?*anyopaque, xdg_output: ?*anyopaque) cal
     const mon: *types.Monitor = @ptrCast(@alignCast(data.?));
     updateTermsOnMonitor(mon);
 }
+
+// ─────────────────────────────────────────────────────────────────────────
+// Window teardown
+// ─────────────────────────────────────────────────────────────────────────
+
+extern fn wayland_shim_surface_attach(surf: ?*anyopaque, buffer: ?*anyopaque, x: i32, y: i32) callconv(.c) void;
+extern fn wayland_shim_surface_commit(surf: ?*anyopaque) callconv(.c) void;
+extern fn wayland_shim_surface_get_user_data(surf: ?*anyopaque) callconv(.c) ?*anyopaque;
+extern fn wayland_shim_wl_callback_destroy(callback: ?*anyopaque) callconv(.c) void;
+extern fn wayland_shim_xdg_surface_destroy(xdg_surface: ?*anyopaque) callconv(.c) void;
+extern fn wayland_shim_xdg_toplevel_destroy(xdg_toplevel: ?*anyopaque) callconv(.c) void;
+extern fn wayland_shim_xdg_toplevel_decoration_destroy(decoration: ?*anyopaque) callconv(.c) void;
+extern fn wayland_shim_fractional_scale_destroy(scale: ?*anyopaque) callconv(.c) void;
+extern fn wayland_shim_destroy_background_effect(effect: ?*anyopaque) callconv(.c) void;
+extern fn wayland_shim_xdg_activation_token_destroy(token: ?*anyopaque) callconv(.c) void;
+extern fn render_wait_for_preapply_damage(term: *types.Terminal) callconv(.c) void;
+extern fn fdm_del(fdm: ?*anyopaque, fd: c_int) callconv(.c) bool;
+
+const TOUCH_STATE_IDLE: c_int = 0;
+
+extern fn close(fd: c_int) callconv(.c) c_int;
+
+export fn wayl_win_destroy(win_in: ?*types.WlWindow) callconv(.c) void {
+    const win = win_in orelse return;
+
+    const term: *types.Terminal = @ptrCast(@alignCast(win.term.?));
+    const wayl = waylandOf(win);
+
+    if (win.csd.move_timeout_fd != -1)
+        _ = close(win.csd.move_timeout_fd);
+
+    // wl_touch has no leave event, so the unmapping below cannot drop touch
+    // focus the way it drops keyboard and pointer focus. Reset it here, or a
+    // wl_touch.up/motion dispatched from the roundtrips below runs against
+    // this window after it has been destroyed.
+    {
+        const SeatList = tll.Tll(types.Seat);
+        const seats: *const SeatList = @ptrCast(&wayl.seats);
+        var it = (@constCast(seats)).foreach();
+        while (it.next()) |node| {
+            const seat = &node.item;
+
+            if (seat.touch.surface != null and
+                wayland_shim_surface_get_user_data(seat.touch.surface) == @as(?*anyopaque, win))
+            {
+                seat.touch.state = @enumFromInt(TOUCH_STATE_IDLE);
+                seat.touch.surface = null;
+            }
+        }
+    }
+
+    // First, unmap all surfaces to trigger things like keyboard_leave() and
+    // wl_pointer_leave(). This ensures we remove all references to *this*
+    // window from the global wayland struct (since it no longer has neither
+    // keyboard nor mouse focus).
+
+    if (win.render_timer.surface.surf != null) {
+        wayland_shim_surface_attach(win.render_timer.surface.surf, null, 0, 0);
+        wayland_shim_surface_commit(win.render_timer.surface.surf);
+    }
+
+    if (win.scrollback_indicator.surface.surf != null) {
+        wayland_shim_surface_attach(win.scrollback_indicator.surface.surf, null, 0, 0);
+        wayland_shim_surface_commit(win.scrollback_indicator.surface.surf);
+    }
+
+    if (win.overlay.surface.surf != null) {
+        wayland_shim_surface_attach(win.overlay.surface.surf, null, 0, 0);
+        wayland_shim_surface_commit(win.overlay.surface.surf);
+    }
+
+    // Scrollback search
+    if (win.search.surface.surf != null) {
+        wayland_shim_surface_attach(win.search.surface.surf, null, 0, 0);
+        wayland_shim_surface_commit(win.search.surface.surf);
+    }
+
+    // URLs
+    {
+        const UrlList = tll.Tll(types.WlUrl);
+        const urls: *UrlList = @ptrCast(&win.urls);
+        var it = (@constCast(urls)).foreach();
+        while (it.next()) |node| {
+            wayland_shim_surface_attach(node.item.surf.surface.surf, null, 0, 0);
+            wayland_shim_surface_commit(node.item.surf.surface.surf);
+        }
+    }
+
+    // CSD
+    for (&win.csd.surface) |*surface| {
+        if (surface.surface.surf != null) {
+            wayland_shim_surface_attach(surface.surface.surf, null, 0, 0);
+            wayland_shim_surface_commit(surface.surface.surf);
+        }
+    }
+
+    wayl_roundtrip(wayl);
+
+    // Main window
+    win.unmapped = true;
+    wayland_shim_surface_attach(win.surface.surf, null, 0, 0);
+    wayland_shim_surface_commit(win.surface.surf);
+    wayl_roundtrip(wayl);
+
+    {
+        const OutputList = tll.Tll(?*const types.Monitor);
+        const outputs: *OutputList = @ptrCast(&win.on_outputs);
+        outputs.freeList();
+    }
+
+    {
+        const UrlList = tll.Tll(types.WlUrl);
+        const urls: *UrlList = @ptrCast(&win.urls);
+        var it = (@constCast(urls)).foreach();
+        while (it.next()) |node| {
+            wayl_win_subsurface_destroy(&node.item.surf);
+            urls.removeNode(node);
+        }
+    }
+
+    render_wait_for_preapply_damage(term);
+
+    csd_destroy(win);
+    wayl_win_subsurface_destroy(&win.search);
+    wayl_win_subsurface_destroy(&win.scrollback_indicator);
+    wayl_win_subsurface_destroy(&win.render_timer);
+    wayl_win_subsurface_destroy(&win.overlay);
+
+    shm_purge(term.render.chains.search);
+    shm_purge(term.render.chains.scrollback_indicator);
+    shm_purge(term.render.chains.render_timer);
+    shm_purge(term.render.chains.grid);
+    shm_purge(term.render.chains.url);
+    shm_purge(term.render.chains.csd);
+
+    {
+        const TokenList = tll.Tll(?*types.XdgActivationTokenContext);
+        const tokens: *TokenList = @ptrCast(&win.xdg_tokens);
+        var it = (@constCast(tokens)).foreach();
+        while (it.next()) |node| {
+            wayland_shim_xdg_activation_token_destroy(node.item.?.xdg_token);
+            free(@as(?*anyopaque, @ptrCast(node.item)));
+
+            tokens.removeNode(node);
+        }
+    }
+
+    if (win.surface.background_effect != null)
+        wayland_shim_destroy_background_effect(win.surface.background_effect);
+
+    if (win.surface.color_management != null)
+        wayland_shim_color_management_surface_destroy(win.surface.color_management);
+    if (win.fractional_scale != null)
+        wayland_shim_fractional_scale_destroy(win.fractional_scale);
+    if (win.surface.viewport != null)
+        wayland_shim_viewport_destroy(win.surface.viewport);
+    if (win.frame_callback != null)
+        wayland_shim_wl_callback_destroy(win.frame_callback);
+    if (win.xdg_toplevel_decoration != null)
+        wayland_shim_xdg_toplevel_decoration_destroy(win.xdg_toplevel_decoration);
+    if (win.xdg_toplevel != null)
+        wayland_shim_xdg_toplevel_destroy(win.xdg_toplevel);
+    if (win.xdg_surface != null)
+        wayland_shim_xdg_surface_destroy(win.xdg_surface);
+    if (win.surface.surf != null)
+        wayland_shim_surface_destroy(win.surface.surf);
+
+    wayl_roundtrip(waylandOf(win));
+
+    if (win.resize_timeout_fd >= 0)
+        _ = fdm_del(wayl.fdm, win.resize_timeout_fd);
+    free(@as(?*anyopaque, @ptrCast(win)));
+}
