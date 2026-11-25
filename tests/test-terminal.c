@@ -4224,6 +4224,108 @@ test_render_margin(void)
     pixman_image_unref(pix);
 }
 
+/* D3d: CSD geometry */
+static void
+test_csd_data(void)
+{
+    struct terminal term = {0};
+    struct config conf = {0};
+    struct wl_window win = {0};
+
+    term.conf = &conf;
+    term.window = &win;
+    win.term = &term;
+    term.scale = 1.0f;
+    term.width = 100;
+    term.height = 50;
+    win.csd_mode = CSD_YES;
+    win.wm_capabilities.maximize = true;
+    win.wm_capabilities.minimize = true;
+    conf.csd.border_width = 1;
+    conf.csd.title_height = 20;
+    conf.csd.button_width = 10;
+
+    struct csd_data title = get_csd_data(&term, CSD_SURF_TITLE);
+    check(title.x == 0 && title.y == -20 && title.width == 100 &&
+          title.height == 20, "the CSD titlebar spans the window width");
+
+    struct csd_data left = get_csd_data(&term, CSD_SURF_LEFT);
+    struct csd_data right = get_csd_data(&term, CSD_SURF_RIGHT);
+    check(left.x == -1 && left.y == -20 && left.width == 1 && left.height == 70,
+          "the left border starts left of the surface");
+    check(right.x == 100 && right.width == 1 && right.height == 70,
+          "the right border starts right of the surface");
+
+    struct csd_data top = get_csd_data(&term, CSD_SURF_TOP);
+    struct csd_data bottom = get_csd_data(&term, CSD_SURF_BOTTOM);
+    check(top.x == -1 && top.y == -21 && top.width == 102 && top.height == 1,
+          "the top border overlaps the titlebar corner");
+    check(bottom.x == -1 && bottom.y == 50 && bottom.width == 102,
+          "the bottom border sits below the surface");
+
+    struct csd_data minimize = get_csd_data(&term, CSD_SURF_MINIMIZE);
+    struct csd_data maximize = get_csd_data(&term, CSD_SURF_MAXIMIZE);
+    struct csd_data close_btn = get_csd_data(&term, CSD_SURF_CLOSE);
+    check(close_btn.x == 90 && close_btn.width == 10 && close_btn.height == 20,
+          "the close button is the right-most one");
+    check(maximize.x == 80 && maximize.width == 10,
+          "the maximize button sits left of close");
+    check(minimize.x == 70 && minimize.width == 10,
+          "the minimize button sits left of maximize");
+
+    /* Without the wm capability the button gets no width. */
+    win.wm_capabilities.maximize = false;
+    struct csd_data no_max = get_csd_data(&term, CSD_SURF_MAXIMIZE);
+    check(no_max.width == 0 && no_max.x == 90,
+          "no maximize capability -> a zero-width maximize button");
+    win.wm_capabilities.maximize = true;
+
+    /* Maximized hides the borders, not the titlebar. */
+    win.is_maximized = true;
+    check(get_csd_data(&term, CSD_SURF_LEFT).width == 0 &&
+          get_csd_data(&term, CSD_SURF_TITLE).height == 20,
+          "maximized drops the borders but keeps the titlebar");
+
+    /* Narrow window: only the close button fits. */
+    win.is_maximized = false;
+    term.width = 15;
+    check(get_csd_data(&term, CSD_SURF_CLOSE).x == 5 &&
+          get_csd_data(&term, CSD_SURF_MAXIMIZE).width == 0,
+          "a narrow window drops the buttons that do not fit");
+}
+
+/* D3d: render_csd_part() fills the whole CSD buffer */
+static void
+test_render_csd_part(void)
+{
+    enum { W = 16, H = 8 };
+    uint32_t pixels[W * H] = {0};
+    pixman_image_t *pix = pixman_image_create_bits(PIXMAN_a8r8g8b8, W, H, pixels, W * 4);
+    if (pix == NULL) {
+        printf("skip: pixman_image_create_bits() failed\n");
+        return;
+    }
+
+    pixman_image_t *pix_arr[1] = {pix};
+    struct buffer buf = {0};
+    buf.width = W;
+    buf.height = H;
+    buf.pix = pix_arr;
+    buf.pix_instances = 1;
+
+    struct terminal term = {0};
+    struct wl_window win = {0};
+    term.window = &win;
+    win.csd_mode = CSD_YES;
+
+    pixman_color_t color = {.red = 0, .green = 0xffff, .blue = 0, .alpha = 0xffff};
+    render_csd_part(&term, NULL, &buf, W, H, &color);
+    check(pix_pixel(pix, 0, 0) == 0xff00ff00 && pix_pixel(pix, W - 1, H - 1) == 0xff00ff00,
+          "render_csd_part() fills the whole buffer");
+
+    pixman_image_unref(pix);
+}
+
 int
 main(void)
 {
@@ -4250,6 +4352,8 @@ main(void)
     test_render_primitives();
     test_render_refresh();
     test_render_margin();
+    test_csd_data();
+    test_render_csd_part();
     test_configure();
     test_surface_listener();
     test_small_listeners();

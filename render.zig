@@ -836,3 +836,130 @@ export fn render_margin(
             term.margins.right, line_count * term.cell_height);
     }
 }
+
+// ─────────────────────────────────────────────────────────────────────────
+// CSD geometry (D3d)
+// ─────────────────────────────────────────────────────────────────────────
+
+pub const CsdData = extern struct {
+    x: c_int,
+    y: c_int,
+    width: c_int,
+    height: c_int,
+};
+
+extern fn wayl_win_csd_borders_visible(win: *const types.WlWindow) callconv(.c) bool;
+extern fn wayl_win_csd_titlebar_visible(win: *const types.WlWindow) callconv(.c) bool;
+extern fn wayl_surface_scale(
+    win: *types.WlWindow,
+    surf: *types.WaylSurface,
+    buf: *Buffer,
+    scale: f32,
+) callconv(.c) void;
+extern fn wayland_shim_surface_attach(surf: ?*anyopaque, buffer: ?*anyopaque, x: i32, y: i32) callconv(.c) void;
+extern fn wayland_shim_surface_commit(surf: ?*anyopaque) callconv(.c) void;
+
+fn roundf(v: f32) c_int {
+    return @intFromFloat(@round(v));
+}
+
+fn fdiv(a: c_int, b: f32) f32 {
+    return @as(f32, @floatFromInt(a)) / b;
+}
+
+export fn get_csd_data(term: *const Terminal, surf_idx: types.CsdSurface) callconv(.c) CsdData {
+    const win = term.window.?;
+    std.debug.assert(win.csd_mode == .yes);
+
+    const borders_visible = wayl_win_csd_borders_visible(win);
+    const title_visible = wayl_win_csd_titlebar_visible(win);
+
+    const scale = term.scale;
+    const conf = term.conf.?;
+
+    const border_width: c_int = if (borders_visible)
+        roundf(conf.csd.border_width * scale)
+    else
+        0;
+
+    const title_height: c_int = if (title_visible)
+        roundf(conf.csd.title_height * scale)
+    else
+        0;
+
+    const button_width: c_int = if (title_visible)
+        roundf(conf.csd.button_width * scale)
+    else
+        0;
+
+    var remaining_width = term.width;
+
+    const button_close_width: c_int = if (remaining_width >= button_width) button_width else 0;
+    remaining_width -= button_close_width;
+    const button_close_start = remaining_width;
+
+    const button_maximize_width: c_int = if (remaining_width >= button_width and
+        win.wm_capabilities.maximize) button_width else 0;
+    remaining_width -= button_maximize_width;
+    const button_maximize_start = remaining_width;
+
+    const button_minimize_width: c_int = if (remaining_width >= button_width and
+        win.wm_capabilities.minimize) button_width else 0;
+    remaining_width -= button_minimize_width;
+    const button_minimize_start = remaining_width;
+
+    // With fractional scaling, we must ensure the offset, when divided by
+    // the scale (in set_position()), and then scaled back (by the
+    // compositor), matches the actual pixel count made up by the titlebar
+    // and the border.
+    const top_offset = roundf(scale * (@as(f32, @floatFromInt(roundf(fdiv(-title_height, scale)))) -
+        @as(f32, @floatFromInt(roundf(fdiv(border_width, scale))))));
+
+    const top_bottom_width = roundf(scale *
+        (@as(f32, @floatFromInt(term.width)) + 2 * @as(f32, @floatFromInt(roundf(fdiv(border_width, scale))))));
+
+    const left_right_height = roundf(scale *
+        (@as(f32, @floatFromInt(roundf(fdiv(title_height, scale)))) +
+            @as(f32, @floatFromInt(term.height))));
+
+    return switch (surf_idx) {
+        .title => .{ .x = 0, .y = -title_height, .width = term.width, .height = title_height },
+        .left => .{ .x = -border_width, .y = -title_height, .width = border_width, .height = left_right_height },
+        .right => .{ .x = term.width, .y = -title_height, .width = border_width, .height = left_right_height },
+        .top => .{ .x = -border_width, .y = top_offset, .width = top_bottom_width, .height = border_width },
+        .bottom => .{ .x = -border_width, .y = term.height, .width = top_bottom_width, .height = border_width },
+
+        // Positioned relative to CSD_SURF_TITLE
+        .minimize => .{ .x = button_minimize_start, .y = 0, .width = button_minimize_width, .height = title_height },
+        .maximize => .{ .x = button_maximize_start, .y = 0, .width = button_maximize_width, .height = title_height },
+        .close => .{ .x = button_close_start, .y = 0, .width = button_close_width, .height = title_height },
+    };
+}
+
+export fn csd_commit(term: *Terminal, surf: *types.WaylSurface, buf: *Buffer) callconv(.c) void {
+    wayl_surface_scale(term.window.?, surf, buf, term.scale);
+    wayland_shim_surface_attach(surf.surf, buf.wl_buf, 0, 0);
+    wayland_shim_surface_damage_buffer(surf.surf, 0, 0, buf.width, buf.height);
+    wayland_shim_surface_commit(surf.surf);
+}
+
+export fn render_csd_part(
+    term: *Terminal,
+    surf: ?*anyopaque,
+    buf: *Buffer,
+    width: c_int,
+    height: c_int,
+    color: *PixmanColor,
+) callconv(.c) void {
+    _ = surf;
+    _ = width;
+    _ = height;
+    std.debug.assert(term.window.?.csd_mode == .yes);
+
+    fillRect(bufferPix(buf), color, &.{.{
+        .x = 0,
+        .y = 0,
+        .width = @intCast(buf.width),
+        .height = @intCast(buf.height),
+    }});
+}

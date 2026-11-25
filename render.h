@@ -64,6 +64,11 @@ struct csd_data {
 };
 
 struct csd_data get_csd_data(const struct terminal *term, enum csd_surface surf_idx);
+void csd_commit(
+    struct terminal *term, struct wayl_surface *surf, struct buffer *buf);
+void render_csd_part(
+    struct terminal *term, struct wl_surface *surf, struct buffer *buf,
+    int width, int height, pixman_color_t *color);
 
 void render_buffer_release_callback(struct buffer *buf, void *data);
 void render_wait_for_preapply_damage(struct terminal *term);
