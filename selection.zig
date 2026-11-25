@@ -1,7 +1,9 @@
 const std = @import("std");
 const types = @import("terminal_types.zig");
 
-// TODO: port selection.c: selection_start, selection_update, selection_finalize, ...
+// The whole module is Zig: selection.c and selection-shim.c were deleted in
+// D5d-b2; only the generated listener tables (wayland-shim.c) and the
+// protocol request inlines (terminal-shim.c) are C.
 
 // ── Chunk A: grid helpers + foreach_selected + selection_to_text ──
 // Ports selection.c lines 33-345.
@@ -1479,16 +1481,97 @@ export fn selection_primary_has_data(seat: ?*const anyopaque) callconv(.c) bool 
 }
 
 // ── Chunk D: clipboard/primary send (manager fns) ────────────────
-// The wayland wire protocol is delegated to selection-shim.c.
-// Receive-side (text_from_*, selection_from_*) is chunk E and not
-// ported yet — those stay C.
+// The wire protocol is a set of generated static inlines; they live in
+// terminal-shim.c as wayland_shim_* wrappers. All the logic is here.
 
-extern fn selection_shim_text_to_clipboard(
-    seat: ?*anyopaque, term: *types.Terminal, text: ?[*:0]u8, serial: u32,
-) callconv(.c) bool;
-extern fn selection_shim_text_to_primary(
-    seat: ?*anyopaque, term: *types.Terminal, text: ?[*:0]u8, serial: u32,
-) callconv(.c) bool;
+const MIME_TYPES = [_][*:0]const u8{
+    "text/plain;charset=utf-8",
+    "text/plain",
+    "TEXT",
+    "STRING",
+    "UTF8_STRING",
+};
+
+fn textToClipboard(
+    seat: *types.Seat,
+    term: *types.Terminal,
+    text: ?[*:0]u8,
+    serial: u32,
+) bool {
+    if (text == null or text.?[0] == 0)
+        return false;
+    if (serial == 0)
+        return false;
+
+    const clipboard = &seat.clipboard;
+
+    if (clipboard.data_source != null) {
+        wayland_shim_data_device_set_selection(seat.data_device, null, clipboard.serial);
+        wayland_shim_data_source_destroy(clipboard.data_source);
+        freeSlice(clipboard.text);
+        clipboard.data_source = null;
+        clipboard.serial = 0;
+        clipboard.text = null;
+    }
+
+    const wayl = term.wl orelse return false;
+    // C dereferences data_device_manager unconditionally; guard instead.
+    const manager = wayl.data_device_manager orelse return false;
+
+    clipboard.data_source = wayland_shim_data_source_create(manager);
+    if (clipboard.data_source == null)
+        return false;
+
+    clipboard.text = text;
+    for (MIME_TYPES) |mime|
+        wayland_shim_data_source_offer(clipboard.data_source, mime);
+
+    wayland_shim_add_data_source_listener(clipboard.data_source, seat);
+    wayland_shim_data_device_set_selection(seat.data_device, clipboard.data_source, serial);
+    clipboard.serial = serial;
+    return true;
+}
+
+fn textToPrimary(
+    seat: *types.Seat,
+    term: *types.Terminal,
+    text: ?[*:0]u8,
+    serial: u32,
+) bool {
+    if (text == null or text.?[0] == 0)
+        return false;
+    if (serial == 0)
+        return false;
+
+    const wayl = term.wl orelse return false;
+    const manager = wayl.primary_selection_device_manager orelse return false;
+
+    const primary = &seat.primary;
+
+    if (primary.data_source != null) {
+        wayland_shim_primary_device_set_selection(
+            seat.primary_selection_device, null, primary.serial);
+        wayland_shim_primary_selection_source_destroy(primary.data_source);
+        freeSlice(primary.text);
+        primary.data_source = null;
+        primary.serial = 0;
+        primary.text = null;
+    }
+
+    primary.data_source = wayland_shim_primary_source_create(manager);
+    if (primary.data_source == null)
+        return false;
+
+    primary.text = text;
+    for (MIME_TYPES) |mime|
+        wayland_shim_primary_source_offer(primary.data_source, mime);
+
+    wayland_shim_add_primary_source_listener(primary.data_source, seat);
+    wayland_shim_primary_device_set_selection(
+        seat.primary_selection_device, primary.data_source, serial);
+    primary.serial = serial;
+    return true;
+}
 
 export fn text_to_clipboard(
     seat: ?*anyopaque,
@@ -1496,7 +1579,8 @@ export fn text_to_clipboard(
     text: ?[*:0]u8,
     serial: u32,
 ) callconv(.c) bool {
-    return selection_shim_text_to_clipboard(seat, term, text, serial);
+    const s: *types.Seat = @ptrCast(@alignCast(seat orelse return false));
+    return textToClipboard(s, term, text, serial);
 }
 
 export fn text_to_primary(
@@ -1505,7 +1589,8 @@ export fn text_to_primary(
     text: ?[*:0]u8,
     serial: u32,
 ) callconv(.c) bool {
-    return selection_shim_text_to_primary(seat, term, text, serial);
+    const s: *types.Seat = @ptrCast(@alignCast(seat orelse return false));
+    return textToPrimary(s, term, text, serial);
 }
 
 export fn selection_to_clipboard(
@@ -1535,25 +1620,124 @@ export fn selection_to_primary(
 }
 
 // ── Chunk E: clipboard/primary receive (manager fns) ─────────────
-// Wire + fdm machinery remains C (selection-shim.c / selection.c _c impls).
+// The other client writes into a pipe; we read it through the FDM (chunk
+// S2) and paste it into the terminal.
 
-const ClipboardCb = *const fn (data: ?[*]u8, size: usize, user: ?*anyopaque) callconv(.c) void;
+const ClipboardCb = *const fn (data: [*]u8, size: usize, user: ?*anyopaque) callconv(.c) void;
 const ClipboardDone = *const fn (user: ?*anyopaque) callconv(.c) void;
 
-extern fn selection_shim_text_from_clipboard(
-    seat: ?*anyopaque, term: *types.Terminal, no_strip: bool,
-    cb: ClipboardCb, done: ClipboardDone, user: ?*anyopaque,
-) callconv(.c) void;
-extern fn selection_shim_text_from_primary(
-    seat: ?*anyopaque, term: *types.Terminal, no_strip: bool,
-    cb: ClipboardCb, done: ClipboardDone, user: ?*anyopaque,
-) callconv(.c) void;
-extern fn selection_shim_selection_from_clipboard(
-    seat: ?*anyopaque, term: *types.Terminal, serial: u32,
-) callconv(.c) void;
-extern fn selection_shim_selection_from_primary(
-    seat: ?*anyopaque, term: *types.Terminal,
-) callconv(.c) void;
+fn mimeTypeName(mime_type: types.DataOfferMimeType) ?[*:0]const u8 {
+    const idx = @intFromEnum(mime_type);
+    if (idx < 0 or idx >= mime_type_map.len)
+        return null;
+    return mime_type_map[@intCast(idx)];
+}
+
+/// Pipe the offer's data into `cb`, then `done`. Asynchronous: the callbacks
+/// run later, off the FDM.
+fn textFromClipboard(
+    seat: *types.Seat,
+    term: *types.Terminal,
+    no_strip: bool,
+    cb: ClipboardCb,
+    done: ClipboardDone,
+    user: ?*anyopaque,
+) void {
+    const clipboard = &seat.clipboard;
+
+    if (clipboard.data_offer == null or clipboard.mime_type == .unset) {
+        done(user);
+        return;
+    }
+
+    // Prepare a pipe the other client can write its selection to us
+    var fds: [2]c_int = undefined;
+    if (pipe2(&fds, O_CLOEXEC) == -1) {
+        log_errno(
+            LOG_CLASS_ERROR, "selection", "selection.zig", @intCast(@src().line),
+            "failed to create pipe");
+        done(user);
+        return;
+    }
+
+    const read_fd = fds[0];
+    const write_fd = fds[1];
+
+    // Give the write-end of the pipe to the other client
+    wayland_shim_data_offer_receive(
+        clipboard.data_offer, mimeTypeName(clipboard.mime_type).?, write_fd);
+
+    // Don't keep our copy of the write-end open (or we'll never get EOF)
+    _ = close(write_fd);
+
+    begin_receive_clipboard(
+        term, no_strip, read_fd, @intFromEnum(clipboard.mime_type), cb, done, user);
+}
+
+fn textFromPrimary(
+    seat: *types.Seat,
+    term: *types.Terminal,
+    no_strip: bool,
+    cb: ClipboardCb,
+    done: ClipboardDone,
+    user: ?*anyopaque,
+) void {
+    const wayl = term.wl orelse {
+        done(user);
+        return;
+    };
+    if (wayl.primary_selection_device_manager == null) {
+        done(user);
+        return;
+    }
+
+    const primary = &seat.primary;
+    if (primary.data_offer == null or primary.mime_type == .unset) {
+        done(user);
+        return;
+    }
+
+    var fds: [2]c_int = undefined;
+    if (pipe2(&fds, O_CLOEXEC) == -1) {
+        log_errno(
+            LOG_CLASS_ERROR, "selection", "selection.zig", @intCast(@src().line),
+            "failed to create pipe");
+        done(user);
+        return;
+    }
+
+    const read_fd = fds[0];
+    const write_fd = fds[1];
+
+    wayland_shim_primary_offer_receive(
+        primary.data_offer, mimeTypeName(primary.mime_type).?, write_fd);
+
+    _ = close(write_fd);
+
+    begin_receive_clipboard(
+        term, no_strip, read_fd, @intFromEnum(primary.mime_type), cb, done, user);
+}
+
+fn receiveOffer(data: [*]u8, size: usize, user: ?*anyopaque) callconv(.c) void {
+    const term: *types.Terminal = @ptrCast(@alignCast(user orelse return));
+    std.debug.assert(term.is_sending_paste_data);
+    term_paste_data_to_slave(term, data, size);
+}
+
+fn receiveOfferDone(user: ?*anyopaque) callconv(.c) void {
+    const term: *types.Terminal = @ptrCast(@alignCast(user orelse return));
+
+    if (term.bracketed_paste)
+        term_paste_data_to_slave(term, "\x1b[201~", 6);
+
+    term.is_sending_paste_data = false;
+
+    // Make sure we send any queued up non-paste data
+    if (term.ptmx_buffers.length > 0) {
+        if (term.fdm) |fdm|
+            _ = fdm_event_add(fdm, term.ptmx, EPOLLOUT);
+    }
+}
 
 export fn text_from_clipboard(
     seat: ?*anyopaque,
@@ -1563,7 +1747,11 @@ export fn text_from_clipboard(
     done: ClipboardDone,
     user: ?*anyopaque,
 ) callconv(.c) void {
-    selection_shim_text_from_clipboard(seat, term, no_strip, cb, done, user);
+    const s: *types.Seat = @ptrCast(@alignCast(seat orelse {
+        done(user);
+        return;
+    }));
+    textFromClipboard(s, term, no_strip, cb, done, user);
 }
 
 export fn text_from_primary(
@@ -1574,7 +1762,11 @@ export fn text_from_primary(
     done: ClipboardDone,
     user: ?*anyopaque,
 ) callconv(.c) void {
-    selection_shim_text_from_primary(seat, term, no_strip, cb, done, user);
+    const s: *types.Seat = @ptrCast(@alignCast(seat orelse {
+        done(user);
+        return;
+    }));
+    textFromPrimary(s, term, no_strip, cb, done, user);
 }
 
 export fn selection_from_clipboard(
@@ -1582,30 +1774,87 @@ export fn selection_from_clipboard(
     term: *types.Terminal,
     serial: u32,
 ) callconv(.c) void {
-    selection_shim_selection_from_clipboard(seat, term, serial);
+    _ = serial;
+    const s: *types.Seat = @ptrCast(@alignCast(seat orelse return));
+
+    if (term.is_sending_paste_data) {
+        // We're already pasting...
+        return;
+    }
+
+    const clipboard = &s.clipboard;
+    if (clipboard.data_offer == null)
+        return;
+
+    term.is_sending_paste_data = true;
+
+    if (term.bracketed_paste)
+        term_paste_data_to_slave(term, "\x1b[200~", 6);
+
+    textFromClipboard(s, term, false, &receiveOffer, &receiveOfferDone, term);
 }
 
 export fn selection_from_primary(
     seat: ?*anyopaque,
     term: *types.Terminal,
 ) callconv(.c) void {
-    selection_shim_selection_from_primary(seat, term);
+    const s: *types.Seat = @ptrCast(@alignCast(seat orelse return));
+
+    const wayl = term.wl orelse return;
+    if (wayl.primary_selection_device_manager == null)
+        return;
+
+    if (term.is_sending_paste_data) {
+        // We're already pasting...
+        return;
+    }
+
+    const primary = &s.primary;
+    if (primary.data_offer == null)
+        return;
+
+    term.is_sending_paste_data = true;
+    if (term.bracketed_paste)
+        term_paste_data_to_slave(term, "\x1b[200~", 6);
+
+    textFromPrimary(s, term, false, &receiveOffer, &receiveOfferDone, term);
 }
 
 // ── Chunk F: unset + scroll timer ───────────────────────────────
-// Wire-protocol listeners and the clipboard_receive machinery stay in
-// selection.c as C glue. The `_c` implementations and all wl_* callbacks
-// remain there permanently.
-
-extern fn selection_shim_clipboard_unset(seat: ?*anyopaque) callconv(.c) void;
-extern fn selection_shim_primary_unset(seat: ?*anyopaque) callconv(.c) void;
 
 export fn selection_clipboard_unset(seat: ?*anyopaque) callconv(.c) void {
-    selection_shim_clipboard_unset(seat);
+    const s: *types.Seat = @ptrCast(@alignCast(seat orelse return));
+    const clipboard = &s.clipboard;
+
+    if (clipboard.data_source == null)
+        return;
+
+    wayland_shim_data_device_set_selection(s.data_device, null, clipboard.serial);
+    wayland_shim_data_source_destroy(clipboard.data_source);
+
+    clipboard.data_source = null;
+    clipboard.serial = 0;
+
+    freeSlice(clipboard.text);
+    clipboard.text = null;
 }
 
 export fn selection_primary_unset(seat: ?*anyopaque) callconv(.c) void {
-    selection_shim_primary_unset(seat);
+    const s: *types.Seat = @ptrCast(@alignCast(seat orelse return));
+    const primary = &s.primary;
+
+    if (primary.data_source == null)
+        return;
+
+    wayland_shim_primary_device_set_selection(
+        s.primary_selection_device, null, primary.serial);
+    wayland_shim_primary_selection_source_destroy(primary.data_source);
+
+    primary.data_source = null;
+    primary.serial = 0;
+
+    freeSlice(primary.text);
+    primary.text = null;
 }
 
 // fdm + timerfd externs
@@ -2121,8 +2370,28 @@ extern fn async_write(
     fd: c_int, data: ?*const anyopaque, len: usize, idx: *usize) callconv(.c) AsyncWriteStatus;
 extern fn xmalloc(size: usize) callconv(.c) ?*anyopaque;
 extern fn xstrdup(s: [*:0]const u8) callconv(.c) ?[*:0]u8;
-extern fn selection_shim_data_source_destroy(source: ?*anyopaque) callconv(.c) void;
-extern fn selection_shim_primary_source_destroy(source: ?*anyopaque) callconv(.c) void;
+extern fn wayland_shim_data_source_destroy(source: ?*anyopaque) callconv(.c) void;
+extern fn wayland_shim_primary_selection_source_destroy(source: ?*anyopaque) callconv(.c) void;
+extern fn wayland_shim_data_device_set_selection(
+    dev: ?*anyopaque, source: ?*anyopaque, serial: u32,
+) callconv(.c) void;
+extern fn wayland_shim_data_source_create(manager: ?*anyopaque) callconv(.c) ?*anyopaque;
+extern fn wayland_shim_data_source_offer(
+    source: ?*anyopaque, mime_type: [*:0]const u8,
+) callconv(.c) void;
+extern fn wayland_shim_primary_source_create(manager: ?*anyopaque) callconv(.c) ?*anyopaque;
+extern fn wayland_shim_primary_source_offer(
+    source: ?*anyopaque, mime_type: [*:0]const u8,
+) callconv(.c) void;
+extern fn wayland_shim_primary_device_set_selection(
+    dev: ?*anyopaque, source: ?*anyopaque, serial: u32,
+) callconv(.c) void;
+extern fn wayland_shim_add_data_source_listener(
+    source: ?*anyopaque, seat: ?*anyopaque,
+) callconv(.c) void;
+extern fn wayland_shim_add_primary_source_listener(
+    source: ?*anyopaque, seat: ?*anyopaque,
+) callconv(.c) void;
 extern fn log_errno(
     class: c_int,
     module: [*:0]const u8,
@@ -2257,7 +2526,7 @@ export fn selection_data_source_cancelled(
 
     std.debug.assert(clipboard.data_source == wl_data_source);
 
-    selection_shim_data_source_destroy(clipboard.data_source);
+    wayland_shim_data_source_destroy(clipboard.data_source);
     clipboard.data_source = null;
     clipboard.serial = 0;
 
@@ -2313,7 +2582,7 @@ export fn selection_primary_source_cancelled(
     const seat: *types.Seat = @ptrCast(@alignCast(data orelse return));
     const primary = &seat.primary;
 
-    selection_shim_primary_source_destroy(primary.data_source);
+    wayland_shim_primary_selection_source_destroy(primary.data_source);
     primary.data_source = null;
     primary.serial = 0;
 
@@ -2340,8 +2609,14 @@ const mime_type_map = [_]?[*:0]const u8{
     "UTF8_STRING", // DATA_OFFER_MIME_TEXT_UTF8_STRING
 };
 
-extern fn selection_shim_data_offer_destroy(offer: ?*anyopaque) callconv(.c) void;
-extern fn selection_shim_primary_offer_destroy(offer: ?*anyopaque) callconv(.c) void;
+extern fn wayland_shim_data_offer_destroy(offer: ?*anyopaque) callconv(.c) void;
+extern fn wayland_shim_primary_selection_offer_destroy(offer: ?*anyopaque) callconv(.c) void;
+extern fn wayland_shim_add_data_offer_listener(
+    offer: ?*anyopaque, seat: ?*anyopaque,
+) callconv(.c) void;
+extern fn wayland_shim_add_primary_offer_listener(
+    offer: ?*anyopaque, seat: ?*anyopaque,
+) callconv(.c) void;
 
 export fn selection_select_mime_type_for_offer(
     mime_type_in: [*:0]const u8,
@@ -2389,7 +2664,7 @@ export fn selection_data_offer_reset(clipboard: ?*types.WlClipboard) callconv(.c
     const c = clipboard orelse return;
 
     if (c.data_offer != null) {
-        selection_shim_data_offer_destroy(c.data_offer);
+        wayland_shim_data_offer_destroy(c.data_offer);
         c.data_offer = null;
     }
 
@@ -2401,7 +2676,7 @@ export fn selection_primary_offer_reset(primary: ?*types.WlPrimary) callconv(.c)
     const p = primary orelse return;
 
     if (p.data_offer != null) {
-        selection_shim_primary_offer_destroy(p.data_offer);
+        wayland_shim_primary_selection_offer_destroy(p.data_offer);
         p.data_offer = null;
     }
 
@@ -2449,4 +2724,260 @@ export fn selection_primary_offer(
     const seat: *types.Seat = @ptrCast(@alignCast(data orelse return));
 
     selection_select_mime_type_for_offer(mime_type orelse return, &seat.primary.mime_type);
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Data-device / DND listeners (D5d-b2)
+//
+// The compositor tells us about incoming offers and drag-and-drop through the
+// wl_data_device interface. The listener table is C (wayland-shim.c), the
+// callbacks are here: they track which terminal the offer targets and, on
+// drop, hand the offer's pipe to the receive pipeline (chunk E).
+// ─────────────────────────────────────────────────────────────────────────
+
+const EPOLLOUT_REPEAT: c_int = 0x004; // EPOLLOUT, shared with the send path
+
+const O_CLOEXEC: c_int = 0x80000;
+
+const DND_ACTION_NONE: u32 = 0;
+const DND_ACTION_COPY: u32 = 1;
+
+extern fn pipe2(fds: *[2]c_int, flags: c_int) callconv(.c) c_int;
+extern fn fdm_event_add(fdm: *anyopaque, fd: c_int, events: c_int) callconv(.c) bool;
+extern fn term_paste_data_to_slave(
+    term: *types.Terminal, buf: [*]const u8, len: usize,
+) callconv(.c) void;
+extern fn term_surface_kind(
+    term: *const types.Terminal, surface: ?*const anyopaque,
+) callconv(.c) types.TermSurface;
+extern fn wayland_shim_data_offer_accept(
+    offer: ?*anyopaque, serial: u32, mime_type: ?[*:0]const u8,
+) callconv(.c) void;
+extern fn wayland_shim_data_offer_set_actions(
+    offer: ?*anyopaque, actions: u32, preferred_action: u32,
+) callconv(.c) void;
+extern fn wayland_shim_data_offer_finish(offer: ?*anyopaque) callconv(.c) void;
+extern fn wayland_shim_data_offer_receive(
+    offer: ?*anyopaque, mime_type: [*:0]const u8, fd: c_int,
+) callconv(.c) void;
+extern fn wayland_shim_primary_offer_receive(
+    offer: ?*anyopaque, mime_type: [*:0]const u8, fd: c_int,
+) callconv(.c) void;
+
+/// tll_foreach(seat->wayl->terms, it)
+const TermsIter = struct {
+    node: ?*anyopaque,
+
+    fn next(self: *TermsIter) ?*types.Terminal {
+        while (self.node) |raw| {
+            const node: *types.TllNode(?*anyopaque) = @ptrCast(@alignCast(raw));
+            self.node = node.next;
+            if (node.item) |item|
+                return @ptrCast(@alignCast(item));
+        }
+        return null;
+    }
+};
+
+fn terms(wayl: *types.Wayland) TermsIter {
+    return .{ .node = wayl.terms.head };
+}
+
+export fn selection_data_device_data_offer(
+    data: ?*anyopaque,
+    wl_data_device: ?*anyopaque,
+    offer: ?*anyopaque,
+) callconv(.c) void {
+    _ = wl_data_device;
+    const seat: *types.Seat = @ptrCast(@alignCast(data orelse return));
+
+    selection_data_offer_reset(&seat.clipboard);
+    seat.clipboard.data_offer = offer;
+    wayland_shim_add_data_offer_listener(offer, seat);
+}
+
+export fn selection_data_device_enter(
+    data: ?*anyopaque,
+    wl_data_device: ?*anyopaque,
+    serial: u32,
+    surface: ?*anyopaque,
+    x: c_int,
+    y: c_int,
+    offer: ?*anyopaque,
+) callconv(.c) void {
+    _ = wl_data_device;
+    _ = x;
+    _ = y;
+    const seat: *types.Seat = @ptrCast(@alignCast(data orelse return));
+    const wayl = seat.wayl orelse return;
+
+    std.debug.assert(offer == seat.clipboard.data_offer);
+
+    if (seat.clipboard.mime_type != .unset) {
+        var it = terms(wayl);
+        while (it.next()) |term| {
+            // Remember _which_ terminal the current DnD offer is targeting
+            if (term_surface_kind(term, surface) == .grid and
+                !term.is_sending_paste_data)
+            {
+                wayland_shim_data_offer_accept(
+                    offer, serial, mimeTypeName(seat.clipboard.mime_type).?);
+                wayland_shim_data_offer_set_actions(
+                    offer, DND_ACTION_COPY, DND_ACTION_COPY);
+
+                std.debug.assert(seat.clipboard.window == null);
+                seat.clipboard.window = @ptrCast(term.window);
+                return;
+            }
+        }
+    }
+
+    // Either terminal is already busy sending paste data, or mouse
+    // pointer isn't over the grid
+    seat.clipboard.window = null;
+    wayland_shim_data_offer_accept(offer, serial, null);
+    wayland_shim_data_offer_set_actions(offer, DND_ACTION_NONE, DND_ACTION_NONE);
+}
+
+export fn selection_data_device_leave(
+    data: ?*anyopaque,
+    wl_data_device: ?*anyopaque,
+) callconv(.c) void {
+    _ = wl_data_device;
+    const seat: *types.Seat = @ptrCast(@alignCast(data orelse return));
+    seat.clipboard.window = null;
+}
+
+export fn selection_data_device_motion(
+    data: ?*anyopaque,
+    wl_data_device: ?*anyopaque,
+    time: u32,
+    x: c_int,
+    y: c_int,
+) callconv(.c) void {
+    _ = data;
+    _ = wl_data_device;
+    _ = time;
+    _ = x;
+    _ = y;
+}
+
+const DndContext = extern struct {
+    term: *types.Terminal,
+    data_offer: ?*anyopaque,
+};
+
+fn receiveDnd(data: [*]u8, size: usize, user: ?*anyopaque) callconv(.c) void {
+    const ctx: *DndContext = @ptrCast(@alignCast(user orelse return));
+    receiveOffer(data, size, ctx.term);
+}
+
+fn receiveDndDone(user: ?*anyopaque) callconv(.c) void {
+    const ctx: *DndContext = @ptrCast(@alignCast(user orelse return));
+
+    wayland_shim_data_offer_finish(ctx.data_offer);
+    wayland_shim_data_offer_destroy(ctx.data_offer);
+    receiveOfferDone(ctx.term);
+    free(ctx);
+}
+
+export fn selection_data_device_drop(
+    data: ?*anyopaque,
+    wl_data_device: ?*anyopaque,
+) callconv(.c) void {
+    _ = wl_data_device;
+    const seat: *types.Seat = @ptrCast(@alignCast(data orelse return));
+    const clipboard = &seat.clipboard;
+
+    const window = clipboard.window orelse return;
+    const w: *types.WlWindow = @ptrCast(@alignCast(window));
+    const term: *types.Terminal = @ptrCast(@alignCast(w.term orelse return));
+
+    if (clipboard.mime_type == .unset)
+        return;
+
+    const raw = xmalloc(@sizeOf(DndContext)) orelse return;
+    const ctx: *DndContext = @ptrCast(@alignCast(raw));
+    ctx.* = .{
+        .term = term,
+        .data_offer = clipboard.data_offer,
+    };
+
+    // Prepare a pipe the other client can write its selection to us
+    var fds: [2]c_int = undefined;
+    if (pipe2(&fds, O_CLOEXEC) == -1) {
+        log_errno(
+            LOG_CLASS_ERROR, "selection", "selection.zig", @intCast(@src().line),
+            "failed to create pipe");
+        free(ctx);
+        return;
+    }
+
+    const read_fd = fds[0];
+    const write_fd = fds[1];
+
+    // Give the write-end of the pipe to the other client
+    wayland_shim_data_offer_receive(
+        clipboard.data_offer, mimeTypeName(clipboard.mime_type).?, write_fd);
+
+    // Don't keep our copy of the write-end open (or we'll never get EOF)
+    _ = close(write_fd);
+
+    term.is_sending_paste_data = true;
+
+    if (term.bracketed_paste)
+        term_paste_data_to_slave(term, "\x1b[200~", 6);
+
+    begin_receive_clipboard(
+        term, false, read_fd, @intFromEnum(clipboard.mime_type),
+        &receiveDnd, &receiveDndDone, ctx);
+
+    // data offer is now "owned" by the receive context
+    clipboard.data_offer = null;
+    clipboard.mime_type = .unset;
+}
+
+export fn selection_data_device_selection(
+    data: ?*anyopaque,
+    wl_data_device: ?*anyopaque,
+    offer: ?*anyopaque,
+) callconv(.c) void {
+    _ = wl_data_device;
+    // Selection offer from another client
+    const seat: *types.Seat = @ptrCast(@alignCast(data orelse return));
+
+    if (offer == null) {
+        selection_data_offer_reset(&seat.clipboard);
+    } else {
+        std.debug.assert(offer == seat.clipboard.data_offer);
+    }
+}
+
+export fn selection_primary_device_data_offer(
+    data: ?*anyopaque,
+    zwp_primary_selection_device: ?*anyopaque,
+    offer: ?*anyopaque,
+) callconv(.c) void {
+    _ = zwp_primary_selection_device;
+    const seat: *types.Seat = @ptrCast(@alignCast(data orelse return));
+
+    selection_primary_offer_reset(&seat.primary);
+    seat.primary.data_offer = offer;
+    wayland_shim_add_primary_offer_listener(offer, seat);
+}
+
+export fn selection_primary_device_selection(
+    data: ?*anyopaque,
+    zwp_primary_selection_device: ?*anyopaque,
+    offer: ?*anyopaque,
+) callconv(.c) void {
+    _ = zwp_primary_selection_device;
+    // Selection offer from another client, for primary
+    const seat: *types.Seat = @ptrCast(@alignCast(data orelse return));
+
+    if (offer == null) {
+        selection_primary_offer_reset(&seat.primary);
+    } else {
+        std.debug.assert(seat.primary.data_offer == offer);
+    }
 }

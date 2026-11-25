@@ -13,9 +13,50 @@
 #include "input.h"
 #include "selection.h"
 
-/* wayland.zig: the data-device / primary-selection / text-input listener
- * tables are defined in selection.c and ime.c, so seat setup attaches them
- * through these. */
+/* selection.zig (D5d-b2): the data-source / data-offer listener tables. The
+ * callbacks are Zig exports (selection.h); only the generated table layout
+ * is C knowledge. */
+const struct wl_data_source_listener data_source_listener = {
+    .target = &selection_data_source_target,
+    .send = &selection_data_source_send,
+    .cancelled = &selection_data_source_cancelled,
+    .dnd_drop_performed = &selection_data_source_dnd_drop_performed,
+    .dnd_finished = &selection_data_source_dnd_finished,
+    .action = &selection_data_source_action,
+};
+
+const struct zwp_primary_selection_source_v1_listener
+    primary_selection_source_listener = {
+    .send = &selection_primary_source_send,
+    .cancelled = &selection_primary_source_cancelled,
+};
+
+static const struct wl_data_offer_listener data_offer_listener = {
+    .offer = &selection_offer,
+    .source_actions = &selection_offer_source_actions,
+    .action = &selection_offer_action,
+};
+
+static const struct zwp_primary_selection_offer_v1_listener
+    primary_selection_offer_listener = {
+    .offer = &selection_primary_offer,
+};
+
+const struct wl_data_device_listener data_device_listener = {
+    .data_offer = &selection_data_device_data_offer,
+    .enter = &selection_data_device_enter,
+    .leave = &selection_data_device_leave,
+    .motion = &selection_data_device_motion,
+    .drop = &selection_data_device_drop,
+    .selection = &selection_data_device_selection,
+};
+
+const struct zwp_primary_selection_device_v1_listener
+    primary_selection_device_listener = {
+    .data_offer = &selection_primary_device_data_offer,
+    .selection = &selection_primary_device_selection,
+};
+
 void wayland_shim_add_data_device_listener(
     struct wl_data_device *dev, struct seat *seat)
 {
@@ -27,6 +68,32 @@ void wayland_shim_add_primary_selection_device_listener(
 {
     zwp_primary_selection_device_v1_add_listener(
         dev, &primary_selection_device_listener, seat);
+}
+
+void wayland_shim_add_data_source_listener(
+    struct wl_data_source *source, struct seat *seat)
+{
+    wl_data_source_add_listener(source, &data_source_listener, seat);
+}
+
+void wayland_shim_add_primary_source_listener(
+    struct zwp_primary_selection_source_v1 *source, struct seat *seat)
+{
+    zwp_primary_selection_source_v1_add_listener(
+        source, &primary_selection_source_listener, seat);
+}
+
+void wayland_shim_add_data_offer_listener(
+    struct wl_data_offer *offer, struct seat *seat)
+{
+    wl_data_offer_add_listener(offer, &data_offer_listener, seat);
+}
+
+void wayland_shim_add_primary_offer_listener(
+    struct zwp_primary_selection_offer_v1 *offer, struct seat *seat)
+{
+    zwp_primary_selection_offer_v1_add_listener(
+        offer, &primary_selection_offer_listener, seat);
 }
 
 #if defined(FOOT_IME_ENABLED) && FOOT_IME_ENABLED

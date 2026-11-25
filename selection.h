@@ -10,7 +10,7 @@ extern const struct zwp_primary_selection_device_v1_listener primary_selection_d
 
 
 /* The wl_data_source / zwp_primary_selection_source_v1 callbacks are Zig
- * (selection.zig, D5d-a); the listener tables in selection.c reference
+ * (selection.zig, D5d-a); the listener tables in wayland-shim.c reference
  * them. */
 void selection_data_source_target(void *data,
                                 struct wl_data_source *wl_data_source,
@@ -36,6 +36,32 @@ void selection_primary_source_cancelled(
 /* Send `text` to `fd` (the compositor's pipe) as selection data. */
 void selection_send_clipboard_or_primary(
     struct seat *seat, int fd, const char *text, const char *source_name);
+
+/* The data-device / primary-selection-device callbacks (selection.zig,
+ * D5d-b2). The listener tables that reference them live in wayland-shim.c. */
+void selection_data_device_data_offer(
+    void *data, struct wl_data_device *wl_data_device,
+    struct wl_data_offer *offer);
+void selection_data_device_enter(
+    void *data, struct wl_data_device *wl_data_device, uint32_t serial,
+    struct wl_surface *surface, wl_fixed_t x, wl_fixed_t y,
+    struct wl_data_offer *offer);
+void selection_data_device_leave(
+    void *data, struct wl_data_device *wl_data_device);
+void selection_data_device_motion(
+    void *data, struct wl_data_device *wl_data_device, uint32_t time,
+    wl_fixed_t x, wl_fixed_t y);
+void selection_data_device_drop(
+    void *data, struct wl_data_device *wl_data_device);
+void selection_data_device_selection(
+    void *data, struct wl_data_device *wl_data_device,
+    struct wl_data_offer *offer);
+void selection_primary_device_data_offer(
+    void *data, struct zwp_primary_selection_device_v1 *device,
+    struct zwp_primary_selection_offer_v1 *offer);
+void selection_primary_device_selection(
+    void *data, struct zwp_primary_selection_device_v1 *device,
+    struct zwp_primary_selection_offer_v1 *offer);
 
 /* Data offers (selection.zig, D5d-b1). */
 void selection_select_mime_type_for_offer(const char *mime_type,

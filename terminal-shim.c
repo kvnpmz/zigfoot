@@ -862,26 +862,102 @@ void wayland_shim_text_input_destroy(struct zwp_text_input_v3 *ti)
     zwp_text_input_v3_destroy(ti);
 }
 
-/* selection.zig (D5d-a): the *_destroy() request wrappers are generated
- * static inlines. */
+/* selection.zig: config accessors and one grid static inline (D5d-b2 moved
+ * these off the deleted selection-shim.c). */
+const char32_t *selection_conf_word_delimiters(const struct terminal *term)
+{
+    return term->conf->word_delimiters;
+}
+
+struct row *selection_grid_row_in_view(struct grid *grid, int row_no)
+{
+    return grid_row_in_view(grid, row_no);
+}
+
+void *selection_seat_clipboard_data_offer(const struct seat *seat)
+{
+    return seat->clipboard.data_offer;
+}
+
+void *selection_seat_primary_data_offer(const struct seat *seat)
+{
+    return seat->primary.data_offer;
+}
+
+int selection_conf_selection_target(const struct terminal *term)
+{
+    return term->conf->selection_target;
+}
+
+/* selection.zig (D5d-b2): the data-offer / data-source / primary-selection
+ * request wrappers are generated static inlines, so they stay here. The
+ * destroy wrappers are the wayland_shim_* ones above. */
 #include "primary-selection-unstable-v1.h"
-void selection_shim_data_source_destroy(struct wl_data_source *source)
+
+void *wayland_shim_data_source_create(struct wl_data_device_manager *manager)
 {
-    wl_data_source_destroy(source);
+    return wl_data_device_manager_create_data_source(manager);
 }
-void selection_shim_primary_source_destroy(
-    struct zwp_primary_selection_source_v1 *source)
+
+void wayland_shim_data_source_offer(
+    struct wl_data_source *source, const char *mime_type)
 {
-    zwp_primary_selection_source_v1_destroy(source);
+    wl_data_source_offer(source, mime_type);
 }
-void selection_shim_data_offer_destroy(struct wl_data_offer *offer)
+
+void wayland_shim_data_device_set_selection(
+    struct wl_data_device *dev, struct wl_data_source *source, uint32_t serial)
 {
-    wl_data_offer_destroy(offer);
+    wl_data_device_set_selection(dev, source, serial);
 }
-void selection_shim_primary_offer_destroy(
-    struct zwp_primary_selection_offer_v1 *offer)
+
+void *wayland_shim_primary_source_create(
+    struct zwp_primary_selection_device_manager_v1 *manager)
 {
-    zwp_primary_selection_offer_v1_destroy(offer);
+    return zwp_primary_selection_device_manager_v1_create_source(manager);
+}
+
+void wayland_shim_primary_source_offer(
+    struct zwp_primary_selection_source_v1 *source, const char *mime_type)
+{
+    zwp_primary_selection_source_v1_offer(source, mime_type);
+}
+
+void wayland_shim_primary_device_set_selection(
+    struct zwp_primary_selection_device_v1 *dev,
+    struct zwp_primary_selection_source_v1 *source, uint32_t serial)
+{
+    zwp_primary_selection_device_v1_set_selection(dev, source, serial);
+}
+
+void wayland_shim_data_offer_receive(
+    struct wl_data_offer *offer, const char *mime_type, int32_t fd)
+{
+    wl_data_offer_receive(offer, mime_type, fd);
+}
+
+void wayland_shim_primary_offer_receive(
+    struct zwp_primary_selection_offer_v1 *offer, const char *mime_type,
+    int32_t fd)
+{
+    zwp_primary_selection_offer_v1_receive(offer, mime_type, fd);
+}
+
+void wayland_shim_data_offer_accept(
+    struct wl_data_offer *offer, uint32_t serial, const char *mime_type)
+{
+    wl_data_offer_accept(offer, serial, mime_type);
+}
+
+void wayland_shim_data_offer_set_actions(
+    struct wl_data_offer *offer, uint32_t actions, uint32_t preferred_action)
+{
+    wl_data_offer_set_actions(offer, actions, preferred_action);
+}
+
+void wayland_shim_data_offer_finish(struct wl_data_offer *offer)
+{
+    wl_data_offer_finish(offer);
 }
 
 /* url-mode.zig (D5c): regex_t's internals (re_nsub, regmatch_t) are

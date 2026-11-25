@@ -24,7 +24,7 @@ foot-owned C lines are gone (44.7%)**, replaced by ~22.7k lines of Zig
 | State | Modules |
 |---|---|
 | **Ported, C deleted** (28) | `async`, `base64`, `char32`, `commands`, `composed`, `csi`, `cursor-shape`, `dcs`, `extract`, `fdm`, `grid`, `hsl`, `misc`, `notify`, `osc`, `reaper`, `sixel`, `spawn`, `spawn_template`, `tokenize`, `uri`, `log`, `user-notification`, `unicode-mode`, `vt`, `xmalloc`, `xsnprintf`, and **`config`** (the parser, the logger tail and the fcft accessors are Zig; the 35 surviving C lines are `config_regex_compile()` only — see §6.3) |
-| **In progress** (Zig + remaining C + shims) | `terminal.c` (1,780 left), `selection.c` (844 left), `config.c` (35 left — the regex_t shim), `slave.c` (64 left — only the execvpe fallback; `slave.zig` has signals and terminfo). `shm.c` (E2) and `debug.c` (E1b) have since reached zero C — see §14. |
+| **In progress** (Zig + remaining C + shims) | `terminal.c` (1,780 left), `config.c` (35 left — the regex_t shim), `slave.c` (64 left — only the execvpe fallback; `slave.zig` has signals and terminfo). `shm.c` (E2), `debug.c` (E1b) and `selection.c` (D5d-b2) have since reached zero C — see §14. |
 | **Untouched** (13 modules, ~21.2k lines) | `box-drawing` (3,450), `render` (5,479), `input` (3,690), `wayland` (2,881), `search` (1,512), `url-mode` (833), `main` (751), `server` (688), `key-binding` (661), `client` (629), `ime` (532), `quirks` (86), `foot-features` (42) |
 
 **Progress read two ways:** 45% by C volume, but roughly **35% by effort**,
@@ -894,7 +894,7 @@ Per-module burn-down (share of that module's original C that is gone):
 | 36 modules | 0 / — | **100%** | `async`…`box-drawing`, `search`, `terminal`, `log`, `grid`, `csi`, `sixel`, `osc`, `vt`, `input`, `key-binding`, `ime`, `url-mode`, `shm`… |
 | `config` | 35 / 4,374 | 99% | only `config_regex_compile()` (§6.3) |
 | `wayland` | 0 / 2,884 | **100%** | `wayland.c` deleted in E3; generated listener tables + `add_listener()` forwarders live in `wayland-shim.c` (249 lines), FDM callbacks are in `wayland.zig` |
-| `selection` | 522 / 2,967 | **82%** | receive path, data-device/DND listeners, `selection-shim.c` |
+| `selection` | 0 / 2,967 | **100%** | `selection.c` deleted in D5d-b2; data-device/DND listener tables and the protocol inlines live in `wayland-shim.c` / `terminal-shim.c`, `selection.zig` is the module |
 | `slave` | 64 / 573 | **89%** | only `execvpe()`; Zig 0.16 has no `execvpeZ()` |
 | `shm` | 0 / 1,110 | **100%** | `shm.c` deleted in E2; generated protocol inlines + `#ifdef` platform tests live in `shm-shim.c`; `shm.zig` is 1,028 lines |
 | `debug` | 0 / 47 | **100%** | ASAN hook is Zig, gated by the Meson `b_sanitize` option |
@@ -906,7 +906,7 @@ Per-module burn-down (share of that module's original C that is gone):
 | `key-binding` | 0 / 661 | **100%** | `key-binding.c` deleted in D5a; `key-binding.zig` is the module |
 | `ime` | 0 / 540 | **100%** | `ime.c` deleted in D5b; `ime.zig` is the module |
 
-**Percent complete: 94.3% by C volume (2,777 of 48,924 module C lines left, post-E3 + E1b), ~88% by effort (band 85–91%), 39/45 top-level modules (54 counting `spawn_template`) with zero C left.**
+**Percent complete: 95.4% by C volume (2,255 of 48,924 module C lines left, post-D5d-b2), ~89% by effort (band 86–92%), 40/45 top-level modules (55 counting `spawn_template`) with zero C left.**
 **Post-D4d2a:** `input.c` is 3,618 → **2,040** (45% ported), module C 12,709 →
 **7,968**, harness 684 → **744** checks; every keyboard entry point is Zig,
 and so is mouse scrolling. `keymap.h` is down to 27 lines (types
@@ -922,6 +922,27 @@ the six windows
 compositor. Real presentation feedback is still not delivered to these
 short-lived windows, so `presented()` is covered by the fabricated-context
 checks, not by the launches.
+
+**Post-D5d-b2:** `selection.c` and `selection-shim.c` are **deleted** — the 40th
+module with no C. The receive pipeline's wayland entry points
+(`text_from_clipboard()`, `text_from_primary()`, `selection_from_clipboard()`,
+`selection_from_primary()`), the data-device and primary-selection device
+listeners (including drag-and-drop: enter/leave/motion/drop and the per-drop
+`dnd_context`), the send-path manager functions and both `*_unset()` helpers
+are Zig now. The six listener tables moved to `wayland-shim.c` (generated
+table layout only), and eleven generated request inlines became
+`wayland_shim_*` wrappers in `terminal-shim.c`; the four struct-mirror
+accessors (`word_delimiters`, `grid_row_in_view`, `selection_target`, the two
+`data_offer` getters) moved there too. Deliberate differences: `TEXT` and
+`STRING` are still offered (C's order preserved), a NULL `data_device_manager`
+returns false instead of dereferencing (undefined in C), and the
+`LOG_DBG`/`LOG_WARN` bodies stay silent as elsewhere. Module C 2,777 →
+**2,255** (95.4% eliminated), `selection.zig` 2,452 → **2,981** lines, Zig
+51,000 → **51,529**, harness 874 → **889** checks, shim 3,500 → **3,400**.
+15 new harness checks drive the guard paths (no offer, no primary manager,
+NULL/empty text, serial 0, unset no-ops, leave, NULL-selection reset, motion,
+re-entrant paste). Verified: full-check green (3 dirs, 6 launches), valgrind
+clean.
 
 **Post-E3 + E1b (merges of agent-c, agent-b2):** `wayland.c` and `debug.c` are gone, `slave.c` is down to the 64-line `execvpe()` fallback. Module C 3,190 → **2,777** of 48,924 (94.3% eliminated), Zig **51,000** lines / 45 files, harness **874** `check()`/`check_text()` call sites, shim 3,500 lines. `wayland`'s generated listener tables and `add_listener()` forwarders are in `wayland-shim.c` (249 lines); the ASAN hook is Zig behind the new `asan_enabled` build option, and `slave`'s terminfo path arrives as the `foot_terminfo_path` build option. agent-b2 also fixed a divide-by-zero in the fuzz driver (empty mutated input). Both merges re-verified: full-check green (3 build dirs, 6 launches), valgrind clean.
 
@@ -1185,7 +1206,7 @@ dump (§14.5.2) for the cell/URL/CSD paths.
 | **D4e** done | `input`: the five **touch listeners** — `touch_to_scroll()` (the cell-granular delta scroll in both axes), `wl_touch_down` (idle gate, the long-press deadline from `conf.touch.long_press_delay`, surface kind), `wl_touch_up` and `wl_touch_motion` (a held touch becomes a synthesized LMB press and then either a scrolling touch or a drag through `wl_pointer_button`/`wl_pointer_motion`, with C's HELD→DRAGGING→SCROLLING fallthrough written out and the mouse-focus/active-surface temporarily swapped), `wl_touch_frame` and `wl_touch_cancel`. With this **`input.c` is deleted** (the 33rd module with no C): the three listener tables moved to `terminal-shim.c` (which already included `input.h` and owns `wayland_shim_add_*_listener()`), and the 390-line keyboard-layout `UNITTEST` moved to the harness as `test_keyboard_layouts()` (se / us+de(neo) / us(intl) keymaps through the kitty encoder, read back out of a pty; its nine assertions became named checks). The two `keymap_lookup()` blocks were already covered by `test_keymap_lookup()` and were dropped. 6 new harness checks for the touch state machine. No new shim functions — only the tables moved | D4d2b | 0.5d |
 
 **Track D5 — mid-tier (≈5–6 dev-days).** `key-binding` (661) — **done, D5a** —
-→ `ime` (540) → `url-mode` (833) — **done, D5c** — → `selection`'s 844-line tail. `key-binding`
+→ `ime` (540) — **done, D5b** — → `url-mode` (833) — **done, D5c** — → `selection` — **done, D5d**. `key-binding`
 removed `search.zig`'s private `KeyBinding` mirror; `terminal.zig` already
 shared `types.KeyBindingSet`. The `selection` tail deletes
 `selection-shim.c` (243) wholesale.

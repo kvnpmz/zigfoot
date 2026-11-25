@@ -6478,6 +6478,124 @@ test_selection_send(void)
 }
 
 /*
+ * The receive pipeline's wayland entry points (selection.zig, D5d-b2).
+ *
+ * There is no compositor, so only the guard paths are reachable: they must
+ * call `done` exactly once, never call the data callback, and leave the paste
+ * state alone. The offer/pipe path needs a real wl_data_offer (smoke launches).
+ */
+static int receive_cb_count;
+static int receive_done_count;
+
+static void
+receive_cb(char *data, size_t size, void *user)
+{
+    (void)data; (void)size; (void)user;
+    receive_cb_count++;
+}
+
+static void
+receive_done(void *user)
+{
+    (void)user;
+    receive_done_count++;
+}
+
+static void
+test_selection_receive(void)
+{
+    struct terminal *term = term_new();
+    struct seat seat;
+    memset(&seat, 0, sizeof(seat));
+    seat.clipboard.mime_type = DATA_OFFER_MIME_UNSET;
+    seat.primary.mime_type = DATA_OFFER_MIME_UNSET;
+
+    receive_done_count = receive_cb_count = 0;
+    text_from_clipboard(&seat, term, false, &receive_cb, &receive_done, term);
+    check(receive_done_count == 1 && receive_cb_count == 0,
+          "text_from_clipboard: no offer completes immediately");
+
+    /* A mime type alone is not enough: the offer pointer is what is read */
+    seat.clipboard.mime_type = DATA_OFFER_MIME_TEXT_PLAIN;
+    receive_done_count = 0;
+    text_from_clipboard(&seat, term, false, &receive_cb, &receive_done, term);
+    check(receive_done_count == 1,
+          "text_from_clipboard: a mime type without an offer still completes");
+
+    /* term->wl is NULL here, so the primary manager check short-circuits */
+    receive_done_count = 0;
+    text_from_primary(&seat, term, false, &receive_cb, &receive_done, term);
+    check(receive_done_count == 1,
+          "text_from_primary: no primary manager completes immediately");
+
+    term->is_sending_paste_data = false;
+    selection_from_clipboard(&seat, term, 1);
+    check(!term->is_sending_paste_data,
+          "selection_from_clipboard: no offer does not start a paste");
+
+    selection_from_primary(&seat, term);
+    check(!term->is_sending_paste_data,
+          "selection_from_primary: no manager does not start a paste");
+
+    /* Send-path guards: nothing here may reach the protocol */
+    check(!text_to_clipboard(&seat, term, NULL, 1),
+          "text_to_clipboard: NULL text is refused");
+    check(!text_to_clipboard(&seat, term, (char *)"", 1),
+          "text_to_clipboard: empty text is refused");
+
+    char *text = xstrdup("x");
+    check(!text_to_clipboard(&seat, term, text, 0),
+          "text_to_clipboard: serial 0 is refused");
+    check(!text_to_primary(&seat, term, text, 7),
+          "text_to_primary: no primary manager is refused");
+    free(text);
+
+    /* Unset without a data source is a no-op */
+    selection_clipboard_unset(&seat);
+    selection_primary_unset(&seat);
+    check(seat.clipboard.data_source == NULL && seat.primary.data_source == NULL,
+          "clipboard/primary unset: nothing to unset is a no-op");
+
+    /* Device listeners: leave drops the DnD target, a NULL selection resets */
+    seat.clipboard.window = (struct wl_window *)term;
+    selection_data_device_leave(&seat, NULL);
+    check(seat.clipboard.window == NULL,
+          "data_device leave: clears the DnD target");
+
+    seat.clipboard.window = (struct wl_window *)term;
+    seat.clipboard.mime_type = DATA_OFFER_MIME_URI_LIST;
+    selection_data_device_selection(&seat, NULL, NULL);
+    check(seat.clipboard.window == NULL &&
+          seat.clipboard.data_offer == NULL &&
+          seat.clipboard.mime_type == DATA_OFFER_MIME_UNSET,
+          "data_device selection(NULL): resets the offer state");
+
+    seat.primary.mime_type = DATA_OFFER_MIME_TEXT_UTF8;
+    selection_primary_device_selection(&seat, NULL, NULL);
+    check(seat.primary.data_offer == NULL &&
+          seat.primary.mime_type == DATA_OFFER_MIME_UNSET,
+          "primary_device selection(NULL): resets the offer state");
+
+    /* Motion is a no-op in C and stays one here */
+    seat.clipboard.window = (struct wl_window *)term;
+    selection_data_device_motion(&seat, NULL, 0, 0, 0);
+    check(seat.clipboard.window == (struct wl_window *)term,
+          "data_device motion: leaves the DnD target alone");
+
+    /* Already pasting: the second paste request is ignored */
+    seat.clipboard.data_offer = (struct wl_data_offer *)&seat;
+    term->is_sending_paste_data = true;
+    selection_from_clipboard(&seat, term, 1);
+    check(term->is_sending_paste_data && seat.clipboard.data_offer != NULL,
+          "selection_from_clipboard: re-entrant paste is ignored");
+    term->is_sending_paste_data = false;
+    seat.clipboard.data_offer = NULL;
+
+    free(term->normal.rows);
+    free(term);
+}
+
+/*
  * URL mode (url-mode.zig, D5c).
  *
  * Detection runs over a real grid with a real POSIX regex; the jump-label
@@ -7716,6 +7834,7 @@ main(void)
     test_keyboard_layouts();
     test_selection_offers();
     test_selection_send();
+    test_selection_receive();
     test_url_mode();
     test_slave_shims();
     test_ime_protocol();

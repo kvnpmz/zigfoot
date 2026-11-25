@@ -677,6 +677,37 @@ void wayland_shim_add_data_device_listener(
     struct wl_data_device *dev, struct seat *seat);
 void wayland_shim_add_primary_selection_device_listener(
     struct zwp_primary_selection_device_v1 *dev, struct seat *seat);
+void wayland_shim_add_data_source_listener(
+    struct wl_data_source *source, struct seat *seat);
+void wayland_shim_add_primary_source_listener(
+    struct zwp_primary_selection_source_v1 *source, struct seat *seat);
+void wayland_shim_add_data_offer_listener(
+    struct wl_data_offer *offer, struct seat *seat);
+void wayland_shim_add_primary_offer_listener(
+    struct zwp_primary_selection_offer_v1 *offer, struct seat *seat);
+/* selection.zig (D5d-b2): generated protocol request inlines. */
+void *wayland_shim_data_source_create(struct wl_data_device_manager *manager);
+void wayland_shim_data_source_offer(
+    struct wl_data_source *source, const char *mime_type);
+void wayland_shim_data_device_set_selection(
+    struct wl_data_device *dev, struct wl_data_source *source, uint32_t serial);
+void *wayland_shim_primary_source_create(
+    struct zwp_primary_selection_device_manager_v1 *manager);
+void wayland_shim_primary_source_offer(
+    struct zwp_primary_selection_source_v1 *source, const char *mime_type);
+void wayland_shim_primary_device_set_selection(
+    struct zwp_primary_selection_device_v1 *dev,
+    struct zwp_primary_selection_source_v1 *source, uint32_t serial);
+void wayland_shim_data_offer_receive(
+    struct wl_data_offer *offer, const char *mime_type, int32_t fd);
+void wayland_shim_primary_offer_receive(
+    struct zwp_primary_selection_offer_v1 *offer, const char *mime_type,
+    int32_t fd);
+void wayland_shim_data_offer_accept(
+    struct wl_data_offer *offer, uint32_t serial, const char *mime_type);
+void wayland_shim_data_offer_set_actions(
+    struct wl_data_offer *offer, uint32_t actions, uint32_t preferred_action);
+void wayland_shim_data_offer_finish(struct wl_data_offer *offer);
 void wayland_shim_add_text_input_listener(
     struct zwp_text_input_v3 *ti, struct seat *seat);
 void wayland_shim_add_registry_listener(
