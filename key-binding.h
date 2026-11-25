@@ -146,7 +146,30 @@ struct key_binding_set {
     xkb_mod_mask_t selection_overrides;
 };
 
-struct key_binding_manager;
+/* The manager and its per-(seat, conf) sets. These used to be private to
+ * key-binding.c; they are here now so the ABI probe can pin the Zig mirrors
+ * in terminal_types.zig (D5). */
+struct vmod_map {
+    const char *name;
+    xkb_mod_mask_t virtual_mask;
+    xkb_mod_mask_t real_mask;
+};
+
+struct key_set {
+    struct key_binding_set public;
+
+    const struct config *conf;
+    const struct seat *seat;
+    size_t conf_ref_count;
+
+    /* Virtual to real modifier mappings */
+    struct vmod_map vmods[8];
+};
+
+struct key_binding_manager {
+    struct key_set *last_used_set;
+    tll(struct key_set) binding_sets;
+};
 
 struct key_binding_manager *key_binding_manager_new(void);
 void key_binding_manager_destroy(struct key_binding_manager *mgr);

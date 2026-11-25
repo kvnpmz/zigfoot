@@ -6169,6 +6169,117 @@ test_keymap_lookup(void)
 }
 
 /*
+ * The key-binding manager (key-binding.zig, D5).
+ *
+ * Builds one set for a seat with a real us keymap and two configured
+ * bindings: Control+a and Control+Shift+A. The latter must be repaired to
+ * 'a' (Shift is consumed producing 'A') and sorted in front of the former.
+ */
+static void
+test_key_binding_manager(void)
+{
+    struct key_binding_manager *mgr = key_binding_manager_new();
+    check(mgr != NULL, "key_binding_manager_new() returns a manager");
+
+    static struct config conf;
+    memset(&conf, 0, sizeof(conf));
+
+    struct wayland wayl;
+    memset(&wayl, 0, sizeof(wayl));
+
+    struct terminal term;
+    memset(&term, 0, sizeof(term));
+    term.conf = &conf;
+    term.wl = &wayl;
+    tll_push_back(wayl.terms, &term);
+
+    struct seat seat;
+    memset(&seat, 0, sizeof(seat));
+    seat.name = "seat0";
+    seat.wayl = &wayl;
+
+    static struct config_key_binding kb[2];
+    memset(kb, 0, sizeof(kb));
+
+    seat.kbd.xkb = xkb_context_new(XKB_CONTEXT_NO_FLAGS);
+    xassert(seat.kbd.xkb != NULL);
+    seat.kbd.xkb_keymap = xkb_keymap_new_from_names(
+        seat.kbd.xkb, &(struct xkb_rule_names){.layout = "us"},
+        XKB_KEYMAP_COMPILE_NO_FLAGS);
+    if (seat.kbd.xkb_keymap == NULL) {
+        check(false, "the us keymap is available for the key-binding test");
+        goto out;
+    }
+    seat.kbd.xkb_state = xkb_state_new(seat.kbd.xkb_keymap);
+    xassert(seat.kbd.xkb_state != NULL);
+
+    tll_push_back(kb[0].modifiers, "Control");
+    kb[0].action = BIND_ACTION_NOOP;
+    kb[0].k.sym = XKB_KEY_a;
+
+    tll_push_back(kb[1].modifiers, "Control");
+    tll_push_back(kb[1].modifiers, "Shift");
+    kb[1].action = BIND_ACTION_NOOP;
+    kb[1].k.sym = XKB_KEY_A;
+
+    conf.bindings.key.count = 2;
+    conf.bindings.key.arr = kb;
+
+    key_binding_new_for_seat(mgr, &seat);
+
+    struct key_binding_set *set = key_binding_for(mgr, &conf, &seat);
+    check(set != NULL, "key_binding_for() finds the set built for the seat");
+    check(set != NULL && tll_length(set->key) == 2,
+          "both configured key bindings were converted");
+    check(set != NULL && tll_length(set->search) == 0 &&
+          tll_length(set->url) == 0 && tll_length(set->mouse) == 0,
+          "the other binding lists stay empty");
+
+    if (set != NULL) {
+        size_t i = 0;
+        tll_foreach(set->key, it) {
+            if (i == 0) {
+                check(it->item.k.sym == XKB_KEY_a &&
+                      __builtin_popcount(it->item.mods) == 2,
+                      "the shifted combo is repaired to 'a' and sorted first");
+                check(tll_length(it->item.k.key_codes) > 0,
+                      "the repaired symbol resolved to key codes");
+            } else {
+                check(it->item.k.sym == XKB_KEY_a &&
+                      __builtin_popcount(it->item.mods) == 1,
+                      "the plain Control+a binding sorts after it");
+            }
+            i++;
+        }
+    }
+
+    key_binding_unload_keymap(mgr, &seat);
+    check(set != NULL && tll_length(set->key) == 0,
+          "unload_keymap empties the binding lists");
+
+    key_binding_remove_seat(mgr, &seat);
+    check(key_binding_for(mgr, &conf, &seat) == NULL,
+          "remove_seat drops the set");
+
+out:
+    key_binding_remove_seat(mgr, &seat);
+    key_binding_manager_destroy(mgr);
+    key_binding_manager_destroy(NULL);
+
+    tll_free(kb[0].modifiers);
+    tll_free(kb[1].modifiers);
+
+    if (seat.kbd.xkb_state != NULL)
+        xkb_state_unref(seat.kbd.xkb_state);
+    if (seat.kbd.xkb_keymap != NULL)
+        xkb_keymap_unref(seat.kbd.xkb_keymap);
+    if (seat.kbd.xkb != NULL)
+        xkb_context_unref(seat.kbd.xkb);
+
+    tll_free(wayl.terms);
+}
+
+/*
  * Touch listeners (input.zig, D4e).
  *
  * A touch needs a real wl_surface to be mapped to a window, so the harness
@@ -7043,6 +7154,7 @@ main(void)
     test_keymap_lookup();
     test_kbd_protocols();
     test_keyboard_layouts();
+    test_key_binding_manager();
     test_touch_listeners();
     test_pointer_helpers();
     test_keyboard_modifiers();

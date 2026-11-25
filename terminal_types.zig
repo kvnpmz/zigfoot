@@ -1985,9 +1985,37 @@ pub const KeyBindingSet = extern struct {
     selection_overrides: u32, // xkb_mod_mask_t
 };
 
+/// key-binding.h's `struct vmod_map`: one virtual→real modifier mapping.
+pub const VmodMap = extern struct {
+    name: ?[*:0]const u8,
+    virtual_mask: u32, // xkb_mod_mask_t
+    real_mask: u32, // xkb_mod_mask_t
+};
+
+/// key-binding.h's `struct key_set`: a `key_binding_set` (first member, so a
+/// `*KeySet` and a `*KeyBindingSet` are interchangeable) plus the conf/seat
+/// it was built for and the cached virtual-modifier mappings.
+pub const KeySet = extern struct {
+    public: KeyBindingSet,
+    conf: ?*const Config,
+    seat: ?*const Seat,
+    conf_ref_count: usize,
+    vmods: [8]VmodMap,
+};
+
+/// key-binding.h's `struct key_binding_manager`: last-used lookup cache plus
+/// the list of live key sets.
+pub const KeyBindingManager = extern struct {
+    last_used_set: ?*KeySet,
+    binding_sets: Tll(KeySet),
+};
+
 comptime {
     expectAbi(KeyBinding, "KeyBinding");
     expectAbi(KeyBindingSet, "KeyBindingSet");
+    expectAbi(VmodMap, "VmodMap");
+    expectAbi(KeySet, "KeySet");
+    expectAbi(KeyBindingManager, "KeyBindingManager");
 }
 
 pub const ConfigKeyBinding = extern struct {

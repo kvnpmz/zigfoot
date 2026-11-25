@@ -1109,25 +1109,9 @@ fn distancePrevWord(term: *const types.Terminal) usize {
 
 const tll = @import("tll.zig");
 
-// key-binding.h's `struct key_binding` (mirrored locally; D5 moves it into
-// terminal_types.zig together with the rest of key-binding.h).
-const KeyCodeList = tll.Tll(u32); // xkb_keycode_t
-const KeyBinding = extern struct {
-    type: types.KeyBindingType,
-    action: c_int,
-    mods: u32, // xkb_mod_mask_t
-    u: extern union {
-        k: extern struct {
-            sym: u32, // xkb_keysym_t
-            key_codes: KeyCodeList,
-        },
-        m: extern struct {
-            button: u32,
-            count: c_int,
-        },
-    },
-    aux: ?*const anyopaque,
-};
+// key-binding.h's `struct key_binding` is terminal_types.KeyBinding (D5);
+// the anonymous union is reachable as `_u`.
+const KeyBinding = types.KeyBinding;
 pub const KeyBindingList = tll.Tll(KeyBinding);
 
 // key-binding.h's `struct key_binding_set` now lives in terminal_types.zig.
@@ -1609,7 +1593,7 @@ export fn search_input(
 
         var i: usize = 0;
         while (i < raw_count) : (i += 1) {
-            if (bind.u.k.sym == raw_syms[i]) {
+            if (bind._u.k.sym == raw_syms[i]) {
                 if (executeBinding(seat, term, bind, serial, &update_search_result, &search_direction, &redraw)) {
                     seat.kbd.last_shortcut_sym = sym;
                     return searchUpdate(term, update_search_result, redraw, search_direction);
@@ -1624,7 +1608,7 @@ export fn search_input(
     while (it.next()) |node| {
         const bind = &node.item;
 
-        if (bind.u.k.sym == sym and bind.mods == (mods & ~consumed)) {
+        if (bind._u.k.sym == sym and bind.mods == (mods & ~consumed)) {
             if (executeBinding(seat, term, bind, serial, &update_search_result, &search_direction, &redraw)) {
                 seat.kbd.last_shortcut_sym = sym;
                 return searchUpdate(term, update_search_result, redraw, search_direction);
@@ -1641,7 +1625,8 @@ export fn search_input(
         if (bind.mods != mods or bind.mods == 0)
             continue;
 
-        var code_it = (@constCast(&bind.u.k.key_codes)).foreach();
+        const key_codes: *tll.Tll(u32) = @ptrCast(@constCast(&bind._u.k.key_codes));
+        var code_it = key_codes.foreach();
         while (code_it.next()) |code| {
             if (code.item == key) {
                 if (executeBinding(seat, term, bind, serial, &update_search_result, &search_direction, &redraw)) {

@@ -497,6 +497,18 @@ input_obj = custom_target(
   ]
 )
 
+key_binding_obj = custom_target(
+  'key_binding_obj',
+  input: 'key-binding.zig',
+  depend_files: files('terminal_types.zig'),
+  output: 'key-binding.o',
+  depends: c_layout,
+  command: [
+    python, files('compile_zig.py'), '@INPUT@', '@OUTPUT@',
+    grapheme_clustering_zig,
+  ]
+)
+
 render_obj = custom_target(
   'render_obj',
   input: 'render.zig',
@@ -839,7 +851,7 @@ footlib = static_library(
   foot_features_obj, 'foot-features.h',
   'ime.c', 'ime.h',
   input_obj, 'input.h',
-  'key-binding.c', 'key-binding.h',
+  key_binding_obj, 'key-binding.h',
   notify_obj, 'notify.h', 'notify-shim.c',
   quirks_obj, 'quirks.h',
   reaper_obj, 'reaper.h',

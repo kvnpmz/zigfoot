@@ -808,7 +808,7 @@ Order matters: `search` and `wayland` first (they unblock the rest), then
 | **D3k** | `render`: search-box and url painting | D3j | 2d |
 | **D3l** | `render`: the worker thread, damage tracking, `grid_render()`, `render_resize()` and the remaining xcursor/tiocswinsz glue | D3k | 3–4d |
 | **D4** | `input` (3,687) — split into D4a keyboard/legacy+kitty protocols, D4b pointer/mouse/touch, D4c compose/IME plumbing | after B2 + key-binding | 1–1.5w |
-| **D5** | `key-binding` (661), `ime` (540), `url-mode` (833), `selection` S1+S3 (~600) | after B2/D4 | 4–5d |
+| **D5a** done | `key-binding`: the whole module — manager new/destroy, `key_binding_new_for_seat`/`_new_for_conf` (one `key_set` per (seat, conf), ref-counted), `key_binding_for` with the last-used cache, `key_binding_remove_seat`, `key_binding_unref`, `key_binding_load/unload_keymap`; `initialize_vmod_mappings()` (8 virtual modifiers through a scratch `xkb_state`), `key_codes_for_xkb_sym()` (every key code producing a symbol, for cross-layout matching), `maybe_repair_key_combo()` (the shifted-symbol/composed-modifier repair, logging the offending combo), `key_cmp()`/`sort_binding_list()` (most modifiers first, foot#1280), `mods_to_mask()` (config modifier names → mask, virtual→real), and the four config→runtime converters. `struct vmod_map`/`key_set`/`key_binding_manager` moved from the .c to `key-binding.h`; `terminal_types.zig` gained `VmodMap`/`KeySet`/`KeyBindingManager` mirrors pinned by the probe, and `search.zig` dropped its private `KeyBinding` for `types.KeyBinding`. 9 new harness checks (set build on a real us keymap, repair, sort order, unload, remove) | D4e | 1d |
 | **D6** | `main` (770), `server` (707), `client` (679) | last; they tie everything together and are only fully testable once a window opens | 4–5d |
 
 ### Track E — endgame (~2–3 days)
@@ -886,7 +886,7 @@ Per-module burn-down (share of that module's original C that is gone):
 
 | Module | C left / original | % | Note |
 |---|---|---|---|
-| 32 modules | 0 / — | **100%** | `async`…`box-drawing`, `search`, `terminal`, `log`, `grid`, `csi`, `sixel`, `osc`, `vt`, `input`… |
+| 33 modules | 0 / — | **100%** | `async`…`box-drawing`, `search`, `terminal`, `log`, `grid`, `csi`, `sixel`, `osc`, `vt`, `input`, `key-binding`… |
 | `config` | 35 / 4,374 | 99% | only `config_regex_compile()` (§6.3) |
 | `wayland` | 359 / 2,884 | 88% | 27 listener tables + forwarders + 3 FDM callbacks |
 | `selection` | 844 / 2,967 | 72% | data-device / primary-selection listeners, DND |
@@ -898,11 +898,11 @@ Per-module burn-down (share of that module's original C that is gone):
 | `url-mode` | 833 / 833 | 0% | |
 | `main` | 770 / 770 | 0% | |
 | `server` / `client` | 707 / 679 | 0% | |
-| `key-binding` | 661 / 661 | 0% | |
+| `key-binding` | 0 / 661 | **100%** | `key-binding.c` deleted in D5a; `key-binding.zig` is the module |
 | `ime` | 540 / 540 | 0% | |
 
-**Percent complete: 87.9% by C volume (post-D4e), ~83% by effort (band
-80–85%), 33/45 top-level modules (48 counting `spawn_template`) with zero C
+**Percent complete: 89.2% by C volume (post-D5a), ~84% by effort (band
+81–86%), 34/45 top-level modules (49 counting `spawn_template`) with zero C
 left.**
 **Post-D4d2a:** `input.c` is 3,618 → **2,040** (45% ported), module C 12,709 →
 **7,968**, harness 684 → **744** checks; every keyboard entry point is Zig,
@@ -919,6 +919,22 @@ the six windows
 compositor. Real presentation feedback is still not delivered to these
 short-lived windows, so `presented()` is covered by the fabricated-context
 checks, not by the launches.
+
+**Post-D5a:** `key-binding.c` is **deleted** — the 24th module port and
+the 34th with no C. Module C **5,927 → 5,266** (89.2% of the original C
+gone), Zig 48,057 → **48,738** lines, harness 781 → **790** checks. The
+manager, the per-(seat, conf) `key_set` lifecycle (build/ref-count/remove,
+the last-used cache), the config→runtime conversion of keyboard, search, URL
+and mouse bindings, `mods_to_mask()` with the virtual-modifier mapping,
+`maybe_repair_key_combo()` (shifted-symbol → level-0 repair) and the
+most-modifiers-first `key_cmp` sort are Zig. `struct vmod_map`,
+`struct key_set` and `struct key_binding_manager` moved from the .c into
+`key-binding.h` so the probe can pin the three new mirrors (`VmodMap`,
+`KeySet`, `KeyBindingManager`) in `terminal_types.zig`; `search.zig` dropped
+its private `KeyBinding` copy and now shares `types.KeyBinding` (only the
+`u`→`_u` union rename was needed). 9 new harness checks: set construction
+against a real `us` keymap, the shifted-symbol repair, the sort order, the
+empty sibling lists, unload, and remove.
 
 **Post-D4e:** `input.c` is **deleted** — the module is Zig only.
 Module C **6,607 → 5,927** (87.9% of the original C gone), Zig 47,861 →
@@ -1039,10 +1055,11 @@ dump (§14.5.2) for the cell/URL/CSD paths.
 | **D4d2b** done | `input`: the twelve **pointer listeners** — `wl_pointer_enter` (NULL-surface workaround, `term_surface_kind()`, the scale multiply, cursor-theme reload, per-surface CSD refresh), `wl_pointer_leave` (the touch-state gate as plain-int comparisons, xcursor-callback teardown, the full mouse reset, and `selection_finalize()`/CSD refresh for the old surface), the static `pointer_is_on_button()` inlined as a Zig helper, `wl_pointer_motion` (CSD hover flush, move-timer hand-off, the grid path: cell bookkeeping, `selection_update()`, the distance-proportional auto-scroll timer, and `term_mouse_motion()`), `fdm_csd_move()`, `wl_pointer_button` (click counting off `CLOCK_MONOTONIC` + `timespec_sub()`, the GNOME multi-press tracker workaround, title double-click/move-timer/window-menu, border resize edges, CSD button releases, and the grid press/release path through `match_mouse_binding()`/`execute_binding()`), plus `axis`/`axis_discrete`/`axis_value120`/`frame`/`axis_source`/`axis_stop` with their three accumulators. The listener table stays in C (like `keyboard_listener`), prototypes in `input.h`. `wl_fixed_t` is local 24.8 arithmetic rather than two new shims, `fabs()` is `@abs`, and three more xdg-shell requests got shims (`move`, `resize`, `show_window_menu`). Deliberate guard: motion/button with no mouse focus returns instead of dereferencing NULL. 11 new harness checks (NULL-surface enter, no-focus motion/axis/value120 early-outs, frame and axis-stop bookkeeping, and the full pointer-leave reset incl. button trackers) | D4c | 1.5d |
 | **D4e** done | `input`: the five **touch listeners** — `touch_to_scroll()` (the cell-granular delta scroll in both axes), `wl_touch_down` (idle gate, the long-press deadline from `conf.touch.long_press_delay`, surface kind), `wl_touch_up` and `wl_touch_motion` (a held touch becomes a synthesized LMB press and then either a scrolling touch or a drag through `wl_pointer_button`/`wl_pointer_motion`, with C's HELD→DRAGGING→SCROLLING fallthrough written out and the mouse-focus/active-surface temporarily swapped), `wl_touch_frame` and `wl_touch_cancel`. With this **`input.c` is deleted** (the 33rd module with no C): the three listener tables moved to `terminal-shim.c` (which already included `input.h` and owns `wayland_shim_add_*_listener()`), and the 390-line keyboard-layout `UNITTEST` moved to the harness as `test_keyboard_layouts()` (se / us+de(neo) / us(intl) keymaps through the kitty encoder, read back out of a pty; its nine assertions became named checks). The two `keymap_lookup()` blocks were already covered by `test_keymap_lookup()` and were dropped. 6 new harness checks for the touch state machine. No new shim functions — only the tables moved | D4d2b | 0.5d |
 
-**Track D5 — mid-tier (≈5–6 dev-days).** `key-binding` (661) → `ime` (540) →
-`url-mode` (833) → `selection`'s 844-line tail. Doing `key-binding` first
-removes `search.zig`'s and `terminal.zig`'s local 104-byte `key_binding_set`
-mirror; the `selection` tail deletes `selection-shim.c` (243) wholesale.
+**Track D5 — mid-tier (≈5–6 dev-days).** `key-binding` (661) — **done, D5a** —
+→ `ime` (540) → `url-mode` (833) → `selection`'s 844-line tail. `key-binding`
+removed `search.zig`'s private `KeyBinding` mirror; `terminal.zig` already
+shared `types.KeyBindingSet`. The `selection` tail deletes
+`selection-shim.c` (243) wholesale.
 
 **Track D6 — entry points (≈4–5 dev-days).** `main` (770), then `server` (707)
 and `client` (679), which share `main`'s setup. After D6 the process entry
