@@ -1965,6 +1965,9 @@ test_config_load_from_xdg(void)
     config_free(&conf);
 
     xassert(!config_load(&conf, NULL, &nots, &overrides, true, false));
+    /* The failing load still allocated the URL regex and the default
+     * bindings; main() frees the config on that path too. */
+    config_free(&conf);
 
     /* restore the environment */
     if (old_home) { setenv("HOME", old_home, 1); free(old_home); }

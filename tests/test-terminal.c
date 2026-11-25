@@ -5851,7 +5851,8 @@ test_pointer_listeners(void)
 
     /* a discrete event earlier in the frame suppresses the low-res axis */
     seat.mouse.have_discrete = true;
-    wl_pointer_axis(&seat, NULL, 0, 0, -120 << 8);
+    /* (-120) * 256, not -120 << 8: shifting a negative value is UB */
+    wl_pointer_axis(&seat, NULL, 0, 0, (-120) * 256);
     check(seat.mouse.aggregated[0] == 0.0,
           "pointer-axis is ignored after a discrete axis event");
 

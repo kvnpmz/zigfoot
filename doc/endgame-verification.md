@@ -69,7 +69,30 @@ Setup: `CC=clang meson setup build-asan --buildtype=debug -Db_sanitize=address`.
 clang -Itests/test-terminal.p -Itests -I../tests -I. -I.. -I/usr/include/pixman-1 -I/usr/include/freetype2 -I/usr/include/libpng16 -I/usr/include/harfbuzz -I/usr/include/glib-2.0 -I/usr/lib64/glib-2.0/include -fdiagnostics-color=always -fsanitize=address -fno-omit-frame-pointer -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Werror -std=c11 -O0 -g -Wno-c2y-extensions -DMEMFD_CREATE -DEXECVPE -DSIGABBREV_NP -D_GNU_SOURCE=200809L '-DFOOT_DEFAULT_TERM="foot"' '-DUTMP_ADD="add"' '-DUTMP_DEL="del"' '-DUTMP_DEFAULT_HELPER_PATH="/usr/lib/utempter/utempter"' -D_DEBUG -DFOOT_IME_ENABLED=1 -pedantic -fstrict-aliasing -Wstrict-aliasing -fmacro-prefix-map=../= -DFOOT_GRAPHEME_CLUSTERING=1 -DHAVE_PIXMAN_RGBA_16 -DHAVE_XDG_TOPLEVEL_TAG=1 -DHAVE_EXT_BACKGROUND_EFFECT=1 -DUTF8PROC_EXPORTS -pthread -MD -MQ tests/test-terminal.p/test-terminal.c.o -MF tests/test-terminal.p/test-terminal.c.o.d -o tests/test-terminal.p/test-terminal.c.o -c ../tests/test-terminal.c
 ```
 
-Diagnostic: `tests/test-terminal.c:5854:45: error: shifting a negative signed value is undefined [-Werror,-Wshift-negative-value]` for `wl_pointer_axis(&seat, NULL, 0, 0, -120 << 8);`. The prompt expected line 5505; merges moved it to 5854. `git blame` attributes the line to `79bd8dc3` (D4d2b pointer-listener harness), not to upstream foot and not to E3 work. GCC builds are unaffected (full matrix green). Code was not changed: this run records the caveat only. No ASAN runtime test result exists until that harness line is fixed by its owner.
+Diagnostic: `tests/test-terminal.c:5854:45: error: shifting a negative signed value is undefined [-Werror,-Wshift-negative-value]` for `wl_pointer_axis(&seat, NULL, 0, 0, -120 << 8);`. The prompt expected line 5505; merges moved it to 5854. `git blame` attributes the line to `79bd8dc3` (D4d2b pointer-listener harness), not to upstream foot and not to E3 work.
+
+**Resolved after this run.** The owner (A) fixed the line to `(-120) * 256`
+(same value, defined behaviour), and the ASAN build now completes. Two
+further results:
+
+- `test-config` under ASAN: **clean** (exit 0, no sanitizer output) — but only
+  after a real leak it exposed was fixed. LeakSanitizer (and valgrind,
+  which reproduced it reliably: 8,411 B direct + 60,912 B indirect,
+  `re_compile_internal` via `config_regex_compile()`) showed that the new
+  `test_config_load_from_xdg` never freed the partially loaded config after
+  its expected fatal-load failure, so the URL regex and the default
+  key/search/url/mouse bindings leaked. Added the missing `config_free()`.
+  `valgrind --leak-check=full ./build/tests/test-config` is now 0 bytes lost,
+  0 errors.
+- `test-terminal` under ASAN: still cannot complete in this container. After
+  ~600 checks ASAN's own allocator aborts (`AddressSanitizer failed to
+  deallocate 0x40000 bytes ... error code 22` / `Failed to munmap`), with
+  and without `quarantine_size_mb=0`. A trivial clang-ASAN binary runs fine
+  and `test-config` passes, so this is the mixed C-ASAN/uninstrumented-Zig
+  build in this environment, not a product finding. GCC ASAN is not
+  reachable: meson refuses `-Db_sanitize=address` with gcc here ("Linker gcc
+  does not support sanitizer arguments"). The gate's valgrind run covers
+  the harness instead.
 
 ### ReleaseSafe vs ReleaseFast
 
