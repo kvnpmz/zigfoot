@@ -25,29 +25,11 @@
  * ported Zig code needs, and only through this file — the layout of
  * `struct sixel` remains a C concern. */
 
-bool sixel_get_scrolling(struct terminal *t) {
-    return t->sixel.scrolling;
-}
 
-bool sixel_get_use_private_palette(struct terminal *t) {
-    return t->sixel.use_private_palette;
-}
 
-bool sixel_get_cursor_right_of_graphics(struct terminal *t) {
-    return t->sixel.cursor_right_of_graphics;
-}
 
-void sixel_set_scrolling(struct terminal *t, bool v) {
-    t->sixel.scrolling = v;
-}
 
-void sixel_set_use_private_palette(struct terminal *t, bool v) {
-    t->sixel.use_private_palette = v;
-}
 
-void sixel_set_cursor_right_of_graphics(struct terminal *t, bool v) {
-    t->sixel.cursor_right_of_graphics = v;
-}
 
 
 

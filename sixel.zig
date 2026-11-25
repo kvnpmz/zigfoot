@@ -13,9 +13,6 @@ extern fn term_to_slave(term: *types.Terminal, buf: [*]const u8, len: usize) cal
 extern fn xsnprintf(buf: [*]u8, n: usize, fmt: [*:0]const u8, ...) callconv(.c) usize;
 
 // sixel-shim.c accessors
-extern fn sixel_get_scrolling(term: *types.Terminal) callconv(.c) bool;
-extern fn sixel_get_use_private_palette(term: *types.Terminal) callconv(.c) bool;
-extern fn sixel_get_cursor_right_of_graphics(term: *types.Terminal) callconv(.c) bool;
 
 // ── Chunk A: colors/geometry report functions ────────────────────
 
@@ -732,6 +729,44 @@ fn wlHaveArgb2101010(term: *types.Terminal) bool {
 fn wlHaveAbgr2101010(term: *types.Terminal) bool {
     const wl = term.wl orelse return false;
     return wl._shm_format_bits.abgr2101010;
+}
+
+// csi.zig (XTSAVE) still reaches these through the C ABI; the bodies are
+// Zig now, so the shim functions are gone.
+export fn sixel_get_scrolling(term: *const types.Terminal) callconv(.c) bool {
+    return sixelFlag(term, 0x01);
+}
+
+export fn sixel_set_scrolling(term: *types.Terminal, v: bool) callconv(.c) void {
+    sixelSetFlag(term, 0x01, v);
+}
+
+export fn sixel_get_use_private_palette(term: *const types.Terminal) callconv(.c) bool {
+    return sixelFlag(term, 0x02);
+}
+
+export fn sixel_set_use_private_palette(term: *types.Terminal, v: bool) callconv(.c) void {
+    sixelSetFlag(term, 0x02, v);
+}
+
+export fn sixel_get_cursor_right_of_graphics(term: *const types.Terminal) callconv(.c) bool {
+    return sixelFlag(term, 0x04);
+}
+
+export fn sixel_set_cursor_right_of_graphics(term: *types.Terminal, v: bool) callconv(.c) void {
+    sixelSetFlag(term, 0x04, v);
+}
+
+/// C: bool scrolling:1, use_private_palette:1, cursor_right_of_graphics:1
+fn sixelFlag(term: *const types.Terminal, mask: u8) bool {
+    return term.sixel._sixel_flags & mask != 0;
+}
+
+fn sixelSetFlag(term: *types.Terminal, comptime mask: u8, v: bool) void {
+    if (v)
+        term.sixel._sixel_flags |= mask
+    else
+        term.sixel._sixel_flags &= ~mask;
 }
 
 export fn sixel_put_generic(term_opaque: ?*anyopaque, c: u8) callconv(.c) void {

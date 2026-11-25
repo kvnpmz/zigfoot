@@ -339,6 +339,8 @@ extern fn osc_ptmx_buffers_len(term: *types.Terminal) callconv(.c) usize;
 extern fn osc_fdm_epollout_ptmx(term: *types.Terminal) callconv(.c) void;
 
 // ── Helpers ───────────────────────────────────────────────────────
+extern fn term_theme_get(term: *const types.Terminal) callconv(.c) *const types.ColorTheme;
+
 fn osc52CopyAllowed(term: *types.Terminal) bool {
     const p = term.conf.?.security.osc52;
     return p == .enabled or p == .copy_enabled;
@@ -600,14 +602,6 @@ extern fn osc_notify(term: *types.Terminal, string: [*:0]u8) callconv(.c) void;
 
 
 
-extern fn osc_theme_fg(term: *types.Terminal) callconv(.c) u32;
-extern fn osc_theme_bg(term: *types.Terminal) callconv(.c) u32;
-extern fn osc_theme_alpha(term: *types.Terminal) callconv(.c) u16;
-extern fn osc_theme_cursor_text(term: *types.Terminal) callconv(.c) u32;
-extern fn osc_theme_cursor_cursor(term: *types.Terminal) callconv(.c) u32;
-extern fn osc_theme_selection_bg(term: *types.Terminal) callconv(.c) u32;
-extern fn osc_theme_selection_fg(term: *types.Terminal) callconv(.c) u32;
-extern fn osc_theme_table_copy(term: *types.Terminal, out: *[256]u32) callconv(.c) void;
 
 fn unhandled(term: *types.Terminal) void {
     std.debug.print("osc: unhandled: OSC: {s}\n", .{term.vt.osc.data.?[0..term.vt.osc.idx]});
@@ -749,7 +743,7 @@ export fn osc_dispatch(term: *types.Terminal) callconv(.c) void {
                 },
                 11 => {
                     term.colors.bg = color;
-                    if (!have_alpha) alpha = osc_theme_alpha(term);
+                    if (!have_alpha) alpha = term_theme_get(term).alpha;
                     const changed = term.colors.alpha != alpha;
                     term.colors.alpha = alpha;
                     if (changed) {
@@ -775,7 +769,7 @@ export fn osc_dispatch(term: *types.Terminal) callconv(.c) void {
         99 => kitty_notification_impl(term, string),
         104 => {
             if (string[0] == 0) {
-                osc_theme_table_copy(term, &term.colors.table);
+                @memcpy(term.colors.table[0..], term_theme_get(term).table[0..]);
                 term_damage_view(term);
             } else {
                 var s_idx_opt: ?[*:0]u8 = strtok(string, ";");
@@ -787,7 +781,7 @@ export fn osc_dispatch(term: *types.Terminal) callconv(.c) void {
                         continue;
                     }
                     var tbl: [256]u32 = undefined;
-                    osc_theme_table_copy(term, &tbl);
+                    @memcpy(tbl[0..], term_theme_get(term).table[0..]);
                     term.colors.table[idx] = tbl[idx];
                     term_damage_color(term, .base256, idx);
                 }
@@ -795,13 +789,13 @@ export fn osc_dispatch(term: *types.Terminal) callconv(.c) void {
         },
         105 => {},
         110 => {
-            term.colors.fg = osc_theme_fg(term);
+            term.colors.fg = term_theme_get(term).fg;
             term_damage_color(term, .default, 0);
         },
         111 => {
-            const alpha_changed = term.colors.alpha != osc_theme_alpha(term);
-            term.colors.bg = osc_theme_bg(term);
-            term.colors.alpha = osc_theme_alpha(term);
+            const alpha_changed = term.colors.alpha != term_theme_get(term).alpha;
+            term.colors.bg = term_theme_get(term).bg;
+            term.colors.alpha = term_theme_get(term).alpha;
             if (alpha_changed) {
                 wayl_win_alpha_changed(term.window);
                 term_font_subpixel_changed(term);
@@ -810,16 +804,16 @@ export fn osc_dispatch(term: *types.Terminal) callconv(.c) void {
             term_damage_margins(term);
         },
         112 => {
-            term.colors.cursor_fg = osc_theme_cursor_text(term);
-            term.colors.cursor_bg = osc_theme_cursor_cursor(term);
+            term.colors.cursor_fg = term_theme_get(term).cursor.text;
+            term.colors.cursor_bg = term_theme_get(term).cursor.cursor;
             if (term.conf.?.colors_dark.use_custom.cursor) {
                 term.colors.cursor_fg |= 1 << 31;
                 term.colors.cursor_bg |= 1 << 31;
             }
             term_damage_cursor(term);
         },
-        117 => term.colors.selection_bg = osc_theme_selection_bg(term),
-        119 => term.colors.selection_fg = osc_theme_selection_fg(term),
+        117 => term.colors.selection_bg = term_theme_get(term).selection_bg,
+        119 => term.colors.selection_fg = term_theme_get(term).selection_fg,
         133 => {
             const grid = term.grid orelse return;
             const cur_row = grid.cur_row orelse return;
