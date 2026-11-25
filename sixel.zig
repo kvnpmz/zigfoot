@@ -498,6 +498,9 @@ fn resize(term: *types.Terminal, new_width_mutable: c_int, new_height_mutable: c
         if (old_data) |p| free(@ptrCast(p));
     }
 
+    // C memsets `(alloc_new_height - old_height) * new_width` here even when
+    // the image shrank, which underflows the count to a huge size_t. The guard
+    // is the fix for that UB, not a port of a missing check (audit VT-07).
     if (initialize_bg and alloc_new_height_u > old_height_u) {
         memset_u32(
             new_data + old_height_u * new_width_u,

@@ -34,6 +34,8 @@
 #include "debug.h"
 #include "unicode-mode.h"
 #include "xmalloc.h"
+#include "base64.h"
+#include "osc.h"
 
 #include <stdio.h>
 #include <fcntl.h>
@@ -1435,6 +1437,103 @@ test_sgr_bad_colour_keeps_parsing(void)
 
     term_free(term);
 }
+/* osc.c sets LOG_ENABLE_DBG 0, so an unknown OSC sequence is silent even
+ * in a debug build; the port used to print it to stderr (audit VT-06). */
+static void
+test_osc_unknown_is_silent(void)
+{
+    struct terminal *term = term_new();
+    xassert(osc_ensure_size(term, 64));
+
+    const char seq[] = "999;x07";
+    memcpy(term->vt.osc.data, seq, sizeof(seq) - 1);
+    term->vt.osc.idx = sizeof(seq) - 1;
+
+    int fds[2];
+    xassert(pipe(fds) == 0);
+
+    fflush(stderr);
+    int saved = dup(STDERR_FILENO);
+    xassert(saved >= 0);
+    xassert(dup2(fds[1], STDERR_FILENO) >= 0);
+
+    osc_dispatch(term);
+
+    fflush(stderr);
+    xassert(dup2(saved, STDERR_FILENO) >= 0);
+    close(saved);
+    close(fds[1]);
+
+    char buf[256];
+    ssize_t n = read(fds[0], buf, sizeof(buf) - 1);
+    close(fds[0]);
+    if (n < 0)
+        n = 0;
+    buf[n] = '\0';
+
+    check(n == 0, "an unknown OSC writes nothing to stderr (VT-06)");
+    if (n != 0)
+        fprintf(stderr, "  unexpected output: <%s>\n", buf);
+
+    free(term->vt.osc.data);
+    term_free(term);
+}
+
+/* xmalloc.c normalizes a zero size to one byte and rejects a zero factor in
+ * xreallocarray() before it touches the pointer (audit PL-06). */
+static void
+test_allocator_contract(void)
+{
+    void *a = xmalloc(0);
+    void *b = xmalloc(0);
+    check(a != NULL, "xmalloc(0) returns a non-NULL pointer");
+    check(b != NULL, "xmalloc(0) returns a non-NULL pointer the second time");
+    check(a != b, "xmalloc(0) returns a unique pointer each time");
+    free(a);
+    free(b);
+
+    void *c = xcalloc(0, 16);
+    check(c != NULL, "xcalloc(0, n) returns a non-NULL pointer");
+    free(c);
+
+    pid_t pid = fork();
+    xassert(pid >= 0);
+    if (pid == 0) {
+        void *p = xmalloc(16);
+        void *q = xreallocarray(p, 0, 16);
+        (void)q;
+        _exit(0); /* realloc(ptr, 0) would have freed p: that is the bug */
+    }
+
+    int status = 0;
+    xassert(waitpid(pid, &status, 0) == pid);
+    check(WIFEXITED(status) && WEXITSTATUS(status) == 1,
+          "xreallocarray(ptr, 0, n) aborts (EINVAL) and keeps ptr alive");
+}
+
+/* base64_encode_final() asserts 0 < size < 3, as C does (audit PL-12). */
+static void
+test_base64_final_size(void)
+{
+    char out[4];
+    base64_encode_final((const uint8_t *)"ab", 2, out);
+    check(memcmp(out, "YWI=", 4) == 0,
+          "base64 final: a valid size-2 tail still encodes to YWI=");
+
+    pid_t pid = fork();
+    xassert(pid >= 0);
+    if (pid == 0) {
+        char bad[4];
+        base64_encode_final((const uint8_t *)"a", 0, bad);
+        _exit(0); /* silently encoding "====" is the bug */
+    }
+
+    int status = 0;
+    xassert(waitpid(pid, &status, 0) == pid);
+    check(!(WIFEXITED(status) && WEXITSTATUS(status) == 0),
+          "base64 final: size 0 aborts instead of encoding");
+}
+
 /* term_set_fonts(): needs four real fonts, a config and font_sizes, but no
  * window as long as resize_grid is false. */
 static void
@@ -8195,6 +8294,9 @@ main(void)
     test_sgr_underline();
     test_csi_private_dispatch();
     test_sgr_bad_colour_keeps_parsing();
+    test_osc_unknown_is_silent();
+    test_allocator_contract();
+    test_base64_final_size();
     test_set_fonts();
     test_reload_fonts();
     test_dpi_and_scale();

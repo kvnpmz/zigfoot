@@ -365,6 +365,7 @@ export fn footclient_main(argc: c_int, argv: [*][*:0]u8) callconv(.c) c_int {
         overrides.deinit();
         free(cfoot_argv);
         free(cslave_argv);
+        free(@ptrCast(foot_argv)); // C keeps this in a VLA; the port heap-copies it
         free(cwd_buffer);
         free(custom_cwd);
         if (fd != -1)

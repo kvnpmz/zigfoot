@@ -10,8 +10,14 @@ fn logErr(comptime fmt: []const u8, args: anytype) void {
 fn logErrno(comptime fmt: []const u8, args: anytype) void {
     std.debug.print("osc: " ++ fmt ++ " (errno)\n", args);
 }
+// osc.c sets `LOG_ENABLE_DBG 0`, so its LOG_DBG()/UNHANDLED() compile out:
+// foot is silent about unknown OSC sequences even with `-d`. Keep that. The
+// port printed to stderr where C prints nothing (audit VT-06).
+const log_enable_dbg = false;
+
 fn logDbg(comptime fmt: []const u8, args: anytype) void {
-    std.debug.print("osc: " ++ fmt ++ "\n", args);
+    if (log_enable_dbg)
+        std.debug.print("osc: " ++ fmt ++ "\n", args);
 }
 
 export fn osc_ensure_size(term: *types.Terminal, required_size: usize) callconv(.c) bool {
@@ -626,7 +632,8 @@ extern fn wayl_win_alpha_changed(win: ?*anyopaque) callconv(.c) void;
 extern fn osc_notify(term: *types.Terminal, string: [*:0]u8) callconv(.c) void;
 
 fn unhandled(term: *types.Terminal) void {
-    std.debug.print("osc: unhandled: OSC: {s}\n", .{term.vt.osc.data.?[0..term.vt.osc.idx]});
+    if (log_enable_dbg)
+        std.debug.print("osc: unhandled: OSC: {s}\n", .{term.vt.osc.data.?[0..term.vt.osc.idx]});
 }
 
 // Parse a leading integer from a C string (advancing through decimal digits).
