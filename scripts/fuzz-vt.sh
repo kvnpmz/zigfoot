@@ -21,7 +21,7 @@ cd "$root"
 compile_line=$(ninja -C build -t commands libvtlib.a | python3 -c '
 import sys
 lines = sys.stdin.read().splitlines()
-print(next(line for line in lines if " -c " in line and "vt-shim.c" in line))
+print(next(line for line in lines if " -c " in line and "csi-shim.c" in line))
 ')
 link_line=$(ninja -C build -t commands foot | tail -1)
 compile_flags=$(python3 -c '

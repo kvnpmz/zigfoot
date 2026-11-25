@@ -85,7 +85,7 @@ pub fn Tll(comptime T: type) type {
             self.length += 1;
         }
 
-        fn insertBefore(self: *@This(), it: ?*Node, item: T) void {
+        pub fn insertBefore(self: *@This(), it: ?*Node, item: T) void {
             const node_ptr = malloc(@sizeOf(Node)) orelse @panic("tll: malloc failed");
             const node: *Node = @ptrCast(@alignCast(node_ptr));
             node.item = item;

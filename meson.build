@@ -878,7 +878,6 @@ vtlib = static_library(
   sixel_obj, 'sixel.h',
   'sixel-shim.c',
   vt_obj, 'vt.h',
-  'vt-shim.c',
   builtin_terminfo, srgb_funcs,
   wl_proto_src + wl_proto_headers,
   version,
