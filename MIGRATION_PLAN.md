@@ -4,7 +4,8 @@ Status snapshot and a concrete continuation plan.
 Prepared 2026-11-23 against `feature/zig-migration` @ `a1d9d288`.
 **Refreshed again 2026-11-25 @ `f67b6f48` (D3i) — current numbers, the revised
 chunk order and the new verification gap are in §14. §1's scoreboard below is
-the 11-24 snapshot; use §14 for anything measured.**
+the 11-24 snapshot; use §14 for history and **§15 for the current endgame
+register, the finding ledger and the last numbers.**
 Refreshed 2026-11-24 against @ `3e023fd6` (Phase 0, Phase 1a, upstream merge,
 config C1-C2o, the terminal font/DPI/size stack T9/T10, `shm` S1-S5, `slave`,
 `log`, `debug`, `user-notification` and `unicode-mode` — the config parser,
@@ -1469,4 +1470,93 @@ concurrently with D3 by different workers.
 `squashfs-root/`, `craft.json`, `feed.json`, `usage.json`, `build-activity.log`.
 None belong in the repo; gitignore or delete them before the next commit so
 the scoreboard diffs stay readable. (`reference/` is tracked — leave it.)
+
+---
+
+## 15. Endgame register — 2026-11-25 @ `98f999c6` (+ `75be865f`)
+
+This is the section the next agent reads first. §14 is history; this is the
+state after `port-c2` and the three audits landed.
+
+### 15.1 Integration state
+
+| Metric | Value |
+|---|---:|
+| Module C remaining | **99 lines** (`config.c` 35 `regex_t`, `slave.c` 64 `execvpe`) |
+| `*-shim.c` | **2,554 lines / 11 files** (`terminal-shim.c` 1,683) |
+| Generated `abi_probe.c` | 3,339 lines |
+| Zig source | 55,039 lines |
+| Unported modules | **0** |
+| Class-(c) shim functions left | **1** — `log_presentation_statistics()`, see §15.3 |
+| Harness | 984 checks |
+| Open audit findings | 22 → 22 − 5 closed here = **17** |
+
+Merged into `feature/zig-migration` in this session: `port-c2` (`dad2f048`),
+`audit-vt` (`0ad2e56b`), `audit-surface` (`2b058876`), `audit-plumbing`
+(`98f999c6`). Gate: `scripts/full-check.sh` green on all three build dirs,
+six window launches; `valgrind -q --error-exitcode=99 ./build/tests/
+test-terminal` clean.
+
+### 15.2 Finding ledger
+
+`fixed` means the commit is on the integration branch. `open` names the owner
+in the three-agent split (`PLAN_3AGENTS.md`).
+
+| id | severity | file | status |
+|---|---|---|---|
+| VT-01…VT-03 | severe/bug | `csi.zig`, `terminal.zig` | fixed `01f734c7` |
+| VT-04 | bug | `selection.zig` | fixed `cbb3b171` |
+| VT-05 | bug | `osc.zig` | fixed `4a5f3382` |
+| VT-06 | risk | `osc.zig` | fixed `75be865f` |
+| VT-07 | nit | `sixel.zig` | fixed `75be865f` |
+| S-01, S-02 | high | `render.zig`, `notify.zig` | fixed `674e62d2` |
+| S-03, S-08 | high | `render.zig`, `input.zig` | fixed `4a5f3382` |
+| S-04…S-07 | high | `render.zig`, `wayland.zig` | open — Agent C |
+| S-09…S-13 | low | `selection.zig`, `notify.zig` | open — Agent C |
+| S-14, S-15 | low | `notify.zig`, `selection.zig` | open — Agent C |
+| V-01 | — | `render.zig`, harness | fixed `c819c0f2` (window/toplevel guard) |
+| PL-01, PL-02 | high | `uri.zig`, `config.zig` | fixed `674e62d2` |
+| PL-03, PL-04 | high | `fdm.zig`, `spawn.zig`, `main.zig`, `slave.zig` | open — Agent B |
+| PL-05, PL-06 | medium | `client.zig`, `xmalloc.zig` | fixed `75be865f` |
+| PL-07 | medium | `server.zig` | fixed `4a5f3382` |
+| PL-08 | medium | `terminal_types.zig`, probe | open — Agent B |
+| PL-09, PL-10, PL-11 | low/medium | `fdm.zig`, `main.zig`, `slave.zig` | open — Agent B |
+| PL-12 | low | `base64.zig` | fixed `75be865f` |
+
+### 15.3 Why `log_presentation_statistics()` stays in C
+
+It is the only remaining class-(c) body, and it is now reclassified as class
+(a): a **compiler mechanism**, not behaviour. The function carries
+`__attribute__((destructor))`, so the C runtime registers it in `.fini_array`
+and runs it after `main` returns, after the FDM and the wayland connection are
+gone. That ordering is the whole point of the function — it reads counters
+that must outlive every consumer. Zig has no equivalent attribute; reproducing
+it would mean an exported symbol plus hand-written `.fini_array` section glue,
+which is more C, not less. Its body is ten lines of formatting over
+`render_shim_presentation_stat_get()`, and the counters themselves live in
+`render.zig`. Keep it, with the reason recorded in `doc/shim-audit.md`.
+
+### 15.4 Divergences recorded in this session
+
+- **VT-06** — osc debug output is compiled out, not routed to the logger:
+  C sets `LOG_ENABLE_DBG 0` for that file, so even `-d` is silent there.
+- **V-01** — `render_update_title()` returns when `window`/`xdg_toplevel` is
+  NULL; C dereferences. Unreachable with a real window, and the harness builds
+  a bare one, so the guard makes the valgrind run deterministic rather than
+  changing product behaviour.
+- **PL-06** — `xreallocarray(ptr, 0, n)` and an overflowing product now abort
+  *before* touching `ptr`. C has the same preconditions; the port had dropped
+  them and silently freed the caller's buffer through `realloc(p, 0)`.
+- **PL-12** — the `0 < size < 3` assertion is back; sizes outside it are a
+  programming error, as in C.
+
+### 15.5 What is left
+
+1. Agent B: PL-03/PL-04 (FreeBSD, epoll layout) → PL-08 (probe coverage) →
+   PL-09/PL-10/PL-11. Gate: own build dirs + `scripts/check-targets.sh`.
+2. Agent C: S-04…S-07 (`f32` arithmetic) → S-09…S-15 (logs and asserts) →
+   render parity oracle + a 120-seed fuzz run.
+3. Agent A: merge B, gate, merge C, gate; annotate `doc/audit-*.md`; fuzz 120;
+   `zig fmt .` as its own commit; final numbers here; tag `zig-migration-1.0`;
+   gate at the tag.
 

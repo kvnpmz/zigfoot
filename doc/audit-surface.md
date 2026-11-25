@@ -1,5 +1,17 @@
 # Audit 2 — Wayland surface, render, input, selection
 
+> **Status (endgame, 2026-11-25, base `98f999c6`).** Body unchanged.
+>
+> | id | status |
+> |---|---|
+> | S-01, S-02 | fixed `674e62d2` |
+> | S-03, S-08 | fixed `4a5f3382` |
+> | V-01 | fixed `c819c0f2` — `render_update_title()` returns when the window
+>   or toplevel is NULL; C dereferences. Unreachable with a real window |
+> | S-04…S-07 | open — Agent C, `render-parity` |
+> | S-09…S-13 | open — Agent C |
+> | S-14, S-15 | open — Agent C |
+
 Base: `18754871` (`git fetch /workspace feature/zig-migration && git reset --hard FETCH_HEAD`, snapshot taken at the start of this audit). References to C are `git show origin/master:<file>.c` (`origin/master` = `6b3f557d`). No product file was edited; this document is the only write.
 
 Verification run on this checkout:

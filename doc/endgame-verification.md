@@ -4,6 +4,11 @@ Base: `9f4f1def` (Agent A's merge, includes the D6 server port).
 Toolchain: `/opt/zig/zig` 0.16.0, GCC 14.2.1, Clang 21.1.8.
 Date: 2026-11-25.
 
+> **Refreshed after integration @ `98f999c6`.** Shims are 2,554 lines in 11
+> files, and the only remaining class-(c) body is the exit-time
+> `log_presentation_statistics()` destructor (MIGRATION_PLAN §15.3). The
+> 99-line argument below is unchanged and still the reason those lines stay.
+
 ## Remaining C
 
 Two files, 99 lines. Both are API gaps, not unfinished ports.

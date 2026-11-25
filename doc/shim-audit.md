@@ -10,8 +10,14 @@ Base: `9f4f1def`. Audit date: 2026-11-25.
 > getters, now that `term_theme_get()` is Zig, and the six sixel flag
 > bits). `wayland_shim_registry_bind()` and `wayland_shim_iface_id()` are
 > reclassified as class (a): they exist so the generated `wl_interface`
-> symbols stay in one C TU. The remaining class-c rows are being ported
-> now; the table stays as the audit record.
+> symbols stay in one C TU.
+>
+> **All class-c rows are now closed (2026-11-25, base `98f999c6`).** The last
+> body, `log_presentation_statistics()`, is reclassified as class (a): it is a
+> `__attribute__((destructor))` function that the C runtime must run after
+> `main` returns, which Zig cannot express without more C glue (MIGRATION_PLAN
+> §15.3). Shims are 2,554 lines in 11 files; the table below stays as the audit
+> record and its per-row class is historical.
 
 ## Scope and result
 
@@ -396,7 +402,7 @@ Action `HOLD` is a class b deletion that needs a module-owner call-site edit. Ac
 | `terminal-shim.c` | `wayland_shim_surface_set_buffer_scale()` | a | KEEP |
 | `terminal-shim.c` | `wayland_shim_viewport_set_destination()` | a | KEEP |
 | `terminal-shim.c` | `terminal_shim_grid_row_absolute_in_view()` | a | KEEP |
-| `terminal-shim.c` | `log_presentation_statistics()` | c | PORT (10 body lines) |
+| `terminal-shim.c` | `log_presentation_statistics()` | a | KEEP — `__attribute__((destructor))`; the C runtime must call it after `main` (see MIGRATION_PLAN §15.3) |
 | `terminal-shim.c` | `render_presentation_ctx_term()` | a | KEEP |
 | `terminal-shim.c` | `render_presentation_ctx_input()` | a | KEEP |
 | `terminal-shim.c` | `render_presentation_ctx_commit()` | a | KEEP |

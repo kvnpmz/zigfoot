@@ -1,5 +1,21 @@
 # Audit 1 — VT core and terminal state
 
+> **Status (endgame, 2026-11-25, base `98f999c6`).** Findings are closed as
+> follows; the body below is the audit as written and is not rewritten.
+>
+> | id | status |
+> |---|---|
+> | VT-01, VT-02, VT-03 | fixed `01f734c7` |
+> | VT-04 | fixed `cbb3b171` |
+> | VT-05 | fixed `4a5f3382` |
+> | VT-06 | fixed `75be865f` (debug output compiled out, as C does) |
+> | VT-07 | fixed `75be865f` (guard kept, comment added) |
+>
+> Regression checks for VT-01…VT-03 live in `tests/test-terminal.c`
+> (`test_csi_private_dispatch`, `test_sgr_bad_colour_keeps_parsing`); VT-06
+> has `test_osc_unknown_is_silent`. VT-04 is exercised by the fuzz seed 118
+> (`0x01` URI chunk).
+
 Scope: `vt`, `csi`, `dcs`, `osc`, `sixel`, `terminal`, `grid`, `composed`,
 `extract`, `search`, `char32`, `tokenize`, `unicode-mode`, `box-drawing`,
 `hsl`, `quirks`, `terminal_types.zig`, plus `csi/dcs/grid/sixel/vt/terminal-shim.c`.
