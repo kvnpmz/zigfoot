@@ -3527,3 +3527,125 @@ export fn erase_line(term: *types.Terminal, r: *types.Row) void {
     r.shell_integration.cmd_start = -1;
     r.shell_integration.cmd_end = -1;
 }
+
+//
+// Chunk C1 — IME enable/disable/reset.
+//
+// The terminal-level wrappers around ime.c: they fan out to every seat that
+// currently has keyboard focus on this terminal. `struct seat`/`struct
+// wayland` are mirrored (Track B), so the walk is direct.
+//
+// The C original wrapped everything in `#if FOOT_IME_ENABLED`; meson now
+// refuses to configure the Zig wayland mirrors without IME support, so there
+// is no off case left to compile.
+//
+
+const LOG_CLASS_DEBUG: c_int = 4;
+
+extern fn ime_enable(seat: *types.Seat) callconv(.c) void;
+extern fn ime_disable(seat: *types.Seat) callconv(.c) void;
+extern fn ime_reset_preedit(seat: *types.Seat) callconv(.c) void;
+
+/// tll_foreach(term->wl->seats, it)
+const SeatIter = struct {
+    node: ?*anyopaque,
+
+    fn next(self: *SeatIter) ?*types.Seat {
+        const raw = self.node orelse return null;
+        const node: *types.TllNode(types.Seat) = @ptrCast(@alignCast(raw));
+        self.node = node.next;
+        return &node.item;
+    }
+};
+
+fn seats(term: *const types.Terminal) SeatIter {
+    const wayl = term.wl orelse return .{ .node = null };
+    return .{ .node = wayl.seats.head };
+}
+
+/// The seats whose keyboard focus is `term`.
+fn focusedOn(seat: *types.Seat, term: *const types.Terminal) bool {
+    const focus = seat.kbd_focus orelse return false;
+    return focus == term;
+}
+
+export fn term_ime_is_enabled(term: *const types.Terminal) callconv(.c) bool {
+    return term.ime_enabled;
+}
+
+export fn term_ime_enable(term: *types.Terminal) callconv(.c) void {
+    if (term.ime_enabled)
+        return;
+
+    log_msg(
+        LOG_CLASS_DEBUG,
+        "terminal",
+        "terminal.zig",
+        @intCast(@src().line),
+        "IME enabled",
+    );
+
+    term.ime_enabled = true;
+
+    // IME is per seat - enable on all seats currently focusing us
+    var it = seats(term);
+    while (it.next()) |seat| {
+        if (focusedOn(seat, term))
+            ime_enable(seat);
+    }
+}
+
+export fn term_ime_disable(term: *types.Terminal) callconv(.c) void {
+    if (!term.ime_enabled)
+        return;
+
+    log_msg(
+        LOG_CLASS_DEBUG,
+        "terminal",
+        "terminal.zig",
+        @intCast(@src().line),
+        "IME disabled",
+    );
+
+    term.ime_enabled = false;
+
+    // IME is per seat - disable on all seats currently focusing us
+    var it = seats(term);
+    while (it.next()) |seat| {
+        if (focusedOn(seat, term))
+            ime_disable(seat);
+    }
+}
+
+export fn term_ime_reset(term: *types.Terminal) callconv(.c) bool {
+    var at_least_one_seat_was_reset = false;
+
+    var it = seats(term);
+    while (it.next()) |seat| {
+        if (!focusedOn(seat, term))
+            continue;
+
+        ime_reset_preedit(seat);
+        at_least_one_seat_was_reset = true;
+    }
+
+    return at_least_one_seat_was_reset;
+}
+
+export fn term_ime_set_cursor_rect(
+    term: *types.Terminal,
+    x: c_int,
+    y: c_int,
+    width: c_int,
+    height: c_int,
+) callconv(.c) void {
+    var it = seats(term);
+    while (it.next()) |seat| {
+        if (focusedOn(seat, term)) {
+            seat.ime.cursor_rect.pending.x = x;
+            seat.ime.cursor_rect.pending.y = y;
+            seat.ime.cursor_rect.pending.width = width;
+            seat.ime.cursor_rect.pending.height = height;
+        }
+    }
+}

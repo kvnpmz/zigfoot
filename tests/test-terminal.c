@@ -2028,6 +2028,57 @@ log_capture_end(struct log_capture *cap, char *buf, size_t cap_len)
     return len;
 }
 
+/* terminal.zig: the IME wrappers fan out to every seat whose keyboard focus
+ * is this terminal. Two seats, one focused and one not, pin that down - and
+ * ime.c's ime_enable()/ime_reset_preedit() both return early on a seat with
+ * no text-input manager and no preedit, so no compositor is needed. */
+static void
+test_ime(void)
+{
+    struct wayland wl = {0};
+    struct terminal *term = term_new();
+    term->wl = &wl;
+
+    struct seat focused = {0};
+    focused.wayl = &wl;
+    focused.kbd_focus = term;
+    focused.ime_focus = term;
+    tll_push_back(wl.seats, focused);
+
+    struct seat elsewhere = {0};
+    elsewhere.wayl = &wl;
+    tll_push_back(wl.seats, elsewhere);
+
+    struct seat *s0 = &tll_front(wl.seats);
+    struct seat *s1 = &tll_back(wl.seats);
+
+    check(!term_ime_is_enabled(term), "IME starts disabled");
+    term_ime_enable(term);
+    check(term_ime_is_enabled(term), "term_ime_enable enables IME");
+    term_ime_enable(term);
+    check(term_ime_is_enabled(term), "enabling twice is harmless");
+    term_ime_disable(term);
+    check(!term_ime_is_enabled(term), "term_ime_disable disables IME");
+
+    term_ime_set_cursor_rect(term, 7, 9, 1, 2);
+    check(s0->ime.cursor_rect.pending.x == 7 &&
+          s0->ime.cursor_rect.pending.y == 9 &&
+          s0->ime.cursor_rect.pending.width == 1 &&
+          s0->ime.cursor_rect.pending.height == 2,
+          "cursor rect goes to the focused seat");
+    check(s1->ime.cursor_rect.pending.width == 0 &&
+          s1->ime.cursor_rect.pending.height == 0,
+          "cursor rect skips seats focused elsewhere");
+
+    check(term_ime_reset(term), "term_ime_reset reports the focused seat");
+    s0->kbd_focus = NULL;
+    check(!term_ime_reset(term),
+          "term_ime_reset is false once no seat is focused");
+
+    tll_free(wl.seats);
+    term_free(term);
+}
+
 /* quirks.zig: the weston CSD-subsurface workaround. The subsurfaces are
  * poison pointers, so any path that reaches wl_subsurface_set_{de,}sync()
  * crashes instead of silently passing. */
@@ -2786,6 +2837,7 @@ main(void)
     test_shm_chain();
     test_shm_scroll();
     test_slave_spawn();
+    test_ime();
     test_quirks();
     test_version_and_features();
     test_log();
