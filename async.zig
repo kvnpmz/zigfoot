@@ -18,8 +18,12 @@ export fn async_write(
     len: usize,
     idx: *usize,
 ) callconv(.c) AsyncWriteStatus {
-    const bytes: [*]const u8 = @ptrCast(data.?);
     var left = len - idx.*;
+    if (left == 0)
+        return .done;
+
+    // Safe now: at least one byte is going to be written.
+    const bytes: [*]const u8 = @ptrCast(data.?);
 
     while (left > 0) {
         const ret = write(fd, bytes + idx.*, left);

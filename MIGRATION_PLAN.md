@@ -811,6 +811,7 @@ Order matters: `search` and `wayland` first (they unblock the rest), then
 | **D5a** done | `key-binding`: the whole module — manager new/destroy, `key_binding_new_for_seat`/`_new_for_conf` (one `key_set` per (seat, conf), ref-counted), `key_binding_for` with the last-used cache, `key_binding_remove_seat`, `key_binding_unref`, `key_binding_load/unload_keymap`; `initialize_vmod_mappings()` (8 virtual modifiers through a scratch `xkb_state`), `key_codes_for_xkb_sym()` (every key code producing a symbol, for cross-layout matching), `maybe_repair_key_combo()` (the shifted-symbol/composed-modifier repair, logging the offending combo), `key_cmp()`/`sort_binding_list()` (most modifiers first, foot#1280), `mods_to_mask()` (config modifier names → mask, virtual→real), and the four config→runtime converters. `struct vmod_map`/`key_set`/`key_binding_manager` moved from the .c to `key-binding.h`; `terminal_types.zig` gained `VmodMap`/`KeySet`/`KeyBindingManager` mirrors pinned by the probe, and `search.zig` dropped its private `KeyBinding` for `types.KeyBinding`. 9 new harness checks (set build on a real us keymap, repair, sort order, unload, remove) | D4e | 1d |
 | **D5b** done | `ime`: the whole module — pending preedit/commit/delete state, `ime_reset_pending`/`ime_reset_preedit`, `done()` applying the six protocol steps (commit to the search input or the slave, then the preedit → cells with the `mblen()`+`c32width()` byte→cell cursor mapping, wide-glyph spacers, and the outside-cursor underline), `ime_enable`/`ime_disable`/`ime_update_cursor_rect` (pending-vs-sent rect dedupe, beam-vs-block width, grid-row rebasing) and the six listeners. Five `terminal_shim_text_input_*` forwarders for the generated inlines; the listener table moved to `wayland.c`; `ime.h` declares the callbacks outside the feature guard, and the `#else` stubs are gone (meson refuses `-Dime=false`). 15 new harness checks | D5a | 0.5d |
 | **D5c** done | `url-mode`: the whole module — the url-mode binding dispatcher, activation (uri_parse, the local file: prefix strip, clipboard or launcher), the spawn-launcher + XDG activation-token callback, `urls_input()`'s three matchers and jump-label editing, `regex_detected()` (per-logical-line utf8 flattening with a byte→cell map, combining expansion, `c32rtomb()`), `osc8_uris()`, overlap removal, `generate_key_combos()`/`urls_assign_key_combos()` with duplicate reuse, `tag_cells_for_url()`, `urls_render()` and `urls_reset()`. `regexec()` stays in C (`url_shim_regex_match()`; `regex_t`/`regmatch_t` are libc-specific), `toc32lower()` added to `char32.zig`. 8 new harness checks | D5b | 1.5d |
+| **D5d-a** done | `selection`: the data-source send path — `target`, `send`, `cancelled`, the DnD stubs, `primary_send`/`primary_cancelled`, and `send_clipboard_or_primary()` (non-blocking fd, synchronous `async_write()`, EPOLLOUT `clipboard_send` context for the remainder, then close). Source listener tables stay in C (as with keyboard/pointer); two destroy-inline shims added. 3 new harness checks write into a real pipe. Also fixed `async_write()`'s NULL+len=0 cast. 157 of 844 lines gone | D5c | 1d |
 | **D6** | `main` (770), `server` (707), `client` (679) | last; they tie everything together and are only fully testable once a window opens | 4–5d |
 
 ### Track E — endgame (~2–3 days)
@@ -891,7 +892,7 @@ Per-module burn-down (share of that module's original C that is gone):
 | 35 modules | 0 / — | **100%** | `async`…`box-drawing`, `search`, `terminal`, `log`, `grid`, `csi`, `sixel`, `osc`, `vt`, `input`, `key-binding`, `ime`, `url-mode`… |
 | `config` | 35 / 4,374 | 99% | only `config_regex_compile()` (§6.3) |
 | `wayland` | 359 / 2,884 | 88% | 27 listener tables + forwarders + 3 FDM callbacks |
-| `selection` | 844 / 2,967 | 72% | data-device / primary-selection listeners, DND |
+| `selection` | 687 / 2,967 | **77%** | receive path, data-device/DND listeners, `selection-shim.c` |
 | `slave` | 106 / 573 | **81%** | signal reset, terminfo path and execvpe left |
 | `shm` | 329 / 1,110 | 70% | globals, `wl_shm`/`wl_buffer` stubs, punch-hole `#ifdef`s |
 | `debug` | 22 / 47 | 53% | ASAN stack-trace hook |
@@ -903,7 +904,7 @@ Per-module burn-down (share of that module's original C that is gone):
 | `key-binding` | 0 / 661 | **100%** | `key-binding.c` deleted in D5a; `key-binding.zig` is the module |
 | `ime` | 0 / 540 | **100%** | `ime.c` deleted in D5b; `ime.zig` is the module |
 
-**Percent complete: 92.2% by C volume (post-D5c), ~86% by effort (band
+**Percent complete: 92.5% by C volume (post-D5d-a), ~86% by effort (band
 83–88%), 36/45 top-level modules (51 counting `spawn_template`) with zero C
 left.**
 **Post-D4d2a:** `input.c` is 3,618 → **2,040** (45% ported), module C 12,709 →
@@ -921,6 +922,20 @@ the six windows
 compositor. Real presentation feedback is still not delivered to these
 short-lived windows, so `presented()` is covered by the fabricated-context
 checks, not by the launches.
+
+**Post-D5d-a:** the data-source half of `selection` is Zig: `target`, `send`,
+`cancelled`, the three DnD stubs, `primary_send`/`primary_cancelled`, and the
+shared `send_clipboard_or_primary()` path (non-blocking fd, a synchronous
+`async_write()`, then an EPOLLOUT `clipboard_send` context for the
+remainder). The two source listener tables stay in `selection.c` and
+reference the Zig exports, as the keyboard/pointer tables do. New shims:
+`selection_shim_{data,primary}_source_destroy()` for the generated destroy
+inlines. Module C 3,841 → **3,684** (92.5% eliminated), Zig 50,364 →
+**50,587**, harness 822 → **825**, shim 3,020 → **3,031**. 3 new harness
+checks write a selection into a real pipe (clipboard, null, primary).
+Latent bug fixed: `async_write()` rejected a NULL buffer with `len == 0`
+(it cast before checking the remaining length); the empty-selection case
+now returns DONE like the C original.
 
 **Post-D5c:** `url-mode.c` is **deleted** — the 36th module with no C.
 Module C **4,674 → 3,841** (92.2% of the original C gone), Zig 49,358 →

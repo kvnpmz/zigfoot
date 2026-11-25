@@ -862,6 +862,19 @@ void wayland_shim_text_input_destroy(struct zwp_text_input_v3 *ti)
     zwp_text_input_v3_destroy(ti);
 }
 
+/* selection.zig (D5d-a): the *_destroy() request wrappers are generated
+ * static inlines. */
+#include "primary-selection-unstable-v1.h"
+void selection_shim_data_source_destroy(struct wl_data_source *source)
+{
+    wl_data_source_destroy(source);
+}
+void selection_shim_primary_source_destroy(
+    struct zwp_primary_selection_source_v1 *source)
+{
+    zwp_primary_selection_source_v1_destroy(source);
+}
+
 /* url-mode.zig (D5c): regex_t's internals (re_nsub, regmatch_t) are
  * libc-specific, so extracting one match's spans stays here. Returns false on
  * REG_NOMATCH (or any regexec() error). */

@@ -18,6 +18,7 @@
 #include "wayland.h"
 #include "render.h"
 #include "shm.h"
+#include "selection.h"
 #include "slave.h"
 #include "log.h"
 #include "box-drawing.h"
@@ -6171,6 +6172,52 @@ test_keymap_lookup(void)
 }
 
 /*
+ * The data-source send path (selection.zig, D5d-a).
+ *
+ * The compositor hands us a pipe and we write the selection into it; the
+ * small case completes synchronously and the fd is closed by the time the
+ * function returns, so the read side sees the data and then EOF.
+ */
+static void
+test_selection_send(void)
+{
+    struct seat seat;
+    memset(&seat, 0, sizeof(seat));
+
+    int fds[2];
+    char buf[32] = {0};
+
+    xassert(pipe(fds) == 0);
+    seat.clipboard.text = xstrdup("hello");
+    selection_send_clipboard_or_primary(&seat, fds[1], seat.clipboard.text, "clipboard");
+
+    ssize_t n = read(fds[0], buf, sizeof(buf));
+    check(n == 5 && memcmp(buf, "hello", 5) == 0,
+          "the clipboard send path writes the selection text to the fd");
+    close(fds[0]);
+    free(seat.clipboard.text);
+    seat.clipboard.text = NULL;
+
+    /* Through the listener callback, with no selection text at all */
+    xassert(pipe(fds) == 0);
+    selection_data_source_send(&seat, NULL, "text/plain", fds[1]);
+    n = read(fds[0], buf, sizeof(buf));
+    check(n == 0,
+          "a null clipboard selection writes nothing and closes the fd");
+    close(fds[0]);
+
+    /* The primary selection variant */
+    xassert(pipe(fds) == 0);
+    seat.primary.text = xstrdup("primary-data");
+    selection_primary_source_send(&seat, NULL, "text/plain", fds[1]);
+    n = read(fds[0], buf, sizeof(buf));
+    check(n == 12 && memcmp(buf, "primary-data", 12) == 0,
+          "the primary send path writes the primary selection");
+    close(fds[0]);
+    free(seat.primary.text);
+}
+
+/*
  * URL mode (url-mode.zig, D5c).
  *
  * Detection runs over a real grid with a real POSIX regex; the jump-label
@@ -7388,6 +7435,7 @@ main(void)
     test_keymap_lookup();
     test_kbd_protocols();
     test_keyboard_layouts();
+    test_selection_send();
     test_url_mode();
     test_slave_shims();
     test_ime_protocol();

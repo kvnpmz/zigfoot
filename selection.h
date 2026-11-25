@@ -8,6 +8,34 @@
 extern const struct wl_data_device_listener data_device_listener;
 extern const struct zwp_primary_selection_device_v1_listener primary_selection_device_listener;
 
+
+/* The wl_data_source / zwp_primary_selection_source_v1 callbacks are Zig
+ * (selection.zig, D5d-a); the listener tables in selection.c reference
+ * them. */
+void selection_data_source_target(void *data,
+                                struct wl_data_source *wl_data_source,
+                                const char *mime_type);
+void selection_data_source_send(void *data,
+                                struct wl_data_source *wl_data_source,
+                                const char *mime_type, int32_t fd);
+void selection_data_source_cancelled(void *data,
+                                     struct wl_data_source *wl_data_source);
+void selection_data_source_dnd_drop_performed(
+    void *data, struct wl_data_source *wl_data_source);
+void selection_data_source_dnd_finished(
+    void *data, struct wl_data_source *wl_data_source);
+void selection_data_source_action(void *data,
+                                  struct wl_data_source *wl_data_source,
+                                  uint32_t dnd_action);
+void selection_primary_source_send(
+    void *data, struct zwp_primary_selection_source_v1 *source,
+    const char *mime_type, int32_t fd);
+void selection_primary_source_cancelled(
+    void *data, struct zwp_primary_selection_source_v1 *source);
+
+/* Send `text` to `fd` (the compositor's pipe) as selection data. */
+void selection_send_clipboard_or_primary(
+    struct seat *seat, int fd, const char *text, const char *source_name);
 void selection_start(
     struct terminal *term, int col, int row,
     enum selection_kind new_kind, bool spaces_only);

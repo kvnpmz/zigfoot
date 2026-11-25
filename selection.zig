@@ -2101,3 +2101,222 @@ export fn begin_receive_clipboard(
     }
     done(user);
 }
+
+// ─────────────────────────────────────────────────────────────────────────
+// Data-source send path (D5d-a)
+//
+// When another client pastes, the compositor asks us for the data through
+// the wl_data_source / zwp_primary_selection_source_v1 "send" event. The
+// initial write is synchronous; if the pipe is full the remainder is queued
+// on the FDM (EPOLLOUT) and written chunk by chunk.
+//
+// The two listener tables stay in selection.c; they reference these exports.
+// ─────────────────────────────────────────────────────────────────────────
+
+const EPOLLOUT: c_int = 0x004;
+
+const AsyncWriteStatus = enum(c_int) { done = 0, remain = 1, err = 2 };
+
+extern fn async_write(
+    fd: c_int, data: ?*const anyopaque, len: usize, idx: *usize) callconv(.c) AsyncWriteStatus;
+extern fn xmalloc(size: usize) callconv(.c) ?*anyopaque;
+extern fn xstrdup(s: [*:0]const u8) callconv(.c) ?[*:0]u8;
+extern fn selection_shim_data_source_destroy(source: ?*anyopaque) callconv(.c) void;
+extern fn selection_shim_primary_source_destroy(source: ?*anyopaque) callconv(.c) void;
+extern fn log_errno(
+    class: c_int,
+    module: [*:0]const u8,
+    file: [*:0]const u8,
+    lineno: c_int,
+    fmt: [*:0]const u8,
+    ...
+) callconv(.c) void;
+
+const LOG_CLASS_ERROR: c_int = 1;
+
+fn freeSlice(p: anytype) void {
+    if (p) |q| free(@ptrCast(q));
+}
+
+const ClipboardSend = extern struct {
+    data: ?[*:0]u8,
+    len: usize,
+    idx: usize,
+};
+
+fn fdmSend(fdm_opaque: *Fdm, fd: c_int, events: c_int, data: ?*anyopaque) callconv(.c) bool {
+    const ctx: *ClipboardSend = @ptrCast(@alignCast(data orelse return true));
+
+    if (events & EPOLLHUP == 0) {
+        const buf: ?*const anyopaque = if (ctx.data) |d| @ptrCast(d) else null;
+        switch (async_write(fd, buf, ctx.len, &ctx.idx)) {
+            .remain => return true,
+            .done => {},
+            .err => log_errno(
+                LOG_CLASS_ERROR, "selection", "selection.zig", @intCast(@src().line),
+                "failed to asynchronously write %zu of selection data to FD=%d",
+                ctx.len - ctx.idx, fd),
+        }
+    }
+
+    _ = fdm_del(fdm_opaque, fd);
+    freeSlice(ctx.data);
+    free(ctx);
+    return true;
+}
+
+fn sendClipboardOrPrimary(
+    seat: *types.Seat,
+    fd: c_int,
+    selection_text: ?[*:0]const u8,
+    source_name: [*:0]const u8,
+) void {
+    // Make it NONBLOCK:ing right away - we don't want to block if the initial
+    // attempt to send the data synchronously fails
+    const flags = fcntl(fd, F_GETFL);
+    if (flags < 0 or fcntl(fd, F_SETFL, flags | O_NONBLOCK) < 0) {
+        log_errno(
+            LOG_CLASS_ERROR, "selection", "selection.zig", @intCast(@src().line),
+            "failed to set O_NONBLOCK");
+        return;
+    }
+
+    const len: usize = if (selection_text) |s| std.mem.len(s) else 0;
+    var async_idx: usize = 0;
+
+    const buf: ?*const anyopaque = if (selection_text) |s| @ptrCast(s) else null;
+
+    switch (async_write(fd, buf, len, &async_idx)) {
+        .remain => {
+            const raw = xmalloc(@sizeOf(ClipboardSend)) orelse unreachable;
+            const ctx: *ClipboardSend = @ptrCast(@alignCast(raw));
+            ctx.* = .{
+                .data = xstrdup(@ptrCast(selection_text.? + async_idx)),
+                .len = len - async_idx,
+                .idx = 0,
+            };
+
+            const fdm: *Fdm = @ptrCast(@alignCast(seat.wayl.?.fdm.?));
+            if (fdm_add(fdm, fd, EPOLLOUT, &fdmSend, ctx))
+                return;
+
+            freeSlice(ctx.data);
+            free(ctx);
+        },
+
+        .done => {},
+
+        .err => log_errno(
+            LOG_CLASS_ERROR, "selection", "selection.zig", @intCast(@src().line),
+            "failed write %zu bytes of %s selection data to FD=%d",
+            len, source_name, fd),
+    }
+
+    _ = close(fd);
+}
+
+export fn selection_send_clipboard_or_primary(
+    seat: ?*anyopaque,
+    fd: c_int,
+    selection_text: ?[*:0]const u8,
+    source_name: [*:0]const u8,
+) callconv(.c) void {
+    const s: *types.Seat = @ptrCast(@alignCast(seat orelse return));
+    sendClipboardOrPrimary(s, fd, selection_text, source_name);
+}
+
+export fn selection_data_source_target(
+    data: ?*anyopaque,
+    wl_data_source: ?*anyopaque,
+    mime_type: ?[*:0]const u8,
+) callconv(.c) void {
+    _ = data;
+    _ = wl_data_source;
+    _ = mime_type;
+}
+
+export fn selection_data_source_send(
+    data: ?*anyopaque,
+    wl_data_source: ?*anyopaque,
+    mime_type: ?[*:0]const u8,
+    fd: c_int,
+) callconv(.c) void {
+    _ = wl_data_source;
+    _ = mime_type;
+    const seat: *types.Seat = @ptrCast(@alignCast(data orelse return));
+
+    sendClipboardOrPrimary(seat, fd, seat.clipboard.text, "clipboard");
+}
+
+export fn selection_data_source_cancelled(
+    data: ?*anyopaque,
+    wl_data_source: ?*anyopaque,
+) callconv(.c) void {
+    const seat: *types.Seat = @ptrCast(@alignCast(data orelse return));
+    const clipboard = &seat.clipboard;
+
+    std.debug.assert(clipboard.data_source == wl_data_source);
+
+    selection_shim_data_source_destroy(clipboard.data_source);
+    clipboard.data_source = null;
+    clipboard.serial = 0;
+
+    freeSlice(clipboard.text);
+    clipboard.text = null;
+}
+
+// We don't support dragging *from*
+export fn selection_data_source_dnd_drop_performed(
+    data: ?*anyopaque,
+    wl_data_source: ?*anyopaque,
+) callconv(.c) void {
+    _ = data;
+    _ = wl_data_source;
+}
+
+export fn selection_data_source_dnd_finished(
+    data: ?*anyopaque,
+    wl_data_source: ?*anyopaque,
+) callconv(.c) void {
+    _ = data;
+    _ = wl_data_source;
+}
+
+export fn selection_data_source_action(
+    data: ?*anyopaque,
+    wl_data_source: ?*anyopaque,
+    dnd_action: u32,
+) callconv(.c) void {
+    _ = data;
+    _ = wl_data_source;
+    _ = dnd_action;
+}
+
+export fn selection_primary_source_send(
+    data: ?*anyopaque,
+    zwp_primary_selection_source_v1: ?*anyopaque,
+    mime_type: ?[*:0]const u8,
+    fd: c_int,
+) callconv(.c) void {
+    _ = zwp_primary_selection_source_v1;
+    _ = mime_type;
+    const seat: *types.Seat = @ptrCast(@alignCast(data orelse return));
+
+    sendClipboardOrPrimary(seat, fd, seat.primary.text, "primary");
+}
+
+export fn selection_primary_source_cancelled(
+    data: ?*anyopaque,
+    zwp_primary_selection_source_v1: ?*anyopaque,
+) callconv(.c) void {
+    _ = zwp_primary_selection_source_v1;
+    const seat: *types.Seat = @ptrCast(@alignCast(data orelse return));
+    const primary = &seat.primary;
+
+    selection_shim_primary_source_destroy(primary.data_source);
+    primary.data_source = null;
+    primary.serial = 0;
+
+    freeSlice(primary.text);
+    primary.text = null;
+}

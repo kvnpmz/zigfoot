@@ -137,175 +137,18 @@ enum mark_selection_variant {
 /* selection_start_scroll_timer: ported to selection.zig */
 /* selection_stop_scroll_timer: ported to selection.zig */
 
-static void
-target(void *data, struct wl_data_source *wl_data_source, const char *mime_type)
-{
-    LOG_DBG("TARGET: mime-type=%s", mime_type);
-}
-
-struct clipboard_send {
-    char *data;
-    size_t len;
-    size_t idx;
-};
-
-static bool
-fdm_send(struct fdm *fdm, int fd, int events, void *data)
-{
-    struct clipboard_send *ctx = data;
-
-    if (events & EPOLLHUP)
-        goto done;
-
-    switch (async_write(fd, ctx->data, ctx->len, &ctx->idx)) {
-    case ASYNC_WRITE_REMAIN:
-        return true;
-
-    case ASYNC_WRITE_DONE:
-        break;
-
-    case ASYNC_WRITE_ERR:
-        LOG_ERRNO(
-            "failed to asynchronously write %zu of selection data to FD=%d",
-            ctx->len - ctx->idx, fd);
-        break;
-    }
-
-done:
-    fdm_del(fdm, fd);
-    free(ctx->data);
-    free(ctx);
-    return true;
-}
-
-static void
-send_clipboard_or_primary(struct seat *seat, int fd, const char *selection,
-                          const char *source_name)
-{
-    /* Make it NONBLOCK:ing right away - we don't want to block if the
-     * initial attempt to send the data synchronously fails */
-    int flags;
-    if ((flags = fcntl(fd, F_GETFL)) < 0 ||
-        fcntl(fd, F_SETFL, flags | O_NONBLOCK) < 0)
-    {
-        LOG_ERRNO("failed to set O_NONBLOCK");
-        return;
-    }
-
-    size_t len = selection != NULL ? strlen(selection) : 0;
-    size_t async_idx = 0;
-
-    switch (async_write(fd, selection, len, &async_idx)) {
-    case ASYNC_WRITE_REMAIN: {
-        struct clipboard_send *ctx = xmalloc(sizeof(*ctx));
-        *ctx = (struct clipboard_send) {
-            .data = xstrdup(&selection[async_idx]),
-            .len = len - async_idx,
-            .idx = 0,
-        };
-
-        if (fdm_add(seat->wayl->fdm, fd, EPOLLOUT, &fdm_send, ctx))
-            return;
-
-        free(ctx->data);
-        free(ctx);
-        break;
-    }
-
-    case ASYNC_WRITE_DONE:
-        break;
-
-    case ASYNC_WRITE_ERR:
-        LOG_ERRNO("failed write %zu bytes of %s selection data to FD=%d",
-                  len, source_name, fd);
-        break;
-    }
-
-    close(fd);
-}
-
-static void
-send(void *data, struct wl_data_source *wl_data_source, const char *mime_type,
-     int32_t fd)
-{
-    struct seat *seat = data;
-    const struct wl_clipboard *clipboard = &seat->clipboard;
-
-    send_clipboard_or_primary(seat, fd, clipboard->text, "clipboard");
-}
-
-static void
-cancelled(void *data, struct wl_data_source *wl_data_source)
-{
-    struct seat *seat = data;
-    struct wl_clipboard *clipboard = &seat->clipboard;
-    xassert(clipboard->data_source == wl_data_source);
-
-    wl_data_source_destroy(clipboard->data_source);
-    clipboard->data_source = NULL;
-    clipboard->serial = 0;
-
-    free(clipboard->text);
-    clipboard->text = NULL;
-}
-
-/* We don't support dragging *from* */
-static void
-dnd_drop_performed(void *data, struct wl_data_source *wl_data_source)
-{
-    //LOG_DBG("DnD drop performed");
-}
-
-static void
-dnd_finished(void *data, struct wl_data_source *wl_data_source)
-{
-    //LOG_DBG("DnD finished");
-}
-
-static void
-action(void *data, struct wl_data_source *wl_data_source, uint32_t dnd_action)
-{
-    //LOG_DBG("DnD action: %u", dnd_action);
-}
-
 const struct wl_data_source_listener data_source_listener = {
-    .target = &target,
-    .send = &send,
-    .cancelled = &cancelled,
-    .dnd_drop_performed = &dnd_drop_performed,
-    .dnd_finished = &dnd_finished,
-    .action = &action,
+    .target = &selection_data_source_target,
+    .send = &selection_data_source_send,
+    .cancelled = &selection_data_source_cancelled,
+    .dnd_drop_performed = &selection_data_source_dnd_drop_performed,
+    .dnd_finished = &selection_data_source_dnd_finished,
+    .action = &selection_data_source_action,
 };
-
-static void
-primary_send(void *data,
-             struct zwp_primary_selection_source_v1 *zwp_primary_selection_source_v1,
-             const char *mime_type, int32_t fd)
-{
-    struct seat *seat = data;
-    const struct wl_primary *primary = &seat->primary;
-
-    send_clipboard_or_primary(seat, fd, primary->text, "primary");
-}
-
-static void
-primary_cancelled(void *data,
-                  struct zwp_primary_selection_source_v1 *zwp_primary_selection_source_v1)
-{
-    struct seat *seat = data;
-    struct wl_primary *primary = &seat->primary;
-
-    zwp_primary_selection_source_v1_destroy(primary->data_source);
-    primary->data_source = NULL;
-    primary->serial = 0;
-
-    free(primary->text);
-    primary->text = NULL;
-}
 
 const struct zwp_primary_selection_source_v1_listener primary_selection_source_listener = {
-    .send = &primary_send,
-    .cancelled = &primary_cancelled,
+    .send = &selection_primary_source_send,
+    .cancelled = &selection_primary_source_cancelled,
 };
 /* text_to_clipboard: ported to selection.zig */
 /* selection_to_clipboard: ported to selection.zig */
