@@ -7,10 +7,15 @@
 > | PL-01, PL-02 | fixed `674e62d2` |
 > | PL-05, PL-06, PL-12 | fixed `75be865f` |
 > | PL-07 | fixed `4a5f3382` (pushed with the S-03/S-08 batch) |
-> | PL-03, PL-04 | open — Agent B, `port-abi` (the tag blocker) |
-> | PL-08 | open — Agent B |
-> | PL-09, PL-10, PL-11 | open — Agent B |
-
+> | PL-03, PL-04 | fixed `a86f6bde` — libc/Zig constants, packed epoll_event on
+>   every Linux target; FreeBSD + aarch64 cross-compile via
+>   `scripts/check-targets.sh` (meson default moved to utmp-backend=none in
+>   `556bcc98`) |
+> | PL-08 | fixed `c9447089` for the named types. Residual: the private `Stat`,
+>   `sockaddr_un`, `Passwd` and `sigaction` mirrors in `client.zig`, `config.zig`
+>   and `terminal.zig` are still unprobed — tracked on `port-abi-2` |
+> | PL-09, PL-10 | fixed `8037ecf9` |
+> | PL-11 | fixed `f6f83686` |
 Base: `187548718ce4103c5ecb8c208749a8ea6dec6a1c` (`feature/zig-migration`).
 C oracle: `origin/master`.
 Audit date: 2026-11-25.

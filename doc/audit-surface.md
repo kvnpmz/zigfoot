@@ -8,10 +8,16 @@
 > | S-03, S-08 | fixed `4a5f3382` |
 > | V-01 | fixed `c819c0f2` — `render_update_title()` returns when the window
 >   or toplevel is NULL; C dereferences. Unreachable with a real window |
-> | S-04…S-07 | open — Agent C, `render-parity` |
-> | S-09…S-13 | open — Agent C |
-> | S-14, S-15 | open — Agent C |
-
+> | S-04…S-07 | fixed `b14005a1` — f32 arithmetic at all four sites; C probes
+>   recorded in the commit (21/11/3/10 vs the port's 20/10/2/9) |
+> | S-09…S-13 | fixed `b4e3ba91` |
+> | S-14, S-15 | fixed `39e70a77` |
+> | cursor-blink phase | fixed `4d9df1d6` — C has CURSOR_BLINK_ON == 0; the port
+>   tested `state != 0`, inverting every cursor painter. Harness adapted in the
+>   merge `5c508c64` (tests/test-terminal.c asked for the inverted phase) |
+> | parity oracle | `f8db574a` + `c6b5205b` — 447 per-cell hashes across two
+>   fractional scales, byte-identical to origin/master; 447/447 covered, no
+>   accepted pixel differences |
 Base: `18754871` (`git fetch /workspace feature/zig-migration && git reset --hard FETCH_HEAD`, snapshot taken at the start of this audit). References to C are `git show origin/master:<file>.c` (`origin/master` = `6b3f557d`). No product file was edited; this document is the only write.
 
 Verification run on this checkout:

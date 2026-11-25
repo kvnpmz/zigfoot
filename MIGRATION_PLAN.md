@@ -1484,12 +1484,12 @@ state after `port-c2` and the three audits landed.
 |---|---:|
 | Module C remaining | **99 lines** (`config.c` 35 `regex_t`, `slave.c` 64 `execvpe`) |
 | `*-shim.c` | **2,554 lines / 11 files** (`terminal-shim.c` 1,683) |
-| Generated `abi_probe.c` | 3,339 lines |
-| Zig source | 55,039 lines |
+| Generated `abi_probe.c` | 3,445 lines |
+| Zig source | 55,339 lines |
 | Unported modules | **0** |
 | Class-(c) shim functions left | **1** — `log_presentation_statistics()`, see §15.3 |
-| Harness | 984 checks |
-| Open audit findings | 22 → 22 − 5 closed here = **17** |
+| Harness | 988 checks, 6 meson suites (the parity corpus is the sixth) |
+| Open audit findings | **0 High/Medium**; 1 residual Medium item on `port-abi-2` |
 
 Merged into `feature/zig-migration` in this session: `port-c2` (`dad2f048`),
 `audit-vt` (`0ad2e56b`), `audit-surface` (`2b058876`), `audit-plumbing`
@@ -1512,16 +1512,18 @@ in the three-agent split (`PLAN_3AGENTS.md`).
 | VT-08 | bug (new) | `terminal.zig` | fixed — fuzz seed 58, asserts dropped |
 | S-01, S-02 | high | `render.zig`, `notify.zig` | fixed `674e62d2` |
 | S-03, S-08 | high | `render.zig`, `input.zig` | fixed `4a5f3382` |
-| S-04…S-07 | high | `render.zig`, `wayland.zig` | open — Agent C |
-| S-09…S-13 | low | `selection.zig`, `notify.zig` | open — Agent C |
-| S-14, S-15 | low | `notify.zig`, `selection.zig` | open — Agent C |
+| S-04…S-07 | high | `render.zig`, `wayland.zig` | fixed `b14005a1` |
+| S-09…S-13 | low | `selection.zig`, `notify.zig` | fixed `b4e3ba91` |
+| S-14, S-15 | low | `notify.zig`, `selection.zig` | fixed `39e70a77` |
+| cursor blink | high (new) | `render.zig`, harness | fixed `4d9df1d6` + merge `5c508c64` |
 | V-01 | — | `render.zig`, harness | fixed `c819c0f2` (window/toplevel guard) |
 | PL-01, PL-02 | high | `uri.zig`, `config.zig` | fixed `674e62d2` |
-| PL-03, PL-04 | high | `fdm.zig`, `spawn.zig`, `main.zig`, `slave.zig` | open — Agent B |
+| PL-03, PL-04 | high | `fdm.zig`, `spawn.zig`, `main.zig`, `slave.zig` | fixed `a86f6bde` |
 | PL-05, PL-06 | medium | `client.zig`, `xmalloc.zig` | fixed `75be865f` |
 | PL-07 | medium | `server.zig` | fixed `4a5f3382` |
-| PL-08 | medium | `terminal_types.zig`, probe | open — Agent B |
-| PL-09, PL-10, PL-11 | low/medium | `fdm.zig`, `main.zig`, `slave.zig` | open — Agent B |
+| PL-08 | medium | `terminal_types.zig`, probe | fixed `c9447089` (named types); private mirrors on `port-abi-2` |
+| PL-09, PL-10 | medium | `fdm.zig` | fixed `8037ecf9` |
+| PL-11 | low | `main.zig`, `slave.zig` | fixed `f6f83686` |
 | PL-12 | low | `base64.zig` | fixed `75be865f` |
 
 ### 15.3 Why `log_presentation_statistics()` stays in C
@@ -1541,6 +1543,10 @@ which is more C, not less. Its body is ten lines of formatting over
 
 - **VT-06** — osc debug output is compiled out, not routed to the logger:
   C sets `LOG_ENABLE_DBG 0` for that file, so even `-d` is silent there.
+- **VT-08** — `term_cursor_up()`/`term_cursor_down()` no longer assert that the
+  cursor is inside the scroll region. C's release build has the assert
+  compiled out and the state is reachable from input (region set on the normal
+  screen, then an alt-screen switch); Debug/ReleaseSafe now match C release.
 - **V-01** — `render_update_title()` returns when `window`/`xdg_toplevel` is
   NULL; C dereferences. Unreachable with a real window, and the harness builds
   a bare one, so the guard makes the valgrind run deterministic rather than
@@ -1550,14 +1556,41 @@ which is more C, not less. Its body is ten lines of formatting over
   them and silently freed the caller's buffer through `realloc(p, 0)`.
 - **PL-12** — the `0 < size < 3` assertion is back; sizes outside it are a
   programming error, as in C.
+- **cursor blink** — not a divergence any more: the port had `CURSOR_BLINK_ON`
+  inverted (`state != 0`), so every cursor painter drew in the wrong phase.
+  `4d9df1d6` restores C's `== CURSOR_BLINK_ON`; the harness had encoded the
+  inverted phase in two checks and follows C as of merge `5c508c64`.
 
-### 15.5 What is left
+### 15.5 Verification on the integrated tree
 
-1. Agent B: PL-03/PL-04 (FreeBSD, epoll layout) → PL-08 (probe coverage) →
-   PL-09/PL-10/PL-11. Gate: own build dirs + `scripts/check-targets.sh`.
-2. Agent C: S-04…S-07 (`f32` arithmetic) → S-09…S-15 (logs and asserts) →
-   render parity oracle + a 120-seed fuzz run.
-3. Agent A: merge B, gate, merge C, gate; annotate `doc/audit-*.md`; fuzz 120;
-   `zig fmt .` as its own commit; final numbers here; tag `zig-migration-1.0`;
-   gate at the tag.
+| Check | Result |
+|---|---|
+| `scripts/full-check.sh` | 6/6 in `build`, `build-disabled`, `build-release`; smoke ok |
+| `valgrind -q --error-exitcode=99 ./build/tests/test-terminal` | clean |
+| `valgrind --leak-check=full ./build/tests/test-config` | no definite loss |
+| `scripts/fuzz-vt.sh 120` | PASS, 24,000 iterations |
+| `scripts/check-targets.sh` | PASS, 2 targets x 5 files |
+| `python3 scripts/gen_abi_probe.py --check` | clean |
+| `scripts/render-parity.sh` | PASS, 447 cells, 2 scales, byte-identical |
+
+Accepted gaps, from `doc/portability.md` and `doc/parity-report.md` — each is
+unverified *here* and provable only on the target:
+
+- FreeBSD `epoll_event` (16 bytes, `data` at 8) and the epoll-shim constants in
+  `server.zig` are pinned by comptime constants, not by a FreeBSD C probe; no
+  FreeBSD headers exist in the cross gate.
+- The aarch64 `epoll_event` shape is checked against the packed C struct
+  definition and the audit, not against an aarch64 C probe on this host.
+- The private `Stat`/`sockaddr_un`/`Passwd`/`sigaction` mirrors in `client.zig`,
+  `config.zig` and `terminal.zig` are exercised behaviourally on Linux and
+  probed by `port-abi-2`; until that lands they remain the one residual
+  PL-08 item.
+
+### 15.6 Closing sequence
+
+1. `port-abi-2`: probe the four private mirrors in `client.zig`, `config.zig`
+   and `terminal.zig`; merge, gate, and fold the last PL-08 residue in.
+2. `zig fmt .` as its own commit, then re-gate.
+3. Recompute §15.1 (module C, shims, probe, Zig), tag `zig-migration-1.0`, run
+   the full gate at the tag and paste it here.
 
