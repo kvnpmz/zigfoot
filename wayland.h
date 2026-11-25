@@ -641,6 +641,10 @@ void shm_format(void *data, struct wl_shm *wl_shm, uint32_t format);
 void seat_handle_name(void *data, struct wl_seat *wl_seat, const char *name);
 void seat_handle_capabilities(
     void *data, struct wl_seat *wl_seat, enum wl_seat_capability caps);
+
+void handle_global(
+    void *data, struct wl_registry *registry, uint32_t name,
+    const char *interface, uint32_t version);
 void xdg_toplevel_decoration_configure(
     void *data, struct zxdg_toplevel_decoration_v1 *decoration, uint32_t mode);
 void fractional_scale_preferred_scale(

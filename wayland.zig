@@ -982,7 +982,6 @@ export fn wayl_win_destroy(win_in: ?*types.WlWindow) callconv(.c) void {
     // wl_touch.up/motion dispatched from the roundtrips below runs against
     // this window after it has been destroyed.
     {
-        const SeatList = tll.Tll(types.Seat);
         const seats: *const SeatList = @ptrCast(&wayl.seats);
         var it = (@constCast(seats)).foreach();
         while (it.next()) |node| {
@@ -2282,7 +2281,6 @@ export fn wayl_destroy(wayl_in: ?*types.Wayland) callconv(.c) void {
     }
 
     {
-        const SeatList = tll.Tll(types.Seat);
         const seats: *SeatList = @ptrCast(&wayl.seats);
         var it = seats.foreach();
         while (it.next()) |node| {
@@ -2476,5 +2474,363 @@ export fn seat_handle_capabilities(data: ?*anyopaque, wl_seat: ?*anyopaque, caps
         }
 
         seat.touch.state = .inhibited;
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Registry globals
+// ─────────────────────────────────────────────────────────────────────────
+
+extern fn wayland_shim_iface_id(interface: [*c]const u8) callconv(.c) c_int;
+extern fn wayland_shim_registry_bind(registry: ?*anyopaque, name: u32, which: c_int, version: u32) callconv(.c) ?*anyopaque;
+extern fn wayland_shim_get_xdg_output(manager: ?*anyopaque, output: ?*anyopaque) callconv(.c) ?*anyopaque;
+extern fn wayland_shim_add_shm_listener(shm: ?*anyopaque, wayl: *types.Wayland) callconv(.c) void;
+extern fn wayland_shim_add_wm_base_listener(shell: ?*anyopaque, wayl: *types.Wayland) callconv(.c) void;
+extern fn wayland_shim_add_seat_listener(wl_seat: ?*anyopaque, seat: *types.Seat) callconv(.c) void;
+extern fn wayland_shim_add_output_listener(output: ?*anyopaque, mon: *types.Monitor) callconv(.c) void;
+extern fn wayland_shim_add_xdg_output_monitor_listener(xdg: ?*anyopaque, mon: *types.Monitor) callconv(.c) void;
+extern fn wayland_shim_add_presentation_listener(presentation: ?*anyopaque, wayl: *types.Wayland) callconv(.c) void;
+extern fn wayland_shim_add_color_manager_listener(manager: ?*anyopaque, wayl: *types.Wayland) callconv(.c) void;
+extern fn wayland_shim_add_background_manager_listener(manager: ?*anyopaque, wayl: *types.Wayland) callconv(.c) void;
+extern fn wayland_shim_fdm_add_repeat(fdm: ?*anyopaque, seat: *types.Seat) callconv(.c) bool;
+
+extern fn timerfd_create(clockid: c_int, flags: c_int) callconv(.c) c_int;
+extern fn xkb_context_new(flags: c_int) callconv(.c) ?*anyopaque;
+extern fn xkb_compose_table_new_from_locale(ctx: ?*anyopaque, locale: [*c]const u8, flags: c_int) callconv(.c) ?*anyopaque;
+extern fn xkb_compose_state_new(table: ?*anyopaque, flags: c_int) callconv(.c) ?*anyopaque;
+extern fn setlocale(category: c_int, locale: [*c]const u8) callconv(.c) ?[*:0]u8;
+
+const CLOCK_MONOTONIC: c_int = 1;
+const TFD_CLOEXEC: c_int = 0x80000;
+const TFD_NONBLOCK: c_int = 0x800;
+const LC_CTYPE: c_int = 0;
+
+// enum wayland_iface in terminal-shim.c
+const IFACE_NONE: c_int = 0;
+const IFACE_COMPOSITOR: c_int = 1;
+const IFACE_SUBCOMPOSITOR: c_int = 2;
+const IFACE_SHM: c_int = 3;
+const IFACE_XDG_WM_BASE: c_int = 4;
+const IFACE_XDG_DECORATION: c_int = 5;
+const IFACE_SEAT: c_int = 6;
+const IFACE_XDG_OUTPUT_MANAGER: c_int = 7;
+const IFACE_OUTPUT: c_int = 8;
+const IFACE_DATA_DEVICE_MANAGER: c_int = 9;
+const IFACE_PRIMARY_SELECTION_DEVICE_MANAGER: c_int = 10;
+const IFACE_PRESENTATION: c_int = 11;
+const IFACE_XDG_ACTIVATION: c_int = 12;
+const IFACE_VIEWPORTER: c_int = 13;
+const IFACE_FRACTIONAL_SCALE_MANAGER: c_int = 14;
+const IFACE_CURSOR_SHAPE_MANAGER: c_int = 15;
+const IFACE_SINGLE_PIXEL_MANAGER: c_int = 16;
+const IFACE_TOPLEVEL_ICON_MANAGER: c_int = 17;
+const IFACE_SYSTEM_BELL: c_int = 18;
+const IFACE_COLOR_MANAGER: c_int = 19;
+const IFACE_FIXES: c_int = 20;
+const IFACE_TOPLEVEL_TAG_MANAGER: c_int = 21;
+const IFACE_BACKGROUND_EFFECT_MANAGER: c_int = 22;
+const IFACE_TEXT_INPUT_MANAGER: c_int = 23;
+
+// Protocol "since" versions, taken from the generated headers.
+const V_COMPOSITOR_PREFERRED: u32 = 6; // WL_SURFACE_PREFERRED_BUFFER_SCALE
+const V_SHM_RELEASE: u32 = 2; // WL_SHM_RELEASE
+const V_XDG_WM_BASE_PREFERRED: u32 = 7; // XDG_TOPLEVEL_STATE_CONSTRAINED_*
+const V_SEAT_PREFERRED: u32 = 8; // WL_POINTER_AXIS_VALUE120
+const V_OUTPUT_PREFERRED: u32 = 4; // WL_OUTPUT_NAME
+const V_OUTPUT_RELEASE: u32 = 3; // WL_OUTPUT_RELEASE
+const V_CURSOR_SHAPE_PREFERRED: u32 = 2; // shape DND_ASK
+const V_FIXES_PREFERRED: u32 = 2; // ack_global_remove
+
+const SeatList = tll.Tll(types.Seat);
+
+fn bind(wayl: *types.Wayland, name: u32, which: c_int, version: u32) ?*anyopaque {
+    return wayland_shim_registry_bind(wayl.registry, name, which, version);
+}
+
+export fn handle_global(
+    data: ?*anyopaque,
+    registry: ?*anyopaque,
+    name: u32,
+    interface: [*c]const u8,
+    version: u32,
+) callconv(.c) void {
+    _ = registry;
+    log_msg(LOG_CLASS_DEBUG, "wayland", "wayland.zig", @intCast(@src().line), "global: 0x%08x, interface=%s, version=%u", name, interface, version);
+
+    const wayl: *types.Wayland = @ptrCast(@alignCast(data.?));
+    const id = wayland_shim_iface_id(interface);
+
+    switch (id) {
+        IFACE_COMPOSITOR => {
+            const required: u32 = 4;
+            if (!verify_iface_version(interface, version, required))
+                return;
+            wayl.compositor = bind(wayl, name, id, @min(version, V_COMPOSITOR_PREFERRED));
+        },
+
+        IFACE_SUBCOMPOSITOR => {
+            const required: u32 = 1;
+            if (!verify_iface_version(interface, version, required))
+                return;
+            wayl.sub_compositor = bind(wayl, name, id, required);
+        },
+
+        IFACE_SHM => {
+            const required: u32 = 1;
+            if (!verify_iface_version(interface, version, required))
+                return;
+
+            wayl.shm = bind(wayl, name, id, @min(version, V_SHM_RELEASE));
+            wayland_shim_add_shm_listener(wayl.shm, wayl);
+            wayl.use_shm_release = version >= V_SHM_RELEASE;
+        },
+
+        IFACE_XDG_WM_BASE => {
+            const required: u32 = 1;
+            if (!verify_iface_version(interface, version, required))
+                return;
+
+            // We *require* version 1, but _can_ use version 2, 5 or 7 if
+            // available (tiled states, wm_capabilities, constrained states).
+            wayl.shell = bind(wayl, name, id, @min(version, V_XDG_WM_BASE_PREFERRED));
+            wayland_shim_add_wm_base_listener(wayl.shell, wayl);
+        },
+
+        IFACE_XDG_DECORATION => {
+            const required: u32 = 1;
+            if (!verify_iface_version(interface, version, required))
+                return;
+            wayl.xdg_decoration_manager = bind(wayl, name, id, required);
+        },
+
+        IFACE_SEAT => {
+            const required: u32 = 5;
+            if (!verify_iface_version(interface, version, required))
+                return;
+
+            const repeat_fd = timerfd_create(CLOCK_MONOTONIC, TFD_CLOEXEC | TFD_NONBLOCK);
+            if (repeat_fd == -1) {
+                log_errno(LOG_CLASS_ERROR, "wayland", "wayland.zig", @intCast(@src().line), "failed to create keyboard repeat timer FD");
+                return;
+            }
+
+            const wl_seat = bind(wayl, name, id, @min(version, V_SEAT_PREFERRED));
+
+            const seats: *SeatList = @ptrCast(&wayl.seats);
+            var new_seat = std.mem.zeroes(types.Seat);
+            new_seat.wayl = wayl;
+            new_seat.wl_seat = wl_seat;
+            new_seat.wl_name = name;
+            new_seat.kbd.repeat.fd = repeat_fd;
+            seats.pushBack(new_seat);
+
+            const seat = &seats.tail.?.item;
+
+            if (!wayland_shim_fdm_add_repeat(wayl.fdm, seat)) {
+                _ = close(repeat_fd);
+                seat.kbd.repeat.fd = -1;
+                seat_destroy(seat);
+                return;
+            }
+
+            seat.kbd.xkb = xkb_context_new(0);
+            if (seat.kbd.xkb != null) {
+                seat.kbd.xkb_compose_table = xkb_compose_table_new_from_locale(
+                    seat.kbd.xkb,
+                    setlocale(LC_CTYPE, null),
+                    0,
+                );
+
+                if (seat.kbd.xkb_compose_table != null) {
+                    seat.kbd.xkb_compose_state = xkb_compose_state_new(seat.kbd.xkb_compose_table, 0);
+                } else {
+                    log_msg(LOG_CLASS_WARNING, "wayland", "wayland.zig", @intCast(@src().line), "failed to instantiate compose table; dead keys (compose) will not work");
+                }
+            }
+
+            seat_add_data_device(seat);
+            seat_add_primary_selection(seat);
+            seat_add_text_input(seat);
+            seat_add_key_bindings(seat);
+            wayland_shim_add_seat_listener(wl_seat, seat);
+        },
+
+        IFACE_XDG_OUTPUT_MANAGER => {
+            const required: u32 = 1;
+            if (!verify_iface_version(interface, version, required))
+                return;
+
+            wayl.xdg_output_manager = bind(wayl, name, id, @min(version, 2));
+
+            const monitors: *MonitorList = @ptrCast(&wayl.monitors);
+            var it = monitors.foreach();
+            while (it.next()) |node| {
+                const mon = &node.item;
+                mon.xdg = wayland_shim_get_xdg_output(wayl.xdg_output_manager, mon.output);
+                wayland_shim_add_xdg_output_monitor_listener(mon.xdg, mon);
+            }
+        },
+
+        IFACE_OUTPUT => {
+            const required: u32 = 2;
+            if (!verify_iface_version(interface, version, required))
+                return;
+
+            const output = bind(wayl, name, id, @min(version, V_OUTPUT_PREFERRED));
+
+            const monitors: *MonitorList = @ptrCast(&wayl.monitors);
+            var new_mon = std.mem.zeroes(types.Monitor);
+            new_mon.wayl = wayl;
+            new_mon.output = output;
+            new_mon.wl_name = name;
+            new_mon.scale = 1;
+            new_mon.use_output_release = version >= V_OUTPUT_RELEASE;
+            monitors.pushBack(new_mon);
+
+            const mon = &monitors.tail.?.item;
+            wayland_shim_add_output_listener(output, mon);
+
+            if (wayl.xdg_output_manager != null) {
+                mon.xdg = wayland_shim_get_xdg_output(wayl.xdg_output_manager, mon.output);
+                wayland_shim_add_xdg_output_monitor_listener(mon.xdg, mon);
+            }
+        },
+
+        IFACE_DATA_DEVICE_MANAGER => {
+            const required: u32 = 3;
+            if (!verify_iface_version(interface, version, required))
+                return;
+
+            wayl.data_device_manager = bind(wayl, name, id, required);
+
+            const seats: *SeatList = @ptrCast(&wayl.seats);
+            var it = seats.foreach();
+            while (it.next()) |node|
+                seat_add_data_device(&node.item);
+        },
+
+        IFACE_PRIMARY_SELECTION_DEVICE_MANAGER => {
+            const required: u32 = 1;
+            if (!verify_iface_version(interface, version, required))
+                return;
+
+            wayl.primary_selection_device_manager = bind(wayl, name, id, required);
+
+            const seats: *SeatList = @ptrCast(&wayl.seats);
+            var it = seats.foreach();
+            while (it.next()) |node|
+                seat_add_primary_selection(&node.item);
+        },
+
+        IFACE_PRESENTATION => {
+            if (wayl.presentation_timings) {
+                const required: u32 = 1;
+                if (!verify_iface_version(interface, version, required))
+                    return;
+
+                wayl.presentation = bind(wayl, name, id, required);
+                wayland_shim_add_presentation_listener(wayl.presentation, wayl);
+            }
+        },
+
+        IFACE_XDG_ACTIVATION => {
+            const required: u32 = 1;
+            if (!verify_iface_version(interface, version, required))
+                return;
+            wayl.xdg_activation = bind(wayl, name, id, required);
+        },
+
+        IFACE_VIEWPORTER => {
+            const required: u32 = 1;
+            if (!verify_iface_version(interface, version, required))
+                return;
+            wayl.viewporter = bind(wayl, name, id, required);
+        },
+
+        IFACE_FRACTIONAL_SCALE_MANAGER => {
+            const required: u32 = 1;
+            if (!verify_iface_version(interface, version, required))
+                return;
+            wayl.fractional_scale_manager = bind(wayl, name, id, required);
+        },
+
+        IFACE_CURSOR_SHAPE_MANAGER => {
+            const required: u32 = 1;
+            if (!verify_iface_version(interface, version, required))
+                return;
+
+            wayl.shape_manager_version = @min(version, V_CURSOR_SHAPE_PREFERRED);
+            wayl.cursor_shape_manager = bind(wayl, name, id, @intCast(wayl.shape_manager_version));
+        },
+
+        IFACE_SINGLE_PIXEL_MANAGER => {
+            const required: u32 = 1;
+            if (!verify_iface_version(interface, version, required))
+                return;
+            wayl.single_pixel_manager = bind(wayl, name, id, required);
+        },
+
+        IFACE_TOPLEVEL_ICON_MANAGER => {
+            const required: u32 = 1;
+            if (!verify_iface_version(interface, version, required))
+                return;
+            wayl.toplevel_icon_manager = bind(wayl, name, id, required);
+        },
+
+        IFACE_SYSTEM_BELL => {
+            const required: u32 = 1;
+            if (!verify_iface_version(interface, version, required))
+                return;
+            wayl.system_bell = bind(wayl, name, id, required);
+        },
+
+        IFACE_COLOR_MANAGER => {
+            const required: u32 = 1;
+            if (!verify_iface_version(interface, version, required))
+                return;
+
+            wayl.color_management.manager = bind(wayl, name, id, required);
+            wayland_shim_add_color_manager_listener(wayl.color_management.manager, wayl);
+        },
+
+        IFACE_FIXES => {
+            const required: u32 = 1;
+            if (!verify_iface_version(interface, version, required))
+                return;
+
+            wayl.fixes_version = @min(version, V_FIXES_PREFERRED);
+            wayl.fixes = bind(wayl, name, id, @intCast(wayl.fixes_version));
+        },
+
+        IFACE_TOPLEVEL_TAG_MANAGER => {
+            const required: u32 = 1;
+            if (!verify_iface_version(interface, version, required))
+                return;
+            wayl.toplevel_tag_manager = bind(wayl, name, id, required);
+        },
+
+        IFACE_BACKGROUND_EFFECT_MANAGER => {
+            const required: u32 = 1;
+            if (!verify_iface_version(interface, version, required))
+                return;
+
+            wayl.background_effect_manager = bind(wayl, name, id, required);
+            wayland_shim_add_background_manager_listener(wayl.background_effect_manager, wayl);
+        },
+
+        IFACE_TEXT_INPUT_MANAGER => {
+            const required: u32 = 1;
+            if (!verify_iface_version(interface, version, required))
+                return;
+
+            wayl.text_input_manager = bind(wayl, name, id, required);
+
+            const seats: *SeatList = @ptrCast(&wayl.seats);
+            var it = seats.foreach();
+            while (it.next()) |node|
+                seat_add_text_input(&node.item);
+        },
+
+        else => {},
     }
 }

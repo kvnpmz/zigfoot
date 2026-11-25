@@ -246,392 +246,6 @@ fdm_repeat(struct fdm *fdm, int fd, int events, void *data)
 }
 
 static void
-handle_global(void *data, struct wl_registry *registry,
-              uint32_t name, const char *interface, uint32_t version)
-{
-    LOG_DBG("global: 0x%08x, interface=%s, version=%u", name, interface, version);
-    struct wayland *wayl = data;
-
-    if (streq(interface, wl_compositor_interface.name)) {
-        const uint32_t required = 4;
-        if (!verify_iface_version(interface, version, required))
-            return;
-
-#if defined (WL_SURFACE_PREFERRED_BUFFER_SCALE_SINCE_VERSION)
-        const uint32_t preferred = WL_SURFACE_PREFERRED_BUFFER_SCALE_SINCE_VERSION;
-#else
-        const uint32_t preferred = required;
-#endif
-        wayl->compositor = wl_registry_bind(
-            wayl->registry, name, &wl_compositor_interface, min(version, preferred));
-    }
-
-    else if (streq(interface, wl_subcompositor_interface.name)) {
-        const uint32_t required = 1;
-        if (!verify_iface_version(interface, version, required))
-            return;
-
-        wayl->sub_compositor = wl_registry_bind(
-            wayl->registry, name, &wl_subcompositor_interface, required);
-    }
-
-    else if (streq(interface, wl_shm_interface.name)) {
-        const uint32_t required = 1;
-        if (!verify_iface_version(interface, version, required))
-            return;
-
-#if defined(WL_SHM_RELEASE_SINCE_VERSION)
-        const uint32_t preferred = WL_SHM_RELEASE_SINCE_VERSION;
-#else
-        const uint32_t preferred = required;
-#endif
-
-        wayl->shm = wl_registry_bind(
-            wayl->registry, name, &wl_shm_interface, min(version, preferred));
-        wl_shm_add_listener(wayl->shm, &shm_listener, wayl);
-#if defined(WL_SHM_RELEASE_SINCE_VERSION)
-        wayl->use_shm_release = version >= WL_SHM_RELEASE_SINCE_VERSION;
-#else
-        wayl->use_shm_release = false;
-#endif
-    }
-
-    else if (streq(interface, xdg_wm_base_interface.name)) {
-        const uint32_t required = 1;
-        if (!verify_iface_version(interface, version, required))
-            return;
-
-        /*
-         * We *require* version 1, but _can_ use version 2, 5 or 7, if
-         * available.
-         *
-         * Version 2 adds 'tiled' window states. We use this
-         * information to restore the window size when window is
-         * un-tiled.
-         *
-         * Version 5 adds 'wm_capabilities'. We use this information
-         * to draw window decorations.
-         *
-         * Version 7 adds 'constrained' window states. We use this
-         * information to determine whether to allow window resize
-         * (via CSDs) or not.
-         */
-#if defined(XDG_TOPLEVEL_STATE_CONSTRAINED_LEFT_SINCE_VERSION)
-        const uint32_t preferred = XDG_TOPLEVEL_STATE_CONSTRAINED_LEFT_SINCE_VERSION;
-#elif defined(XDG_TOPLEVEL_WM_CAPABILITIES_SINCE_VERSION)
-        const uint32_t preferred = XDG_TOPLEVEL_WM_CAPABILITIES_SINCE_VERSION;
-#elif defined(XDG_TOPLEVEL_STATE_TILED_LEFT_SINCE_VERSION)
-        const uint32_t preferred = XDG_TOPLEVEL_STATE_TILED_LEFT_SINCE_VERSION;
-#else
-        const uint32_t preferred = required;
-#endif
-
-        wayl->shell = wl_registry_bind(
-            wayl->registry, name, &xdg_wm_base_interface, min(version, preferred));
-        xdg_wm_base_add_listener(wayl->shell, &xdg_wm_base_listener, wayl);
-    }
-
-    else if (streq(interface, zxdg_decoration_manager_v1_interface.name)) {
-        const uint32_t required = 1;
-        if (!verify_iface_version(interface, version, required))
-            return;
-
-        wayl->xdg_decoration_manager = wl_registry_bind(
-            wayl->registry, name, &zxdg_decoration_manager_v1_interface, required);
-    }
-
-    else if (streq(interface, wl_seat_interface.name)) {
-        const uint32_t required = 5;
-        if (!verify_iface_version(interface, version, required))
-            return;
-
-#if defined(WL_POINTER_AXIS_VALUE120_SINCE_VERSION)
-        const uint32_t preferred = WL_POINTER_AXIS_VALUE120_SINCE_VERSION;
-#else
-        const uint32_t preferred = required;
-#endif
-
-        int repeat_fd = timerfd_create(CLOCK_MONOTONIC, TFD_CLOEXEC | TFD_NONBLOCK);
-        if (repeat_fd == -1) {
-            LOG_ERRNO("failed to create keyboard repeat timer FD");
-            return;
-        }
-
-        struct wl_seat *wl_seat = wl_registry_bind(
-            wayl->registry, name, &wl_seat_interface, min(version, preferred));
-
-        tll_push_back(wayl->seats, ((struct seat){
-                    .wayl = wayl,
-                    .wl_seat = wl_seat,
-                    .wl_name = name,
-                    .kbd = {
-                        .repeat = {
-                            .fd = repeat_fd,
-                        },
-                    }}));
-
-        struct seat *seat = &tll_back(wayl->seats);
-
-        if (!fdm_add(wayl->fdm, repeat_fd, EPOLLIN, &fdm_repeat, seat)) {
-            close(repeat_fd);
-            seat->kbd.repeat.fd = -1;
-            seat_destroy(seat);
-            return;
-        }
-
-        seat->kbd.xkb = xkb_context_new(XKB_CONTEXT_NO_FLAGS);
-        if (seat->kbd.xkb != NULL) {
-            seat->kbd.xkb_compose_table = xkb_compose_table_new_from_locale(
-                seat->kbd.xkb, setlocale(LC_CTYPE, NULL), XKB_COMPOSE_COMPILE_NO_FLAGS);
-
-            if (seat->kbd.xkb_compose_table != NULL) {
-                seat->kbd.xkb_compose_state = xkb_compose_state_new(
-                    seat->kbd.xkb_compose_table, XKB_COMPOSE_STATE_NO_FLAGS);
-            } else {
-                LOG_WARN("failed to instantiate compose table; dead keys (compose) will not work");
-            }
-        }
-
-        seat_add_data_device(seat);
-        seat_add_primary_selection(seat);
-        seat_add_text_input(seat);
-        seat_add_key_bindings(seat);
-        wl_seat_add_listener(wl_seat, &seat_listener, seat);
-    }
-
-    else if (streq(interface, zxdg_output_manager_v1_interface.name)) {
-        const uint32_t required = 1;
-        if (!verify_iface_version(interface, version, required))
-            return;
-
-        wayl->xdg_output_manager = wl_registry_bind(
-            wayl->registry, name, &zxdg_output_manager_v1_interface,
-            min(version, 2));
-
-        tll_foreach(wayl->monitors, it) {
-            struct monitor *mon = &it->item;
-            mon->xdg = zxdg_output_manager_v1_get_xdg_output(
-                wayl->xdg_output_manager, mon->output);
-            zxdg_output_v1_add_listener(mon->xdg, &xdg_output_listener, mon);
-        }
-    }
-
-    else if (streq(interface, wl_output_interface.name)) {
-        const uint32_t required = 2;
-        if (!verify_iface_version(interface, version, required))
-            return;
-
-#if defined(WL_OUTPUT_NAME_SINCE_VERSION)
-        const uint32_t preferred = WL_OUTPUT_NAME_SINCE_VERSION;
-#elif defined(WL_OUTPUT_RELEASE_SINCE_VERSION)
-        const uint32_t preferred = WL_OUTPUT_RELEASE_SINCE_VERSION;
-#else
-        const uint32_t preferred = required;
-#endif
-
-        struct wl_output *output = wl_registry_bind(
-            wayl->registry, name, &wl_output_interface, min(version, preferred));
-
-        tll_push_back(
-            wayl->monitors,
-            ((struct monitor){.wayl = wayl, .output = output, .wl_name = name,
-             .scale = 1,
-             .use_output_release = version >= WL_OUTPUT_RELEASE_SINCE_VERSION}));
-
-        struct monitor *mon = &tll_back(wayl->monitors);
-        wl_output_add_listener(output, &output_listener, mon);
-
-        if (wayl->xdg_output_manager != NULL) {
-            mon->xdg = zxdg_output_manager_v1_get_xdg_output(
-                wayl->xdg_output_manager, mon->output);
-            zxdg_output_v1_add_listener(mon->xdg, &xdg_output_listener, mon);
-        }
-    }
-
-    else if (streq(interface, wl_data_device_manager_interface.name)) {
-        const uint32_t required = 3;
-        if (!verify_iface_version(interface, version, required))
-            return;
-
-        wayl->data_device_manager = wl_registry_bind(
-            wayl->registry, name, &wl_data_device_manager_interface, required);
-
-        tll_foreach(wayl->seats, it)
-            seat_add_data_device(&it->item);
-    }
-
-    else if (streq(interface, zwp_primary_selection_device_manager_v1_interface.name)) {
-        const uint32_t required = 1;
-        if (!verify_iface_version(interface, version, required))
-            return;
-
-        wayl->primary_selection_device_manager = wl_registry_bind(
-            wayl->registry, name,
-            &zwp_primary_selection_device_manager_v1_interface, required);
-
-        tll_foreach(wayl->seats, it)
-            seat_add_primary_selection(&it->item);
-    }
-
-    else if (streq(interface, wp_presentation_interface.name)) {
-        if (wayl->presentation_timings) {
-            const uint32_t required = 1;
-            if (!verify_iface_version(interface, version, required))
-                return;
-
-            wayl->presentation = wl_registry_bind(
-                wayl->registry, name, &wp_presentation_interface, required);
-            wp_presentation_add_listener(
-                wayl->presentation, &presentation_listener, wayl);
-        }
-    }
-
-    else if (streq(interface, xdg_activation_v1_interface.name)) {
-        const uint32_t required = 1;
-        if (!verify_iface_version(interface, version, required))
-            return;
-
-        wayl->xdg_activation = wl_registry_bind(
-            wayl->registry, name, &xdg_activation_v1_interface, required);
-    }
-
-    else if (streq(interface, wp_viewporter_interface.name)) {
-        const uint32_t required = 1;
-        if (!verify_iface_version(interface, version, required))
-            return;
-
-        wayl->viewporter = wl_registry_bind(
-            wayl->registry, name, &wp_viewporter_interface, required);
-    }
-
-    else if (streq(interface, wp_fractional_scale_manager_v1_interface.name)) {
-        const uint32_t required = 1;
-        if (!verify_iface_version(interface, version, required))
-            return;
-
-        wayl->fractional_scale_manager = wl_registry_bind(
-            wayl->registry, name,
-            &wp_fractional_scale_manager_v1_interface, required);
-    }
-
-    else if (streq(interface, wp_cursor_shape_manager_v1_interface.name)) {
-        const uint32_t required = 1;
-        if (!verify_iface_version(interface, version, required))
-            return;
-
-#if defined(WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_DND_ASK_SINCE_VERSION)  /* 1.42 */
-        const uint32_t preferred = WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_DND_ASK_SINCE_VERSION;
-#else
-        const uint32_t preferred = required;
-#endif
-
-        wayl->shape_manager_version = min(version, preferred);
-        wayl->cursor_shape_manager = wl_registry_bind(
-            wayl->registry, name, &wp_cursor_shape_manager_v1_interface,
-            wayl->shape_manager_version);
-    }
-
-    else if (streq(interface, wp_single_pixel_buffer_manager_v1_interface.name)) {
-        const uint32_t required = 1;
-        if (!verify_iface_version(interface, version, required))
-            return;
-
-        wayl->single_pixel_manager = wl_registry_bind(
-            wayl->registry, name,
-            &wp_single_pixel_buffer_manager_v1_interface, required);
-    }
-
-    else if (streq(interface, xdg_toplevel_icon_manager_v1_interface.name)) {
-        const uint32_t required = 1;
-        if (!verify_iface_version(interface, version, required))
-            return;
-
-        wayl->toplevel_icon_manager = wl_registry_bind(
-            wayl->registry, name, &xdg_toplevel_icon_manager_v1_interface, required);
-    }
-
-    else if (streq(interface, xdg_system_bell_v1_interface.name)) {
-        const uint32_t required = 1;
-        if (!verify_iface_version(interface, version, required))
-            return;
-
-        wayl->system_bell = wl_registry_bind(
-            wayl->registry, name, &xdg_system_bell_v1_interface, required);
-    }
-
-    else if (streq(interface, wp_color_manager_v1_interface.name)) {
-        const uint32_t required = 1;
-        if (!verify_iface_version(interface, version, required))
-            return;
-
-        wayl->color_management.manager = wl_registry_bind(
-            wayl->registry, name, &wp_color_manager_v1_interface, required);
-
-        wp_color_manager_v1_add_listener(
-            wayl->color_management.manager, &color_manager_listener, wayl);
-    }
-
-#if defined(WL_FIXES_INTERFACE)
-    else if (streq(interface, wl_fixes_interface.name)) {
-        const uint32_t required = 1;
-        if (!verify_iface_version(interface, version, required))
-            return;
-
-#if defined(WL_FIXES_ACK_GLOBAL_REMOVE_SINCE_VERSION)
-        const uint32_t preferred = WL_FIXES_ACK_GLOBAL_REMOVE_SINCE_VERSION;
-#else
-        const uint32_t preferred = required;
-#endif
-
-        wayl->fixes_version = min(version, preferred);
-        wayl->fixes = wl_registry_bind(
-            wayl->registry, name, &wl_fixes_interface, wayl->fixes_version);
-    }
-#endif
-
-#if defined(HAVE_XDG_TOPLEVEL_TAG)
-    else if (streq(interface, xdg_toplevel_tag_manager_v1_interface.name)) {
-        const uint32_t required = 1;
-        if (!verify_iface_version(interface, version, required))
-            return;
-
-        wayl->toplevel_tag_manager = wl_registry_bind(
-            wayl->registry, name, &xdg_toplevel_tag_manager_v1_interface, required);
-    }
-#endif
-#if defined(HAVE_EXT_BACKGROUND_EFFECT)
-    else if (streq(interface, ext_background_effect_manager_v1_interface.name)) {
-        const uint32_t required = 1;
-        if (!verify_iface_version(interface, version, required))
-            return;
-
-        wayl->background_effect_manager = wl_registry_bind(
-            wayl->registry, name,
-            &ext_background_effect_manager_v1_interface, required);
-
-        ext_background_effect_manager_v1_add_listener(
-            wayl->background_effect_manager, &background_manager_listener, wayl);
-    }
-#endif
-
-#if defined(FOOT_IME_ENABLED) && FOOT_IME_ENABLED
-    else if (streq(interface, zwp_text_input_manager_v3_interface.name)) {
-        const uint32_t required = 1;
-        if (!verify_iface_version(interface, version, required))
-            return;
-
-        wayl->text_input_manager = wl_registry_bind(
-            wayl->registry, name, &zwp_text_input_manager_v3_interface, required);
-
-        tll_foreach(wayl->seats, it)
-            seat_add_text_input(&it->item);
-    }
-#endif
-
-}
-
-
-static void
 handle_global_remove(void *data, struct wl_registry *registry, uint32_t name)
 {
     LOG_DBG("global removed: 0x%08x", name);
@@ -780,6 +394,63 @@ void wayland_shim_add_registry_listener(
     struct wl_registry *registry, struct wayland *wayl)
 {
     wl_registry_add_listener(registry, &registry_listener, wayl);
+}
+
+void wayland_shim_add_shm_listener(struct wl_shm *shm, struct wayland *wayl)
+{
+    wl_shm_add_listener(shm, &shm_listener, wayl);
+}
+
+void wayland_shim_add_wm_base_listener(
+    struct xdg_wm_base *shell, struct wayland *wayl)
+{
+    xdg_wm_base_add_listener(shell, &xdg_wm_base_listener, wayl);
+}
+
+void wayland_shim_add_seat_listener(struct wl_seat *wl_seat, struct seat *seat)
+{
+    wl_seat_add_listener(wl_seat, &seat_listener, seat);
+}
+
+void wayland_shim_add_output_listener(
+    struct wl_output *output, struct monitor *mon)
+{
+    wl_output_add_listener(output, &output_listener, mon);
+}
+
+void wayland_shim_add_xdg_output_monitor_listener(
+    struct zxdg_output_v1 *xdg, struct monitor *mon)
+{
+    zxdg_output_v1_add_listener(xdg, &xdg_output_listener, mon);
+}
+
+void wayland_shim_add_presentation_listener(
+    struct wp_presentation *presentation, struct wayland *wayl)
+{
+    wp_presentation_add_listener(presentation, &presentation_listener, wayl);
+}
+
+void wayland_shim_add_color_manager_listener(
+    struct wp_color_manager_v1 *manager, struct wayland *wayl)
+{
+    wp_color_manager_v1_add_listener(manager, &color_manager_listener, wayl);
+}
+
+void wayland_shim_add_background_manager_listener(
+    struct ext_background_effect_manager_v1 *manager, struct wayland *wayl)
+{
+#if defined(HAVE_EXT_BACKGROUND_EFFECT)
+    ext_background_effect_manager_v1_add_listener(
+        manager, &background_manager_listener, wayl);
+#else
+    (void)manager;
+    (void)wayl;
+#endif
+}
+
+bool wayland_shim_fdm_add_repeat(struct fdm *fdm, struct seat *seat)
+{
+    return fdm_add(fdm, seat->kbd.repeat.fd, EPOLLIN, &fdm_repeat, seat);
 }
 
 bool wayland_shim_fdm_add(struct fdm *fdm, struct wayland *wayl)

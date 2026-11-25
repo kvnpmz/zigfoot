@@ -3811,6 +3811,31 @@ test_seat_capabilities(void)
           "repeating the empty capability set is harmless");
 }
 
+
+static void
+test_handle_global(void)
+{
+    struct wayland wayl = {0};
+
+    /* Unknown interfaces are ignored */
+    handle_global(&wayl, NULL, 1, "wl_does_not_exist", 1);
+    check(wayl.compositor == NULL && wayl.shm == NULL && wayl.shell == NULL,
+          "an unknown global is ignored");
+
+    /* Too old versions are rejected before binding */
+    handle_global(&wayl, NULL, 1, "wl_compositor", 3);
+    check(wayl.compositor == NULL, "a too-old compositor is rejected");
+
+    handle_global(&wayl, NULL, 2, "wl_shm", 0);
+    check(wayl.shm == NULL, "a too-old shm is rejected");
+
+    handle_global(&wayl, NULL, 3, "wl_seat", 4);
+    check(tll_length(wayl.seats) == 0, "a too-old seat is rejected");
+
+    handle_global(&wayl, NULL, 4, "wl_output", 1);
+    check(tll_length(wayl.monitors) == 0, "a too-old output is rejected");
+}
+
 int
 main(void)
 {
@@ -3839,6 +3864,7 @@ main(void)
     test_small_listeners();
     test_wayl_init_failure();
     test_seat_capabilities();
+    test_handle_global();
     test_wayland_misc();
     test_osc8();
     test_size_notifications();

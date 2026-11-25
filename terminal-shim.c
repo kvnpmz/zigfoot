@@ -493,6 +493,187 @@ void wayland_shim_add_touch_listener(struct wl_touch *touch, struct seat *seat)
     wl_touch_add_listener(touch, &touch_listener, seat);
 }
 
+/* wayland.zig: registry globals (D2k7). The interface objects and the
+ * listener tables are all static or generated C, so the names are matched
+ * and the bind performed here, keyed by an integer the Zig side switches on. */
+enum wayland_iface {
+    WAYLAND_IFACE_NONE = 0,
+    WAYLAND_IFACE_COMPOSITOR,
+    WAYLAND_IFACE_SUBCOMPOSITOR,
+    WAYLAND_IFACE_SHM,
+    WAYLAND_IFACE_XDG_WM_BASE,
+    WAYLAND_IFACE_XDG_DECORATION,
+    WAYLAND_IFACE_SEAT,
+    WAYLAND_IFACE_XDG_OUTPUT_MANAGER,
+    WAYLAND_IFACE_OUTPUT,
+    WAYLAND_IFACE_DATA_DEVICE_MANAGER,
+    WAYLAND_IFACE_PRIMARY_SELECTION_DEVICE_MANAGER,
+    WAYLAND_IFACE_PRESENTATION,
+    WAYLAND_IFACE_XDG_ACTIVATION,
+    WAYLAND_IFACE_VIEWPORTER,
+    WAYLAND_IFACE_FRACTIONAL_SCALE_MANAGER,
+    WAYLAND_IFACE_CURSOR_SHAPE_MANAGER,
+    WAYLAND_IFACE_SINGLE_PIXEL_MANAGER,
+    WAYLAND_IFACE_TOPLEVEL_ICON_MANAGER,
+    WAYLAND_IFACE_SYSTEM_BELL,
+    WAYLAND_IFACE_COLOR_MANAGER,
+    WAYLAND_IFACE_FIXES,
+    WAYLAND_IFACE_TOPLEVEL_TAG_MANAGER,
+    WAYLAND_IFACE_BACKGROUND_EFFECT_MANAGER,
+    WAYLAND_IFACE_TEXT_INPUT_MANAGER,
+};
+
+int wayland_shim_iface_id(const char *interface)
+{
+    if (streq(interface, wl_compositor_interface.name))
+        return WAYLAND_IFACE_COMPOSITOR;
+    if (streq(interface, wl_subcompositor_interface.name))
+        return WAYLAND_IFACE_SUBCOMPOSITOR;
+    if (streq(interface, wl_shm_interface.name))
+        return WAYLAND_IFACE_SHM;
+    if (streq(interface, xdg_wm_base_interface.name))
+        return WAYLAND_IFACE_XDG_WM_BASE;
+    if (streq(interface, zxdg_decoration_manager_v1_interface.name))
+        return WAYLAND_IFACE_XDG_DECORATION;
+    if (streq(interface, wl_seat_interface.name))
+        return WAYLAND_IFACE_SEAT;
+    if (streq(interface, zxdg_output_manager_v1_interface.name))
+        return WAYLAND_IFACE_XDG_OUTPUT_MANAGER;
+    if (streq(interface, wl_output_interface.name))
+        return WAYLAND_IFACE_OUTPUT;
+    if (streq(interface, wl_data_device_manager_interface.name))
+        return WAYLAND_IFACE_DATA_DEVICE_MANAGER;
+    if (streq(interface, zwp_primary_selection_device_manager_v1_interface.name))
+        return WAYLAND_IFACE_PRIMARY_SELECTION_DEVICE_MANAGER;
+    if (streq(interface, wp_presentation_interface.name))
+        return WAYLAND_IFACE_PRESENTATION;
+    if (streq(interface, xdg_activation_v1_interface.name))
+        return WAYLAND_IFACE_XDG_ACTIVATION;
+    if (streq(interface, wp_viewporter_interface.name))
+        return WAYLAND_IFACE_VIEWPORTER;
+    if (streq(interface, wp_fractional_scale_manager_v1_interface.name))
+        return WAYLAND_IFACE_FRACTIONAL_SCALE_MANAGER;
+    if (streq(interface, wp_cursor_shape_manager_v1_interface.name))
+        return WAYLAND_IFACE_CURSOR_SHAPE_MANAGER;
+    if (streq(interface, wp_single_pixel_buffer_manager_v1_interface.name))
+        return WAYLAND_IFACE_SINGLE_PIXEL_MANAGER;
+    if (streq(interface, xdg_toplevel_icon_manager_v1_interface.name))
+        return WAYLAND_IFACE_TOPLEVEL_ICON_MANAGER;
+    if (streq(interface, xdg_system_bell_v1_interface.name))
+        return WAYLAND_IFACE_SYSTEM_BELL;
+    if (streq(interface, wp_color_manager_v1_interface.name))
+        return WAYLAND_IFACE_COLOR_MANAGER;
+#if defined(WL_FIXES_INTERFACE)
+    if (streq(interface, wl_fixes_interface.name))
+        return WAYLAND_IFACE_FIXES;
+#endif
+#if defined(HAVE_XDG_TOPLEVEL_TAG)
+    if (streq(interface, xdg_toplevel_tag_manager_v1_interface.name))
+        return WAYLAND_IFACE_TOPLEVEL_TAG_MANAGER;
+#endif
+#if defined(HAVE_EXT_BACKGROUND_EFFECT)
+    if (streq(interface, ext_background_effect_manager_v1_interface.name))
+        return WAYLAND_IFACE_BACKGROUND_EFFECT_MANAGER;
+#endif
+#if defined(FOOT_IME_ENABLED) && FOOT_IME_ENABLED
+    if (streq(interface, zwp_text_input_manager_v3_interface.name))
+        return WAYLAND_IFACE_TEXT_INPUT_MANAGER;
+#endif
+    return WAYLAND_IFACE_NONE;
+}
+
+void *wayland_shim_registry_bind(
+    struct wl_registry *registry, uint32_t name, int which, uint32_t version)
+{
+    switch (which) {
+    case WAYLAND_IFACE_COMPOSITOR:
+        return wl_registry_bind(
+            registry, name, &wl_compositor_interface, version);
+    case WAYLAND_IFACE_SUBCOMPOSITOR:
+        return wl_registry_bind(
+            registry, name, &wl_subcompositor_interface, version);
+    case WAYLAND_IFACE_SHM:
+        return wl_registry_bind(registry, name, &wl_shm_interface, version);
+    case WAYLAND_IFACE_XDG_WM_BASE:
+        return wl_registry_bind(registry, name, &xdg_wm_base_interface, version);
+    case WAYLAND_IFACE_XDG_DECORATION:
+        return wl_registry_bind(
+            registry, name, &zxdg_decoration_manager_v1_interface, version);
+    case WAYLAND_IFACE_SEAT:
+        return wl_registry_bind(registry, name, &wl_seat_interface, version);
+    case WAYLAND_IFACE_XDG_OUTPUT_MANAGER:
+        return wl_registry_bind(
+            registry, name, &zxdg_output_manager_v1_interface, version);
+    case WAYLAND_IFACE_OUTPUT:
+        return wl_registry_bind(registry, name, &wl_output_interface, version);
+    case WAYLAND_IFACE_DATA_DEVICE_MANAGER:
+        return wl_registry_bind(
+            registry, name, &wl_data_device_manager_interface, version);
+    case WAYLAND_IFACE_PRIMARY_SELECTION_DEVICE_MANAGER:
+        return wl_registry_bind(
+            registry, name, &zwp_primary_selection_device_manager_v1_interface,
+            version);
+    case WAYLAND_IFACE_PRESENTATION:
+        return wl_registry_bind(
+            registry, name, &wp_presentation_interface, version);
+    case WAYLAND_IFACE_XDG_ACTIVATION:
+        return wl_registry_bind(
+            registry, name, &xdg_activation_v1_interface, version);
+    case WAYLAND_IFACE_VIEWPORTER:
+        return wl_registry_bind(
+            registry, name, &wp_viewporter_interface, version);
+    case WAYLAND_IFACE_FRACTIONAL_SCALE_MANAGER:
+        return wl_registry_bind(
+            registry, name, &wp_fractional_scale_manager_v1_interface, version);
+    case WAYLAND_IFACE_CURSOR_SHAPE_MANAGER:
+        return wl_registry_bind(
+            registry, name, &wp_cursor_shape_manager_v1_interface, version);
+    case WAYLAND_IFACE_SINGLE_PIXEL_MANAGER:
+        return wl_registry_bind(
+            registry, name, &wp_single_pixel_buffer_manager_v1_interface,
+            version);
+    case WAYLAND_IFACE_TOPLEVEL_ICON_MANAGER:
+        return wl_registry_bind(
+            registry, name, &xdg_toplevel_icon_manager_v1_interface, version);
+    case WAYLAND_IFACE_SYSTEM_BELL:
+        return wl_registry_bind(
+            registry, name, &xdg_system_bell_v1_interface, version);
+    case WAYLAND_IFACE_COLOR_MANAGER:
+        return wl_registry_bind(
+            registry, name, &wp_color_manager_v1_interface, version);
+#if defined(WL_FIXES_INTERFACE)
+    case WAYLAND_IFACE_FIXES:
+        return wl_registry_bind(registry, name, &wl_fixes_interface, version);
+#endif
+#if defined(HAVE_XDG_TOPLEVEL_TAG)
+    case WAYLAND_IFACE_TOPLEVEL_TAG_MANAGER:
+        return wl_registry_bind(
+            registry, name, &xdg_toplevel_tag_manager_v1_interface, version);
+#endif
+#if defined(HAVE_EXT_BACKGROUND_EFFECT)
+    case WAYLAND_IFACE_BACKGROUND_EFFECT_MANAGER:
+        return wl_registry_bind(
+            registry, name, &ext_background_effect_manager_v1_interface,
+            version);
+#endif
+#if defined(FOOT_IME_ENABLED) && FOOT_IME_ENABLED
+    case WAYLAND_IFACE_TEXT_INPUT_MANAGER:
+        return wl_registry_bind(
+            registry, name, &zwp_text_input_manager_v3_interface, version);
+#endif
+    }
+    return NULL;
+}
+
+void *wayland_shim_get_xdg_output(struct zxdg_output_manager_v1 *manager,
+                                  struct wl_output *output)
+{
+    return zxdg_output_manager_v1_get_xdg_output(manager, output);
+}
+
+bool wayland_shim_fdm_add_repeat(struct fdm *fdm, struct seat *seat);
+
+
 int wayland_shim_fcntl_getfl(int fd)
 {
     return fcntl(fd, F_GETFL);
