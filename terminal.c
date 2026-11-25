@@ -93,6 +93,8 @@ extern bool term_paste_data_to_slave(struct terminal *term, const void *data, si
 extern bool term_ptmx_pause(struct terminal *term);
 extern bool term_ptmx_resume(struct terminal *term);
 extern bool fdm_ptmx_out(struct fdm *fdm, int fd, int events, void *data);
+extern bool fdm_delayed_render(struct fdm *fdm, int fd, int events, void *data);
+extern bool initialize_render_workers(struct terminal *term);
 
 /* enqueue_data_for_slave: ported to terminal.zig */
 /* data_to_slave: ported to terminal.zig */
@@ -157,52 +159,7 @@ extern bool fdm_ptmx(struct fdm *fdm, int fd, int events, void *data);
 /* cursor_refresh: ported to terminal.zig */
 /* fdm_cursor_blink: ported to terminal.zig */
 
-static bool
-fdm_delayed_render(struct fdm *fdm, int fd, int events, void *data)
-{
-    if (events & EPOLLHUP)
-        return false;
-
-    struct terminal *term = data;
-
-    uint64_t unused;
-    ssize_t ret1 = 0;
-    ssize_t ret2 = 0;
-
-    if (fd == term->delayed_render_timer.lower_fd)
-        ret1 = read(term->delayed_render_timer.lower_fd, &unused, sizeof(unused));
-    if (fd == term->delayed_render_timer.upper_fd)
-        ret2 = read(term->delayed_render_timer.upper_fd, &unused, sizeof(unused));
-
-    if ((ret1 < 0 || ret2 < 0)) {
-        if (errno == EAGAIN)
-            return true;
-
-        LOG_ERRNO("failed to read timeout timer");
-        return false;
-    }
-
-    if (ret1 > 0)
-        LOG_DBG("lower delay timer expired");
-    else if (ret2 > 0)
-        LOG_DBG("upper delay timer expired");
-
-    if (ret1 == 0 && ret2 == 0)
-        return true;
-
-#if PTMX_TIMING
-    last = (struct timespec){0};
-#endif
-
-    /* Reset timers */
-    struct itimerspec reset = {{0}};
-    timerfd_settime(term->delayed_render_timer.lower_fd, 0, &reset, NULL);
-    timerfd_settime(term->delayed_render_timer.upper_fd, 0, &reset, NULL);
-    term->delayed_render_timer.is_armed = false;
-
-    render_refresh(term);
-    return true;
-}
+/* fdm_delayed_render: ported to terminal.zig */
 
 /* fdm_app_sync_updates_timeout, fdm_title_update_timeout,
  * fdm_icon_update_timeout, fdm_app_id_update_timeout: ported to terminal.zig */
@@ -211,56 +168,7 @@ extern bool fdm_title_update_timeout(struct fdm *fdm, int fd, int events, void *
 extern bool fdm_icon_update_timeout(struct fdm *fdm, int fd, int events, void *data);
 extern bool fdm_app_id_update_timeout(struct fdm *fdm, int fd, int events, void *data);
 
-static bool
-initialize_render_workers(struct terminal *term)
-{
-    LOG_INFO("using %hu rendering threads", term->render.workers.count);
-
-    if (sem_init(&term->render.workers.start, 0, 0) < 0 ||
-        sem_init(&term->render.workers.done, 0, 0) < 0)
-    {
-        LOG_ERRNO("failed to instantiate render worker semaphores");
-        return false;
-    }
-
-    int err;
-    if ((err = mtx_init(&term->render.workers.lock, mtx_plain)) != thrd_success) {
-        LOG_ERR("failed to instantiate render worker mutex: %s (%d)",
-                thrd_err_as_string(err), err);
-        goto err_sem_destroy;
-    }
-
-    mtx_init(&term->render.workers.preapplied_damage.lock, mtx_plain);
-    cnd_init(&term->render.workers.preapplied_damage.cond);
-
-    term->render.workers.threads = xcalloc(
-        term->render.workers.count, sizeof(term->render.workers.threads[0]));
-
-    for (size_t i = 0; i < term->render.workers.count; i++) {
-        struct render_worker_context *ctx = xmalloc(sizeof(*ctx));
-        *ctx = (struct render_worker_context) {
-            .term = term,
-            .my_id = 1 + i,
-        };
-
-        int ret = thrd_create(
-            &term->render.workers.threads[i], &render_worker_thread, ctx);
-        if (ret != thrd_success) {
-
-            LOG_ERR("failed to create render worker thread: %s (%d)",
-                    thrd_err_as_string(ret), ret);
-            term->render.workers.threads[i] = 0;
-            return false;
-        }
-    }
-
-    return true;
-
-err_sem_destroy:
-    sem_destroy(&term->render.workers.start);
-    sem_destroy(&term->render.workers.done);
-    return false;
-}
+/* initialize_render_workers: ported to terminal.zig */
 
 /* term_line_height_update: ported to terminal.zig */
 
@@ -619,18 +527,7 @@ close_fds:
     return NULL;
 }
 
-void
-term_window_configured(struct terminal *term)
-{
-    /* Enable ptmx FDM callback */
-    if (!term->shutdown.in_progress) {
-        xassert(term->window->is_configured);
-        fdm_add(term->fdm, term->ptmx, EPOLLIN, &fdm_ptmx, term);
-
-        const bool gamma_correct = wayl_do_linear_blending(term->wl, term->conf);
-        LOG_INFO("gamma-correct blending: %s", gamma_correct ? "enabled" : "disabled");
-    }
-}
+/* term_window_configured: ported to terminal.zig */
 
 /*
  * Shutdown logic

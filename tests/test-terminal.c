@@ -35,6 +35,8 @@
 #include "input.h"
 #include "key-binding.h"
 #include <sys/timerfd.h>
+#include <sys/epoll.h>
+#include <semaphore.h>
 #include <sys/mman.h>
 #include <sys/wait.h>
 #include <poll.h>
@@ -64,6 +66,8 @@ bool term_set_fonts(
     struct terminal *term, struct fcft_font *fonts[static 4], bool resize_grid);
 bool reload_fonts(struct terminal *term, bool resize_grid);
 bool load_fonts_from_conf(struct terminal *term);
+bool fdm_delayed_render(struct fdm *fdm, int fd, int events, void *data);
+bool initialize_render_workers(struct terminal *term);
 float get_font_dpi(const struct terminal *term);
 bool buffer_unref_no_remove_from_chain(struct buffer_private *buf);
 enum fcft_subpixel get_font_subpixel(const struct terminal *term);
@@ -2130,6 +2134,59 @@ test_cursor_shape(void)
 }
 
 static void
+test_delayed_render(void)
+{
+    struct terminal *term = term_new();
+
+    int lower = timerfd_create(CLOCK_MONOTONIC, TFD_NONBLOCK | TFD_CLOEXEC);
+    int upper = timerfd_create(CLOCK_MONOTONIC, TFD_NONBLOCK | TFD_CLOEXEC);
+    xassert(lower >= 0 && upper >= 0);
+
+    term->delayed_render_timer.lower_fd = lower;
+    term->delayed_render_timer.upper_fd = upper;
+    term->delayed_render_timer.is_armed = true;
+
+    check(!fdm_delayed_render(NULL, lower, EPOLLHUP, term),
+          "EPOLLHUP tears the delayed render timer down");
+
+    check(fdm_delayed_render(NULL, lower, EPOLLIN, term),
+          "an unexpired delayed-render timer is a no-op");
+    check(term->delayed_render_timer.is_armed,
+          "a no-op delayed render leaves the timers armed");
+
+    check(fdm_delayed_render(NULL, -1, EPOLLIN, term),
+          "a foreign fd is a no-op");
+
+    close(lower);
+    close(upper);
+    term->delayed_render_timer.is_armed = false;
+    term->delayed_render_timer.lower_fd = -1;
+    term->delayed_render_timer.upper_fd = -1;
+    term_free(term);
+}
+
+static void
+test_render_workers(void)
+{
+    struct terminal *term = term_new();
+
+    term->render.workers.count = 1;
+    check(initialize_render_workers(term), "one render worker starts");
+
+    check(term->render.workers.threads != NULL,
+          "the worker thread array is allocated");
+
+    /* The worker is blocked in sem_wait() on the start semaphore, so a
+     * trywait on it must not succeed. */
+    check(sem_trywait(&term->render.workers.start) == -1 && errno == EAGAIN,
+          "the render worker is waiting for work");
+
+    /* The thread is left blocked; the process exits right after the tests. */
+    term->render.workers.count = 0;
+    term_free(term);
+}
+
+static void
 test_ime(void)
 {
     struct wayland wl = {0};
@@ -2936,6 +2993,8 @@ main(void)
     test_slave_spawn();
     test_ime();
     test_cursor_shape();
+    test_delayed_render();
+    test_render_workers();
     test_quirks();
     test_version_and_features();
     test_log();

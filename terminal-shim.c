@@ -244,3 +244,11 @@ terminal_shim_fcft_font_options_configure(
 #endif
     }
 }
+
+/* util.h's thrd_err_as_string() is a static inline switch, which Zig cannot
+ * call; the render-worker error paths log through this. */
+#include "util.h"
+const char *terminal_shim_thrd_err_as_string(int thrd_err)
+{
+    return thrd_err_as_string(thrd_err);
+}

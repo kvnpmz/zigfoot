@@ -3874,3 +3874,176 @@ export fn term_xcursor_update(term: *types.Terminal) callconv(.c) void {
     while (it.next()) |seat|
         term_xcursor_update_for_seat(term, seat);
 }
+//
+// Chunk C3a — the delayed-render timer, window-configured and the render
+// worker pool. All three were static in terminal.c. The deadline arithmetic is
+// already Zig; what remains here is the fdm/timer plumbing and C11 thread
+// setup, which are thin libc calls.
+//
+
+extern fn wayl_do_linear_blending(wayl: ?*const types.Wayland, conf: ?*const types.Config) callconv(.c) bool;
+
+fn fdmPtmxAdapter(fdm_opaque: *anyopaque, fd: c_int, events: c_int, data: ?*anyopaque) callconv(.c) bool {
+    return fdm_ptmx(fdm_opaque, fd, events, data);
+}
+
+export fn term_window_configured(term: *types.Terminal) callconv(.c) void {
+    // Enable the ptmx FDM callback
+    if (!term.shutdown.in_progress) {
+        const win = term.window orelse
+            bug(@src().file, @intCast(@src().line), "term_window_configured", "no window");
+        if (!win.is_configured)
+            bug(@src().file, @intCast(@src().line), "term_window_configured", "assertion failed: 'term->window->is_configured'");
+
+        _ = fdm_add(term.fdm orelse return, term.ptmx, EPOLLIN, &fdmPtmxAdapter, term);
+
+        const gamma_correct = wayl_do_linear_blending(term.wl, term.conf);
+        log_msg(
+            LOG_CLASS_INFO,
+            "terminal",
+            "terminal.zig",
+            @intCast(@src().line),
+            "gamma-correct blending: %s",
+            @as([*:0]const u8, if (gamma_correct) "enabled" else "disabled"),
+        );
+    }
+}
+
+export fn fdm_delayed_render(
+    fdm_opaque: ?*anyopaque,
+    fd: c_int,
+    events: c_int,
+    data: ?*anyopaque,
+) callconv(.c) bool {
+    _ = fdm_opaque;
+    if (events & EPOLLHUP != 0) return false;
+
+    const term: *types.Terminal = @ptrCast(@alignCast(data orelse return false));
+
+    var unused: u64 = 0;
+    var ret1: isize = 0;
+    var ret2: isize = 0;
+
+    if (fd == term.delayed_render_timer.lower_fd)
+        ret1 = read(term.delayed_render_timer.lower_fd, &unused, @sizeOf(u64));
+    if (fd == term.delayed_render_timer.upper_fd)
+        ret2 = read(term.delayed_render_timer.upper_fd, &unused, @sizeOf(u64));
+
+    if (ret1 < 0 or ret2 < 0) {
+        if (__errno_location().* == EAGAIN) return true;
+
+        log_errno(LOG_CLASS_ERROR, "terminal", "terminal.zig", @intCast(@src().line), "failed to read timeout timer");
+        return false;
+    }
+
+    if (ret1 > 0)
+        log_msg(LOG_CLASS_DEBUG, "terminal", "terminal.zig", @intCast(@src().line), "lower delay timer expired")
+    else if (ret2 > 0)
+        log_msg(LOG_CLASS_DEBUG, "terminal", "terminal.zig", @intCast(@src().line), "upper delay timer expired");
+
+    if (ret1 == 0 and ret2 == 0) return true;
+
+    // Reset the timers
+    const reset: types.Itimerspec = std.mem.zeroes(types.Itimerspec);
+    _ = timerfd_settime(term.delayed_render_timer.lower_fd, 0, &reset, null);
+    _ = timerfd_settime(term.delayed_render_timer.upper_fd, 0, &reset, null);
+    term.delayed_render_timer.is_armed = false;
+
+    render_refresh(term);
+    return true;
+}
+
+//
+// Render workers. The semaphores/mutex/condition variable are byte blobs in
+// the mirror (their pthread layout is opaque to Zig, but the size is pinned by
+// the ABI probe), so they are passed through by address.
+//
+
+extern fn sem_init(sem: *anyopaque, pshared: c_int, value: c_uint) callconv(.c) c_int;
+extern fn sem_destroy(sem: *anyopaque) callconv(.c) c_int;
+extern fn mtx_init(mtx: *anyopaque, mtx_type: c_int) callconv(.c) c_int;
+extern fn cnd_init(cond: *anyopaque) callconv(.c) c_int;
+extern fn thrd_create(
+    thr: *anyopaque,
+    func: *const fn (?*anyopaque) callconv(.c) c_int,
+    arg: ?*anyopaque,
+) callconv(.c) c_int;
+extern fn terminal_shim_thrd_err_as_string(err: c_int) callconv(.c) [*:0]const u8;
+extern fn render_worker_thread(ctx: ?*anyopaque) callconv(.c) c_int;
+extern fn xcalloc(nmemb: usize, size: usize) callconv(.c) ?*anyopaque;
+
+const THRD_SUCCESS: c_int = 0;
+const MTX_PLAIN: c_int = 0;
+
+/// render.h's `struct render_worker_context` (my_id comes first).
+const RenderWorkerContext = extern struct {
+    my_id: c_int,
+    _pad: [4]u8 = undefined,
+    term: *types.Terminal,
+};
+
+export fn initialize_render_workers(term: *types.Terminal) callconv(.c) bool {
+    log_msg(
+        LOG_CLASS_INFO,
+        "terminal",
+        "terminal.zig",
+        @intCast(@src().line),
+        "using %hu rendering threads",
+        @as(c_uint, term.render.workers.count),
+    );
+
+    const start: *anyopaque = @ptrCast(@alignCast(&term.render.workers.start));
+    const done: *anyopaque = @ptrCast(@alignCast(&term.render.workers.done));
+    const lock: *anyopaque = @ptrCast(@alignCast(&term.render.workers.lock));
+
+    if (sem_init(start, 0, 0) < 0 or sem_init(done, 0, 0) < 0) {
+        log_errno(LOG_CLASS_ERROR, "terminal", "terminal.zig", @intCast(@src().line), "failed to instantiate render worker semaphores");
+        return false;
+    }
+
+    const err = mtx_init(lock, MTX_PLAIN);
+    if (err != THRD_SUCCESS) {
+        log_msg(
+            LOG_CLASS_ERROR,
+            "terminal",
+            "terminal.zig",
+            @intCast(@src().line),
+            "failed to instantiate render worker mutex: %s (%d)",
+            @as([*:0]const u8, terminal_shim_thrd_err_as_string(err)),
+            err,
+        );
+        _ = sem_destroy(start);
+        _ = sem_destroy(done);
+        return false;
+    }
+
+    _ = mtx_init(@ptrCast(@alignCast(&term.render.workers.preapplied_damage.lock)), MTX_PLAIN);
+    _ = cnd_init(@ptrCast(@alignCast(&term.render.workers.preapplied_damage.cond)));
+
+    const count = @as(usize, term.render.workers.count);
+    term.render.workers.threads = xcalloc(count, @sizeOf(u64));
+    const threads: [*]u64 = @ptrCast(@alignCast(term.render.workers.threads.?));
+
+    var i: usize = 0;
+    while (i < count) : (i += 1) {
+        const ctx: *RenderWorkerContext = @ptrCast(@alignCast(xmalloc(@sizeOf(RenderWorkerContext)).?));
+        ctx.* = .{ .my_id = @intCast(1 + i), .term = term };
+
+        const ret = thrd_create(@ptrCast(&threads[i]), &render_worker_thread, ctx);
+        if (ret != THRD_SUCCESS) {
+            log_msg(
+                LOG_CLASS_ERROR,
+                "terminal",
+                "terminal.zig",
+                @intCast(@src().line),
+                "failed to create render worker thread: %s (%d)",
+                @as([*:0]const u8, terminal_shim_thrd_err_as_string(ret)),
+                ret,
+            );
+            threads[i] = 0;
+            return false;
+        }
+    }
+
+    return true;
+}
