@@ -572,6 +572,18 @@ wayland_obj = custom_target(
   ]
 )
 
+server_obj = custom_target(
+  'server_obj',
+  input: 'server.zig',
+  depend_files: files('terminal_types.zig', 'tll.zig'),
+  output: 'server.o',
+  depends: c_layout,
+  command: [
+    python, files('compile_zig.py'), '@INPUT@', '@OUTPUT@',
+    grapheme_clustering_zig,
+  ]
+)
+
 search_obj = custom_target(
   'search_obj',
   input: 'search.zig',
@@ -897,7 +909,7 @@ footlib = static_library(
   render_obj, 'render.h',
   search_obj, 'search.h',
   'main-shim.c',
-  'server.c', 'server.h', 'client-protocol.h',
+  server_obj, 'server.h', 'client-protocol.h',
   shm_obj, 'shm-shim.c', 'shm.h',
   slave_obj, 'slave.c', 'slave.h',
   spawn_obj, spawn_template_obj, 'spawn.h',

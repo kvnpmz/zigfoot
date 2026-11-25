@@ -2484,6 +2484,90 @@ test "line height update" {
 }
 
 
+// ── server.c internals (shared with server.zig) ─────────────────────
+
+pub const ServerClient = extern struct {
+    server: ?*Server,
+    fd: c_int,
+
+    buffer: extern struct {
+        data: ?[*]u8,
+        left: usize,
+        idx: usize,
+    },
+
+    instance: ?*TerminalInstance,
+};
+
+pub const TerminalInstance = extern struct {
+    terminal: ?*Terminal,
+    server: ?*Server,
+    client: ?*ServerClient,
+    conf: ?*Config,
+};
+
+pub const Server = extern struct {
+    conf: ?*Config,
+    fdm: ?*anyopaque,
+    reaper: ?*anyopaque,
+    wayl: ?*anyopaque,
+
+    fd: c_int,
+    sock_path: ?[*:0]const u8,
+
+    clients: Tll(?*ServerClient),
+    terminals: Tll(?*TerminalInstance),
+};
+
+/// client-protocol.h: struct client_data (packed, with C bit-fields).
+/// C's three flag bits + five reserved bits are the opaque first byte; the
+/// remaining fields are parsed byte-by-byte in server.zig. Zig 0.16 rounds
+/// packed-struct sizes up to a power of two, so this is an extern mirror with
+/// the exact 14-byte layout; expectAbi() still pins every real C field.
+pub const ClientData = extern struct {
+    _bits: u8,
+    token_len: u8,
+    exe_len: u16,
+    cwd_len: u16,
+    override_count: u16,
+    foot_argc: u16,
+    slave_argc: u16,
+    env_count: u16,
+};
+
+pub const ClientString = extern struct {
+    len: u16,
+};
+
+/// Packed in C (enum + uint8 = 5 bytes); use raw bytes for the enum so the
+/// extern mirror has the same one-byte alignment and size.
+pub const ClientIpcHdr = extern struct {
+    ipc_code: [4]u8,
+    size: u8,
+};
+
+pub const ClientIpcSigusr = extern struct {
+    signo: i32,
+};
+
+/// Linux struct sockaddr_un (AF_UNIX path socket).
+pub const SockaddrUn = extern struct {
+    sun_family: u16,
+    sun_path: [108]u8,
+};
+
+test "server layout matches C probe" {
+    expectAbi(Server, "Server");
+    expectAbi(ServerClient, "ServerClient");
+    expectAbi(TerminalInstance, "TerminalInstance");
+    expectAbi(ClientData, "ClientData");
+    expectAbi(ClientString, "ClientString");
+    expectAbi(ClientIpcHdr, "ClientIpcHdr");
+    expectAbi(ClientIpcSigusr, "ClientIpcSigusr");
+    expectAbi(SockaddrUn, "SockaddrUn");
+}
+
+
 // ── shm.c internals (shared with shm.zig) ─────────────────────────
 
 /// Mirrors `struct buf` in box-drawing.h (the box-drawing rendering buffer).
