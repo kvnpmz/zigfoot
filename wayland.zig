@@ -561,3 +561,194 @@ export fn wayl_win_subsurface_destroy(surf_in: ?*types.WaylSubSurface) callconv(
         surf.surface.surf = null;
     }
 }
+
+// ─────────────────────────────────────────────────────────────────────────
+// Display flush / roundtrip
+// ─────────────────────────────────────────────────────────────────────────
+
+extern fn wl_display_flush(display: ?*anyopaque) callconv(.c) c_int;
+extern fn wl_display_read_events(display: ?*anyopaque) callconv(.c) c_int;
+extern fn wl_display_dispatch_pending(display: ?*anyopaque) callconv(.c) c_int;
+extern fn wl_display_cancel_read(display: ?*anyopaque) callconv(.c) void;
+extern fn wl_display_roundtrip(display: ?*anyopaque) callconv(.c) c_int;
+extern fn wl_display_prepare_read(display: ?*anyopaque) callconv(.c) c_int;
+extern fn poll(fds: [*]PollFd, nfds: c_ulong, timeout: c_int) callconv(.c) c_int;
+extern fn log_errno(
+    class: c_int,
+    module: [*:0]const u8,
+    file: [*:0]const u8,
+    lineno: c_int,
+    fmt: [*:0]const u8,
+    ...
+) callconv(.c) void;
+extern fn log_errno_provided(
+    class: c_int,
+    module: [*:0]const u8,
+    file: [*:0]const u8,
+    lineno: c_int,
+    errnum: c_int,
+    fmt: [*:0]const u8,
+    ...
+) callconv(.c) void;
+extern fn __errno_location() callconv(.c) *c_int;
+
+const EINTR: c_int = 4;
+const EAGAIN: c_int = 11;
+const EPIPE: c_int = 32;
+const POLLOUT: c_short = 0x4;
+const POLLHUP: c_short = 0x10;
+
+const PollFd = extern struct {
+    fd: c_int,
+    events: c_short,
+    revents: c_short,
+};
+
+fn errno() *c_int {
+    return __errno_location();
+}
+
+export fn wayl_flush(wayl: *types.Wayland) callconv(.c) void {
+    while (true) {
+        const r = wl_display_flush(wayl.display);
+        if (r >= 0) {
+            // Most likely code path - the flush succeed
+            return;
+        }
+
+        if (errno().* == EINTR) {
+            // Unlikely
+            continue;
+        }
+
+        if (errno().* != EAGAIN) {
+            const saved_errno = errno().*;
+
+            if (errno().* == EPIPE) {
+                _ = wl_display_read_events(wayl.display);
+                _ = wl_display_dispatch_pending(wayl.display);
+            }
+
+            log_errno_provided(LOG_CLASS_ERROR, "wayland", "wayland.zig", @intCast(@src().line), saved_errno, "failed to flush wayland socket");
+            return;
+        }
+
+        // Socket buffer is full - need to wait for it to become
+        // writeable again
+        std.debug.assert(errno().* == EAGAIN);
+
+        while (true) {
+            var fds = [_]PollFd{.{ .fd = wayl.fd, .events = POLLOUT, .revents = 0 }};
+
+            const r2 = poll(&fds, fds.len, -1);
+
+            if (r2 < 0) {
+                if (errno().* == EINTR)
+                    continue;
+
+                log_errno(LOG_CLASS_ERROR, "wayland", "wayland.zig", @intCast(@src().line), "failed to poll");
+                return;
+            }
+
+            if (fds[0].revents & POLLHUP != 0)
+                return;
+
+            std.debug.assert(fds[0].revents & POLLOUT != 0);
+            break;
+        }
+    }
+}
+
+export fn wayl_roundtrip(wayl: *types.Wayland) callconv(.c) void {
+    wl_display_cancel_read(wayl.display);
+    if (wl_display_roundtrip(wayl.display) < 0) {
+        log_errno(LOG_CLASS_ERROR, "wayland", "wayland.zig", @intCast(@src().line), "failed to roundtrip Wayland display");
+        return;
+    }
+
+    // I suspect the roundtrip above clears the pending queue, and
+    // that prepare_read() will always succeed in the first call. But,
+    // better safe than sorry...
+
+    while (wl_display_prepare_read(wayl.display) != 0) {
+        if (wl_display_dispatch_pending(wayl.display) < 0) {
+            log_errno(LOG_CLASS_ERROR, "wayland", "wayland.zig", @intCast(@src().line), "failed to dispatch pending Wayland events");
+            return;
+        }
+    }
+    wayl_flush(wayl);
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Client-side cursor theme
+// ─────────────────────────────────────────────────────────────────────────
+
+extern fn wl_cursor_theme_load(name: ?[*:0]const u8, size: c_int, shm: ?*anyopaque) callconv(.c) ?*anyopaque;
+extern fn wl_cursor_theme_destroy(theme: ?*anyopaque) callconv(.c) void;
+extern fn getenv(name: [*:0]const u8) callconv(.c) ?[*:0]u8;
+extern fn strtol(nptr: [*:0]const u8, endptr: *?[*:0]u8, base: c_int) callconv(.c) c_long;
+
+const LOG_CLASS_INFO: c_int = 3;
+
+export fn wayl_reload_xcursor_theme(seat: *types.Seat, new_scale: f32) callconv(.c) bool {
+    if (seat.pointer.theme != null and seat.pointer.scale == new_scale) {
+        // We already have a theme loaded, and the scale hasn't changed
+        return true;
+    }
+
+    if (seat.pointer.theme != null) {
+        std.debug.assert(seat.pointer.scale != new_scale);
+        wl_cursor_theme_destroy(seat.pointer.theme);
+        seat.pointer.theme = null;
+        seat.pointer.cursor = null;
+    }
+
+    if (seat.pointer.shape_device != null) {
+        // Using server side cursors
+        return true;
+    }
+
+    var xcursor_size: c_int = 24;
+
+    {
+        const env_cursor_size = getenv("XCURSOR_SIZE");
+        if (env_cursor_size) |size_str| {
+            errno().* = 0;
+            var end: ?[*:0]u8 = null;
+            const size = strtol(size_str, &end, 10);
+
+            if (errno().* == 0 and end != null and end.?[0] == 0 and size > 0)
+                xcursor_size = @intCast(size)
+            else
+                log_msg(LOG_CLASS_WARNING, "wayland", "wayland.zig", @intCast(@src().line), "XCURSOR_SIZE '%s' is invalid, defaulting to 24", size_str);
+        }
+    }
+
+    const xcursor_theme = getenv("XCURSOR_THEME");
+
+    log_msg(
+        LOG_CLASS_INFO,
+        "wayland",
+        "wayland.zig",
+        @intCast(@src().line),
+        "cursor theme: %s, size: %d, scale: %.2f",
+        if (xcursor_theme) |t| t else @as([*:0]const u8, "(null)"),
+        xcursor_size,
+        new_scale,
+    );
+
+    const seat_wayl: *types.Wayland = @ptrCast(@alignCast(seat.wayl.?));
+    seat.pointer.theme = wl_cursor_theme_load(
+        xcursor_theme,
+        @intFromFloat(@as(f32, @floatFromInt(xcursor_size)) * new_scale),
+        seat_wayl.shm,
+    );
+
+    if (seat.pointer.theme == null) {
+        log_msg(LOG_CLASS_ERROR, "wayland", "wayland.zig", @intCast(@src().line), "failed to load cursor theme");
+        return false;
+    }
+
+    seat.pointer.scale = new_scale;
+    return true;
+}

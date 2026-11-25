@@ -3504,6 +3504,20 @@ test_wayland_misc(void)
     check(empty.surface.surf == NULL && empty.sub == NULL,
           "destroying an empty sub-surface is a no-op");
     wayl_win_subsurface_destroy(NULL);
+
+    /* Cursor theme reload short-circuits when nothing changed */
+    struct seat s2 = {0};
+    void *fake_theme = &s2;
+    s2.pointer.theme = (struct wl_cursor_theme *)fake_theme;
+    s2.pointer.scale = 2.0f;
+    check(wayl_reload_xcursor_theme(&s2, 2.0f),
+          "an unchanged cursor theme is reused");
+    check((void *)s2.pointer.theme == fake_theme, "the existing theme is kept");
+
+    struct seat s3 = {0};
+    s3.pointer.shape_device = (struct wp_cursor_shape_device_v1 *)fake_theme;
+    check(wayl_reload_xcursor_theme(&s3, 1.5f),
+          "server-side cursors skip the client theme load");
 }
 
 int
