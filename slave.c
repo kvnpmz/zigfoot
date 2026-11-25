@@ -5,12 +5,13 @@
  * the platform glue that Zig cannot express portably or without duplicating
  * configure-time knowledge:
  *
- *  - the numeric open/fcntl/ioctl/confstr constants (O_*, F_*, TIOCSCTTY,
- *    _CS_PATH), which differ per platform and are macros in C,
- *  - the IUTF8 termios adjustment (struct termios layout),
  *  - restoring the signal mask and SIG_DFL handlers (sigset_t/sigaction),
+ *  - the configured terminfo path (a compile-time define),
  *  - execvpe() (EXECVPE is a configure-time feature, and the non-glibc
  *    fallback has to call execve() on the resolved path).
+ *
+ * The open/fcntl/ioctl/confstr constants and the IUTF8 adjustment are Zig
+ * now (slave.zig, E1a).
  */
 
 #include <fcntl.h>
@@ -25,59 +26,6 @@
 #include "debug.h"
 #include "macros.h"
 #include "util.h"
-
-struct slave_constants {
-    int o_rdwr;
-    int o_cloexec;
-    int o_nonblock;
-    int f_getfl;
-    int f_setfl;
-    int f_getfd;
-    int f_setfd;
-    int fd_cloexec;
-    int f_ok;
-    int stdin_fileno;
-    int stdout_fileno;
-    int stderr_fileno;
-    int cs_path;
-    unsigned long tiocsctty;
-};
-
-static const struct slave_constants constants = {
-    .o_rdwr = O_RDWR,
-    .o_cloexec = O_CLOEXEC,
-    .o_nonblock = O_NONBLOCK,
-    .f_getfl = F_GETFL,
-    .f_setfl = F_SETFL,
-    .f_getfd = F_GETFD,
-    .f_setfd = F_SETFD,
-    .fd_cloexec = FD_CLOEXEC,
-    .f_ok = F_OK,
-    .stdin_fileno = STDIN_FILENO,
-    .stdout_fileno = STDOUT_FILENO,
-    .stderr_fileno = STDERR_FILENO,
-    .cs_path = _CS_PATH,
-    .tiocsctty = TIOCSCTTY,
-};
-
-const struct slave_constants *slave_shim_constants(void) {
-    return &constants;
-}
-
-int slave_shim_set_iutf8(int pts) {
-#ifdef IUTF8
-    struct termios flags;
-    if (tcgetattr(pts, &flags) < 0)
-        return 1;
-
-    flags.c_iflag |= IUTF8;
-    if (tcsetattr(pts, TCSANOW, &flags) < 0)
-        return 2;
-#else
-    (void)pts;
-#endif
-    return 0;
-}
 
 const char *slave_shim_terminfo_path(void) {
 #if defined(FOOT_TERMINFO_PATH)

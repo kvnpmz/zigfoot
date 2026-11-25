@@ -6170,6 +6170,63 @@ test_keymap_lookup(void)
 }
 
 /*
+ * slave.c's platform glue (slave.zig, E1a).
+ *
+ * The constants are C macros; the Zig copy must match them exactly. IUTF8 is
+ * checked for real on a pty pair.
+ */
+static void
+test_slave_shims(void)
+{
+    const struct slave_constants *c = slave_shim_constants();
+    check(c != NULL, "slave_shim_constants() returns a table");
+
+    check(c->o_rdwr == O_RDWR && c->o_cloexec == O_CLOEXEC &&
+          c->o_nonblock == O_NONBLOCK,
+          "slave constants: the open flags match the C macros");
+    check(c->f_getfl == F_GETFL && c->f_setfl == F_SETFL &&
+          c->f_getfd == F_GETFD && c->f_setfd == F_SETFD,
+          "slave constants: the fcntl commands match");
+    check(c->fd_cloexec == FD_CLOEXEC && c->f_ok == F_OK,
+          "slave constants: FD_CLOEXEC and F_OK match");
+    check(c->stdin_fileno == STDIN_FILENO &&
+          c->stdout_fileno == STDOUT_FILENO &&
+          c->stderr_fileno == STDERR_FILENO,
+          "slave constants: the standard file descriptors match");
+    check(c->tiocsctty == TIOCSCTTY && c->cs_path == _CS_PATH,
+          "slave constants: TIOCSCTTY and _CS_PATH match");
+
+    {
+        int master = posix_openpt(O_RDWR | O_NOCTTY);
+        xassert(master >= 0);
+        xassert(grantpt(master) == 0);
+        xassert(unlockpt(master) == 0);
+
+        const char *slave_name = ptsname(master);
+        xassert(slave_name != NULL);
+        int slave = open(slave_name, O_RDWR | O_NOCTTY);
+        xassert(slave >= 0);
+
+        struct termios tio;
+        xassert(tcgetattr(slave, &tio) == 0);
+        tio.c_iflag &= ~IUTF8;
+        xassert(tcsetattr(slave, TCSANOW, &tio) == 0);
+
+        check(slave_shim_set_iutf8(slave) == 0,
+              "slave_shim_set_iutf8() succeeds on a pty");
+        xassert(tcgetattr(slave, &tio) == 0);
+        check((tio.c_iflag & IUTF8) != 0,
+              "slave_shim_set_iutf8() sets the IUTF8 input flag");
+
+        close(slave);
+        close(master);
+    }
+
+    check(slave_shim_set_iutf8(-1) == 1,
+          "slave_shim_set_iutf8() reports an unreadable fd as 1");
+}
+
+/*
  * The IME text-input path (ime.zig, D5b).
  *
  * No compositor is needed for the pending/state machine: done() applies the
@@ -7262,6 +7319,7 @@ main(void)
     test_keymap_lookup();
     test_kbd_protocols();
     test_keyboard_layouts();
+    test_slave_shims();
     test_ime_protocol();
     test_key_binding_manager();
     test_touch_listeners();

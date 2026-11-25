@@ -891,7 +891,7 @@ Per-module burn-down (share of that module's original C that is gone):
 | `config` | 35 / 4,374 | 99% | only `config_regex_compile()` (§6.3) |
 | `wayland` | 359 / 2,884 | 88% | 27 listener tables + forwarders + 3 FDM callbacks |
 | `selection` | 844 / 2,967 | 72% | data-device / primary-selection listeners, DND |
-| `slave` | 158 / 573 | 72% | O_*/TIOCSCTTY constants, termios, execvpe shim |
+| `slave` | 106 / 573 | **81%** | signal reset, terminfo path and execvpe left |
 | `shm` | 329 / 1,110 | 70% | globals, `wl_shm`/`wl_buffer` stubs, punch-hole `#ifdef`s |
 | `debug` | 22 / 47 | 53% | ASAN stack-trace hook |
 | `render` | 0 / 5,479 | **100%** | `render.c` deleted in D3l4; `render.zig` is the module |
@@ -902,7 +902,7 @@ Per-module burn-down (share of that module's original C that is gone):
 | `key-binding` | 0 / 661 | **100%** | `key-binding.c` deleted in D5a; `key-binding.zig` is the module |
 | `ime` | 0 / 540 | **100%** | `ime.c` deleted in D5b; `ime.zig` is the module |
 
-**Percent complete: 90.3% by C volume (post-D5b), ~85% by effort (band
+**Percent complete: 90.5% by C volume (post-E1a), ~85% by effort (band
 82–87%), 35/45 top-level modules (50 counting `spawn_template`) with zero C
 left.**
 **Post-D4d2a:** `input.c` is 3,618 → **2,040** (45% ported), module C 12,709 →
@@ -920,6 +920,18 @@ the six windows
 compositor. Real presentation feedback is still not delivered to these
 short-lived windows, so `presented()` is covered by the fabricated-context
 checks, not by the launches.
+
+**Post-E1a:** the `slave` platform glue shrank from 158 to **106** lines
+(slave now 81% ported). `slave_shim_constants()` and
+`slave_shim_set_iutf8()` are Zig: the open/fcntl/confstr/ioctl constants
+are Zig constants with the Linux values (checked against the C macros by the
+harness), and IUTF8 is set through libc's `tcgetattr()`/`tcsetattr()` on
+Zig's `std.posix.termios` — deliberately not `std.posix.tcgetattr()`, which
+maps EBADF/ENOTTY to `unreachable` where the C contract is return-1. What
+remains in `slave.c` is only the signal-mask restore, the compile-time
+terminfo path and `execvpe()`. 9 new harness checks; the full harness also
+runs clean under **valgrind** (0 errors; gdb and valgrind are both present in
+this container). Module C 4,726 → 4,674, harness 805 → **814** checks.
 
 **Post-D5b:** `ime.c` is **deleted** — the 35th module with no C.
 Module C **5,266 → 4,726** (90.3% of the original C gone), Zig 48,738 →
@@ -1086,7 +1098,7 @@ shared `types.KeyBindingSet`. The `selection` tail deletes
 and `client` (679), which share `main`'s setup. After D6 the process entry
 point is Zig.
 
-**Track E — endgame (≈3–4 dev-days).** `wayland`'s 359 glue lines, `shm`'s 329
+**Track E — endgame (≈3–4 dev-days).** E1a done (slave's constants +IUTF8). `wayland`'s 359 glue lines, `shm`'s 329
 (pull the `wl_shm` stubs behind a mirrored `struct shm_wayland_caps`), `slave`'s
 158 constants/execvpe, `config`'s 35-line regex shim, `debug`'s 22-line ASAN
 hook; then delete every struct-mirror shim. Note the shim count has *grown*

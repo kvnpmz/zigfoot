@@ -61,8 +61,66 @@ const SlaveConstants = extern struct {
     tiocsctty: c_ulong,
 };
 
-extern fn slave_shim_constants() *const SlaveConstants;
-extern fn slave_shim_set_iutf8(pts: c_int) c_int;
+// The open/fcntl/confstr/ioctl constants are C macros (and differ per
+// platform); these are the Linux values foot targets. Keeping them in the
+// `SlaveConstants` struct preserves the shape the rest of this file uses.
+const O_RDWR: c_int = 2;
+const O_CLOEXEC: c_int = 0o2000000; // 0x80000
+const O_NONBLOCK: c_int = 0o4000; // 0x800
+const F_GETFL: c_int = 3;
+const F_SETFL: c_int = 4;
+const F_GETFD: c_int = 1;
+const F_SETFD: c_int = 2;
+const FD_CLOEXEC: c_int = 1;
+const F_OK: c_int = 0;
+const STDIN_FILENO: c_int = 0;
+const STDOUT_FILENO: c_int = 1;
+const STDERR_FILENO: c_int = 2;
+const CS_PATH: c_int = 0; // glibc/musl _CS_PATH
+const TIOCSCTTY: c_ulong = 0x540e;
+
+const constants = SlaveConstants{
+    .o_rdwr = O_RDWR,
+    .o_cloexec = O_CLOEXEC,
+    .o_nonblock = O_NONBLOCK,
+    .f_getfl = F_GETFL,
+    .f_setfl = F_SETFL,
+    .f_getfd = F_GETFD,
+    .f_setfd = F_SETFD,
+    .fd_cloexec = FD_CLOEXEC,
+    .f_ok = F_OK,
+    .stdin_fileno = STDIN_FILENO,
+    .stdout_fileno = STDOUT_FILENO,
+    .stderr_fileno = STDERR_FILENO,
+    .cs_path = CS_PATH,
+    .tiocsctty = TIOCSCTTY,
+};
+
+export fn slave_shim_constants() *const SlaveConstants {
+    return &constants;
+}
+
+// libc's tcgetattr()/tcsetattr(), rather than std.posix: the latter turns
+// EBADF/ENOTTY into unreachable, while the C shim's contract is "1 if the
+// attributes cannot be read, 2 if they cannot be written".
+extern fn tcgetattr(fd: c_int, termios: *std.posix.termios) c_int;
+extern fn tcsetattr(fd: c_int, action: c_int, termios: *const std.posix.termios) c_int;
+const TCSANOW: c_int = 0;
+
+/// Enable IUTF8 on the pty slave: return 0 on success, 1 if the attributes
+/// cannot be read, 2 if they cannot be written (the C shim's contract).
+export fn slave_shim_set_iutf8(pts: c_int) c_int {
+    var flags: std.posix.termios = undefined;
+    if (tcgetattr(pts, &flags) < 0)
+        return 1;
+
+    flags.iflag.IUTF8 = true;
+    if (tcsetattr(pts, TCSANOW, &flags) < 0)
+        return 2;
+
+    return 0;
+}
+
 extern fn slave_shim_reset_signals() bool;
 extern fn slave_shim_terminfo_path() ?[*:0]const u8;
 extern fn slave_shim_execvpe(
