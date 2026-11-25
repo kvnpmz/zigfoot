@@ -889,7 +889,7 @@ footlib = static_library(
   unicode_mode_obj, 'unicode-mode.h',
   url_mode_obj, 'url-mode.h',
   user_notification_obj, 'user-notification.h',
-  'wayland.c', wayland_obj, 'wayland.h', 'shm-formats.h',
+  'wayland-shim.c', wayland_obj, 'wayland.h', 'shm-formats.h',
   'xkbcommon-vmod.h',
   srgb_funcs, wl_proto_src + wl_proto_headers, version,
   dependencies: foot_deps,

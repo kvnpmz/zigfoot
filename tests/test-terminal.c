@@ -3981,6 +3981,57 @@ test_small_listeners(void)
 }
 
 
+/* The FDM callbacks are Zig exports; drive them headlessly with a real
+ * fdm, a pipe standing in for the Wayland socket and an unarmed timerfd. */
+static void
+test_wayland_fdm(void)
+{
+    struct fdm *fdm = fdm_init();
+    check(fdm != NULL, "wayland FDM test has an fdm");
+    if (fdm == NULL)
+        return;
+
+    struct wayland wayl = {0};
+    check(wayland_shim_hook_add(fdm, &wayl),
+          "the low-priority FDM hook registers");
+    check(wayland_shim_hook_del(fdm),
+          "the low-priority FDM hook unregisters");
+
+    int fds[2];
+    check(pipe(fds) == 0, "wayland socket stand-in created");
+    wayl.fd = fds[0];
+    check(wayland_shim_fdm_add(fdm, &wayl),
+          "the Wayland socket FDM handler registers");
+    check(fdm_del(fdm, fds[0]), "the socket stand-in is deregistered");
+    close(fds[1]);
+
+    struct seat seat = {0};
+    int repeat_fd = timerfd_create(
+        CLOCK_MONOTONIC, TFD_CLOEXEC | TFD_NONBLOCK);
+    check(repeat_fd >= 0, "keyboard repeat timer created");
+
+    if (repeat_fd >= 0) {
+        seat.kbd.repeat.fd = repeat_fd;
+        seat.kbd.repeat.key = 38;
+        check(wayland_shim_fdm_add_repeat(fdm, &seat),
+              "the repeat timer FDM handler registers");
+        check(fdm_repeat(fdm, repeat_fd, EPOLLIN, &seat),
+              "an unarmed repeat timer returns true (EAGAIN)");
+        check(!fdm_repeat(fdm, repeat_fd, EPOLLHUP, &seat),
+              "the repeat handler reports EPOLLHUP");
+        check(fdm_del(fdm, repeat_fd),
+              "the repeat timer is deregistered");
+    }
+
+    check(fdm_wayl(fdm, -1, 0, &wayl),
+          "the Wayland FDM handler returns true with no events");
+    check(!fdm_wayl(fdm, -1, EPOLLHUP, &wayl),
+          "the Wayland FDM handler reports a disconnect");
+
+    fdm_destroy(fdm);
+}
+
+
 static void
 test_wayl_init_failure(void)
 {
@@ -7668,6 +7719,7 @@ main(void)
     test_configure();
     test_surface_listener();
     test_small_listeners();
+    test_wayland_fdm();
     test_wayl_init_failure();
     test_seat_capabilities();
     test_handle_global();

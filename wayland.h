@@ -569,13 +569,13 @@ void wayl_activate(struct wayland *wayl, struct wl_window *win, const char *toke
 
 bool wayl_do_linear_blending(const struct wayland *wayl, const struct config *conf);
 
-/* CSD helpers moved to wayland.zig; wayland.c still calls them. */
+/* CSD helpers moved to wayland.zig. */
 void csd_instantiate(struct wl_window *win);
 void csd_destroy(struct wl_window *win);
 void csd_reload_font(struct wl_window *win, float old_scale);
 
 /* ── Ported to wayland.zig ─────────────────────────────────────────────
- * Generated-protocol listener callbacks; the listener tables in wayland.c
+ * Generated-protocol listener callbacks; the listener tables in wayland-shim.c
  * still point at these, so their prototypes live here. */
 
 void output_geometry(
@@ -665,3 +665,58 @@ void fractional_scale_preferred_scale(
     void *data, struct wp_fractional_scale_v1 *fractional_scale, uint32_t scale);
 void ext_background_capabilities(
     void *data, struct ext_background_effect_manager_v1 *manager, uint32_t flags);
+
+/* ── Listener glue ──────────────────────────────────────────────────────
+ *
+ * The generated-protocol listener tables and their add_listener() forwarders
+ * live in wayland-shim.c; every callback they reference is a Zig export
+ * declared above. The FDM callbacks below, and the forwarders that register
+ * them, are implemented in wayland.zig.
+ */
+void wayland_shim_add_data_device_listener(
+    struct wl_data_device *dev, struct seat *seat);
+void wayland_shim_add_primary_selection_device_listener(
+    struct zwp_primary_selection_device_v1 *dev, struct seat *seat);
+void wayland_shim_add_text_input_listener(
+    struct zwp_text_input_v3 *ti, struct seat *seat);
+void wayland_shim_add_registry_listener(
+    struct wl_registry *registry, struct wayland *wayl);
+void wayland_shim_add_shm_listener(struct wl_shm *shm, struct wayland *wayl);
+void wayland_shim_add_wm_base_listener(
+    struct xdg_wm_base *shell, struct wayland *wayl);
+void wayland_shim_add_seat_listener(struct wl_seat *wl_seat, struct seat *seat);
+void wayland_shim_keyboard_leave(
+    struct seat *seat, struct wl_keyboard *kbd, struct wl_surface *surface);
+void wayland_shim_pointer_leave(
+    struct seat *seat, struct wl_pointer *pointer, struct wl_surface *surface);
+void wayland_shim_add_output_listener(
+    struct wl_output *output, struct monitor *mon);
+void wayland_shim_add_xdg_output_monitor_listener(
+    struct zxdg_output_v1 *xdg, struct monitor *mon);
+void wayland_shim_add_presentation_listener(
+    struct wp_presentation *presentation, struct wayland *wayl);
+void wayland_shim_add_color_manager_listener(
+    struct wp_color_manager_v1 *manager, struct wayland *wayl);
+void wayland_shim_add_background_manager_listener(
+    struct ext_background_effect_manager_v1 *manager, struct wayland *wayl);
+void wayland_shim_add_surface_listener(
+    struct wl_surface *surf, struct wl_window *win);
+void wayland_shim_add_fractional_scale_listener(
+    struct wp_fractional_scale_v1 *scale, struct wl_window *win);
+void wayland_shim_add_xdg_surface_listener(
+    struct xdg_surface *xdg_surface, struct wl_window *win);
+void wayland_shim_add_xdg_toplevel_listener(
+    struct xdg_toplevel *toplevel, struct wl_window *win);
+void wayland_shim_add_decoration_listener(
+    struct zxdg_toplevel_decoration_v1 *decoration, struct wl_window *win);
+void wayland_shim_add_activation_token_listener(
+    struct xdg_activation_token_v1 *token,
+    struct xdg_activation_token_context *ctx);
+
+bool fdm_repeat(struct fdm *fdm, int fd, int events, void *data);
+void fdm_hook(struct fdm *fdm, void *data);
+bool fdm_wayl(struct fdm *fdm, int fd, int events, void *data);
+bool wayland_shim_hook_add(struct fdm *fdm, struct wayland *wayl);
+bool wayland_shim_hook_del(struct fdm *fdm);
+bool wayland_shim_fdm_add_repeat(struct fdm *fdm, struct seat *seat);
+bool wayland_shim_fdm_add(struct fdm *fdm, struct wayland *wayl);
