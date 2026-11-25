@@ -4276,7 +4276,6 @@ extern fn user_notification_add_fmt(
 
 // struct fcft_font / struct fcft_glyph are fcft's business; the shims hand
 // over the two fields this file needs.
-extern fn terminal_shim_fcft_glyph_advance_x(glyph: *const anyopaque) callconv(.c) c_int;
 extern fn terminal_shim_fcft_font_name(font: *const anyopaque) callconv(.c) ?[*:0]const u8;
 
 const FcResultMatch: c_int = 0;
@@ -4448,7 +4447,7 @@ export fn check_if_font_is_monospaced(
 
     for (chars) |cp| {
         const g = fcft_rasterize_char_utf32(f, cp, FCFT_SUBPIXEL_NONE) orelse continue;
-        const advance_x = terminal_shim_fcft_glyph_advance_x(g);
+        const advance_x = @as(*const types.FcftGlyph, @ptrCast(@alignCast(g))).advance.x;
 
         if (last_width >= 0 and advance_x != last_width) {
             const font_name: [*:0]const u8 = terminal_shim_fcft_font_name(f) orelse pattern;

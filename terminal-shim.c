@@ -179,10 +179,6 @@ terminal_shim_emoji_vs_width(uint32_t cp, uint32_t wc)
 /* ── custom glyph freeing (terminal.zig) ─────────────────────────── */
 
 /* fcft_glyph's layout is fcft's business; terminal.zig only needs pix. */
-pixman_image_t *terminal_shim_fcft_glyph_pix(const struct fcft_glyph *glyph) {
-    return glyph->pix;
-}
-
 /* ── font metrics (terminal.zig) ─────────────────────────────────── */
 
 /* struct fcft_font is fcft's business; terminal.zig only reads these four
@@ -203,10 +199,6 @@ terminal_shim_fcft_font_metrics(const struct fcft_font *font)
         .ascent = font->ascent,
         .max_advance_x = font->max_advance.x,
     };
-}
-
-int terminal_shim_fcft_glyph_advance_x(const struct fcft_glyph *glyph) {
-    return glyph->advance.x;
 }
 
 const char *terminal_shim_fcft_font_name(const struct fcft_font *font) {
@@ -862,31 +854,10 @@ void wayland_shim_text_input_destroy(struct zwp_text_input_v3 *ti)
     zwp_text_input_v3_destroy(ti);
 }
 
-/* selection.zig: config accessors and one grid static inline (D5d-b2 moved
- * these off the deleted selection-shim.c). */
-const char32_t *selection_conf_word_delimiters(const struct terminal *term)
-{
-    return term->conf->word_delimiters;
-}
-
+/* selection.zig: `grid_row_in_view()` is a static inline in grid.h. */
 struct row *selection_grid_row_in_view(struct grid *grid, int row_no)
 {
     return grid_row_in_view(grid, row_no);
-}
-
-void *selection_seat_clipboard_data_offer(const struct seat *seat)
-{
-    return seat->clipboard.data_offer;
-}
-
-void *selection_seat_primary_data_offer(const struct seat *seat)
-{
-    return seat->primary.data_offer;
-}
-
-int selection_conf_selection_target(const struct terminal *term)
-{
-    return term->conf->selection_target;
 }
 
 /* selection.zig (D5d-b2): the data-offer / data-source / primary-selection

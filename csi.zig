@@ -211,8 +211,6 @@ extern fn term_save_cursor(term: *types.Terminal) callconv(.c) void;
 extern fn term_ime_is_enabled(term: *types.Terminal) callconv(.c) bool;
 
 extern fn csi_xtsave_get(term: *types.Terminal, bit: c_uint) callconv(.c) bool;
-extern fn csi_grapheme_shaping(term: *types.Terminal) callconv(.c) bool;
-extern fn csi_size_notifications(term: *types.Terminal) callconv(.c) bool;
 extern fn csi_xtsave_set(term: *types.Terminal, bit: c_uint, v: bool) callconv(.c) void;
 
 // sixel-shim.c accessors (already exist)
@@ -300,10 +298,10 @@ export fn xtsave(term: *types.Terminal, param: c_uint) callconv(.c) void {
         1070 => csi_xtsave_set(term, XTSAVE_SIXEL_PRIVATE_PALETTE, sixel_get_use_private_palette(term)),
         2004 => csi_xtsave_set(term, XTSAVE_BRACKETED_PASTE, term.bracketed_paste),
         2026 => csi_xtsave_set(term, XTSAVE_APP_SYNC_UPDATES, term.render.app_sync_updates.enabled),
-        2027 => csi_xtsave_set(term, XTSAVE_GRAPHEME_SHAPING, csi_grapheme_shaping(term)),
+        2027 => csi_xtsave_set(term, XTSAVE_GRAPHEME_SHAPING, term.grapheme_shaping),
         2031 => csi_xtsave_set(term, XTSAVE_REPORT_THEME_CHANGES, term.report_theme_changes),
         2033 => csi_xtsave_set(term, XTSAVE_VISIBILITY_REPORTS, term.visibility_reports),
-        2048 => csi_xtsave_set(term, XTSAVE_SIZE_NOTIFICATIONS, csi_size_notifications(term)),
+        2048 => csi_xtsave_set(term, XTSAVE_SIZE_NOTIFICATIONS, term.size_notifications),
         8452 => csi_xtsave_set(term, XTSAVE_SIXEL_CURSOR_RIGHT_OF_GRAPHICS, sixel_get_cursor_right_of_graphics(term)),
         737769 => csi_xtsave_set(term, XTSAVE_IME, term_ime_is_enabled(term)),
         else => {},
@@ -423,7 +421,6 @@ extern fn sixel_set_use_private_palette(term: *types.Terminal, v: bool) callconv
 extern fn sixel_set_cursor_right_of_graphics(term: *types.Terminal, v: bool) callconv(.c) void;
 
 // csi-shim.c url accessor
-extern fn csi_set_url_ime_reenable_after_url_mode(term: *types.Terminal, v: bool) callconv(.c) void;
 
 // tll helpers
 
@@ -608,7 +605,7 @@ export fn decset_decrst(term: *types.Terminal, param: c_uint, enable: bool) call
             if (enable) term_ime_enable(term)
             else {
                 term_ime_disable(term);
-                csi_set_url_ime_reenable_after_url_mode(term, false);
+                term.url.ime_reenable_after_url_mode = false;
             }
         },
         else => {},
@@ -616,11 +613,10 @@ export fn decset_decrst(term: *types.Terminal, param: c_uint, enable: bool) call
 }
 
 // grapheme_shaping needs the csi-shim.c setter (already exists)
-extern fn csi_set_grapheme_shaping(term: *types.Terminal, v: bool) callconv(.c) void;
 
 // Helper: direct setter wrapper (name collision with shim fn avoided)
 fn csi_set_grapheme_shaping_direct(term: *types.Terminal, v: bool) void {
-    csi_set_grapheme_shaping(term, v);
+    term.grapheme_shaping = v;
 }
 
 export fn decset(term: *types.Terminal, param: c_uint) callconv(.c) void {
@@ -686,7 +682,6 @@ fn decrpm(enabled: bool) DecrpmStatus {
 // GRAPHEME_WIDTH_* enum values (from config.h)
 const GRAPHEME_WIDTH_DOUBLE: c_int = 2;
 
-extern fn csi_conf_grapheme_width_method(term: *types.Terminal) callconv(.c) c_int;
 
 export fn decrqm(term: *const types.Terminal, param: c_uint) callconv(.c) DecrpmStatus {
     const t: *types.Terminal = @constCast(term);
@@ -720,13 +715,13 @@ export fn decrqm(term: *const types.Terminal, param: c_uint) callconv(.c) Decrpm
         1070 => decrpm(sixel_get_use_private_palette(t)),
         2004 => decrpm(term.bracketed_paste),
         2026 => decrpm(term.render.app_sync_updates.enabled),
-        2027 => if (csi_conf_grapheme_width_method(t) != GRAPHEME_WIDTH_DOUBLE)
+        2027 => if (@intFromEnum(t.conf.?.tweak.grapheme_width_method) != GRAPHEME_WIDTH_DOUBLE)
             .permanently_reset
         else
-            decrpm(csi_grapheme_shaping(t)),
+            decrpm(t.grapheme_shaping),
         2031 => decrpm(term.report_theme_changes),
         2033 => decrpm(term.visibility_reports),
-        2048 => decrpm(csi_size_notifications(t)),
+        2048 => decrpm(t.size_notifications),
         8452 => decrpm(sixel_get_cursor_right_of_graphics(t)),
         737769 => decrpm(term_ime_is_enabled(t)),
         else => .not_recognized,
@@ -759,8 +754,6 @@ extern fn memmove(dst: ?*anyopaque, src: ?*const anyopaque, n: usize) callconv(.
 extern fn snprintf(buf: [*]u8, n: usize, fmt: [*:0]const u8, ...) callconv(.c) c_int;
 
 // csi-shim.c config accessors
-extern fn csi_conf_tweak_sixel(term: *types.Terminal) callconv(.c) bool;
-extern fn csi_conf_security_osc52(term: *types.Terminal) callconv(.c) c_int;
 
 const OSC52_ENABLED: c_int = 3;
 const OSC52_COPY_ENABLED: c_int = 1;
@@ -810,8 +803,8 @@ fn case0Dispatch(term: *types.Terminal, final: u8) void {
             if (vtParamGet(term, 0, 0) != 0) break :blk;
 
             var reply: [32]u8 = undefined;
-            const has_sixel = csi_conf_tweak_sixel(term);
-            const osc52 = csi_conf_security_osc52(term);
+            const has_sixel = term.conf.?.tweak.sixel;
+            const osc52 = @intFromEnum(term.conf.?.security.osc52);
             const has_osc52 = (osc52 == OSC52_ENABLED or osc52 == OSC52_COPY_ENABLED);
 
             const sixel_str: [*:0]const u8 = if (has_sixel) ";4" else "";
@@ -1253,8 +1246,6 @@ fn case0UnhandledDispatch(term: *types.Terminal, final: u8) void {
 
 
 // csi-shim.c config/term accessors
-extern fn csi_modify_other_keys_2(term: *types.Terminal) callconv(.c) bool;
-extern fn csi_set_modify_other_keys_2(term: *types.Terminal, v: bool) callconv(.c) void;
 
 // sixel_colors_* / sixel_geometry_* — Zig exports from sixel.zig
 extern fn sixel_colors_report_current(term: *types.Terminal) callconv(.c) void;
@@ -1298,7 +1289,7 @@ fn caseQuestion(term: *types.Terminal, final: u8) void {
             }
         },
         'S' => blk: { // XTSMGRAPHICS — sixel colors/geometry
-            if (!csi_conf_tweak_sixel(term)) break :blk;
+            if (!term.conf.?.tweak.sixel) break :blk;
             const target = vtParamGet(term, 0, 0);
             const operation = vtParamGet(term, 1, 0);
             switch (target) {
@@ -1325,7 +1316,7 @@ fn caseQuestion(term: *types.Terminal, final: u8) void {
             switch (resource) {
                 0 => value = 0, // modifyKeyboard
                 1, 2 => value = 1, // modifyCursorKeys/modifyFunctionKeys
-                4 => value = if (csi_modify_other_keys_2(term)) 2 else 1, // modifyOtherKeys
+                4 => value = if (term.modify_other_keys_2) 2 else 1, // modifyOtherKeys
                 else => {},
             }
             if (value >= 0) {
@@ -1378,8 +1369,6 @@ extern fn csi_foot_version_major() callconv(.c) c_uint;
 extern fn csi_foot_version_minor() callconv(.c) c_uint;
 extern fn csi_foot_version_patch() callconv(.c) c_uint;
 extern fn csi_foot_version_extra() callconv(.c) [*:0]const u8;
-extern fn csi_conf_cursor_style(term: *types.Terminal) callconv(.c) c_int;
-extern fn csi_conf_cursor_blink_enabled(term: *types.Terminal) callconv(.c) bool;
 
 const KITTY_KBD_SUPPORTED: c_int = 0x1f;
 
@@ -1402,7 +1391,7 @@ fn caseGreater(term: *types.Terminal, final: u8) void {
             switch (resource) {
                 0 => {},
                 1, 2 => {}, // modifyCursorKeys/modifyFunctionKeys ignored
-                4 => csi_set_modify_other_keys_2(term, value == 2),
+                4 => term.modify_other_keys_2 = (value == 2),
                 else => {},
             }
         },
@@ -1410,7 +1399,7 @@ fn caseGreater(term: *types.Terminal, final: u8) void {
             const resource = vtParamGet(term, 0, 2);
             switch (resource) {
                 0, 1, 2 => {},
-                4 => csi_set_modify_other_keys_2(term, false),
+                4 => term.modify_other_keys_2 = false,
                 else => {},
             }
         },
@@ -1466,12 +1455,12 @@ fn caseSpace(term: *types.Terminal, final: u8) void {
     const param = vtParamGet(term, 0, 0);
     switch (param) {
         0 => {
-            term.cursor_style = @enumFromInt(csi_conf_cursor_style(term));
-            term.cursor_blink.deccsusr = csi_conf_cursor_blink_enabled(term);
+            term.cursor_style = @enumFromInt(@intFromEnum(term.conf.?.cursor.style));
+            term.cursor_blink.deccsusr = term.conf.?.cursor.blink.enabled;
             term_cursor_blink_update(term);
         },
         1, 2 => {
-            term.cursor_style = if (csi_conf_cursor_style(term) == 3) .hollow else .block;
+            term.cursor_style = if (@intFromEnum(term.conf.?.cursor.style) == 3) .hollow else .block;
         },
         3, 4 => { term.cursor_style = .underline; },
         5, 6 => { term.cursor_style = .beam; },

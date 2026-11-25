@@ -51,53 +51,6 @@ void csi_xtsave_set(struct terminal *t, unsigned bit, bool v) {
 /* These are stored in the _font_state opaque blob or standalone
  * trailing fields in the C Terminal; expose via accessors. */
 
-bool csi_size_notifications(struct terminal *t) {
-    return t->size_notifications;
-}
-
-bool csi_grapheme_shaping(struct terminal *t) {
-    return t->grapheme_shaping;
-}
-
-void csi_set_grapheme_shaping(struct terminal *t, bool v) {
-    t->grapheme_shaping = v;
-}
-
-bool csi_modify_other_keys_2(struct terminal *t) {
-    return t->modify_other_keys_2;
-}
-
-void csi_set_modify_other_keys_2(struct terminal *t, bool v) {
-    t->modify_other_keys_2 = v;
-}
-
-/* ── Config accessors (term->conf is opaque to Zig) ──────────────── */
-
-bool csi_conf_cursor_blink_enabled(struct terminal *t) {
-    return t->conf->cursor.blink.enabled;
-}
-
-int csi_conf_cursor_style(struct terminal *t) {
-    return (int)t->conf->cursor.style;
-}
-
-int csi_conf_security_osc52(struct terminal *t) {
-    return (int)t->conf->security.osc52;
-}
-
-int csi_conf_grapheme_width_method(struct terminal *t) {
-    return (int)t->conf->tweak.grapheme_width_method;
-}
-
-bool csi_conf_tweak_sixel(struct terminal *t) {
-    return t->conf->tweak.sixel;
-}
-
-
-void csi_set_url_ime_reenable_after_url_mode(struct terminal *t, bool v) {
-    t->url.ime_reenable_after_url_mode = v;
-}
-
 /* c32width is static inline in char32.h — no C symbol. Wrap it. */
 int csi_c32width(uint32_t c) {
 #if defined(FOOT_GRAPHEME_CLUSTERING)

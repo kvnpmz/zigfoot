@@ -27,7 +27,6 @@ const PixmanImage = anyopaque;
 
 extern fn pixman_image_get_data(image: *PixmanImage) callconv(.c) ?[*]u32;
 extern fn pixman_image_unref(image: *PixmanImage) callconv(.c) void;
-extern fn terminal_shim_fcft_glyph_pix(glyph: *anyopaque) callconv(.c) ?*PixmanImage;
 
 // Mirrors terminal.h's GLYPH_*_COUNT macros.
 const GLYPH_BOX_DRAWING_COUNT = GLYPH_BOX_DRAWING_LAST - GLYPH_BOX_DRAWING_FIRST + 1;
@@ -47,7 +46,9 @@ const GLYPH_LEGACY_LAST = 0x1FB9B;
 fn freeCustomGlyph(glyph: *?*anyopaque) void {
     const g = glyph.* orelse return;
 
-    if (terminal_shim_fcft_glyph_pix(g)) |pix| {
+    const fg: *types.FcftGlyph = @ptrCast(@alignCast(g));
+    if (fg.pix) |pix_any| {
+        const pix: *PixmanImage = @ptrCast(@alignCast(pix_any));
         if (pixman_image_get_data(pix)) |data|
             std.c.free(@ptrCast(data));
         pixman_image_unref(pix);
@@ -120,7 +121,6 @@ extern fn fcft_rasterize_char_utf32(
     cp: u32,
     subpixel: c_int,
 ) callconv(.c) ?*const anyopaque;
-extern fn terminal_shim_fcft_glyph_advance_x(glyph: *const anyopaque) callconv(.c) c_int;
 extern fn sixel_cell_size_changed(term: *types.Terminal) callconv(.c) void;
 extern fn render_resize(
     term: *types.Terminal,
@@ -151,7 +151,7 @@ export fn term_set_fonts(
     // Measure 'M'; fall back to the font's widest glyph if it has no 'M'.
     const glyph_m = fcft_rasterize_char_utf32(primary, 'M', term.font_subpixel);
     const advance: c_int = if (glyph_m) |glyph|
-        terminal_shim_fcft_glyph_advance_x(glyph)
+        @as(*const types.FcftGlyph, @ptrCast(@alignCast(glyph))).advance.x
     else
         metrics.max_advance_x;
 

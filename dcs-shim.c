@@ -30,7 +30,3 @@ size_t dcs_terminfo_capabilities_size(void) {
     return sizeof(terminfo_capabilities);
 }
 
-/* Terminal.conf is opaque to Zig until config.h is ported. */
-bool dcs_tweak_sixel_enabled(const struct terminal *term) {
-    return term->conf->tweak.sixel;
-}

@@ -23,8 +23,6 @@ extern fn sixel_unhook(term: *types.Terminal) callconv(.c) void;
 // ── Accessors from dcs-shim.c ─────────────────────────────────────
 extern fn dcs_terminfo_capabilities() callconv(.c) [*]const u8;
 extern fn dcs_terminfo_capabilities_size() callconv(.c) usize;
-extern fn dcs_tweak_sixel_enabled(term: *const types.Terminal) callconv(.c) bool;
-
 // ── Inlined vt_param_get (was static inline in vt.h) ──────────────
 fn vtParamGet(term: *const types.Terminal, idx: usize, default_value: c_int) c_int {
     const value_mask: c_uint = 0x7fff_ffff;
@@ -413,7 +411,7 @@ export fn dcs_hook(term: *types.Terminal, final: u8) callconv(.c) void {
     switch (term.vt.private) {
         0 => switch (final) {
             'q' => {
-                if (!dcs_tweak_sixel_enabled(term)) return;
+                if (!term.conf.?.tweak.sixel) return;
                 const p1 = vtParamGet(term, 0, 0);
                 const p2 = vtParamGet(term, 1, 0);
                 const p3 = vtParamGet(term, 2, 0);

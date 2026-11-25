@@ -319,7 +319,6 @@ export fn selection_to_text(term: *const types.Terminal) callconv(.c) ?[*:0]u8 {
 // ── Chunk B: word/quote/line boundary finders ────────────────────
 // Ports selection.c lines 74-395.
 
-extern fn selection_conf_word_delimiters(term: *const types.Terminal) callconv(.c) ?[*]const u32;
 extern fn selection_grid_row_in_view(grid: *types.Grid, row_no: c_int) callconv(.c) ?*types.Row;
 
 export fn selection_find_word_boundary_left(
@@ -331,7 +330,7 @@ export fn selection_find_word_boundary_left(
 
     pos.row &= grid.num_rows - 1;
 
-    const delims = selection_conf_word_delimiters(term);
+    const delims: ?[*]const u32 = @ptrCast(term.conf.?.word_delimiters);
 
     const r = grid.rows.?[@intCast(pos.row)] orelse return;
     var c: u32 = r.cells.?[@intCast(pos.col)].wc;
@@ -414,7 +413,7 @@ export fn selection_find_word_boundary_right(
 
     pos.row &= grid.num_rows - 1;
 
-    const delims = selection_conf_word_delimiters(term);
+    const delims: ?[*]const u32 = @ptrCast(term.conf.?.word_delimiters);
 
     const r = grid.rows.?[@intCast(pos.row)] orelse return;
     var c: u32 = r.cells.?[@intCast(pos.col)].wc;
@@ -1194,11 +1193,8 @@ export fn selection_update(
 
 extern fn search_selection_cancelled(term: *types.Terminal) callconv(.c) void;
 
-extern fn selection_seat_clipboard_data_offer(seat: ?*const anyopaque) callconv(.c) ?*anyopaque;
-extern fn selection_seat_primary_data_offer(seat: ?*const anyopaque) callconv(.c) ?*anyopaque;
 
 // SelectionTarget enum values (from config.h: SELECTION_TARGET_NONE=0, PRIMARY=1, CLIPBOARD=2, BOTH=3)
-extern fn selection_conf_selection_target(term: *const types.Terminal) callconv(.c) c_int;
 
 export fn selection_dirty_cells(term: *types.Terminal) callconv(.c) void {
     if (term.selection.coords.start.row < 0 or term.selection.coords.end.row < 0) return;
@@ -1414,7 +1410,7 @@ export fn selection_finalize(seat: ?*anyopaque, term: *types.Terminal, serial: u
     term.selection.coords.start.row &= term.grid.?.num_rows - 1;
     term.selection.coords.end.row &= term.grid.?.num_rows - 1;
 
-    const target = selection_conf_selection_target(term);
+    const target = @intFromEnum(term.conf.?.selection_target);
     switch (target) {
         0 => {}, // SELECTION_TARGET_NONE
         1 => selection_to_primary(seat, term, serial),
@@ -1473,11 +1469,13 @@ export fn selection_cancel(term: *types.Terminal) callconv(.c) void {
 }
 
 export fn selection_clipboard_has_data(seat: ?*const anyopaque) callconv(.c) bool {
-    return selection_seat_clipboard_data_offer(seat) != null;
+    const s: *const types.Seat = @ptrCast(@alignCast(seat orelse return false));
+    return s.clipboard.data_offer != null;
 }
 
 export fn selection_primary_has_data(seat: ?*const anyopaque) callconv(.c) bool {
-    return selection_seat_primary_data_offer(seat) != null;
+    const s: *const types.Seat = @ptrCast(@alignCast(seat orelse return false));
+    return s.primary.data_offer != null;
 }
 
 // ── Chunk D: clipboard/primary send (manager fns) ────────────────
