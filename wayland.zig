@@ -1,8 +1,7 @@
-//! Zig port of wayland.c, started with the monitor/output layer (D2a).
-//!
-//! The listener tables stay in wayland.c for now: they are generated-protocol
-//! types, so C is the cheaper place to pin their layout. The callbacks they
-//! point at live here.
+//! Zig port of wayland.c. wayland.c is deleted: the generated-protocol
+//! listener tables and their add_listener() forwarders live in
+//! wayland-shim.c, while every callback they reference (including the three
+//! FDM callbacks) is a Zig export in this file.
 
 const std = @import("std");
 const types = @import("terminal_types.zig");
@@ -2087,15 +2086,136 @@ extern fn wayland_shim_compositor_destroy(compositor: ?*anyopaque) callconv(.c) 
 extern fn wayland_shim_fixes_destroy(fixes: ?*anyopaque) callconv(.c) void;
 extern fn wayland_shim_registry_destroy(registry: ?*anyopaque) callconv(.c) void;
 
-extern fn wayland_shim_hook_add(fdm: ?*anyopaque, wayl: *types.Wayland) callconv(.c) bool;
-extern fn wayland_shim_hook_del(fdm: ?*anyopaque) callconv(.c) bool;
+// ─────────────────────────────────────────────────────────────────────────
+// FDM callbacks (ported from wayland.c) and their registration.
+//
+// fdm.h's callback types stay C-side; only the generated listener tables are
+// in wayland-shim.c. The three callbacks below are the Zig exports those
+// tables and the FDM forwarders point at.
+// ─────────────────────────────────────────────────────────────────────────
+
+const Fdm = anyopaque;
+const FdHandler = *const fn (*Fdm, c_int, c_int, ?*anyopaque) callconv(.c) bool;
+const HookCb = *const fn (*Fdm, ?*anyopaque) callconv(.c) void;
+
+extern fn fdm_add(
+    fdm: *Fdm, fd: c_int, events: c_int, handler: FdHandler,
+    data: ?*anyopaque,
+) callconv(.c) bool;
+extern fn fdm_hook_add(
+    fdm: *Fdm, hook: HookCb, data: ?*anyopaque, priority: c_int,
+) callconv(.c) bool;
+extern fn fdm_hook_del(fdm: *Fdm, hook: HookCb, priority: c_int) callconv(.c) bool;
+extern fn read(fd: c_int, buf: *anyopaque, count: usize) callconv(.c) isize;
+extern fn input_repeat(seat: *types.Seat, key: u32) callconv(.c) void;
+
+const EPOLLIN: c_int = 0x001;
+const EPOLLHUP: c_int = 0x010;
+const FDM_HOOK_PRIORITY_LOW: c_int = 0;
+
+export fn fdm_repeat(
+    fdm_ptr: *Fdm, fd: c_int, events: c_int, data: ?*anyopaque,
+) callconv(.c) bool {
+    _ = fdm_ptr;
+    _ = fd;
+
+    if (events & EPOLLHUP != 0)
+        return false;
+
+    const seat: *types.Seat = @ptrCast(@alignCast(data orelse return false));
+
+    var expiration_count: u64 = 0;
+    const ret = read(seat.kbd.repeat.fd, &expiration_count, @sizeOf(u64));
+    if (ret < 0) {
+        if (errno().* == EAGAIN)
+            return true;
+
+        log_errno(LOG_CLASS_ERROR, "wayland", "wayland.zig", @intCast(@src().line), "failed to read repeat key from repeat timer fd");
+        return false;
+    }
+
+    seat.kbd.repeat.dont_re_repeat = true;
+    var i: u64 = 0;
+    while (i < expiration_count) : (i += 1)
+        input_repeat(seat, seat.kbd.repeat.key);
+    seat.kbd.repeat.dont_re_repeat = false;
+    return true;
+}
+
+export fn fdm_hook(fdm_ptr: *Fdm, data: ?*anyopaque) callconv(.c) void {
+    _ = fdm_ptr;
+    const wayl: *types.Wayland = @ptrCast(@alignCast(data orelse return));
+    wayl_flush(wayl);
+}
+
+export fn fdm_wayl(
+    fdm_ptr: *Fdm, fd: c_int, events: c_int, data: ?*anyopaque,
+) callconv(.c) bool {
+    _ = fdm_ptr;
+    _ = fd;
+
+    const wayl: *types.Wayland = @ptrCast(@alignCast(data orelse return false));
+
+    if (events & EPOLLIN != 0) {
+        if (wl_display_read_events(wayl.display) < 0) {
+            log_errno(LOG_CLASS_ERROR, "wayland", "wayland.zig", @intCast(@src().line), "failed to read events from the Wayland socket");
+            return false;
+        }
+
+        _ = wl_display_dispatch_pending(wayl.display);
+
+        while (wl_display_prepare_read(wayl.display) != 0) {
+            if (wl_display_dispatch_pending(wayl.display) < 0) {
+                log_errno(LOG_CLASS_ERROR, "wayland", "wayland.zig", @intCast(@src().line), "failed to dispatch pending Wayland events");
+                return false;
+            }
+        }
+    }
+
+    if (events & EPOLLHUP != 0) {
+        log_msg(LOG_CLASS_WARNING, "wayland", "wayland.zig", @intCast(@src().line), "%s", "disconnected from Wayland");
+        // Do not call wl_display_cancel_read(): it makes a later
+        // wayl_roundtrip() from term_destroy() hang (foot#651).
+        return false;
+    }
+
+    // The C callback's event_count was always zero, hence always "!=
+    // -1" on this path; keep the same result.
+    return true;
+}
+
+export fn wayland_shim_hook_add(
+    fdm_ptr: ?*anyopaque, wayl: *types.Wayland,
+) callconv(.c) bool {
+    const fdm: *Fdm = @ptrCast(@alignCast(fdm_ptr orelse return false));
+    return fdm_hook_add(fdm, &fdm_hook, wayl, FDM_HOOK_PRIORITY_LOW);
+}
+
+export fn wayland_shim_hook_del(fdm_ptr: ?*anyopaque) callconv(.c) bool {
+    const fdm: *Fdm = @ptrCast(@alignCast(fdm_ptr orelse return false));
+    return fdm_hook_del(fdm, &fdm_hook, FDM_HOOK_PRIORITY_LOW);
+}
+
+export fn wayland_shim_fdm_add_repeat(
+    fdm_ptr: ?*anyopaque, seat: *types.Seat,
+) callconv(.c) bool {
+    const fdm: *Fdm = @ptrCast(@alignCast(fdm_ptr orelse return false));
+    return fdm_add(fdm, seat.kbd.repeat.fd, EPOLLIN, &fdm_repeat, seat);
+}
+
+export fn wayland_shim_fdm_add(
+    fdm_ptr: ?*anyopaque, wayl: *types.Wayland,
+) callconv(.c) bool {
+    const fdm: *Fdm = @ptrCast(@alignCast(fdm_ptr orelse return false));
+    return fdm_add(fdm, wayl.fd, EPOLLIN, &fdm_wayl, wayl);
+}
+
 extern fn wayland_shim_add_registry_listener(registry: ?*anyopaque, wayl: *types.Wayland) callconv(.c) void;
 
 extern fn wl_display_connect(name: [*c]const u8) callconv(.c) ?*anyopaque;
 extern fn wayland_shim_display_get_registry(display: ?*anyopaque) callconv(.c) ?*anyopaque;
 extern fn wl_display_get_fd(display: ?*anyopaque) callconv(.c) c_int;
 extern fn wl_display_disconnect(display: ?*anyopaque) callconv(.c) void;
-extern fn wayland_shim_fdm_add(fdm: ?*anyopaque, wayl: *types.Wayland) callconv(.c) bool;
 extern fn fdm_del_no_close(fdm: ?*anyopaque, fd: c_int) callconv(.c) bool;
 extern fn term_destroy(term: *types.Terminal) callconv(.c) c_int;
 
@@ -2492,8 +2612,6 @@ extern fn wayland_shim_add_xdg_output_monitor_listener(xdg: ?*anyopaque, mon: *t
 extern fn wayland_shim_add_presentation_listener(presentation: ?*anyopaque, wayl: *types.Wayland) callconv(.c) void;
 extern fn wayland_shim_add_color_manager_listener(manager: ?*anyopaque, wayl: *types.Wayland) callconv(.c) void;
 extern fn wayland_shim_add_background_manager_listener(manager: ?*anyopaque, wayl: *types.Wayland) callconv(.c) void;
-extern fn wayland_shim_fdm_add_repeat(fdm: ?*anyopaque, seat: *types.Seat) callconv(.c) bool;
-
 extern fn timerfd_create(clockid: c_int, flags: c_int) callconv(.c) c_int;
 extern fn xkb_context_new(flags: c_int) callconv(.c) ?*anyopaque;
 extern fn xkb_compose_table_new_from_locale(ctx: ?*anyopaque, locale: [*c]const u8, flags: c_int) callconv(.c) ?*anyopaque;

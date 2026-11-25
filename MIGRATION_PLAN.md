@@ -657,8 +657,9 @@ State: **35,870 of 48,830 C lines gone (73.5%)**, ~59% by effort, 35 modules
 ported, 603 harness assertions, `meson test` 5/5 in three build dirs.
 Remaining module C: 12,960 lines, plus 2,545 lines of `*-shim.c` accessors.
 
-**`wayland` is done.** `wayland.c` is down from 2,884 lines to **359**, and what
-is left is glue rather than logic: the fourteen generated-protocol listener
+**`wayland` is done.** `wayland.c` went from 2,884 lines to **359** before
+E3 deleted the rest (see the Post-E3 note). What was left is glue rather than
+logic: the generated-protocol listener
 *tables* (their layout comes from the generated headers, so C pins it for
 free), the tiny `wayland_shim_add_*_listener()` forwarders, and the three FDM
 callbacks (`fdm_hook`, `fdm_wayl`, `fdm_repeat`) that the FDM hands opaque
@@ -890,7 +891,7 @@ Per-module burn-down (share of that module's original C that is gone):
 |---|---|---|---|
 | 35 modules | 0 / — | **100%** | `async`…`box-drawing`, `search`, `terminal`, `log`, `grid`, `csi`, `sixel`, `osc`, `vt`, `input`, `key-binding`, `ime`, `url-mode`… |
 | `config` | 35 / 4,374 | 99% | only `config_regex_compile()` (§6.3) |
-| `wayland` | 359 / 2,884 | 88% | 27 listener tables + forwarders + 3 FDM callbacks |
+| `wayland` | 0 / 2,884 | **100%** | `wayland.c` deleted in E3; generated listener tables + `add_listener()` forwarders live in `wayland-shim.c` (249 lines), FDM callbacks are in `wayland.zig` |
 | `selection` | 844 / 2,967 | 72% | data-device / primary-selection listeners, DND |
 | `slave` | 106 / 573 | **81%** | signal reset, terminfo path and execvpe left |
 | `shm` | 0 / 1,110 | **100%** | `shm.c` deleted in E2; generated protocol inlines + `#ifdef` platform tests live in `shm-shim.c`; `shm.zig` is 1,028 lines |
@@ -964,6 +965,19 @@ inlines, the headless sentinels they have to recognise, the
 alignment, zero-sized `shm_get_many` entries, cache age tie-break, release
 callback and sentinel forwarders; +32 `check()` call sites). Verified
 with `ninja`, `meson test`, six smoke launches and valgrind (0 errors).
+
+**Post-E3 (wayland):** `wayland.c` is **deleted** (370 → 0 C lines) — the
+module is 100% Zig apart from the generated-protocol boundary. The 16
+listener tables and their `add_listener()` forwarders moved to
+`wayland-shim.c` (249 lines), with prototypes for all 27 forwarders added
+to `wayland.h`; every callback in those tables is a Zig export. The three
+FDM callbacks (`fdm_repeat`, `fdm_hook`, `fdm_wayl`) and the four
+forwarders that register them are now Zig, calling `fdm_add`/`fdm_hook_add`/
+`fdm_hook_del` directly with the mirrored `struct seat`/`struct wayland`.
+No new ABI mirror was needed (`Seat.kbd.repeat` was already pinned).
+13 new harness checks drive the FDM registration, the EAGAIN/EPOLLHUP paths
+and the no-event path headlessly; the six smoke launches exercise the real
+listener tables. Verified with `ninja`, `meson test`, smoke and valgrind.
 
 **Post-D5b:** `ime.c` is **deleted** — the 35th module with no C.
 Module C **5,266 → 4,726** (90.3% of the original C gone), Zig 48,738 →
@@ -1133,7 +1147,7 @@ point is Zig.
 **Track E — endgame (≈3–4 dev-days).** E1a done (slave's constants +IUTF8); E2 done (`shm.c` deleted, 329 → 0 — the
 `wl_shm` capabilities are read from the mirrored `struct wayland`, and only
 the generated protocol inlines and `#ifdef` platform tests stay in
-`shm-shim.c`). What is left is `wayland`'s 359 glue lines, `slave`'s
+`shm-shim.c`). What is left is `slave`'s
 158 constants/execvpe, `config`'s 35-line regex shim, `debug`'s 22-line ASAN
 hook; then delete every struct-mirror shim. Note the shim count has *grown*
 during D2/D3 (2,465 → 2,524) because generated protocol inlines need

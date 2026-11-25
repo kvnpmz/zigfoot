@@ -1,40 +1,17 @@
+/* C shim for the wayland port.
+ *
+ * Only the generated-protocol listener tables and their add_listener() calls
+ * live here: both are generated-static-inline/C-type knowledge that Zig does
+ * not mirror. The callbacks the tables reference are the Zig exports declared
+ * in wayland.h. The FDM callbacks and their registration forwarders are in
+ * wayland.zig.
+ */
+
 #include "wayland.h"
 
-#include <ctype.h>
-#include <errno.h>
-#include <fcntl.h>
-#include <locale.h>
-#include <poll.h>
-#include <stdlib.h>
-#include <string.h>
-#include <unistd.h>
-
-#include <sys/timerfd.h>
-#include <sys/epoll.h>
-
-#include <cursor-shape-v1.h>
-#include <wayland-client.h>
-#include <wayland-cursor.h>
-#include <xkbcommon/xkbcommon.h>
-#include <xkbcommon/xkbcommon-keysyms.h>
-#include <xkbcommon/xkbcommon-compose.h>
-
-#include <tllist.h>
-
-#define LOG_MODULE "wayland"
-#define LOG_ENABLE_DBG 0
-#include "log.h"
-
-#include "config.h"
-#include "terminal.h"
 #include "ime.h"
 #include "input.h"
-#include "render.h"
 #include "selection.h"
-#include "shm.h"
-#include "shm-formats.h"
-#include "util.h"
-#include "xmalloc.h"
 
 /* wayland.zig: the data-device / primary-selection / text-input listener
  * tables are defined in selection.c and ime.c, so seat setup attaches them
@@ -149,94 +126,10 @@ static const struct ext_background_effect_manager_v1_listener background_manager
 };
 #endif  /* HAVE_EXT_BACKGROUND_EFFECT */
 
-static bool
-fdm_repeat(struct fdm *fdm, int fd, int events, void *data)
-{
-    if (events & EPOLLHUP)
-        return false;
-
-    struct seat *seat = data;
-    uint64_t expiration_count;
-    ssize_t ret = read(
-        seat->kbd.repeat.fd, &expiration_count, sizeof(expiration_count));
-
-    if (ret < 0) {
-        if (errno == EAGAIN)
-            return true;
-
-        LOG_ERRNO("failed to read repeat key from repeat timer fd");
-        return false;
-    }
-
-    seat->kbd.repeat.dont_re_repeat = true;
-    for (size_t i = 0; i < expiration_count; i++)
-        input_repeat(seat, seat->kbd.repeat.key);
-    seat->kbd.repeat.dont_re_repeat = false;
-    return true;
-}
-
 static const struct wl_registry_listener registry_listener = {
     .global = &handle_global,
     .global_remove = &handle_global_remove,
 };
-
-static void
-fdm_hook(struct fdm *fdm, void *data)
-{
-    struct wayland *wayl = data;
-    wayl_flush(wayl);
-}
-
-static bool
-fdm_wayl(struct fdm *fdm, int fd, int events, void *data)
-{
-    struct wayland *wayl = data;
-    int event_count = 0;
-
-    if (events & EPOLLIN) {
-        if (wl_display_read_events(wayl->display) < 0) {
-            LOG_ERRNO("failed to read events from the Wayland socket");
-            return false;
-        }
-
-        wl_display_dispatch_pending(wayl->display);
-
-        while (wl_display_prepare_read(wayl->display) != 0) {
-            if (wl_display_dispatch_pending(wayl->display) < 0) {
-                LOG_ERRNO("failed to dispatch pending Wayland events");
-                return false;
-            }
-        }
-    }
-
-    if (events & EPOLLHUP) {
-        LOG_WARN("disconnected from Wayland");
-        /*
-         * Do *not* call wl_display_cancel_read() here.
-         *
-         * Doing so causes later calls to wayl_roundtrip() (called
-         * from term_destroy() -> wayl_win_destroy()) to hang
-         * indefinitely.
-         *
-         * https://codeberg.org/dnkl/foot/issues/651
-         */
-        return false;
-    }
-
-    return event_count != -1;
-}
-
-/* wayland.zig: fdm_hook, the registry listener and fdm_wayl are still
- * static here, so wayl_init()/wayl_destroy() reach them through these. */
-bool wayland_shim_hook_add(struct fdm *fdm, struct wayland *wayl)
-{
-    return fdm_hook_add(fdm, &fdm_hook, wayl, FDM_HOOK_PRIORITY_LOW);
-}
-
-bool wayland_shim_hook_del(struct fdm *fdm)
-{
-    return fdm_hook_del(fdm, &fdm_hook, FDM_HOOK_PRIORITY_LOW);
-}
 
 void wayland_shim_add_registry_listener(
     struct wl_registry *registry, struct wayland *wayl)
@@ -308,22 +201,10 @@ void wayland_shim_add_background_manager_listener(
 #endif
 }
 
-bool wayland_shim_fdm_add_repeat(struct fdm *fdm, struct seat *seat)
-{
-    return fdm_add(fdm, seat->kbd.repeat.fd, EPOLLIN, &fdm_repeat, seat);
-}
-
-bool wayland_shim_fdm_add(struct fdm *fdm, struct wayland *wayl)
-{
-    return fdm_add(fdm, wayl->fd, EPOLLIN, &fdm_wayl, wayl);
-}
-
 static const struct wp_fractional_scale_v1_listener fractional_scale_listener = {
     .preferred_scale = &fractional_scale_preferred_scale,
 };
 
-/* wayland.zig: the listener tables are still static here, so window
- * creation attaches them through these. */
 void wayland_shim_add_surface_listener(
     struct wl_surface *surf, struct wl_window *win)
 {
@@ -355,9 +236,7 @@ void wayland_shim_add_decoration_listener(
         decoration, &xdg_toplevel_decoration_listener, win);
 }
 
-
-static const struct
-xdg_activation_token_v1_listener activation_token_listener = {
+static const struct xdg_activation_token_v1_listener activation_token_listener = {
     .done = &activation_token_v1_done,
 };
 
