@@ -206,6 +206,20 @@ if (wayland_protocols.version().version_compare('>=1.45'))
   add_project_arguments('-DHAVE_EXT_BACKGROUND_EFFECT=1', language: 'c')
 endif
 
+# The Zig mirrors of wayland.h (terminal_types.zig, chunks B1/B2) include the
+# fields these compile-time flags gate. Turning any of them off changes the
+# struct layout, so fail here with a clear message rather than with an ABI
+# probe mismatch deep in a Zig compile.
+if not get_option('ime')
+  error('the Zig wayland.h mirrors assume IME support; configure with -Dime=true')
+endif
+if not wayland_protocols.version().version_compare('>=1.43')
+  error('the Zig wayland.h mirrors assume xdg-toplevel-tag (wayland-protocols >= 1.43)')
+endif
+if not wayland_protocols.version().version_compare('>=1.45')
+  error('the Zig wayland.h mirrors assume ext-background-effect (wayland-protocols >= 1.45)')
+endif
+
 foreach prot : wl_proto_xml
   wl_proto_headers += custom_target(
     prot.underscorify() + '-client-header',

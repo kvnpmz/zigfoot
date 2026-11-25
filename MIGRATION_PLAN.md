@@ -623,9 +623,16 @@ utmp backends where available.
 
 ## 13. Sequenced backlog (refreshed 2026-11-24)
 
-State: **27,910 of 48,830 C lines gone (57.2%)**, ~41% by effort, 31 modules
+State: **27,978 of 48,830 C lines gone (57.3%)**, ~42% by effort, 31 modules
 ported, 315 harness assertions, `meson test` 5/5 in three build dirs.
-Remaining C: 20,920 hand-written lines + 1,303 shim lines.
+Remaining C: 20,920 hand-written lines + 1,391 shim lines.
+
+Track B is done (commits ec838c9a, aef90c27): **all of `wayland.h` is mirrored
+and ABI-pinned**, `struct seat` included, and the 18 accessors that existed
+only to read those fields are gone. Milestone **M1** is reached - `input`,
+`ime`, `key-binding`, `render`, `wayland` and `terminal`'s IME/xcursor code
+can all be ported, and the harness can fabricate a `struct seat`/`struct
+wayland` the same way it fabricates a `struct terminal`.
 
 `box-drawing` is finished (A1-A5c, commits 10cd275b..effdbe5d): the module is
 3,374 lines of Zig, `box-drawing.c` is deleted, and every shape family is
@@ -667,11 +674,11 @@ glyph's raw pixmap next to its hash.
 
 | Chunk | Work | Est. |
 |---|---|---|
-| **B1** | Mirror the 19 structs in `wayland.h` **except** `struct seat`: `wayland`, `wayl_surface`, `wl_window`, `monitor`(+outputs), `clipboard`, `data_offer`, `renderer`/`chains`/`damage` subsets. Extend `gen_abi_probe.py` + `expectAbi` tests. No behaviour change; the C code keeps using the same structs. | 2–3d |
-| **B2** | Mirror `struct seat` (~100 members incl. nested `kbd`, `pointer`, `touch`, `repeat`) and `tll(struct seat)`; pin every offset with the probe; switch `terminal-shim.c`'s 3 seat accessors + the monitor/window ones to direct Zig field access and delete them. | 2–3d |
-| **B3** | Delete the now-dead accessors; re-point `terminal.zig` (DPI/scale), `unicode-mode.zig` and `slave`/`shm` call sites at the mirrors. | 0.5d |
+| **B1** done | Mirror the 19 structs in `wayland.h` **except** `struct seat`: `wayland`, `wayl_surface`, `wl_window`, `monitor`(+outputs), `clipboard`, `data_offer`, `renderer`/`chains`/`damage` subsets. Extend `gen_abi_probe.py` + `expectAbi` tests. No behaviour change; the C code keeps using the same structs. | 2–3d |
+| **B2** done | Mirror `struct seat` (~100 members incl. nested `kbd`, `pointer`, `touch`, `repeat`) and `tll(struct seat)`; pin every offset with the probe; switch `terminal-shim.c`'s 3 seat accessors + the monitor/window ones to direct Zig field access and delete them. | 2–3d |
+| **B3** done | Delete the now-dead accessors; re-point `terminal.zig` (DPI/scale), `unicode-mode.zig` and `slave`/`shm` call sites at the mirrors. | 0.5d |
 
-Milestone **M1**: `struct seat` and `struct wayland` are Zig-visible, so
+Milestone **M1** (reached): `struct seat` and `struct wayland` are Zig-visible, so
 `input`, `ime`, `key-binding`, `selection`'s data-source listeners, `render`
 and `terminal`'s xcursor/IME/init code all become portable **and testable**
 (the harness can fabricate `struct seat`/`struct wayland` the same way it
