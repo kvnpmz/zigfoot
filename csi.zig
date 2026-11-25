@@ -44,7 +44,9 @@ export fn csi_sgr(term: *types.Terminal) callconv(.c) void {
 
     var i: usize = 0;
     while (i < n) : (i += 1) {
-        const param: c_int = @intCast(params[i].value);
+        // C: `const int param = <uint32_t value>;` — that conversion wraps,
+        // it does not trap (found by the fuzzer with huge SGR parameters).
+        const param: c_int = @bitCast(params[i].value);
 
         switch (param) {
             0 => sgr_reset(term),
@@ -58,7 +60,7 @@ export fn csi_sgr(term: *types.Terminal) callconv(.c) void {
                 term.vt.underline.style = .single;
 
                 if (params[i].sub.idx == 1) {
-                    const raw: c_int = @intCast(params[i].sub.value[0]);
+                    const raw: c_int = @bitCast(params[i].sub.value[0]);
 
                     // Unknown styles are treated like `4:0` (underline off),
                     // matching the `default:` case in the C original.
@@ -1543,7 +1545,7 @@ fn caseDollar(term: *types.Terminal, final: u8) void {
                     a.clean = false;
                     var i: usize = 4;
                     while (i < term.vt.params.idx) : (i += 1) {
-                        switch (@as(c_int, @intCast(term.vt.params.v[i].value))) {
+                        switch (@as(c_int, @bitCast(term.vt.params.v[i].value))) {
                             0 => { a.bold = false; a.underline = false; a.blink = false; a.reverse = false; },
                             1 => a.bold = true,
                             4 => a.underline = true,
@@ -1577,7 +1579,7 @@ fn caseDollar(term: *types.Terminal, final: u8) void {
                     a.clean = false;
                     var i: usize = 4;
                     while (i < term.vt.params.idx) : (i += 1) {
-                        switch (@as(c_int, @intCast(term.vt.params.v[i].value))) {
+                        switch (@as(c_int, @bitCast(term.vt.params.v[i].value))) {
                             0 => { a.bold = !a.bold; a.underline = !a.underline; a.blink = !a.blink; a.reverse = !a.reverse; },
                             1 => a.bold = !a.bold,
                             4 => a.underline = !a.underline,
