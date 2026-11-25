@@ -4099,3 +4099,60 @@ export fn del_utmp_record(conf: ?*const types.Config, reaper: ?*anyopaque, ptmx:
 
     return spawn(reaper, null, @ptrCast(&argv), ptmx, -1, -1, null, null, null) >= 0;
 }
+//
+// Chunk C4a — the two small leftovers: keyboard focus-out and the surface
+// kind lookup. Both were the last functions in terminal.c that only read the
+// mirrors.
+//
+
+/// meson refuses to configure a Zig build with -Dime=false (the wayland.h
+/// mirrors assume IME), so the C's `#if FOOT_IME_ENABLED` guard is a constant.
+export fn term_kbd_focus_out(term: *types.Terminal) callconv(.c) void {
+    if (!term.kbd_focus)
+        return;
+
+    var it = seats(term);
+    while (it.next()) |seat| {
+        if (focusedOn(seat, term))
+            return;
+    }
+
+    if (term_ime_reset(term))
+        render_refresh(term);
+
+    term.kbd_focus = false;
+    cursor_refresh(term);
+
+    if (term.focus_events)
+        _ = term_to_slave(term, "\x1b[O", 3);
+}
+
+export fn term_surface_kind(
+    term: *const types.Terminal,
+    surface: ?*const anyopaque,
+) callconv(.c) types.TermSurface {
+    const win = term.window orelse return .none;
+
+    if (surface == win.surface.surf)
+        return .grid;
+
+    const csd = &win.csd.surface;
+    if (surface == csd[@intFromEnum(types.CsdSurface.title)].surface.surf)
+        return .title;
+    if (surface == csd[@intFromEnum(types.CsdSurface.left)].surface.surf)
+        return .border_left;
+    if (surface == csd[@intFromEnum(types.CsdSurface.right)].surface.surf)
+        return .border_right;
+    if (surface == csd[@intFromEnum(types.CsdSurface.top)].surface.surf)
+        return .border_top;
+    if (surface == csd[@intFromEnum(types.CsdSurface.bottom)].surface.surf)
+        return .border_bottom;
+    if (surface == csd[@intFromEnum(types.CsdSurface.minimize)].surface.surf)
+        return .button_minimize;
+    if (surface == csd[@intFromEnum(types.CsdSurface.maximize)].surface.surf)
+        return .button_maximize;
+    if (surface == csd[@intFromEnum(types.CsdSurface.close)].surface.surf)
+        return .button_close;
+
+    return .none;
+}

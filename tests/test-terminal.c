@@ -2212,6 +2212,71 @@ test_utmp(void)
 }
 
 static void
+test_kbd_focus_out(void)
+{
+    struct terminal *term = term_new();
+    struct wayland wl = {0};
+    term->wl = &wl;
+
+    term_kbd_focus_out(term);
+    check(!term->kbd_focus, "focus-out on an unfocused terminal is a no-op");
+
+    term->kbd_focus = true;
+    struct seat focused = {0};
+    focused.wayl = &wl;
+    focused.kbd_focus = term;
+    tll_push_back(wl.seats, focused);
+    term_kbd_focus_out(term);
+    check(term->kbd_focus,
+          "focus-out keeps the focus while a seat is focused on us");
+    tll_free(wl.seats);
+
+    int slave = term_capture_begin(term);
+    term->focus_events = true;
+    term_kbd_focus_out(term);
+    char buf[8];
+    term_capture_read(slave, buf, sizeof(buf));
+    check(!term->kbd_focus, "focus-out clears the keyboard focus");
+    check(strcmp(buf, "\033[O") == 0,
+          "focus-out reports the escape when focus events are on");
+    term->focus_events = false;
+    term_capture_end(term, slave);
+
+    term->wl = NULL;
+    term_free(term);
+}
+
+static void
+test_surface_kind(void)
+{
+    struct terminal *term = term_new();
+    struct wl_window win = {0};
+    term->window = &win;
+
+    /* Every surface gets its own address: the unset ones are NULL in C
+     * too, and NULL matches the first NULL surface in the CSD array. */
+    char surf[CSD_SURF_COUNT + 1];
+    win.surface.surf = (struct wl_surface *)&surf[0];
+    for (int i = 0; i < CSD_SURF_COUNT; i++)
+        win.csd.surface[i].surface.surf = (struct wl_surface *)&surf[i + 1];
+    struct wl_surface *grid_surf = (struct wl_surface *)&surf[0];
+    struct wl_surface *title_surf = (struct wl_surface *)&surf[1 + CSD_SURF_TITLE];
+    struct wl_surface *close_surf = (struct wl_surface *)&surf[1 + CSD_SURF_CLOSE];
+
+    check(term_surface_kind(term, grid_surf) == TERM_SURF_GRID,
+          "the window surface is the grid");
+    check(term_surface_kind(term, title_surf) == TERM_SURF_TITLE,
+          "the title CSD surface is the title");
+    check(term_surface_kind(term, close_surf) == TERM_SURF_BUTTON_CLOSE,
+          "the close CSD surface is the close button");
+    check(term_surface_kind(term, NULL) == TERM_SURF_NONE,
+          "an unknown surface has no kind");
+
+    term->window = NULL;
+    term_free(term);
+}
+
+static void
 test_ime(void)
 {
     struct wayland wl = {0};
@@ -3021,6 +3086,8 @@ main(void)
     test_delayed_render();
     test_render_workers();
     test_utmp();
+    test_kbd_focus_out();
+    test_surface_kind();
     test_quirks();
     test_version_and_features();
     test_log();

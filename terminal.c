@@ -1340,27 +1340,7 @@ UNITTEST
 
 /* term_kbd_focus_in: ported to terminal.zig */
 
-void
-term_kbd_focus_out(struct terminal *term)
-{
-    if (!term->kbd_focus)
-        return;
-
-    tll_foreach(term->wl->seats, it)
-        if (it->item.kbd_focus == term)
-            return;
-
-#if defined(FOOT_IME_ENABLED) && FOOT_IME_ENABLED
-    if (term_ime_reset(term))
-        render_refresh(term);
-#endif
-
-    term->kbd_focus = false;
-    cursor_refresh(term);
-
-    if (term->focus_events)
-        term_to_slave(term, "\033[O", 3);
-}
+/* term_kbd_focus_out: ported to terminal.zig */
 
 /* mouse reporting: ported to terminal.zig */
 
@@ -1427,30 +1407,7 @@ UNITTEST
 /* term_process_and_print_non_ascii: ported to terminal.zig */
 
 
-enum term_surface
-term_surface_kind(const struct terminal *term, const struct wl_surface *surface)
-{
-    if (likely(surface == term->window->surface.surf))
-        return TERM_SURF_GRID;
-    else if (surface == term->window->csd.surface[CSD_SURF_TITLE].surface.surf)
-        return TERM_SURF_TITLE;
-    else if (surface == term->window->csd.surface[CSD_SURF_LEFT].surface.surf)
-        return TERM_SURF_BORDER_LEFT;
-    else if (surface == term->window->csd.surface[CSD_SURF_RIGHT].surface.surf)
-        return TERM_SURF_BORDER_RIGHT;
-    else if (surface == term->window->csd.surface[CSD_SURF_TOP].surface.surf)
-        return TERM_SURF_BORDER_TOP;
-    else if (surface == term->window->csd.surface[CSD_SURF_BOTTOM].surface.surf)
-        return TERM_SURF_BORDER_BOTTOM;
-    else if (surface == term->window->csd.surface[CSD_SURF_MINIMIZE].surface.surf)
-        return TERM_SURF_BUTTON_MINIMIZE;
-    else if (surface == term->window->csd.surface[CSD_SURF_MAXIMIZE].surface.surf)
-        return TERM_SURF_BUTTON_MAXIMIZE;
-    else if (surface == term->window->csd.surface[CSD_SURF_CLOSE].surface.surf)
-        return TERM_SURF_BUTTON_CLOSE;
-    else
-        return TERM_SURF_NONE;
-}
+/* term_surface_kind: ported to terminal.zig */
 
 /* rows_to_text, term_scrollback_to_text, term_view_to_text,
  * term_command_output_to_text: ported to terminal.zig */
