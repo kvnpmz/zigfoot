@@ -337,6 +337,9 @@ export fn draw_underline(
 /// identical if that ever happens.
 const max_dots = 256;
 
+// enum in terminal.h: CURSOR_BLINK_ON is the zero value.
+const CURSOR_BLINK_ON: c_int = 0;
+
 export fn draw_styled_underline(
     term: *const Terminal,
     pix: *PixmanImage,
@@ -566,7 +569,7 @@ export fn draw_cursor(
 
     switch (term.cursor_style) {
         .block => {
-            if (term.cursor_blink.state != 0 or !term.kbd_focus) {
+            if (term.cursor_blink.state == CURSOR_BLINK_ON or !term.kbd_focus) {
                 fg.* = text_color;
                 fillRect(pix, &cursor_color, &.{.{
                     .x = @intCast(x),
@@ -578,17 +581,17 @@ export fn draw_cursor(
         },
 
         .beam => {
-            if (term.cursor_blink.state != 0 or !term.kbd_focus)
+            if (term.cursor_blink.state == CURSOR_BLINK_ON or !term.kbd_focus)
                 draw_beam_cursor(term, pix, font, &cursor_color, x, y);
         },
 
         .underline => {
-            if (term.cursor_blink.state != 0 or !term.kbd_focus)
+            if (term.cursor_blink.state == CURSOR_BLINK_ON or !term.kbd_focus)
                 draw_underline_cursor(term, pix, font, &cursor_color, x, y, cols);
         },
 
         .hollow => {
-            if (term.cursor_blink.state != 0)
+            if (term.cursor_blink.state == CURSOR_BLINK_ON)
                 draw_hollow_block(term, pix, &cursor_color, x, y, cols);
         },
     }
