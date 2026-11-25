@@ -18,6 +18,16 @@ extern fn spawn_expand_template(
 ) callconv(.c) bool;
 
 const O_CLOEXEC: c_int = 0x80000;
+const LOG_CLASS_WARNING: c_int = 2;
+
+extern fn log_msg(
+    class: c_int,
+    module: [*:0]const u8,
+    file: [*:0]const u8,
+    lineno: c_int,
+    fmt: [*:0]const u8,
+    ...
+) callconv(.c) void;
 
 fn freePtr(p: anytype) void {
     if (p) |v| free(@ptrCast(@constCast(v)));
@@ -410,11 +420,22 @@ export fn notify_close(term: *types.Terminal, id: [*:0]const u8) callconv(.c) vo
         if (!std.mem.eql(u8, std.mem.span(nid), std.mem.span(id))) continue;
 
         if (term.conf.?.desktop_notifications.close.argv.args == null) {
-            if (notif.pid != 0) {
+            if (notif.pid == 0) {
+                log_msg(
+                    LOG_CLASS_WARNING, "notify", "notify.zig", @intCast(@src().line),
+                    "cannot close notification \"%s\": no helper process running", id,
+                );
+            } else {
                 _ = kill(notif.pid, SIGINT);
             }
         } else {
-            if (notif.external_id == 0) return;
+            if (notif.external_id == 0) {
+                log_msg(
+                    LOG_CLASS_WARNING, "notify", "notify.zig", @intCast(@src().line),
+                    "cannot close notification \"%s\": no daemon assigned notification ID available", id,
+                );
+                return;
+            }
 
             var external_id_buf: [16]u8 = undefined;
             const n = xsnprintf(&external_id_buf, external_id_buf.len, "%u", notif.external_id);
@@ -438,6 +459,11 @@ export fn notify_close(term: *types.Terminal, id: [*:0]const u8) callconv(.c) vo
         }
         return;
     }
+
+    log_msg(
+        LOG_CLASS_WARNING, "notify", "notify.zig", @intCast(@src().line),
+        "cannot close notification \"%s\": no such notification", id,
+    );
 }
 
 // ── chunk B-3a ────────────────────────────────────────────────────
@@ -494,7 +520,13 @@ export fn notif_done(_reaper: ?*anyopaque, pid: c_int, _status: c_int, data: ?*a
         }
     }
 
-    const found_term = term orelse return;
+    const found_term = term orelse {
+        log_msg(
+            LOG_CLASS_WARNING, "notify", "notify.zig", @intCast(@src().line),
+            "notification closed, but the associated terminal instance is already gone",
+        );
+        return;
+    };
 
     var it = notify_active_first(found_term);
     while (it) |notif| : (it = notify_active_next(found_term, notif)) {
@@ -505,7 +537,14 @@ export fn notif_done(_reaper: ?*anyopaque, pid: c_int, _status: c_int, data: ?*a
             if (notif.xdg_token) |token| {
                 _ = wayl_activate(found_term.wl.?, window.?, token);
             } else {
-                if (window) |w| _ = wayl_win_set_urgent(w);
+                if (window) |w| {
+                    if (!wayl_win_set_urgent(w)) {
+                        log_msg(
+                            LOG_CLASS_WARNING, "notify", "notify.zig", @intCast(@src().line),
+                            "cannot focus window: no activation token available",
+                        );
+                    }
+                }
             }
         }
 
@@ -760,6 +799,10 @@ export fn notify_notify(term: *types.Terminal, notif_in: *types.Notification) ca
     var track = track_notification;
     if (track) {
         if (notify_pipe2(&stdout_fds, O_CLOEXEC | O_NONBLOCK) < 0) {
+            log_msg(
+                LOG_CLASS_WARNING, "notify", "notify.zig", @intCast(@src().line),
+                "failed to create stdout pipe",
+            );
             track = false;
         } else {
             notify_active_push_back(term, notif);
