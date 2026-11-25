@@ -101,7 +101,7 @@ fn fillRect(
 // Colour helpers
 // ─────────────────────────────────────────────────────────────────────────
 
-export fn attrs_to_font(term: *const Terminal, attrs: *const Attributes) callconv(.c) ?*FcftFont {
+export fn attrs_to_font(term: *const Terminal, attrs: *const align(4) Attributes) callconv(.c) ?*FcftFont {
     const idx: usize = @as(usize, @intFromBool(attrs.italic)) * 2 + @intFromBool(attrs.bold);
     return @ptrCast(term.fonts[idx]);
 }
@@ -711,15 +711,6 @@ export fn render_refresh_icon(term: *Terminal) callconv(.c) void {
 
 const Buffer = types.Buffer;
 
-extern fn render_cell(
-    term: *Terminal,
-    pix: *PixmanImage,
-    damage: ?*anyopaque,
-    row: *types.Row,
-    row_no: c_int,
-    col: c_int,
-    has_cursor: bool,
-) callconv(.c) c_int;
 extern fn render_shim_region_union_rect(
     region: ?*anyopaque,
     x: c_int,
@@ -962,4 +953,500 @@ export fn render_csd_part(
         .width = @intCast(buf.width),
         .height = @intCast(buf.height),
     }});
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// render_cell() (D3e)
+// ─────────────────────────────────────────────────────────────────────────
+
+const FcftGlyph = types.FcftGlyph;
+const Composed = types.Composed;
+const CellAttrs = types.Attributes;
+
+const FcftGrapheme = extern struct {
+    cols: c_int,
+    count: usize,
+    glyphs: [*]?*FcftGlyph,
+};
+
+// enum color_source, stored as a 2-bit field in `struct attributes`.
+const COLOR_DEFAULT: u2 = 0;
+const COLOR_BASE16: u2 = 1;
+const COLOR_BASE256: u2 = 2;
+const COLOR_RGB: u2 = 3;
+
+const CELL_COMB_CHARS_LO: u32 = 0x00200000;
+const CELL_COMB_CHARS_HI: u32 = CELL_COMB_CHARS_LO + 0x3fffffff;
+const CELL_SPACER: u32 = CELL_COMB_CHARS_HI + 1;
+
+const GLYPH_BOX_DRAWING_FIRST: u32 = 0x2500;
+const GLYPH_BOX_DRAWING_LAST: u32 = 0x259F;
+const GLYPH_BOX_DRAWING_COUNT: usize = GLYPH_BOX_DRAWING_LAST - GLYPH_BOX_DRAWING_FIRST + 1;
+
+const GLYPH_BRAILLE_FIRST: u32 = 0x2800;
+const GLYPH_BRAILLE_LAST: u32 = 0x28FF;
+const GLYPH_BRAILLE_COUNT: usize = GLYPH_BRAILLE_LAST - GLYPH_BRAILLE_FIRST + 1;
+
+const GLYPH_OCTANTS_FIRST: u32 = 0x1CD00;
+const GLYPH_OCTANTS_LAST: u32 = 0x1CDE5;
+const GLYPH_OCTANTS_COUNT: usize = GLYPH_OCTANTS_LAST - GLYPH_OCTANTS_FIRST + 1;
+
+const GLYPH_LEGACY_FIRST: u32 = 0x1FB00;
+const GLYPH_LEGACY_LAST: u32 = 0x1FB9B;
+const GLYPH_LEGACY_COUNT: usize = GLYPH_LEGACY_LAST - GLYPH_LEGACY_FIRST + 1;
+
+
+extern fn fcft_rasterize_char_utf32(font: *const FcftFont, cp: u32, subpixel: c_int) callconv(.c) ?*FcftGlyph;
+extern fn fcft_rasterize_grapheme_utf32(
+    font: *const FcftFont,
+    len: usize,
+    chars: [*]const u32,
+    subpixel: c_int,
+) callconv(.c) ?*const FcftGrapheme;
+extern fn composed_lookup(root: ?*Composed, key: u32) callconv(.c) ?*Composed;
+extern fn box_drawing(term: *const Terminal, wc: u32) callconv(.c) ?*FcftGlyph;
+extern fn term_arm_blink_timer(term: *Terminal) callconv(.c) void;
+extern fn xcalloc(n: usize, size: usize) callconv(.c) ?*anyopaque;
+
+extern fn render_shim_clip_rect(pix: *PixmanImage, x: c_int, y: c_int, width: c_int, height: c_int) callconv(.c) void;
+extern fn render_shim_clip_clear(pix: *PixmanImage) callconv(.c) void;
+extern fn render_shim_solid_fill(color: *const PixmanColor) callconv(.c) ?*PixmanImage;
+extern fn render_shim_image_unref(pix: *PixmanImage) callconv(.c) void;
+extern fn render_shim_composite(
+    src: ?*PixmanImage,
+    mask: ?*PixmanImage,
+    dest: *PixmanImage,
+    x: c_int,
+    y: c_int,
+    width: c_int,
+    height: c_int,
+) callconv(.c) void;
+extern fn render_shim_workers_lock(term: *Terminal) callconv(.c) void;
+extern fn render_shim_workers_unlock(term: *Terminal) callconv(.c) void;
+
+/// `struct fcft_glyph **` held in `term.custom_glyphs`.
+fn optPix(p: ?*anyopaque) ?*PixmanImage {
+    return if (p) |ptr| @ptrCast(ptr) else null;
+}
+
+fn glyphTable(ptr: *?*anyopaque) [*]?*FcftGlyph {
+    return @ptrCast(@alignCast(ptr.* orelse @panic("glyph table not allocated")));
+}
+
+fn customGlyph(
+    term: *Terminal,
+    base: u32,
+) struct { glyph: ?*FcftGlyph, cols: c_int } {
+    var table: *?*anyopaque = undefined;
+    var count: usize = undefined;
+    var idx: usize = undefined;
+
+    if (base >= GLYPH_LEGACY_FIRST) {
+        table = &term.custom_glyphs.legacy;
+        count = GLYPH_LEGACY_COUNT;
+        idx = base - GLYPH_LEGACY_FIRST;
+    } else if (base >= GLYPH_OCTANTS_FIRST) {
+        table = &term.custom_glyphs.octants;
+        count = GLYPH_OCTANTS_COUNT;
+        idx = base - GLYPH_OCTANTS_FIRST;
+    } else if (base >= GLYPH_BRAILLE_FIRST) {
+        table = &term.custom_glyphs.braille;
+        count = GLYPH_BRAILLE_COUNT;
+        idx = base - GLYPH_BRAILLE_FIRST;
+    } else {
+        table = &term.custom_glyphs.box_drawing;
+        count = GLYPH_BOX_DRAWING_COUNT;
+        idx = base - GLYPH_BOX_DRAWING_FIRST;
+    }
+
+    if (table.* == null)
+        table.* = xcalloc(count, @sizeOf(?*FcftGlyph));
+
+    const glyphs = glyphTable(table);
+    if (glyphs[idx] != null)
+        return .{ .glyph = glyphs[idx], .cols = glyphs[idx].?.cols };
+
+    render_shim_workers_lock(term);
+
+    // Another thread may have instantiated it while we acquired the lock
+    var single = glyphs[idx];
+    if (single == null) {
+        single = box_drawing(term, base);
+        glyphs[idx] = single;
+    }
+
+    render_shim_workers_unlock(term);
+
+    if (single == null)
+        return .{ .glyph = null, .cols = 1 };
+
+    return .{ .glyph = single, .cols = single.?.cols };
+}
+
+export fn render_cell(
+    term: *Terminal,
+    pix: *PixmanImage,
+    damage: ?*anyopaque,
+    row: *types.Row,
+    row_no: c_int,
+    col: c_int,
+    has_cursor: bool,
+) callconv(.c) c_int {
+    const cell = &row.cells.?[@intCast(col)];
+    if (cell.attrs.clean)
+        return 0;
+
+    cell.attrs.clean = true;
+    cell.attrs.confined = true;
+
+    const width = term.cell_width;
+    const height = term.cell_height;
+    const x = term.margins.left + col * width;
+    const y = term.margins.top + row_no * height;
+
+    var _fg: u32 = 0;
+    var _bg: u32 = 0;
+
+    var alpha: u16 = 0xffff;
+    const is_selected = cell.attrs.selected;
+
+    // Use cell specific color, if set, otherwise the default colors
+    // (possible reversed)
+    switch (cell.attrs.fg_src) {
+        COLOR_RGB => _fg = cell.attrs.fg,
+        COLOR_BASE16, COLOR_BASE256 => {
+            std.debug.assert(@as(usize, cell.attrs.fg) < term.colors.table.len);
+            _fg = term.colors.table[cell.attrs.fg];
+        },
+        else => _fg = if (term.reverse) term.colors.bg else term.colors.fg,
+    }
+
+    switch (cell.attrs.bg_src) {
+        COLOR_RGB => _bg = cell.attrs.bg,
+        COLOR_BASE16, COLOR_BASE256 => {
+            std.debug.assert(@as(usize, cell.attrs.bg) < term.colors.table.len);
+            _bg = term.colors.table[cell.attrs.bg];
+        },
+        else => _bg = if (term.reverse) term.colors.fg else term.colors.bg,
+    }
+
+    if (is_selected) {
+        const cell_fg = _fg;
+        const cell_bg = _bg;
+
+        const custom_fg = term.colors.selection_fg >> 24 == 0;
+        const custom_bg = term.colors.selection_bg >> 24 == 0;
+        const custom_both = custom_fg and custom_bg;
+
+        if (custom_both) {
+            _fg = term.colors.selection_fg;
+            _bg = term.colors.selection_bg;
+        } else if (custom_bg) {
+            _bg = term.colors.selection_bg;
+            _fg = if (cell.attrs.reverse) cell_bg else cell_fg;
+        } else if (custom_fg) {
+            _fg = term.colors.selection_fg;
+            _bg = if (cell.attrs.reverse) cell_fg else cell_bg;
+        } else {
+            _bg = cell_fg;
+            _fg = cell_bg;
+        }
+
+        if (_fg == _bg) {
+            // Invert bg when selected/highlighted text has same fg/bg
+            _bg = ~_bg;
+            alpha = 0xffff;
+        }
+    } else {
+        if (cell.attrs.reverse) {
+            const swap = _fg;
+            _fg = _bg;
+            _bg = swap;
+        } else if (!term.window.?.is_fullscreen and term.colors.alpha != 0xffff) {
+            switch (term.conf.?.colors_dark.alpha_mode) {
+                .default => {
+                    if (cell.attrs.bg_src == COLOR_DEFAULT)
+                        alpha = term.colors.alpha;
+                },
+                .matching => {
+                    const bg_src = cell.attrs.bg_src;
+                    if (bg_src == COLOR_DEFAULT or
+                        ((bg_src == COLOR_BASE16 or bg_src == COLOR_BASE256) and
+                            term.colors.table[cell.attrs.bg] == term.colors.bg) or
+                        (bg_src == COLOR_RGB and cell.attrs.bg == term.colors.bg))
+                    {
+                        alpha = term.colors.alpha;
+                    }
+                },
+                .all => alpha = term.colors.alpha,
+            }
+
+            // Disable transparency when fullscreened (see render_margin()).
+            std.debug.assert(alpha == 0xffff);
+        }
+    }
+
+    if (cell.attrs.dim)
+        _fg = color_dim(term, _fg);
+    if (term.conf.?.bold_in_bright.enabled and cell.attrs.bold)
+        _fg = color_brighten(term, _fg);
+
+    if (cell.attrs.blink and term.blink.state == .off)
+        _fg = color_blend_towards(_fg, 0x00000000, term.conf.?.dim.amount);
+
+    const gamma_correct = wayl_do_linear_blending(term.wl, term.conf.?);
+    var fg = color_hex_to_pixman(_fg, gamma_correct);
+    const bg = color_hex_to_pixman_with_alpha(_bg, alpha, gamma_correct);
+
+    const font = attrs_to_font(term, &cell.attrs).?;
+    var composed: ?*Composed = null;
+    var grapheme: ?*const FcftGrapheme = null;
+    var single: ?*FcftGlyph = null;
+    var glyphs: []const ?*FcftGlyph = &.{};
+    var glyph_count: c_int = 0;
+
+    var base = cell.wc;
+    var cell_cols: c_int = 1;
+
+    const conf = term.conf.?;
+
+    if (base != 0) {
+        const is_custom_range =
+            (base >= GLYPH_BOX_DRAWING_FIRST and base <= GLYPH_BOX_DRAWING_LAST) or
+            (base >= GLYPH_BRAILLE_FIRST and base <= GLYPH_BRAILLE_LAST) or
+            (base >= GLYPH_LEGACY_FIRST and base <= GLYPH_LEGACY_LAST) or
+            (base >= GLYPH_OCTANTS_FIRST and base <= GLYPH_OCTANTS_LAST);
+
+        if (is_custom_range and !conf.box_drawings_uses_font_glyphs) {
+            const r = customGlyph(term, base);
+            if (r.glyph) |g| {
+                single = g;
+                glyph_count = 1;
+                glyphs = @as([*]const ?*FcftGlyph, @ptrCast(&single))[0..1];
+                cell_cols = r.cols;
+            }
+        } else if (base >= CELL_COMB_CHARS_LO and base <= CELL_COMB_CHARS_HI) {
+            const c = composed_lookup(term.composed, base - CELL_COMB_CHARS_LO).?;
+            composed = c;
+            base = c.chars.?[0];
+
+            if (conf.can_shape_grapheme and conf.tweak.grapheme_shaping)
+                grapheme = fcft_rasterize_grapheme_utf32(font, c.count, c.chars.?, term.font_subpixel);
+
+            if (grapheme) |g| {
+                const forced_width = c.forced_width;
+                cell_cols = if (forced_width > 0) forced_width else g.cols;
+
+                composed = null;
+                glyphs = g.glyphs[0..g.count];
+                glyph_count = @intCast(g.count);
+
+                if (forced_width > 0)
+                    glyph_count = @min(glyph_count, forced_width);
+            }
+        }
+
+        if (single == null and grapheme == null) {
+            if (base >= CELL_SPACER) {
+                glyph_count = 0;
+                cell_cols = 1;
+            } else {
+                std.debug.assert(base != 0);
+                single = fcft_rasterize_char_utf32(font, base, term.font_subpixel);
+                if (single == null) {
+                    glyph_count = 0;
+                    cell_cols = 1;
+                } else {
+                    glyph_count = 1;
+                    glyphs = @as([*]const ?*FcftGlyph, @ptrCast(&single))[0..1];
+
+                    const forced_width: u8 = if (composed) |c| c.forced_width else 0;
+                    cell_cols = if (forced_width > 0) @intCast(forced_width) else single.?.cols;
+                }
+            }
+        }
+    }
+
+    const cols_left = term.cols - col;
+    cell_cols = @max(1, @min(cell_cols, cols_left));
+
+    // Determine cells that will bleed into their right neighbor and remember
+    // them for cleanup in the next frame.
+    var render_width: c_int = cell_cols * width;
+    if (conf.tweak.overflowing_glyphs and glyph_count > 0 and cols_left > cell_cols) {
+        var glyph_width: c_int = 0;
+        var advance: c_int = 0;
+        for (glyphs) |maybe_g| {
+            const g = maybe_g.?;
+            glyph_width = @max(glyph_width, advance + g.x + g.width);
+            advance += g.advance.x;
+        }
+
+        if (glyph_width > render_width) {
+            render_width = @min(glyph_width, render_width + width);
+
+            var i: c_int = 0;
+            while (i < cell_cols) : (i += 1)
+                row.cells.?[@intCast(col + i)].attrs.confined = false;
+        }
+    }
+
+    render_shim_clip_rect(pix, x, y, render_width, height);
+
+    if (damage) |d|
+        render_shim_region_union_rect(d, x, y, render_width, height);
+
+    // Background
+    fillRect(pix, &bg, &.{.{
+        .x = @intCast(x),
+        .y = @intCast(y),
+        .width = @intCast(cell_cols * width),
+        .height = @intCast(height),
+    }});
+
+    if (cell.attrs.blink and term.blink.fd < 0) {
+        // TODO: use a custom lock for this?
+        render_shim_workers_lock(term);
+        term_arm_blink_timer(term);
+        render_shim_workers_unlock(term);
+    }
+
+    var early_cursor = false;
+
+    if (has_cursor and term.cursor_style == .block and term.kbd_focus) {
+        const bg_without_alpha = color_hex_to_pixman(_bg, gamma_correct);
+        draw_cursor(term, cell, font, pix, &fg, &bg_without_alpha, x, y, cell_cols);
+    }
+
+    if (cell.wc == 0 or cell.wc >= CELL_SPACER or cell.wc == '\t' or
+        (cell.attrs.conceal and !is_selected))
+    {
+        early_cursor = true;
+    }
+
+    if (!early_cursor) {
+        const clr_pix = render_shim_solid_fill(&fg).?;
+        var pen_x = x;
+        const cell_width = term.cell_width;
+
+        var i: usize = 0;
+        while (i < @as(usize, @intCast(glyph_count))) : (i += 1) {
+            const letter_x_ofs: c_int = if (i == 0) @as(c_int, term.font_x_ofs) else 0;
+
+            const glyph = glyphs[i] orelse continue;
+
+            var g_x = glyph.x;
+            const g_y = glyph.y;
+
+            if (i > 0 and glyph.x >= 0 and cell_cols == 1)
+                g_x -= cell_width;
+
+            if (glyph.is_color_glyph) {
+                // Glyph surface is a pre-rendered image (typically colour emoji)
+                if (!(cell.attrs.blink and term.blink.state == .off)) {
+                    render_shim_composite(
+                        optPix(glyph.pix), null, pix,
+                        pen_x + letter_x_ofs + g_x,
+                        y + @as(c_int, term.font_baseline) - g_y,
+                        glyph.width, glyph.height);
+                }
+            } else {
+                render_shim_composite(
+                    clr_pix, optPix(glyph.pix), pix,
+                    pen_x + letter_x_ofs + g_x,
+                    y + @as(c_int, term.font_baseline) - g_y,
+                    glyph.width, glyph.height);
+
+                // Combining characters
+                if (composed) |c| {
+                    std.debug.assert(glyph_count == 1);
+
+                    var j: usize = 1;
+                    while (j < c.count) : (j += 1) {
+                        const g = fcft_rasterize_char_utf32(font, c.chars.?[j], term.font_subpixel) orelse continue;
+
+                        // Fonts _should_ assume the pen position is now
+                        // *after* the base glyph, and thus use negative
+                        // offsets for combining glyphs; accommodate both.
+                        const x_ofs: c_int = if (cell_cols == 1)
+                            (if (g.x < 0) cell_cols * cell_width else (cell_cols - 1) * cell_width)
+                        else
+                            0;
+
+                        if (cell_cols > 1)
+                            pen_x += cell_width;
+
+                        render_shim_composite(
+                            clr_pix, optPix(g.pix), pix,
+                            pen_x + letter_x_ofs + x_ofs + g.x,
+                            y + @as(c_int, term.font_baseline) - g.y,
+                            g.width, g.height);
+                    }
+                }
+            }
+
+            pen_x += if (cell_cols > 1) cell_width else glyph.advance.x;
+        }
+
+        render_shim_image_unref(clr_pix);
+
+        // Underline
+        if (cell.attrs.underline) {
+            var underline_color = fg;
+            var underline_style: UnderlineStyle = .single;
+
+            // Check if cell has a styled underline. This lookup is fairly
+            // expensive...
+            if (row.extra) |extra| {
+                const ranges = extra.underline_ranges;
+                if (ranges.v) |v| {
+                    var ri: usize = 0;
+                    while (ri < @as(usize, @intCast(ranges.count))) : (ri += 1) {
+                        const range = &v[ri];
+
+                        if (range.start > col)
+                            break;
+
+                        if (range.start <= col and col <= range.end) {
+                            switch (range.data.underline.color_src) {
+                                .base256 => underline_color = color_hex_to_pixman(
+                                    term.colors.table[range.data.underline.color], gamma_correct),
+                                .rgb => underline_color = color_hex_to_pixman(
+                                    range.data.underline.color, gamma_correct),
+                                .default => {},
+                                .base16 => unreachable, // underline color can't be base-16
+                            }
+
+                            underline_style = range.data.underline.style;
+                            break;
+                        }
+                    }
+                }
+            }
+
+            draw_styled_underline(term, pix, font, &underline_color, underline_style, x, y, cell_cols);
+        }
+
+        if (cell.attrs.strikethrough)
+            draw_strikeout(term, pix, font, &fg, x, y, cell_cols);
+
+        if (cell.attrs.url and conf.url.style != .none) {
+            const url_color = color_hex_to_pixman(
+                if (conf.colors_dark.use_custom.url)
+                    conf.colors_dark.url
+                else
+                    term.colors.table[3],
+                gamma_correct);
+
+            draw_styled_underline(term, pix, font, &url_color, conf.url.style, x, y, cell_cols);
+        }
+    }
+
+    if (has_cursor and (term.cursor_style != .block or !term.kbd_focus)) {
+        const bg_without_alpha = color_hex_to_pixman(_bg, gamma_correct);
+        draw_cursor(term, cell, font, pix, &fg, &bg_without_alpha, x, y, cell_cols);
+    }
+
+    render_shim_clip_clear(pix);
+    return cell_cols;
 }

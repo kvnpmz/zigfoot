@@ -4326,6 +4326,167 @@ test_render_csd_part(void)
     pixman_image_unref(pix);
 }
 
+/* D3e: render_cell() end-to-end on a real pixman image */
+static uint32_t
+pixman_color_to_argb(pixman_color_t c)
+{
+    return (uint32_t)(c.alpha >> 8) << 24 | (uint32_t)(c.red >> 8) << 16 |
+        (uint32_t)(c.green >> 8) << 8 | (uint32_t)(c.blue >> 8);
+}
+
+static size_t
+count_argb(pixman_image_t *pix, int w, int h, uint32_t argb)
+{
+    size_t n = 0;
+    for (int y = 0; y < h; y++)
+        for (int x = 0; x < w; x++)
+            n += pix_pixel(pix, x, y) == argb;
+    return n;
+}
+
+static size_t
+count_not_argb(pixman_image_t *pix, int w, int h, uint32_t argb)
+{
+    size_t n = 0;
+    for (int y = 0; y < h; y++)
+        for (int x = 0; x < w; x++)
+            n += pix_pixel(pix, x, y) != argb;
+    return n;
+}
+
+static void
+test_render_cell(void)
+{
+    struct config testconf = {0};
+    struct terminal *term = term_with_fonts(&testconf);
+    if (term == NULL) {
+        printf("skip: no monospace font available\n");
+        return;
+    }
+
+    enum { W = 80, H = 40 };
+    uint32_t pixels[W * H] = {0};
+    pixman_image_t *pix = pixman_image_create_bits(PIXMAN_a8r8g8b8, W, H, pixels, W * 4);
+    if (pix == NULL) {
+        printf("skip: pixman_image_create_bits() failed\n");
+        term_with_fonts_free(term);
+        return;
+    }
+
+    struct config *conf = &testconf;
+
+    term->cols = 8;
+    term->rows = 2;
+    term->cell_width = 10;
+    term->cell_height = 20;
+    term->margins.top = term->margins.bottom = 0;
+    term->margins.left = term->margins.right = 0;
+    term->width = W;
+    term->height = H;
+
+    /* Non-default bg so "painted" is distinguishable from "untouched". */
+    term->colors.bg = 0x000000ff;
+    term->colors.fg = 0x00ffffff;
+    term->colors.alpha = 0xffff;
+    term->colors.selection_fg = 0;
+    term->colors.selection_bg = 0;
+    term->blink.fd = 5; /* no timer arming in the harness */
+    conf->box_drawings_uses_font_glyphs = false;
+
+    const uint32_t bg_argb =
+        pixman_color_to_argb(color_hex_to_pixman(term->colors.bg, false));
+    const uint32_t fg_argb =
+        pixman_color_to_argb(color_hex_to_pixman(term->colors.fg, false));
+
+    struct row *row = grid_row_alloc(term->cols, true);
+    row->dirty = true;
+    for (int c = 0; c < term->cols; c++)
+        row->cells[c].attrs.clean = 0;
+
+    /* ── empty cell: only the background ─────────────────────────── */
+    memset(pixels, 0, sizeof(pixels));
+    check(render_cell(term, pix, NULL, row, 0, 0, false) == 1,
+          "render_cell() returns one column for an ASCII cell");
+    check(pix_pixel(pix, 5, 10) == bg_argb,
+          "render_cell() fills the cell background");
+    check(pix_pixel(pix, 15, 10) == 0,
+          "render_cell() stays inside its cell");
+
+    check(render_cell(term, pix, NULL, row, 0, 0, false) == 0,
+          "a clean cell is skipped");
+
+    /* ── a glyph ─────────────────────────────────────────────────── */
+    memset(pixels, 0, sizeof(pixels));
+    row->cells[1].wc = 'A';
+    row->cells[1].attrs.clean = 0;
+    render_cell(term, pix, NULL, row, 0, 1, false);
+    check(count_not_argb(pix, W, H, bg_argb) > 0,
+          "render_cell() paints the glyph in the foreground color");
+    check(pix_pixel(pix, 15, 10) == bg_argb,
+          "the glyph never bleeds into the background area");
+
+    /* ── conceal ─────────────────────────────────────────────────── */
+    memset(pixels, 0, sizeof(pixels));
+    row->cells[2].wc = 'B';
+    row->cells[2].attrs.clean = 0;
+    row->cells[2].attrs.conceal = 1;
+    render_cell(term, pix, NULL, row, 0, 2, false);
+    check(count_argb(pix, W, H, fg_argb) == 0,
+          "a concealed cell paints no glyph");
+
+    /* ── box drawing goes through the custom glyph cache ─────────── */
+    memset(pixels, 0, sizeof(pixels));
+    row->cells[3].wc = 0x2500; /* light horizontal */
+    row->cells[3].attrs.clean = 0;
+    render_cell(term, pix, NULL, row, 0, 3, false);
+    check(term->custom_glyphs.box_drawing != NULL,
+          "box-drawing instantiates the custom glyph cache");
+    check(count_not_argb(pix, W, H, bg_argb) > 0,
+          "box drawing is rendered from the cache");
+
+    /* ── underline ───────────────────────────────────────────────── */
+    memset(pixels, 0, sizeof(pixels));
+    conf->use_custom_underline_offset = true;
+    conf->underline_offset.px = 5;
+    conf->underline_thickness.px = 2;
+    term->font_baseline = 10;
+    row->cells[4].wc = ' ';
+    row->cells[4].attrs.clean = 0;
+    row->cells[4].attrs.underline = 1;
+    render_cell(term, pix, NULL, row, 0, 4, false);
+    check(pix_pixel(pix, 45, 15) == fg_argb && pix_pixel(pix, 45, 16) == fg_argb,
+          "render_cell() underlines in the foreground color");
+    check(pix_pixel(pix, 45, 13) == bg_argb,
+          "the underline is at the configured offset only");
+
+    /* ── selection uses the selection colors ─────────────────────── */
+    memset(pixels, 0, sizeof(pixels));
+    term->colors.selection_bg = 0x0000ff00; /* custom: top byte clear */
+    term->colors.selection_fg = 0x00000000;
+    row->cells[5].attrs.clean = 0;
+    row->cells[5].attrs.selected = 1;
+    render_cell(term, pix, NULL, row, 0, 5, false);
+    check(pix_pixel(pix, 55, 10) == 0xff00ff00,
+          "a selected cell uses the selection background");
+    term->colors.selection_bg = 0;
+    term->colors.selection_fg = 0;
+
+    /* ── cursor ──────────────────────────────────────────────────── */
+    memset(pixels, 0, sizeof(pixels));
+    term->kbd_focus = true;
+    term->cursor_style = CURSOR_BLOCK;
+    term->cursor_blink.state = CURSOR_BLINK_OFF;
+    row->cells[6].attrs.clean = 0;
+    render_cell(term, pix, NULL, row, 1, 6, true);
+    check(pix_pixel(pix, 65, 25) == fg_argb,
+          "a focused block cursor is painted in the foreground color");
+    term->kbd_focus = false;
+
+    pixman_image_unref(pix);
+    grid_row_free(row);
+    term_with_fonts_free(term);
+}
+
 int
 main(void)
 {
@@ -4352,6 +4513,7 @@ main(void)
     test_render_primitives();
     test_render_refresh();
     test_render_margin();
+    test_render_cell();
     test_csd_data();
     test_render_csd_part();
     test_configure();

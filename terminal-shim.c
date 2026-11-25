@@ -17,6 +17,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdlib.h>
+#include <threads.h>
 #include "terminal.h"
 #include "url-mode.h"
 #include "grid.h"
@@ -241,6 +242,51 @@ void wayland_shim_surface_damage_buffer(
     struct wl_surface *surface, int x, int y, int width, int height)
 {
     wl_surface_damage_buffer(surface, x, y, width, height);
+}
+
+/* pixman region/image helpers for render_cell(). The clip is always
+ * "this rect", so init+set+fini collapse into one call. */
+void render_shim_clip_rect(
+    pixman_image_t *pix, int x, int y, int width, int height)
+{
+    pixman_region32_t clip;
+    pixman_region32_init_rect(&clip, x, y, width, height);
+    pixman_image_set_clip_region32(pix, &clip);
+    pixman_region32_fini(&clip);
+}
+
+void render_shim_clip_clear(pixman_image_t *pix)
+{
+    pixman_image_set_clip_region32(pix, NULL);
+}
+
+pixman_image_t *render_shim_solid_fill(const pixman_color_t *color)
+{
+    return pixman_image_create_solid_fill(color);
+}
+
+void render_shim_image_unref(pixman_image_t *pix)
+{
+    pixman_image_unref(pix);
+}
+
+void render_shim_composite(
+    pixman_image_t *src, pixman_image_t *mask, pixman_image_t *dest,
+    int x, int y, int width, int height)
+{
+    pixman_image_composite32(
+        PIXMAN_OP_OVER, src, mask, dest, 0, 0, 0, 0, x, y, width, height);
+}
+
+/* term->render.workers.lock is a pthread mutex the worker threads share. */
+void render_shim_workers_lock(struct terminal *term)
+{
+    mtx_lock(&term->render.workers.lock);
+}
+
+void render_shim_workers_unlock(struct terminal *term)
+{
+    mtx_unlock(&term->render.workers.lock);
 }
 
 /*

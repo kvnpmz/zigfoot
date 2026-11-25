@@ -650,9 +650,9 @@ utmp backends where available.
 
 ## 13. Sequenced backlog (refreshed 2026-11-24)
 
-State: **34,617 of 48,830 C lines gone (70.9%)**, ~57% by effort, 35 modules
-ported, 555 harness assertions, `meson test` 5/5 in three build dirs.
-Remaining module C: 14,213 lines, plus 2,345 lines of `*-shim.c` accessors.
+State: **35,128 of 48,830 C lines gone (71.9%)**, ~58% by effort, 35 modules
+ported, 568 harness assertions, `meson test` 5/5 in three build dirs.
+Remaining module C: 13,702 lines, plus 2,380 lines of `*-shim.c` accessors.
 
 **`wayland` is done.** `wayland.c` is down from 2,884 lines to **359**, and what
 is left is glue rather than logic: the fourteen generated-protocol listener
@@ -795,8 +795,8 @@ Order matters: `search` and `wayland` first (they unblock the rest), then
 | **D3b** done | `render`: the frame bookkeeping — `dirty_cursor()`/`dirty_old_cursor()` (cell + row dirtying, plus remembering the cursor for the next frame), the four `render_refresh*()` flag setters, and the rate-limited title/app-id/icon updaters, which now share one `rateLimit()` helper (8333 µs window, `timerfd_settime()` for the remainder). `render_update_title()` lost its `static`; `grid_row()` and `urls_mode_is_active()` are static inlines in the headers, so two more `terminal_shim_*` accessors. 13 new harness checks, including a real timerfd proving the rate limiter arms itself | D3a | 0.5d |
 | **D3c** done | `render`: `render_row()` (right-to-left so wide glyphs win), `render_urgency()` (the red border hints) and `render_margin()` (default background outside the grid, reverse handling, fullscreen alpha, the four `pixman_region32_union_rect()` damage adds and the `wl_surface_damage_buffer()` calls). Two new shims: `render_shim_region_union_rect()` (pixman_region32_t is not mirrored) and `wayland_shim_surface_damage_buffer()`. `render_cell()` lost its `static` so Zig can call it. 7 new harness checks paint a real 64×64 buffer and read the pixels back | D3b | 0.5d |
 | **D3d** done | `render`: the CSD geometry and commit path — `get_csd_data()` (border/title/button widths from the scale, the fractional-scaling-safe offsets, the whole `enum csd_surface` switch) plus `csd_commit()` (scale, attach, damage, commit) and `render_csd_part()` (solid fill). `struct csd_data` is a 16-byte extern struct; the three wl_surface calls were already shimmed. 12 new harness checks walk every surface, the "no wm capability", maximized and too-narrow cases | D3c | 0.5d |
-| **D3e** | `render`: `render_cell()` (the big one: composed glyphs, graphemes, ligatures, underlines, strikeout, sixel/url ranges) | D3d | 2–3d |
-| **D3f** | `render`: scroll/OSD/CSD-button/overlay/search-box/url painting | D3e | 3–4d |
+| **D3e** done | `render`: **`render_cell()`** — the 510-line heart of the renderer. Colour-source resolution for fg/bg (default/base16/base256/RGB), selection colours with the invert-on-collision rule, reverse and the three alpha modes (with the fullscreen assertion), dim/bold-in-bright/blink, glyph selection through the four custom-glyph caches (box drawing, braille, octants, legacy — allocated lazily under the worker lock), composed characters with grapheme shaping and forced widths, spacers, the overflowing-glyph bleed bookkeeping, clip + damage, background, the early blink-timer arming, colour-emoji vs mask compositing, combining-character pen arithmetic, styled underlines from `row->extra->underline_ranges`, strikeout, url underlines and both cursor paths. Six new `render_shim_*` helpers keep `pixman_region32_t` and the `mtx_t` worker lock in C. 13 new harness checks render real cells onto a pixman image | D3d | 1.5d |
+| **D3f** | `render`: scroll/sixel/OSD/CSD-button/overlay/search-box/url painting | D3e | 3–4d |
 | **D3g** | `render`: the worker thread, damage tracking, `grid_render()`, `render_resize()` and the remaining xcursor/tiocswinsz glue | D3f | 3–4d |
 | **D4** | `input` (3,687) — split into D4a keyboard/legacy+kitty protocols, D4b pointer/mouse/touch, D4c compose/IME plumbing | after B2 + key-binding | 1–1.5w |
 | **D5** | `key-binding` (661), `ime` (540), `url-mode` (833), `selection` S1+S3 (~600) | after B2/D4 | 4–5d |
