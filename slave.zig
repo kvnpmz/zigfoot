@@ -336,20 +336,24 @@ fn slaveExec(
     const c = slave_shim_constants().*;
 
     var ptmx = ptmx_in;
+    var child_errno: c_int = 0;
     var pts: c_int = -1;
 
     exec: {
         const pts_name = ptsname(ptmx) orelse {
-            logErrno("failed to get the pseudo terminal slave device name", .{});
+            child_errno = errno();
+            logErrnoProvided(child_errno, "failed to get the pseudo terminal slave device name", .{});
             break :exec;
         };
 
         if (grantpt(ptmx) == -1) {
-            logErrno("failed to grantpt()", .{});
+            child_errno = errno();
+            logErrnoProvided(child_errno, "failed to grantpt()", .{});
             break :exec;
         }
         if (unlockpt(ptmx) == -1) {
-            logErrno("failed to unlockpt()", .{});
+            child_errno = errno();
+            logErrnoProvided(child_errno, "failed to unlockpt()", .{});
             break :exec;
         }
 
@@ -357,29 +361,34 @@ fn slaveExec(
         ptmx = -1;
 
         if (setsid() == -1) {
-            logErrno("failed to setsid()", .{});
+            child_errno = errno();
+            logErrnoProvided(child_errno, "failed to setsid()", .{});
             break :exec;
         }
 
         pts = open(pts_name, c.o_rdwr);
         if (pts == -1) {
-            logErrno("failed to open pseudo terminal slave device", .{});
+            child_errno = errno();
+            logErrnoProvided(child_errno, "failed to open pseudo terminal slave device", .{});
             break :exec;
         }
 
         if (ioctl(pts, c.tiocsctty, @as(c_int, 0)) < 0) {
-            logErrno("failed to configure controlling terminal", .{});
+            child_errno = errno();
+            logErrnoProvided(child_errno, "failed to configure controlling terminal", .{});
             break :exec;
         }
 
         switch (slave_shim_set_iutf8(pts)) {
             0 => {},
             1 => {
-                logErrno("failed to get terminal attributes", .{});
+                child_errno = errno();
+                logErrnoProvided(child_errno, "failed to get terminal attributes", .{});
                 break :exec;
             },
             2 => {
-                logErrno("failed to set IUTF8 terminal attribute", .{});
+                child_errno = errno();
+                logErrnoProvided(child_errno, "failed to set IUTF8 terminal attribute", .{});
                 break :exec;
             },
             else => unreachable,
@@ -387,13 +396,19 @@ fn slaveExec(
 
         if (notifications.length > 0) {
             const flags = fcntl(pts, c.f_getfl);
-            if (flags < 0)
+            if (flags < 0) {
+                child_errno = errno();
                 break :exec;
-            if (fcntl(pts, c.f_setfl, flags | c.o_nonblock) < 0)
+            }
+            if (fcntl(pts, c.f_setfl, flags | c.o_nonblock) < 0) {
+                child_errno = errno();
                 break :exec;
+            }
 
-            if (!emitNotifications(pts, notifications))
+            if (!emitNotifications(pts, notifications)) {
+                child_errno = errno();
                 break :exec;
+            }
 
             _ = fcntl(pts, c.f_setfl, flags);
         }
@@ -402,7 +417,8 @@ fn slaveExec(
             std.c.dup2(pts, c.stdout_fileno) == -1 or
             std.c.dup2(pts, c.stderr_fileno) == -1)
         {
-            logErrno("failed to dup stdin/stdout/stderr", .{});
+            child_errno = errno();
+            logErrnoProvided(child_errno, "failed to dup stdin/stdout/stderr", .{});
             break :exec;
         }
 
@@ -426,16 +442,19 @@ fn slaveExec(
         }
 
         _ = slave_shim_execvpe(file, argv, envp);
+        child_errno = errno();
         // Getting here is an error
     }
 
-    _ = std.c.write(err_fd, @as([*]const u8, @ptrCast(std.c._errno())), @sizeOf(c_int));
+    const err_no = child_errno;
+    _ = std.c.write(err_fd, @as([*]const u8, @ptrCast(&err_no)), @sizeOf(c_int));
     if (pts != -1)
         _ = std.c.close(pts);
     if (ptmx != -1)
         _ = std.c.close(ptmx);
     _ = std.c.close(err_fd);
-    std.c._exit(errno());
+    logErrnoProvided(err_no, "failed to spawn child", .{});
+    std.c._exit(err_no);
 }
 
 // ── environment list ────────────────────────────────────────────────

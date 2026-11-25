@@ -96,6 +96,8 @@ extern fn log_init(
 extern fn log_deinit() callconv(.c) void;
 extern fn log_msg(log_class: c_int, module: [*:0]const u8, file: [*:0]const u8, lineno: c_int, fmt: [*:0]const u8, ...) callconv(.c) void;
 extern fn log_errno(log_class: c_int, module: [*:0]const u8, file: [*:0]const u8, lineno: c_int, fmt: [*:0]const u8, ...) callconv(.c) void;
+extern fn log_errno_provided(log_class: c_int, module: [*:0]const u8, file: [*:0]const u8, lineno: c_int, errnum: c_int, fmt: [*:0]const u8, ...) callconv(.c) void;
+
 extern fn log_level_from_string(str: [*:0]const u8) callconv(.c) c_int;
 extern fn log_level_string_hint() callconv(.c) [*:0]const u8;
 
@@ -219,6 +221,17 @@ fn logErr(comptime fmt: [*:0]const u8, args: anytype) void {
 
 fn logErrno(comptime fmt: [*:0]const u8) void {
     log_errno(LOG_CLASS_ERROR, "main", "main.zig", @intCast(@src().line), fmt);
+}
+
+fn logErrnoProvided(errnum: c_int, comptime fmt: [*:0]const u8, args: anytype) void {
+    @call(.auto, log_errno_provided, .{
+        LOG_CLASS_ERROR,
+        "main",
+        "main.zig",
+        @as(c_int, @intCast(@src().line)),
+        errnum,
+        fmt,
+    } ++ args);
 }
 
 fn spanOf(s: [*:0]const u8) []const u8 {
@@ -426,10 +439,11 @@ fn printPid(pid_file: [*:0]const u8, unlink_at_exit: *bool) bool {
         var pid: [32]u8 = undefined;
         const n = xsnprintf(&pid, pid.len, "%u\n", getpid());
         const bytes = write(pid_fd, &pid, n);
+        const write_errno = std.c._errno().*;
         _ = close(pid_fd);
 
         if (bytes < 0) {
-            logErrno("failed to write PID to FD");
+            logErrnoProvided(write_errno, "failed to write PID to FD=%u", .{pid_fd});
             return false;
         }
         return true;
