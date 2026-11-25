@@ -1479,6 +1479,34 @@ test_osc_unknown_is_silent(void)
     term_free(term);
 }
 
+/* C's term_cursor_up()/down() only assert the cursor is inside the scroll
+ * region in builds without NDEBUG, and the state is reachable from input:
+ * set a scroll region, switch to the alt screen (the region survives, the
+ * cursor row is taken from the other grid), then send ESC M. The port must
+ * not trap where C release carries on. Found by fuzz seed 58 (VT-08). */
+static void
+test_cursor_outside_region(void)
+{
+    struct terminal *term = term_new();
+    term->origin = ORIGIN_RELATIVE;
+    term->scroll_region.start = 1;
+    term->scroll_region.end = 4;
+
+    term->grid->cursor.point.row = 0;
+    term->grid->cursor.point.col = 0;
+    term_cursor_up(term, 1);
+    check(term->grid->cursor.point.row == 1,
+          "term_cursor_up() from above the region does not trap");
+
+    term->grid->cursor.point.row = 4;
+    term->grid->cursor.point.col = 0;
+    term_cursor_down(term, 1);
+    check(term->grid->cursor.point.row == 3,
+          "term_cursor_down() from below the region does not trap");
+
+    term_free(term);
+}
+
 /* xmalloc.c normalizes a zero size to one byte and rejects a zero factor in
  * xreallocarray() before it touches the pointer (audit PL-06). */
 static void
@@ -8295,6 +8323,7 @@ main(void)
     test_csi_private_dispatch();
     test_sgr_bad_colour_keeps_parsing();
     test_osc_unknown_is_silent();
+    test_cursor_outside_region();
     test_allocator_contract();
     test_base64_final_size();
     test_set_fonts();

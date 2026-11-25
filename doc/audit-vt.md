@@ -10,6 +10,11 @@
 > | VT-05 | fixed `4a5f3382` |
 > | VT-06 | fixed `75be865f` (debug output compiled out, as C does) |
 > | VT-07 | fixed `75be865f` (guard kept, comment added) |
+> | VT-08 | found by the 120-seed campaign after this audit: `term_cursor_up()`/
+>   `term_cursor_down()` trapped (Debug/ReleaseSafe) on a cursor outside the
+>   scroll region, reachable by setting a region and then switching to the alt
+>   screen. C's release build has no assert there. Asserts dropped; regression
+>   check `test_cursor_outside_region`. |
 >
 > Regression checks for VT-01…VT-03 live in `tests/test-terminal.c`
 > (`test_csi_private_dispatch`, `test_sgr_bad_colour_keeps_parsing`); VT-06

@@ -805,7 +805,14 @@ export fn term_cursor_right(term: *types.Terminal, count: c_int) void {
 export fn term_cursor_up(term: *types.Terminal, count: c_int) void {
     const top: c_int =
         if (term.origin == .absolute) 0 else term.scroll_region.start;
-    std.debug.assert(term.grid.?.cursor.point.row >= top);
+
+    // C xassert()s `cursor.row >= top` here. That state is reachable from
+    // hostile input: set a scroll region on the normal screen, switch to the
+    // alt screen (the region survives the switch, the cursor row does not),
+    // then send ESC M. C's debug build aborts too, but its release build has
+    // the assert compiled out, computes a negative move amount and carries on.
+    // Drop the trap so Debug/ReleaseSafe match C release instead of crashing
+    // (fuzz seed 58).
 
     const move_amount = @min(
         term.grid.?.cursor.point.row - top,
@@ -821,7 +828,10 @@ export fn term_cursor_up(term: *types.Terminal, count: c_int) void {
 export fn term_cursor_down(term: *types.Terminal, count: c_int) void {
     const bottom: c_int =
         if (term.origin == .absolute) term.rows else term.scroll_region.end;
-    std.debug.assert(bottom >= term.grid.?.cursor.point.row);
+
+    // Same trap, same reason, as term_cursor_up(): C only has this assert in
+    // builds without NDEBUG, and the mirror state (region without its cursor)
+    // is reachable from input.
 
     const move_amount = @min(
         bottom - term.grid.?.cursor.point.row - 1,

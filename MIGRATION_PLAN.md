@@ -1509,6 +1509,7 @@ in the three-agent split (`PLAN_3AGENTS.md`).
 | VT-05 | bug | `osc.zig` | fixed `4a5f3382` |
 | VT-06 | risk | `osc.zig` | fixed `75be865f` |
 | VT-07 | nit | `sixel.zig` | fixed `75be865f` |
+| VT-08 | bug (new) | `terminal.zig` | fixed — fuzz seed 58, asserts dropped |
 | S-01, S-02 | high | `render.zig`, `notify.zig` | fixed `674e62d2` |
 | S-03, S-08 | high | `render.zig`, `input.zig` | fixed `4a5f3382` |
 | S-04…S-07 | high | `render.zig`, `wayland.zig` | open — Agent C |
