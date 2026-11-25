@@ -20,6 +20,7 @@
 #include "shm.h"
 #include "terminal.h"
 #include "wayland.h"
+#include "client-protocol.h"
 
 int main(int argc, char **argv) {
     FILE *out = stdout;

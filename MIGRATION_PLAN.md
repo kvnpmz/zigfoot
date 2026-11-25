@@ -24,7 +24,7 @@ foot-owned C lines are gone (44.7%)**, replaced by ~22.7k lines of Zig
 | State | Modules |
 |---|---|
 | **Ported, C deleted** (28) | `async`, `base64`, `char32`, `commands`, `composed`, `csi`, `cursor-shape`, `dcs`, `extract`, `fdm`, `grid`, `hsl`, `misc`, `notify`, `osc`, `reaper`, `sixel`, `spawn`, `spawn_template`, `tokenize`, `uri`, `log`, `user-notification`, `unicode-mode`, `vt`, `xmalloc`, `xsnprintf`, and **`config`** (the parser, the logger tail and the fcft accessors are Zig; the 35 surviving C lines are `config_regex_compile()` only — see §6.3) |
-| **In progress** (Zig + remaining C + shims) | `terminal.c` (1,780 left), `config.c` (35 left — the regex_t shim), `slave.c` (64 left — only the execvpe fallback; `slave.zig` has signals and terminfo). `shm.c` (E2), `debug.c` (E1b), `selection.c` (D5d-b2), `main.c` (D6) and `server.c` (D6) have since reached zero C — see §14. |
+| **In progress** (Zig + remaining C + shims) | `terminal.c` (1,780 left), `config.c` (35 left — the regex_t shim), `slave.c` (64 left — only the execvpe fallback; `slave.zig` has signals and terminfo). `shm.c` (E2), `debug.c` (E1b), `selection.c` (D5d-b2), `main.c` (D6), `server.c` (D6) and `client.c` (D6a) have since reached zero C — see §14. |
 | **Untouched** (13 modules, ~21.2k lines) | `box-drawing` (3,450), `render` (5,479), `input` (3,690), `wayland` (2,881), `search` (1,512), `url-mode` (833), `main` (751), `server` (688), `key-binding` (661), `client` (629), `ime` (532), `quirks` (86), `foot-features` (42) |
 
 **Progress read two ways:** 45% by C volume, but roughly **35% by effort**,
@@ -814,7 +814,8 @@ Order matters: `search` and `wayland` first (they unblock the rest), then
 | **D5c** done | `url-mode`: the whole module — the url-mode binding dispatcher, activation (uri_parse, the local file: prefix strip, clipboard or launcher), the spawn-launcher + XDG activation-token callback, `urls_input()`'s three matchers and jump-label editing, `regex_detected()` (per-logical-line utf8 flattening with a byte→cell map, combining expansion, `c32rtomb()`), `osc8_uris()`, overlap removal, `generate_key_combos()`/`urls_assign_key_combos()` with duplicate reuse, `tag_cells_for_url()`, `urls_render()` and `urls_reset()`. `regexec()` stays in C (`url_shim_regex_match()`; `regex_t`/`regmatch_t` are libc-specific), `toc32lower()` added to `char32.zig`. 8 new harness checks | D5b | 1.5d |
 | **D5d-a** done | `selection`: the data-source send path — `target`, `send`, `cancelled`, the DnD stubs, `primary_send`/`primary_cancelled`, and `send_clipboard_or_primary()` (non-blocking fd, synchronous `async_write()`, EPOLLOUT `clipboard_send` context for the remainder, then close). Source listener tables stay in C (as with keyboard/pointer); two destroy-inline shims added. 3 new harness checks write into a real pipe. Also fixed `async_write()`'s NULL+len=0 cast. 157 of 844 lines gone | D5c | 1d |
 | **D5d-b1** done | `selection`: the data-offer half — mime-type ranking (uri-list always wins, utf-8 upgrades plain, X11 names last), `data_offer_reset()`/`primary_offer_reset()`, and the offer/source_actions/offer_action/primary_offer callbacks. Two destroy-inline shims. 10 new harness checks. 165 of 844 lines gone | D5d-a | 0.5d |
-| **D6** | `main` (770), `server` (707), `client` (679) | last; they tie everything together and are only fully testable once a window opens | 4–5d |
+| **D6** done | `main` (770) and `server` (707): the process entry point (options, locale, config, setup/teardown, signals) and server mode (accept loop, handshake, IPC, instance bookkeeping). Details in the Post-D6 notes in §14 | D5d | 1d |
+| **D6a** done | `client`: the whole 679-line module — option parsing, working-directory and URI handling, socket discovery, setup-packet serialization, environment forwarding, signal forwarding and the server response. Four wire mirrors are pinned by the ABI probe. Seven headless checks cover protocol sizes, string limits, window-size parsing, sendall, and SIGUSR IPC. No C shim remains | D6 | 1d |
 
 ### Track E — endgame (~2–3 days)
 
@@ -903,11 +904,11 @@ Per-module burn-down (share of that module's original C that is gone):
 | `url-mode` | 0 / 833 | **100%** | `url-mode.c` deleted in D5c; `url-mode.zig` is the module |
 | `main` | 0 / 770 | **100%** | `main.c` deleted in D6; `main.zig` is the entry point (option parsing, locale, config, the setup/teardown chain); `main-shim.c` is the one-line `struct stat` directory test |
 | `server` | 0 / 707 | **100%** | `server.c` deleted in D6; `server_obj` compiles `server.zig`; private structs + client protocol pinned by the ABI probe |
-| `client` | 679 / 679 | 0% | |
+| `client` | 0 / 679 | **100%** | `client.c` deleted in D6a; `client.zig` owns the footclient entry point and the setup packet; no C shim |
 | `key-binding` | 0 / 661 | **100%** | `key-binding.c` deleted in D5a; `key-binding.zig` is the module |
 | `ime` | 0 / 540 | **100%** | `ime.c` deleted in D5b; `ime.zig` is the module |
 
-**Percent complete: 98.4% by C volume (778 of 48,924 module C lines left, post-D6-server), ~93% by effort (band 90–95%), 42/45 top-level modules (57 counting `spawn_template`) with zero C left.**
+**Percent complete: 99.8% by C volume (99 of 48,924 module C lines left, post-D6a), ~95% by effort (band 92–97%), 43/45 top-level modules (58 counting `spawn_template`) with zero C left.**
 **Post-D4d2a:** `input.c` is 3,618 → **2,040** (45% ported), module C 12,709 →
 **7,968**, harness 684 → **744** checks; every keyboard entry point is Zig,
 and so is mouse scrolling. `keymap.h` is down to 27 lines (types
@@ -923,6 +924,27 @@ the six windows
 compositor. Real presentation feedback is still not delivered to these
 short-lived windows, so `presented()` is covered by the fabricated-context
 checks, not by the launches.
+
+**Post-D6a (client, merge of agent-b2):** `client.c` is **deleted** — the
+43rd module with no C. `client.zig` (727 lines) is the footclient entry
+point: option parsing, `-D`/URI handling, socket discovery, the setup
+packet (`client_data` + the `client_string` arrays), environment and
+argument forwarding, SIGUSR IPC encoding and the server's exit-code
+response. It builds twice from one source through the new
+`client_entrypoint` build option: `client_obj` (with `main`) for the
+`footclient` binary and `client_harness_obj` (without) for the harness,
+so the logic is unit-testable before it has a process. No C shim remains.
+Both agents independently mirrored the four wire structs
+(`ClientData`/`ClientString`/`ClientIpcHdr`/`ClientIpcSigusr`); the merge
+kept one definition per type (server's named-field form: `_bits`,
+`ipc_code`/`size`, `i32` signo) and the `client.zig` construction sites
+were adapted to it, so the probe still pins one `C_TYPES` entry each.
+`gen_abi_probe.py` keeps the union of both sides' `C_TYPES` and
+`abi_probe.c` was regenerated (never hand-merged). Module C 778 → **99**
+(99.8% eliminated), Zig 53,514 → **54,241**, harness 917 → **925** checks,
+shim unchanged at 3,417. Verified: full-check green (3 dirs, 6 launches),
+valgrind clean on the harness and `footclient --version`, and
+`footclient --help`/exit codes match the previous C binary.
 
 **Post-D6 (server, merge of agent-c):** `server.c` is **deleted** — the 42nd
 module with no C. `server.zig` (881 lines) is the server mode: the socket
@@ -1042,6 +1064,13 @@ stayed in C (`url_shim_regex_match()`, since `regex_t`'s `re_nsub` and
 `regmatch_t` are libc-specific); `toc32lower()` was added to `char32.zig`.
 8 new harness checks: detection over a real POSIX regex (two rows), the
 match range/action, the first label letter, duplicate-URL reuse, and reset.
+
+**Post-D6a:** `client.c` is **deleted**. `client.zig` emits the
+`main` symbol only for the footclient object; the harness object uses the same
+source without the entry point. `ClientString`, `ClientData`,
+`ClientIpcHdr`, and `ClientIpcSigusr` are ABI-probed. The full gate passes in
+all three build directories, and a fake UNIX server verified the setup packet
+and exit-code response.
 
 **Post-E1b:** `slave.c` is down to **64** lines and contains only
 `slave_shim_execvpe()`: Zig 0.16 has no `execvpeZ()`, and the portable
@@ -1269,9 +1298,10 @@ removed `search.zig`'s private `KeyBinding` mirror; `terminal.zig` already
 shared `types.KeyBindingSet`. The `selection` tail deletes
 `selection-shim.c` (243) wholesale.
 
-**Track D6 — entry points (≈4–5 dev-days).** `main` (770) — **done, D6** — and
-`server` (707) — **done** — are ported; the process entry point is Zig.
-`client` (679) is the last one and shares their setup.
+**Track D6 — entry points (≈4–5 dev-days).** **Done**: `main` (770, D6),
+`server` (707, D6) and `client` (679, D6a) are Zig; both process entry points
+are Zig. What is left of the C tree is `slave`'s `execvpe()` and `config`'s
+`regex_t` — 99 lines, both by design.
 
 **Track E — endgame (≈3–4 dev-days).** E1a/E1b done (slave constants, IUTF8, signals, terminfo; the debug ASAN hook is Zig, gated by the Meson `b_sanitize` option). E2 done (`shm.c` deleted, 329 → 0 — the `wl_shm` capabilities are read from the mirrored `struct wayland`, and only the generated protocol inlines and `#ifdef` platform tests stay in `shm-shim.c`). E3 done (`wayland.c` deleted, 370 → 0 — only the generated listener tables and `add_listener()` forwarders stay in `wayland-shim.c`). What is left is `slave`'s 64-line execvpe fallback and `config`'s 35-line regex shim; then delete every struct-mirror shim. Note the shim count has *grown*
 during D2/D3 (2,465 → 2,524) because generated protocol inlines need

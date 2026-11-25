@@ -35,6 +35,7 @@ test('abi-probe-up-to-date', python, args: [gen_abi_probe_script, '--check'])
 terminal_harness = executable(
   'test-terminal',
   'test-terminal.c',
+  client_harness_obj,
   include_directories: '..',
   dependencies: foot_deps,
   link_with: footlib)

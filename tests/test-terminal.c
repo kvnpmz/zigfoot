@@ -22,6 +22,7 @@
 #include "server.h"
 #include "client-protocol.h"
 #include "slave.h"
+#include "client-protocol.h"
 #include "log.h"
 #include "box-drawing.h"
 #include "foot-features.h"
@@ -51,6 +52,7 @@
 #include <pthread.h>
 #include <sys/mman.h>
 #include <sys/wait.h>
+#include <sys/socket.h>
 #include <poll.h>
 #include <signal.h>
 #include <locale.h>
@@ -67,6 +69,13 @@ int render_url_format_label(char32_t *label, const char32_t *key,
                             const char32_t *url, bool show_url,
                             size_t entered_key_len, int max_cols);
 void render_dirty_overflowing_glyphs(struct terminal *term);
+/* Ported to client.zig; exposed for the headless harness only. */
+void client_shim_protocol_sizes(size_t sizes[4]);
+bool client_shim_parse_window_size(const char *text, unsigned *width, unsigned *height);
+bool client_shim_string_len_ok(size_t len);
+ssize_t client_shim_sendall(int fd, const void *data, size_t len);
+size_t client_shim_sigusr_ipc(unsigned char buf[static 9], int signo);
+
 /* Ported to input.zig (D4a). */
 const struct key_data *keymap_lookup(struct terminal *term,
                                          xkb_keysym_t sym,
@@ -6835,6 +6844,57 @@ test_url_mode(void)
     term_free(term);
 }
 
+/* client.zig: wire layout, parsing, sendall and SIGUSR IPC. */
+static void
+test_client_helpers(void)
+{
+    size_t sizes[4];
+    client_shim_protocol_sizes(sizes);
+    check(sizes[0] == sizeof(struct client_string) &&
+          sizes[1] == sizeof(struct client_data) &&
+          sizes[2] == sizeof(struct client_ipc_hdr) &&
+          sizes[3] == sizeof(struct client_ipc_sigusr),
+          "client protocol mirrors match the C wire sizes");
+
+    check(client_shim_string_len_ok(65534) && !client_shim_string_len_ok(65535),
+          "client string length limit includes the NUL byte");
+
+    unsigned width, height;
+    check(client_shim_parse_window_size("80x24", &width, &height) &&
+          width == 80 && height == 24,
+          "client window-size parser accepts WIDTHxHEIGHT");
+    check(!client_shim_parse_window_size("80x0", &width, &height) &&
+          !client_shim_parse_window_size("80", &width, &height),
+          "client window-size parser rejects zero and missing dimensions");
+
+    int fds[2];
+    xassert(socketpair(AF_UNIX, SOCK_STREAM, 0, fds) == 0);
+    static const char message[] = "client setup";
+    check(client_shim_sendall(fds[0], message, sizeof(message)) == sizeof(message),
+          "client sendall writes the complete buffer");
+    char received[sizeof(message)];
+    check(recv(fds[1], received, sizeof(received), 0) == sizeof(message) &&
+          memcmp(received, message, sizeof(message)) == 0,
+          "client sendall output arrives unchanged");
+    close(fds[1]);
+    errno = 0;
+    check(client_shim_sendall(fds[0], message, sizeof(message)) == -1 &&
+          errno == EPIPE,
+          "client sendall reports a closed peer without SIGPIPE");
+    close(fds[0]);
+
+    unsigned char ipc[9];
+    size_t ipc_len = client_shim_sigusr_ipc(ipc, SIGUSR1);
+    struct client_ipc_hdr hdr;
+    struct client_ipc_sigusr payload;
+    memcpy(&hdr, ipc, sizeof(hdr));
+    memcpy(&payload, ipc + sizeof(hdr), sizeof(payload));
+    check(ipc_len == sizeof(hdr) + sizeof(payload) &&
+          hdr.ipc_code == FOOT_IPC_SIGUSR &&
+          hdr.size == sizeof(payload) && payload.signo == SIGUSR1,
+          "client SIGUSR IPC matches the packed C protocol");
+}
+
 /*
  * slave.c's platform glue (slave.zig, E1a).
  *
@@ -8009,6 +8069,7 @@ main(void)
     test_selection_receive();
     test_main_helpers();
     test_url_mode();
+    test_client_helpers();
     test_slave_shims();
     test_ime_protocol();
     test_key_binding_manager();
