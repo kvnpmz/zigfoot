@@ -1127,13 +1127,13 @@ comptime {
 }
 
 pub const Timespec = extern struct {
-    tv_sec: i64,
-    tv_nsec: i64,
+    tv_sec: std.c.time_t,
+    tv_nsec: c_long,
 };
 
 pub const Timeval = extern struct {
-    tv_sec: i64,
-    tv_usec: i64,
+    tv_sec: std.c.time_t,
+    tv_usec: c_long,
 };
 
 pub const PresentationContext = extern struct {
@@ -2576,6 +2576,30 @@ test "server layout matches C probe" {
     expectAbi(ClientIpcHdr, "ClientIpcHdr");
     expectAbi(ClientIpcSigusr, "ClientIpcSigusr");
     expectAbi(SockaddrUn, "SockaddrUn");
+}
+
+comptime {
+    expectAbi(PtOrPx, "PtOrPx");
+    expectAbi(Timespec, "Timespec");
+    expectAbi(TllStr, "TllStr");
+    expectAbi(EnvVar, "EnvVar");
+    expectAbi(EnvVarNode, "EnvVarNode");
+    expectAbi(EnvVarList, "EnvVarList");
+    expectAbi(UserNotification, "UserNotification");
+    expectAbi(UserNotificationNode, "UserNotificationNode");
+    expectAbi(UserNotifications, "UserNotifications");
+}
+
+comptime {
+    expectAbi(PtOrPx, "PtOrPx");
+    expectAbi(Timespec, "Timespec");
+    expectAbi(TllStr, "TllStr");
+    expectAbi(EnvVar, "EnvVar");
+    expectAbi(EnvVarNode, "EnvVarNode");
+    expectAbi(EnvVarList, "EnvVarList");
+    expectAbi(UserNotification, "UserNotification");
+    expectAbi(UserNotificationNode, "UserNotificationNode");
+    expectAbi(UserNotifications, "UserNotifications");
 }
 
 // ── shm.c internals (shared with shm.zig) ─────────────────────────

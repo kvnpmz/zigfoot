@@ -122,6 +122,15 @@ C_TYPES: dict[str, str] = {
     "ClientIpcHdr": "struct client_ipc_hdr",
     "ClientIpcSigusr": "struct client_ipc_sigusr",
     "SockaddrUn": "struct sockaddr_un",
+    "PtOrPx": "struct pt_or_px",
+    "Timespec": "struct timespec",
+    "TllStr": "__typeof__(foot_tll_str_probe)",
+    "EnvVar": "struct env_var",
+    "EnvVarNode": "__typeof__(*foot_env_var_probe.head)",
+    "EnvVarList": "env_var_list_t",
+    "UserNotification": "struct user_notification",
+    "UserNotificationNode": "__typeof__(*foot_notification_probe.head)",
+    "UserNotifications": "user_notifications_t",
 }
 
 NESTED_IN_TERMINAL: dict[str, str] = {
@@ -134,9 +143,9 @@ NESTED_IN_TERMINAL: dict[str, str] = {
 
 # Zig-only helpers with no C counterpart; do not recurse into them.
 SKIP: set[str] = {
-    "AsciiPrinterBits", "TllInt", "TllStr", "TllNotification", "UrlList",
+    "AsciiPrinterBits", "TllInt", "TllNotification", "UrlList",
     "SixelList", "DamageList", "DamageNode", "SixelNode", "UrlNode",
-    "NotificationNode", "Timespec", "Itimerspec", "TllBufferPrivate",
+    "NotificationNode", "Itimerspec", "TllBufferPrivate",
     "FcftGlyphAdvance",
 }
 
@@ -338,6 +347,8 @@ def generate() -> str:
         '#include "grid.h"',
         '#include "notify.h"',
         '#include <sys/un.h>',
+        '#include <time.h>',
+        '#include <time.h>',
         '#include "client-protocol.h"',
         '#include "server.h"',
         '#include "shm.h"',
@@ -345,6 +356,12 @@ def generate() -> str:
         '#include "render.h"',
         '#include "wayland.h"',
         '#include "client-protocol.h"',
+        "",
+        "/* Anonymous tll() structs need named probe objects for sizeof/offsetof. */",
+        "typedef tll(char *) foot_tll_str_t;",
+        "static foot_tll_str_t foot_tll_str_probe;",
+        "static env_var_list_t foot_env_var_probe;",
+        "static user_notifications_t foot_notification_probe;",
         "",
         "int main(int argc, char **argv) {",
         "    FILE *out = stdout;",
