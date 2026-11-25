@@ -24,6 +24,8 @@
 #include "foot-features.h"
 #include "quirks.h"
 #include <pixman.h>
+#include <presentation-time.h>
+#include <sys/time.h>
 #include "user-notification.h"
 #include "debug.h"
 #include "unicode-mode.h"
@@ -50,6 +52,13 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
+
+/* Ported to render.zig; exposed for the harness only. */
+unsigned render_presentation_frame_count(int64_t total_us, float refresh);
+void presented(void *data, struct wp_presentation_feedback *feedback,
+               uint32_t tv_sec_hi, uint32_t tv_sec_lo, uint32_t tv_nsec,
+               uint32_t refresh, uint32_t seq_hi, uint32_t seq_lo,
+               uint32_t flags);
 
 /* Ported to terminal.zig; internal helpers, not part of terminal.h. */
 void print_insert(struct terminal *term, int width);
@@ -5123,6 +5132,101 @@ test_render_overlay(void)
 
 
 
+/* D3k1: the renderer object and the presentation frame bucket */
+static void
+test_render_init(void)
+{
+    struct fdm *fdm = fdm_init();
+    if (fdm == NULL) {
+        printf("skip: fdm_init() failed\n");
+        return;
+    }
+
+    struct wayland wl = {0};
+    struct renderer *renderer = render_init(fdm, &wl);
+    check(renderer != NULL, "render_init() registers the refresh hook");
+
+    render_destroy(renderer);
+    check(1, "render_destroy() removes the hook");
+
+    render_destroy(NULL); /* must be a no-op */
+    fdm_destroy(fdm);
+
+    /* One 60 Hz frame is 16666.7 µs. */
+    check(render_presentation_frame_count(0, 60.0f) == 0,
+          "no elapsed time is zero frames");
+    check(render_presentation_frame_count(20000, 60.0f) == 1,
+          "20 ms at 60 Hz is one frame");
+    check(render_presentation_frame_count(40000, 60.0f) == 2,
+          "40 ms at 60 Hz is two frames");
+    check(render_presentation_frame_count(8000, 120.0f) == 0,
+          "8 ms at 120 Hz is less than one frame");
+    check(render_presentation_frame_count(9000, 120.0f) == 1,
+          "9 ms at 120 Hz is one frame");
+    check(render_presentation_frame_count(40000, 0.0f) == 0,
+          "an unknown refresh rate cannot produce frames");
+}
+
+
+/* D3k1: presented() end-to-end. grid_render() allocates the context, so the
+ * harness rebuilds the same three-member layout (term + two timevals) and
+ * hands it over; the function frees it (except on the early-return paths). */
+struct presentation_ctx_test {
+    struct terminal *term;
+    struct timeval input;
+    struct timeval commit;
+};
+
+static struct presentation_ctx_test *
+presentation_ctx_new(struct terminal *term, time_t input_sec, time_t commit_sec)
+{
+    struct presentation_ctx_test *ctx = xmalloc(sizeof(*ctx));
+    ctx->term = term;
+    ctx->input = (struct timeval){.tv_sec = input_sec, .tv_usec = 0};
+    ctx->commit = (struct timeval){.tv_sec = commit_sec, .tv_usec = 0};
+    return ctx;
+}
+
+static void
+test_presentation_feedback(void)
+{
+    struct terminal *term = term_new();
+    struct wl_window win = {0};
+    struct monitor mon = {0};
+
+    mon.refresh = 60.0f;
+    term->window = &win;
+    tll_push_back(win.on_outputs, &mon);
+
+    /* 20 ms after the commit: one 60 Hz frame (the warning bucket). */
+    presented(presentation_ctx_new(term, 0, 10), NULL,
+              0, 10, 20 * 1000 * 1000, 0, 0, 0, 0);
+    check(1, "presented() measures a commit-to-presented delay");
+
+    /* 1 ms after the commit: less than a frame (the info bucket). */
+    presented(presentation_ctx_new(term, 0, 10), NULL,
+              0, 10, 1000 * 1000, 0, 0, 0, 0);
+    check(1, "presented() handles a sub-frame delay");
+
+    /* An input timestamp makes the message include the input-to-presented
+     * leg, and skips the commit comparison. */
+    presented(presentation_ctx_new(term, 5, 6), NULL,
+              0, 7, 500 * 1000, 0, 0, 0, 0);
+    check(1, "presented() includes the input leg when there is one");
+
+    /* Older than the commit: dropped before the free. Keep the context on
+     * the stack - it is deliberately not freed on this path. */
+    struct presentation_ctx_test early =
+        {.term = term, .input = {0}, .commit = {.tv_sec = 10, .tv_usec = 0}};
+    presented(&early, NULL, 0, 5, 0, 0, 0, 0, 0);
+    check(1, "presented() drops a timestamp older than the commit");
+
+    tll_free(win.on_outputs);
+    term->window = NULL;
+    term_free(term);
+}
+
+
 int
 main(void)
 {
@@ -5152,6 +5256,8 @@ main(void)
     test_render_cell();
     test_render_ime_preedit();
     test_render_overlay();
+    test_render_init();
+    test_presentation_feedback();
     test_grid_render_scroll();
     test_render_sixel();
     test_csd_buttons();

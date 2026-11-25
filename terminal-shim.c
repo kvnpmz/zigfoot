@@ -402,6 +402,16 @@ void render_shim_set_clip_region(
     pixman_image_set_clip_region32(pix, r);
 }
 
+
+/* wp_presentation_feedback_destroy() is a generated static inline. */
+void render_shim_presentation_feedback_destroy(
+    struct wp_presentation_feedback *feedback)
+{
+    if (feedback == NULL)
+        return;
+    wp_presentation_feedback_destroy(feedback);
+}
+
 /* wp_single_pixel_buffer_manager_v1_create_u32_rgba_buffer() is a generated
  * static inline. */
 struct wl_buffer *render_shim_single_pixel_buffer(

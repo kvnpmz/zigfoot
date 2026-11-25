@@ -1,6 +1,7 @@
 #include "render.h"
 
 #include <limits.h>
+#include <stdint.h>
 #include <signal.h>
 #include <string.h>
 #include <unistd.h>
@@ -53,6 +54,10 @@ struct renderer {
     struct wayland *wayl;
 };
 
+/* render.zig mirrors this layout (two pointers); keep both sides honest. */
+_Static_assert(sizeof(struct renderer) == 2 * sizeof(void *),
+               "struct renderer is two pointers");
+
 static struct {
     size_t total;
     size_t zero;  /* commits presented in less than one frame interval */
@@ -60,44 +65,9 @@ static struct {
     size_t two;   /* commits presented in two or more frame intervals */
 } presentation_statistics = {0};
 
-static void fdm_hook_refresh_pending_terminals(struct fdm *fdm, void *data);
+void fdm_hook_refresh_pending_terminals(struct fdm *fdm, void *data);
 
-struct renderer *
-render_init(struct fdm *fdm, struct wayland *wayl)
-{
-    struct renderer *renderer = malloc(sizeof(*renderer));
-    if (unlikely(renderer == NULL)) {
-        LOG_ERRNO("malloc() failed");
-        return NULL;
-    }
-
-    *renderer = (struct renderer) {
-        .fdm = fdm,
-        .wayl = wayl,
-    };
-
-    if (!fdm_hook_add(fdm, &fdm_hook_refresh_pending_terminals, renderer,
-                      FDM_HOOK_PRIORITY_NORMAL))
-    {
-        LOG_ERR("failed to register FDM hook");
-        free(renderer);
-        return NULL;
-    }
-
-    return renderer;
-}
-
-void
-render_destroy(struct renderer *renderer)
-{
-    if (renderer == NULL)
-        return;
-
-    fdm_hook_del(renderer->fdm, &fdm_hook_refresh_pending_terminals,
-                 FDM_HOOK_PRIORITY_NORMAL);
-
-    free(renderer);
-}
+/* render_init()/render_destroy() are in render.zig (D3k1). */
 
 static void DESTRUCTOR
 log_presentation_statistics(void)
@@ -112,12 +82,17 @@ log_presentation_statistics(void)
              100. * presentation_statistics.two / total);
 }
 
-static void
-sync_output(void *data,
-            struct wp_presentation_feedback *wp_presentation_feedback,
-            struct wl_output *output)
-{
-}
+/* Ported to render.zig (D3k1). The listener table stays here: its layout is
+ * the generated protocol struct. */
+void sync_output(
+    void *data, struct wp_presentation_feedback *wp_presentation_feedback,
+    struct wl_output *output);
+void presented(
+    void *data, struct wp_presentation_feedback *wp_presentation_feedback,
+    uint32_t tv_sec_hi, uint32_t tv_sec_lo, uint32_t tv_nsec,
+    uint32_t refresh, uint32_t seq_hi, uint32_t seq_lo, uint32_t flags);
+void discarded(
+    void *data, struct wp_presentation_feedback *wp_presentation_feedback);
 
 struct presentation_context {
     struct terminal *term;
@@ -125,96 +100,43 @@ struct presentation_context {
     struct timeval commit;
 };
 
-static void
-presented(void *data,
-          struct wp_presentation_feedback *wp_presentation_feedback,
-          uint32_t tv_sec_hi, uint32_t tv_sec_lo, uint32_t tv_nsec,
-          uint32_t refresh, uint32_t seq_hi, uint32_t seq_lo, uint32_t flags)
+/* TODO(shim-removal): the context is allocated by grid_render(), which is
+ * still C. These accessors go away with grid_render() (D3l2). */
+struct terminal *
+render_presentation_ctx_term(void *data)
 {
-    struct presentation_context *ctx = data;
-    struct terminal *term = ctx->term;
-    const struct timeval *input = &ctx->input;
-    const struct timeval *commit = &ctx->commit;
+    return ((struct presentation_context *)data)->term;
+}
 
-    const struct timeval presented = {
-        .tv_sec = (uint64_t)tv_sec_hi << 32 | tv_sec_lo,
-        .tv_usec = tv_nsec / 1000,
-    };
+void
+render_presentation_ctx_input(void *data, int64_t *sec, int64_t *usec)
+{
+    const struct presentation_context *ctx = data;
+    *sec = ctx->input.tv_sec;
+    *usec = ctx->input.tv_usec;
+}
 
-    bool use_input = (input->tv_sec > 0 || input->tv_usec > 0) &&
-        timercmp(&presented, input, >);
-    char msg[1024];
-    int chars = 0;
+void
+render_presentation_ctx_commit(void *data, int64_t *sec, int64_t *usec)
+{
+    const struct presentation_context *ctx = data;
+    *sec = ctx->commit.tv_sec;
+    *usec = ctx->commit.tv_usec;
+}
 
-    if (use_input && timercmp(&presented, input, <))
-        return;
-    else if (timercmp(&presented, commit, <))
-        return;
-
-    LOG_DBG("commit: %lu s %lu µs, presented: %lu s %lu µs",
-            commit->tv_sec, commit->tv_usec, presented.tv_sec, presented.tv_usec);
-
-    if (use_input) {
-        struct timeval diff;
-        timersub(commit, input, &diff);
-        chars += snprintf(
-            &msg[chars], sizeof(msg) - chars,
-            "input - %llu µs -> ", (unsigned long long)diff.tv_usec);
-    }
-
-    struct timeval diff;
-    timersub(&presented, commit, &diff);
-    chars += snprintf(
-        &msg[chars], sizeof(msg) - chars,
-        "commit - %llu µs -> ", (unsigned long long)diff.tv_usec);
-
-    if (use_input) {
-        xassert(timercmp(&presented, input, >));
-        timersub(&presented, input, &diff);
-    } else {
-        xassert(timercmp(&presented, commit, >));
-        timersub(&presented, commit, &diff);
-    }
-
-    chars += snprintf(
-        &msg[chars], sizeof(msg) - chars,
-        "presented (total: %llu µs)", (unsigned long long)diff.tv_usec);
-
-    unsigned frame_count = 0;
-    if (tll_length(term->window->on_outputs) > 0) {
-        const struct monitor *mon = tll_front(term->window->on_outputs);
-        frame_count = (diff.tv_sec * 1000000. + diff.tv_usec) / (1000000. / mon->refresh);
-    }
-
+/* The counters and their DESTRUCTOR stay in C: the exit-time log is a C
+ * attribute (macros.h), not something Zig can portably express. */
+void
+render_shim_presentation_stat_add(unsigned frame_count)
+{
     presentation_statistics.total++;
+
     if (frame_count >= 2)
         presentation_statistics.two++;
     else if (frame_count >= 1)
         presentation_statistics.one++;
     else
         presentation_statistics.zero++;
-
-#define _log_fmt "%s (more than %u frames)"
-
-    if (frame_count >= 2)
-        LOG_ERR(_log_fmt, msg, frame_count);
-    else if (frame_count >= 1)
-        LOG_WARN(_log_fmt, msg, frame_count);
-    else
-        LOG_INFO(_log_fmt, msg, frame_count);
-
-#undef _log_fmt
-
-    wp_presentation_feedback_destroy(wp_presentation_feedback);
-    free(ctx);
-}
-
-static void
-discarded(void *data, struct wp_presentation_feedback *wp_presentation_feedback)
-{
-    struct presentation_context *ctx = data;
-    wp_presentation_feedback_destroy(wp_presentation_feedback);
-    free(ctx);
 }
 
 static const struct wp_presentation_feedback_listener presentation_feedback_listener = {
@@ -2479,7 +2401,7 @@ xcursor_callback(void *data, struct wl_callback *wl_callback, uint32_t callback_
     }
 }
 
-static void
+void
 fdm_hook_refresh_pending_terminals(struct fdm *fdm, void *data)
 {
     struct renderer *renderer = data;

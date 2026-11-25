@@ -2842,3 +2842,213 @@ export fn render_overlay(term: *Terminal) callconv(.c) void {
     term.render.last_overlay_style = style;
 }
 
+
+
+// ─────────────────────────────────────────────────────────────────────────
+// Presentation feedback and the renderer object (D3k1)
+// ─────────────────────────────────────────────────────────────────────────
+
+const LOG_CLASS_ERROR: c_int = 1;
+const LOG_CLASS_WARNING: c_int = 2;
+const LOG_CLASS_INFO: c_int = 3;
+
+extern fn log_errno(
+    class: c_int, module: [*:0]const u8, file: [*:0]const u8, lineno: c_int,
+    fmt: [*:0]const u8, ...
+) callconv(.c) void;
+
+const Fdm = opaque {};
+
+/// fdm.h's `fdm_hook_t`.
+const FdmHook = *const fn (*Fdm, ?*anyopaque) callconv(.c) void;
+const FDM_HOOK_PRIORITY_NORMAL: c_int = 1;
+
+extern fn fdm_hook_add(
+    fdm: *Fdm, hook: FdmHook, data: ?*anyopaque, priority: c_int,
+) callconv(.c) bool;
+extern fn fdm_hook_del(fdm: *Fdm, hook: FdmHook, priority: c_int) callconv(.c) bool;
+extern fn fdm_hook_refresh_pending_terminals(fdm: *Fdm, data: ?*anyopaque) callconv(.c) void;
+
+/// render.c's `struct renderer`: two pointers. The C side has a
+/// `_Static_assert` pinning the same size; the hook (still C) reads
+/// `renderer->wayl`, so the layout has to agree.
+const Renderer = extern struct {
+    fdm: *Fdm,
+    wayl: *types.Wayland,
+};
+
+comptime {
+    std.debug.assert(@sizeOf(Renderer) == 2 * @sizeOf(usize));
+}
+
+extern fn render_presentation_ctx_term(ctx: ?*anyopaque) callconv(.c) ?*Terminal;
+extern fn render_presentation_ctx_input(ctx: ?*anyopaque, sec: *i64, usec: *i64) callconv(.c) void;
+extern fn render_presentation_ctx_commit(ctx: ?*anyopaque, sec: *i64, usec: *i64) callconv(.c) void;
+extern fn render_shim_presentation_feedback_destroy(fb: ?*anyopaque) callconv(.c) void;
+extern fn render_shim_presentation_stat_add(frames: c_uint) callconv(.c) void;
+
+export fn render_init(fdm: *Fdm, wayl: *types.Wayland) callconv(.c) ?*Renderer {
+    const raw = std.c.malloc(@sizeOf(Renderer)) orelse {
+        log_errno(LOG_CLASS_ERROR, "render", "render.zig", @intCast(@src().line), "malloc() failed");
+        return null;
+    };
+
+    const renderer: *Renderer = @ptrCast(@alignCast(raw));
+    renderer.* = .{ .fdm = fdm, .wayl = wayl };
+
+    if (!fdm_hook_add(fdm, &fdm_hook_refresh_pending_terminals, renderer, FDM_HOOK_PRIORITY_NORMAL)) {
+        log_msg(
+            LOG_CLASS_ERROR, "render", "render.zig", @intCast(@src().line),
+            "failed to register FDM hook");
+        free(renderer);
+        return null;
+    }
+
+    return renderer;
+}
+
+export fn render_destroy(renderer: ?*Renderer) callconv(.c) void {
+    const r = renderer orelse return;
+
+    _ = fdm_hook_del(r.fdm, &fdm_hook_refresh_pending_terminals, FDM_HOOK_PRIORITY_NORMAL);
+    free(r);
+}
+
+/// Appends to `buf` at `len`, truncating like snprintf() when it does not fit.
+fn appendMsg(buf: []u8, len: *usize, comptime fmt: []const u8, args: anytype) void {
+    const piece = std.fmt.bufPrint(buf[len.*..], fmt, args) catch return;
+    len.* += piece.len;
+}
+
+/// How many monitor frames a commit took. `presented()` logs this and buckets
+/// it into the exit-time statistics; exported so the harness can pin it.
+fn presentationFrameCount(total_us: i64, refresh: f32) c_uint {
+    if (!(refresh > 0))
+        return 0;
+
+    const sec = @divTrunc(total_us, 1_000_000);
+    const usec = @mod(total_us, 1_000_000);
+    const diff: f64 =
+        @as(f64, @floatFromInt(sec)) * 1_000_000.0 + @as(f64, @floatFromInt(usec));
+
+    return @intFromFloat(diff / (1_000_000.0 / @as(f64, refresh)));
+}
+
+export fn render_presentation_frame_count(total_us: i64, refresh: f32) callconv(.c) c_uint {
+    return presentationFrameCount(total_us, refresh);
+}
+
+export fn sync_output(
+    data: ?*anyopaque,
+    wp_presentation_feedback: ?*anyopaque,
+    output: ?*anyopaque,
+) callconv(.c) void {
+    _ = data;
+    _ = wp_presentation_feedback;
+    _ = output;
+}
+
+export fn presented(
+    data: ?*anyopaque,
+    wp_presentation_feedback: ?*anyopaque,
+    tv_sec_hi: u32,
+    tv_sec_lo: u32,
+    tv_nsec: u32,
+    refresh: u32,
+    seq_hi: u32,
+    seq_lo: u32,
+    flags: u32,
+) callconv(.c) void {
+    _ = refresh;
+    _ = seq_hi;
+    _ = seq_lo;
+    _ = flags;
+
+    const ctx = data orelse return;
+    const term = render_presentation_ctx_term(ctx) orelse return;
+
+    var in_sec: i64 = 0;
+    var in_usec: i64 = 0;
+    render_presentation_ctx_input(ctx, &in_sec, &in_usec);
+
+    var commit_sec: i64 = 0;
+    var commit_usec: i64 = 0;
+    render_presentation_ctx_commit(ctx, &commit_sec, &commit_usec);
+
+    const presented_sec: i64 = @as(i64, tv_sec_hi) << 32 | @as(i64, tv_sec_lo);
+    const presented_usec: i64 = @as(i64, tv_nsec / 1000);
+
+    const presented_us = presented_sec * 1_000_000 + presented_usec;
+    const input_us = in_sec * 1_000_000 + in_usec;
+    const commit_us = commit_sec * 1_000_000 + commit_usec;
+
+    const use_input = input_us > 0 and presented_us > input_us;
+
+    if (use_input) {
+        if (presented_us < input_us)
+            return;
+    } else if (presented_us < commit_us) {
+        return;
+    }
+
+    log_msg(
+        LOG_CLASS_DEBUG, "render", "render.zig", @intCast(@src().line),
+        "commit: %lu s %lu µs, presented: %lu s %lu µs",
+        @as(u64, @intCast(commit_sec)),
+        @as(u64, @intCast(commit_usec)),
+        @as(u64, @intCast(presented_sec)),
+        @as(u64, @intCast(presented_usec)),
+    );
+
+    var msg_buf: [1025]u8 = undefined;
+    var msg_len: usize = 0;
+
+    if (use_input) {
+        appendMsg(&msg_buf, &msg_len, "input - {d} µs -> ", .{commit_us - input_us});
+    }
+    appendMsg(&msg_buf, &msg_len, "commit - {d} µs -> ", .{presented_us - commit_us});
+
+    const total_us = if (use_input) presented_us - input_us else presented_us - commit_us;
+    appendMsg(&msg_buf, &msg_len, "presented (total: {d} µs)", .{total_us});
+    msg_buf[msg_len] = 0;
+
+    var frame_count: c_uint = 0;
+    // terminal_types.Tll is head-only; cast to the typed list to read the
+    // front monitor (same three-word head layout).
+    const on_outputs: *tll.Tll(?*const types.Monitor) =
+        @ptrCast(&term.window.?.on_outputs);
+    if (on_outputs.len() > 0) {
+        if (on_outputs.head.?.item) |mon| {
+            frame_count = presentationFrameCount(total_us, mon.refresh);
+        }
+    }
+
+    render_shim_presentation_stat_add(frame_count);
+
+    const msg: [*:0]const u8 = @ptrCast(&msg_buf);
+    if (frame_count >= 2) {
+        log_msg(
+            LOG_CLASS_ERROR, "render", "render.zig", @intCast(@src().line),
+            "%s (more than %u frames)", msg, frame_count);
+    } else if (frame_count >= 1) {
+        log_msg(
+            LOG_CLASS_WARNING, "render", "render.zig", @intCast(@src().line),
+            "%s (more than %u frames)", msg, frame_count);
+    } else {
+        log_msg(
+            LOG_CLASS_INFO, "render", "render.zig", @intCast(@src().line),
+            "%s (more than %u frames)", msg, frame_count);
+    }
+
+    render_shim_presentation_feedback_destroy(wp_presentation_feedback);
+    free(ctx);
+}
+
+export fn discarded(
+    data: ?*anyopaque,
+    wp_presentation_feedback: ?*anyopaque,
+) callconv(.c) void {
+    render_shim_presentation_feedback_destroy(wp_presentation_feedback);
+    free(data);
+}
+
