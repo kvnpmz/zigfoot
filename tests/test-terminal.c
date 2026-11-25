@@ -5377,6 +5377,100 @@ test_reapply_old_damage(void)
 
 /* D3k2b: the scrollback indicator's early-outs (the painting paths need a
  * compositor; smoke.sh runs them with render-timer=osd). */
+/*
+ * execute_binding() (input.zig, D4c).
+ *
+ * Only the early-outs and the two actions with no compositor or font
+ * requirement are exercised here: MINIMIZE/MAXIMIZE/FULLSCREEN marshal on a
+ * real wl_surface, FONT_SIZE_* needs fonts, and the URL collectors need a
+ * configured regex.
+ */
+static void
+test_execute_binding(void)
+{
+    struct terminal *term = term_new();
+    struct seat seat;
+    memset(&seat, 0, sizeof(seat));
+    static struct config conf;
+    memset(&conf, 0, sizeof(conf));
+    term->conf = &conf;
+
+    struct key_binding bind;
+    memset(&bind, 0, sizeof(bind));
+    static struct binding_aux aux;
+    memset(&aux, 0, sizeof(aux));
+    bind.aux = &aux;
+
+    bind.action = BIND_ACTION_NONE;
+    check(execute_binding(&seat, term, &bind, 1, 1),
+          "execute_binding: NONE is consumed");
+
+    bind.action = BIND_ACTION_NOOP;
+    check(execute_binding(&seat, term, &bind, 1, 1),
+          "execute_binding: NOOP is consumed");
+
+    term->grid = &term->alt;
+
+    bind.action = BIND_ACTION_SCROLLBACK_UP_PAGE;
+    check(!execute_binding(&seat, term, &bind, 1, 1),
+          "execute_binding: scrollback-up-page is declined on the alt grid");
+
+    bind.action = BIND_ACTION_SCROLLBACK_UP_MOUSE;
+    term->alt_scrolling = false;
+    check(!execute_binding(&seat, term, &bind, 1, 1),
+          "execute_binding: wheel up is declined on the alt grid with alt-scrolling off");
+
+    bind.action = BIND_ACTION_PROMPT_PREV;
+    check(!execute_binding(&seat, term, &bind, 1, 1),
+          "execute_binding: prompt-prev is declined on the alt grid");
+
+    bind.action = BIND_ACTION_PROMPT_NEXT;
+    check(!execute_binding(&seat, term, &bind, 1, 1),
+          "execute_binding: prompt-next is declined on the alt grid");
+
+    bind.action = BIND_ACTION_PIPE_SCROLLBACK;
+    check(!execute_binding(&seat, term, &bind, 1, 1),
+          "execute_binding: pipe-scrollback is declined on the alt grid");
+
+    term->grid = &term->normal;
+
+    /* A pipe binding whose aux is not BINDING_AUX_PIPE is a consumed no-op. */
+    aux.type = BINDING_AUX_NONE;
+    bind.action = BIND_ACTION_PIPE_VIEW;
+    check(execute_binding(&seat, term, &bind, 1, 1),
+          "execute_binding: pipe-view without a pipe aux is consumed");
+
+    /* An unknown regex name is consumed after walking the (empty) list. */
+    static char unknown_name[] = "no-such-regex";
+    aux.type = BINDING_AUX_REGEX;
+    aux.regex_name = unknown_name;
+    bind.action = BIND_ACTION_REGEX_COPY;
+    check(execute_binding(&seat, term, &bind, 1, 1),
+          "execute_binding: an unknown regex name is consumed");
+
+    /* Char-wise extend is refused while a block selection is active. */
+    term->selection.kind = SELECTION_BLOCK;
+    bind.action = BIND_ACTION_SELECT_EXTEND_CHAR_WISE;
+    check(!execute_binding(&seat, term, &bind, 1, 1),
+          "execute_binding: char-wise extend is declined during a block selection");
+
+    /* Text bindings send their payload straight to the slave. */
+    int slave = term_capture_begin(term);
+    static uint8_t payload[] = "hi there";
+    aux.type = BINDING_AUX_TEXT;
+    aux.text.data = payload;
+    aux.text.len = sizeof(payload) - 1;
+    bind.action = BIND_ACTION_TEXT_BINDING;
+    check(execute_binding(&seat, term, &bind, 1, 1),
+          "execute_binding: text binding is consumed");
+    char buf[64];
+    term_capture_read(slave, buf, sizeof(buf));
+    check_text(buf, "hi there", "execute_binding: text binding reaches the slave");
+    term_capture_end(term, slave);
+
+    term_free(term);
+}
+
 static void
 test_scrollback_indicator(void)
 {
@@ -6417,6 +6511,7 @@ main(void)
     test_pointer_helpers();
     test_keyboard_modifiers();
     test_mouse_scroll();
+    test_execute_binding();
     test_scrollback_indicator();
     test_search_box_offset();
     test_url_label();

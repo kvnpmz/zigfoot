@@ -682,6 +682,18 @@ void terminal_shim_xdg_toplevel_set_fullscreen(struct xdg_toplevel *toplevel,
 {
     xdg_toplevel_set_fullscreen(toplevel, output);
 }
+void terminal_shim_xdg_toplevel_set_minimized(struct xdg_toplevel *toplevel)
+{
+    xdg_toplevel_set_minimized(toplevel);
+}
+void terminal_shim_xdg_toplevel_unset_maximized(struct xdg_toplevel *toplevel)
+{
+    xdg_toplevel_unset_maximized(toplevel);
+}
+void terminal_shim_xdg_toplevel_unset_fullscreen(struct xdg_toplevel *toplevel)
+{
+    xdg_toplevel_unset_fullscreen(toplevel);
+}
 /* char32.h's comparison and predicate helpers are static inlines. */
 int terminal_shim_c32ncmp(const char32_t *s1, const char32_t *s2, size_t n)
 {

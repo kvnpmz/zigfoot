@@ -56,6 +56,7 @@ void mouse_scroll(struct seat *seat, int amount, enum wl_pointer_axis axis);
 
 void key_press_release(struct seat *seat, struct terminal *term, uint32_t serial,
                        uint32_t key, uint32_t state);
+/* Implemented in input.zig (D4c). */
 bool execute_binding(struct seat *seat, struct terminal *term,
                      const struct key_binding *binding, uint32_t serial,
                      int amount);

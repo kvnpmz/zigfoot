@@ -894,15 +894,16 @@ Per-module burn-down (share of that module's original C that is gone):
 | `shm` | 329 / 1,110 | 70% | globals, `wl_shm`/`wl_buffer` stubs, punch-hole `#ifdef`s |
 | `debug` | 22 / 47 | 53% | ASAN stack-trace hook |
 | `render` | 0 / 5,479 | **100%** | `render.c` deleted in D3l4; `render.zig` is the module |
-| `input` | 2,040 / 3,687 | **45%** | keyboard path complete; mouse scroll done; D4c (`execute_binding`), D4d2b, D4e left |
+| `input` | 1,564 / 3,687 | **58%** | keyboard path complete; `execute_binding` and mouse scroll done; D4d2b, D4e left |
 | `url-mode` | 833 / 833 | 0% | |
 | `main` | 770 / 770 | 0% | |
 | `server` / `client` | 707 / 679 | 0% | |
 | `key-binding` | 661 / 661 | 0% | |
 | `ime` | 540 / 540 | 0% | |
 
-**Percent complete: 83% by C volume, ~78% by effort (band 75–80%), 32/45
-top-level modules (47 counting `spawn_template`) with zero C left.**
+**Percent complete: 84.7% by C volume (post-D4c), ~79% by effort (band
+76–81%), 32/45 top-level modules (47 counting `spawn_template`) with zero C
+left.**
 **Post-D4d2a:** `input.c` is 3,618 → **2,040** (45% ported), module C 12,709 →
 **7,968**, harness 684 → **744** checks; every keyboard entry point is Zig,
 and so is mouse scrolling. `keymap.h` is down to 27 lines (types
@@ -918,6 +919,19 @@ the six windows
 compositor. Real presentation feedback is still not delivered to these
 short-lived windows, so `presented()` is covered by the fabricated-context
 checks, not by the launches.
+
+**Post-D4c:** `input.c` is 2,040 → **1,564** (58% ported), module C
+**7,968 → 7,491** (84.7% of the original C gone), Zig 46,299 → **46,884**
+lines, harness 744 → **756** checks, shim 2,910 → **2,922** (four new
+xdg-shell forwarders). `execute_binding()` — the 470-line action switch behind
+every key and mouse binding — is Zig, so `input.c` is now only the pointer and
+touch listeners plus the seat glue (D4d2b/D4e). The four xdg_toplevel requests
+that were static inlines (`set_minimized`, `unset_maximized`,
+`unset_fullscreen`, and `set_fullscreen`'s sibling pair) got shims; the
+`PIPE_*` group keeps C's fallthrough as an explicit alt-grid early-out, and
+C's `pipe_err` label became a labelled block. One deliberate difference: C
+closed `pipe_fd[0]` twice (the fd stayed >= 0 after the first close, so the
+error path could close a recycled descriptor); the port sets it to -1.
 
 The effort figure is §13's 59% at 12,960 lines, advanced by the 251 lines D3e–D3i
 removed — all of them render code, the most expensive per line (1.4× weight),
@@ -980,7 +994,7 @@ dump (§14.5.2) for the cell/URL/CSD paths.
 | **D4b4** done | `input`: **`key_press_release()`** — the dispatcher. Repeat-timer handling on release, `last_shortcut_sym` reset on press, `xkb_keymap_key_repeats()`, `xkb_state_key_get_one_sym()`, the hide-when-typing pointer hide, compose feed/status, `get_current_modifiers()`, the layout + level-0 syms, `key_binding_for()`, the unicode-mode / search / URL early-outs, the **three binding matchers** (untranslated syms, translated sym with `mods & ~consumed`, raw keycodes) walking `types.KeyBindingSet`'s tlls, the release-after-shortcut suppression, the compose/utf8/utf32 buffer dance (`ambstoc32()` for composed text, stack buffer with a heap fallback), the `kbd_ctx` hand-off to the kitty-or-legacy encoder, the composed-release reset, and the `term_reset_view()` + `selection_cancel()` epilogue. C's three `goto maybe_repeat` paths became a labelled Zig block. `execute_binding()` lost its `static` (it is the next chunk) | D4b4-mirror | 2d |
 | **D4b5** done | `input`: the three wrappers that were waiting on it — `keyboard_key()` (the `+8` evdev→xkb keycode shift), `input_repeat()` (the repeat timer's re-press) and `alternate_scroll()` (BTN_BACK/FORWARD → Up/Down presses, then the release). With these, **every keyboard entry point in `input.c` is Zig**; what is left there is the pointer/touch listeners and `execute_binding` | D4b4 | 0.5d |
 | **D4c-groundwork** done | `input.zig`: the **binding-action constants** `execute_binding()` switches on, emitted by asking the C compiler rather than transcribing (`scripts/gen_bind_enums.sh`: 91 constants covering every `BIND_ACTION_*` and `BINDING_AUX_*`, plus `URL_ACTION_*` and `SELECTION_*` transcribed in declaration order). `types.BindingAux` (with `pipe`/`text`/`regex_name`) and `types.KeyBinding` already exist, so this is the last missing input for the switch | D4d2a | 0.25d |
-| **D4c** | `execute_binding` (470) and the binding matchers | 1–1.5d |
+| **D4c** done | `input`: **`execute_binding()`** — the whole action switch: scrollback up/down (page/half/line/mouse, with the alt-grid + `alt_scrolling` hand-off to `alternate_scroll()` and the `max(rows/2, 1)` half-page clamp), home/end, the three clipboard actions, search, the font-size trio, `term_spawn_new()`, minimize/maximize/fullscreen (via four new `terminal_shim_xdg_toplevel_*` forwarders for the static inlines), the `PIPE_*` quad (C's fallthrough became an explicit alt-grid early-out; the pipe/fcntl/spawn/fdm_add sequence with C's `goto pipe_err` as a labelled block, reusing the existing `PipeContext` and `fdm_write_pipe()`), the three URL collectors, text bindings, prompt-prev/next (the scrollback-relative row walk with `shell_integration.prompt_marker`), unicode input, quit, regex launch/copy (walking `conf.custom_regexes`, the two `LOG_ERR` messages), the theme trio and the eight selection actions. The four xdg-shell shims are C-only knowledge (static protocol inlines). One deliberate difference: C closed `pipe_fd[0]` twice on the error path (the fd was never reset), which could close a recycled descriptor; the Zig version sets it to -1. 12 new harness checks (alt-grid early-outs, the no-aux pipe no-op, the unknown-regex path, block-selection refusal, and a text binding read back out of a real pty) | D4d2a | 1d |
 | **D4d1** done | `input`: the pointer helpers the listeners are built on — `mouse_button_state_reset()` (drops the button list and the double/triple-click counters and timer), `mouse_coord_pixel_to_cell()` (pixel → cell with the margins clamping to the first/last cell), `touch_is_active()` (idle/inhibited vs held/dragging/scrolling, plus the `wl_touch == NULL` short-circuit) and `mouse_scroll_multiplier()` (the configured scrollback multiplier on the normal grid, or on the alt grid only when the mouse is grabbed *and* alt-scrolling is on). 13 new harness checks, mostly around the coordinate clamping and the multiplier's four combinations | D4b2b | 0.5d |
 | **D4b3** done | `input`: **`keyboard_modifiers()`** — the virtual-modifier masking (Mutter), the `xkb_state_update_mask()` call, and the four cached `shift`/`alt`/`ctrl`/`super` flags via `xkb_state_mod_index_is_active(..., XKB_STATE_MODS_EFFECTIVE)`, then the cursor refresh when the pointer sits on the grid. 4 new harness checks (no modifiers, ctrl+shift, the untouched pair, and a virtual modifier being ignored) against a real keymap. The big `UNITTEST` block that follows it in `input.c` still drives the Zig function through the C `key_press_release()` + the new protocol encoders, and still passes | D4d1 | 0.5d |
 | **D4d2a** done | `input`: **`match_mouse_binding()`** — with a keyboard it walks `types.KeyBindingSet.mouse`, masks the selection-override modifiers out of the current mods, and picks the binding with the highest click count that is <= the seat's; without a keyboard it scans `conf.bindings.mouse` ignoring modifiers and synthesizes a static `KeyBinding` from the `ConfigKeyBinding` (the same trick C used). **`mouse_scroll()`** — axis+sign → wheel button, `term_mouse_grabbed()` → one `execute_binding()` with the scroll amount, otherwise `term_mouse_down()` per step plus one `term_mouse_up()`. 6 new harness checks: button/click-count matching, an unbound button, a modified binding being skipped without a keyboard, one wheel-down step and two wheel-up steps read back as SGR reports from a real pty, and silence when mouse tracking is off | D4b5 | 1d |

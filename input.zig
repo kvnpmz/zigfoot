@@ -2921,13 +2921,7 @@ extern fn urls_input(
     raw_count: usize,
     serial: u32,
 ) callconv(.c) void;
-extern fn execute_binding(
-    seat: *Seat,
-    term: *Terminal,
-    binding: *const types.KeyBinding,
-    serial: u32,
-    amount: c_int,
-) callconv(.c) bool;
+// execute_binding() is defined in this file (D4c).
 extern fn term_reset_view(term: *Terminal) callconv(.c) void;
 extern fn selection_cancel(term: *Terminal) callconv(.c) void;
 extern fn ambstoc32(src: [*c]const u8) callconv(.c) ?[*]u32;
@@ -3390,6 +3384,583 @@ export fn mouse_scroll(seat: *Seat, amount: c_int, axis: u32) callconv(.c) void 
             seat.mouse.x - term.margins.left,
             seat.kbd.shift, seat.kbd.alt, seat.kbd.ctrl);
     }
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// execute_binding (D4c)
+//
+// The action switch behind every key/mouse binding, and what url-mode.c
+// calls when a URL key combo is pressed. The C `goto pipe_err` became a
+// labelled block; its double `close(pipe_fd[0])` (the fd was left >= 0 after
+// the first close) is not reproduced - it is set to -1 instead.
+// ─────────────────────────────────────────────────────────────────────────
+
+extern fn cmd_scrollback_up(term: *Terminal, rows: c_int) callconv(.c) void;
+extern fn cmd_scrollback_down(term: *Terminal, rows: c_int) callconv(.c) void;
+extern fn selection_to_clipboard(seat: ?*anyopaque, term: *Terminal, serial: u32) callconv(.c) void;
+extern fn selection_from_clipboard(seat: ?*anyopaque, term: *Terminal, serial: u32) callconv(.c) void;
+extern fn selection_from_primary(seat: ?*anyopaque, term: *Terminal) callconv(.c) void;
+extern fn search_begin(term: *Terminal) callconv(.c) void;
+extern fn term_font_size_increase(term: *Terminal) callconv(.c) bool;
+extern fn term_font_size_decrease(term: *Terminal) callconv(.c) bool;
+extern fn term_font_size_reset(term: *Terminal) callconv(.c) bool;
+extern fn term_spawn_new(term: *const Terminal) callconv(.c) bool;
+extern fn term_shutdown(term: *Terminal) callconv(.c) bool;
+extern fn term_damage_view(term: *Terminal) callconv(.c) void;
+extern fn render_refresh(term: *Terminal) callconv(.c) void;
+extern fn unicode_mode_activate(term: *Terminal) callconv(.c) void;
+extern fn term_theme_switch_to_dark(term: *Terminal) callconv(.c) void;
+extern fn term_theme_switch_to_light(term: *Terminal) callconv(.c) void;
+extern fn term_theme_toggle(term: *Terminal) callconv(.c) void;
+extern fn term_scrollback_to_text(term: *const Terminal, text: *?[*:0]u8, len: *usize) callconv(.c) bool;
+extern fn term_view_to_text(term: *const Terminal, text: *?[*:0]u8, len: *usize) callconv(.c) bool;
+extern fn term_command_output_to_text(term: *const Terminal, text: *?[*:0]u8, len: *usize) callconv(.c) bool;
+extern fn selection_to_text(term: *const Terminal) callconv(.c) ?[*:0]u8;
+extern fn selection_start(
+    term: *Terminal, col: c_int, row: c_int, kind: types.SelectionKind, spaces_only: bool) callconv(.c) void;
+extern fn selection_extend(
+    seat: ?*anyopaque, term: *Terminal, col: c_int, row: c_int, new_kind: types.SelectionKind) callconv(.c) void;
+extern fn urls_collect(
+    term: *const Terminal, action: c_int, preg: *const anyopaque, osc8: bool, urls: *anyopaque) callconv(.c) void;
+extern fn urls_assign_key_combos(conf: *const types.Config, urls: *anyopaque) callconv(.c) void;
+extern fn urls_render(term: *Terminal, launch: *const types.ConfigSpawnTemplate) callconv(.c) void;
+extern fn terminal_shim_xdg_toplevel_set_minimized(toplevel: ?*anyopaque) callconv(.c) void;
+extern fn terminal_shim_xdg_toplevel_set_maximized(toplevel: ?*anyopaque) callconv(.c) void;
+extern fn terminal_shim_xdg_toplevel_unset_maximized(toplevel: ?*anyopaque) callconv(.c) void;
+extern fn terminal_shim_xdg_toplevel_set_fullscreen(toplevel: ?*anyopaque, output: ?*anyopaque) callconv(.c) void;
+extern fn terminal_shim_xdg_toplevel_unset_fullscreen(toplevel: ?*anyopaque) callconv(.c) void;
+extern fn spawn(
+    reaper: ?*anyopaque,
+    cwd: [*c]const u8,
+    argv: [*c]const [*c]u8,
+    stdin_fd: c_int,
+    stdout_fd: c_int,
+    stderr_fd: c_int,
+    cb: ?*const anyopaque,
+    cb_data: ?*anyopaque,
+    xdg_activation_token: [*c]const u8,
+) callconv(.c) c_int;
+extern fn fdm_add(
+    fdm: *anyopaque,
+    fd: c_int,
+    events: c_int,
+    handler: *const fn (*anyopaque, c_int, c_int, ?*anyopaque) callconv(.c) bool,
+    data: ?*anyopaque,
+) callconv(.c) bool;
+extern fn grid_sb_start_ignore_uninitialized(grid: *const types.Grid, screen_rows: c_int) callconv(.c) c_int;
+extern fn grid_row_abs_to_sb_precalc_sb_start(
+    grid: *const types.Grid, sb_start: c_int, abs_row: c_int) callconv(.c) c_int;
+extern fn grid_row_sb_to_abs_precalc_sb_start(
+    grid: *const types.Grid, sb_start: c_int, sb_rel_row: c_int) callconv(.c) c_int;
+extern fn pipe(fds: *[2]c_int) callconv(.c) c_int;
+extern fn open(path: [*:0]const u8, flags: c_int, ...) callconv(.c) c_int;
+extern fn fcntl(fd: c_int, cmd: c_int, ...) callconv(.c) c_int;
+
+const O_WRONLY: c_int = 1;
+const O_NONBLOCK: c_int = 0o4000; // == 0x800 on Linux
+const F_GETFL: c_int = 3;
+const F_SETFL: c_int = 4;
+const F_GETFD: c_int = 1;
+const F_SETFD: c_int = 2;
+const FD_CLOEXEC: c_int = 1;
+
+fn streqZ(a: ?[*:0]const u8, b: [*:0]const u8) bool {
+    const ap = a orelse return false;
+    return std.mem.eql(u8, std.mem.span(ap), std.mem.span(b));
+}
+
+fn bindingAux(binding: *const types.KeyBinding) *const types.BindingAux {
+    return @ptrCast(@alignCast(binding.aux orelse unreachable));
+}
+
+export fn execute_binding(
+    seat: *Seat,
+    term: *Terminal,
+    binding: *const types.KeyBinding,
+    serial: u32,
+    amount: c_int,
+) callconv(.c) bool {
+    const action = binding.action;
+    const grid = term.grid.?;
+
+    switch (action) {
+        BIND_ACTION_NONE => return true,
+        BIND_ACTION_NOOP => return true,
+
+        BIND_ACTION_SCROLLBACK_UP_PAGE => {
+            if (grid == &term.normal) {
+                cmd_scrollback_up(term, term.rows);
+                return true;
+            }
+        },
+        BIND_ACTION_SCROLLBACK_UP_HALF_PAGE => {
+            if (grid == &term.normal) {
+                cmd_scrollback_up(term, @max(@divTrunc(term.rows, 2), 1));
+                return true;
+            }
+        },
+        BIND_ACTION_SCROLLBACK_UP_LINE => {
+            if (grid == &term.normal) {
+                cmd_scrollback_up(term, 1);
+                return true;
+            }
+        },
+        BIND_ACTION_SCROLLBACK_UP_MOUSE => {
+            if (grid == &term.alt) {
+                if (term.alt_scrolling) {
+                    alternate_scroll(seat, amount, BTN_BACK);
+                    return true;
+                }
+            } else {
+                cmd_scrollback_up(term, amount);
+                return true;
+            }
+        },
+
+        BIND_ACTION_SCROLLBACK_DOWN_PAGE => {
+            if (grid == &term.normal) {
+                cmd_scrollback_down(term, term.rows);
+                return true;
+            }
+        },
+        BIND_ACTION_SCROLLBACK_DOWN_HALF_PAGE => {
+            if (grid == &term.normal) {
+                cmd_scrollback_down(term, @max(@divTrunc(term.rows, 2), 1));
+                return true;
+            }
+        },
+        BIND_ACTION_SCROLLBACK_DOWN_LINE => {
+            if (grid == &term.normal) {
+                cmd_scrollback_down(term, 1);
+                return true;
+            }
+        },
+        BIND_ACTION_SCROLLBACK_DOWN_MOUSE => {
+            if (grid == &term.alt) {
+                if (term.alt_scrolling) {
+                    alternate_scroll(seat, amount, BTN_FORWARD);
+                    return true;
+                }
+            } else {
+                cmd_scrollback_down(term, amount);
+                return true;
+            }
+        },
+
+        BIND_ACTION_SCROLLBACK_HOME => {
+            if (grid == &term.normal) {
+                cmd_scrollback_up(term, grid.num_rows);
+                return true;
+            }
+        },
+        BIND_ACTION_SCROLLBACK_END => {
+            if (grid == &term.normal) {
+                cmd_scrollback_down(term, grid.num_rows);
+                return true;
+            }
+        },
+
+        BIND_ACTION_CLIPBOARD_COPY => {
+            selection_to_clipboard(seat, term, serial);
+            return true;
+        },
+        BIND_ACTION_CLIPBOARD_PASTE => {
+            selection_from_clipboard(seat, term, serial);
+            term_reset_view(term);
+            return true;
+        },
+        BIND_ACTION_PRIMARY_PASTE => {
+            selection_from_primary(seat, term);
+            term_reset_view(term);
+            return true;
+        },
+
+        BIND_ACTION_SEARCH_START => {
+            search_begin(term);
+            return true;
+        },
+
+        BIND_ACTION_FONT_SIZE_UP => {
+            _ = term_font_size_increase(term);
+            return true;
+        },
+        BIND_ACTION_FONT_SIZE_DOWN => {
+            _ = term_font_size_decrease(term);
+            return true;
+        },
+        BIND_ACTION_FONT_SIZE_RESET => {
+            _ = term_font_size_reset(term);
+            return true;
+        },
+
+        BIND_ACTION_SPAWN_TERMINAL => {
+            _ = term_spawn_new(term);
+            return true;
+        },
+
+        BIND_ACTION_MINIMIZE => {
+            terminal_shim_xdg_toplevel_set_minimized(term.window.?.xdg_toplevel);
+            return true;
+        },
+        BIND_ACTION_MAXIMIZE => {
+            const win = term.window.?;
+            if (win.is_fullscreen)
+                terminal_shim_xdg_toplevel_unset_fullscreen(win.xdg_toplevel);
+            if (win.is_maximized)
+                terminal_shim_xdg_toplevel_unset_maximized(win.xdg_toplevel)
+            else
+                terminal_shim_xdg_toplevel_set_maximized(win.xdg_toplevel);
+            return true;
+        },
+        BIND_ACTION_FULLSCREEN => {
+            const win = term.window.?;
+            if (win.is_fullscreen)
+                terminal_shim_xdg_toplevel_unset_fullscreen(win.xdg_toplevel)
+            else
+                terminal_shim_xdg_toplevel_set_fullscreen(win.xdg_toplevel, null);
+            return true;
+        },
+
+        // C falls through from PIPE_SCROLLBACK; the alt-grid early-out is
+        // the only thing that distinguished it before the shared body.
+        BIND_ACTION_PIPE_SCROLLBACK,
+        BIND_ACTION_PIPE_VIEW,
+        BIND_ACTION_PIPE_SELECTED,
+        BIND_ACTION_PIPE_COMMAND_OUTPUT,
+        => {
+            if (action == BIND_ACTION_PIPE_SCROLLBACK and grid == &term.alt)
+                return false;
+
+            const aux = bindingAux(binding);
+            if (aux.type != .pipe)
+                return true;
+
+            var pipe_fd = [2]c_int{ -1, -1 };
+            var stdout_fd: c_int = -1;
+            var stderr_fd: c_int = -1;
+            var text: ?[*:0]u8 = null;
+            var len: usize = 0;
+            var ctx: ?*PipeContext = null;
+
+            blk: {
+                if (pipe(&pipe_fd) < 0) {
+                    log_errno(
+                        LOG_CLASS_ERROR, "input", "input.zig", @intCast(@src().line),
+                        "failed to create pipe");
+                    break :blk;
+                }
+
+                stdout_fd = open("/dev/null", O_WRONLY);
+                stderr_fd = open("/dev/null", O_WRONLY);
+
+                if (stdout_fd < 0 or stderr_fd < 0) {
+                    log_errno(
+                        LOG_CLASS_ERROR, "input", "input.zig", @intCast(@src().line),
+                        "failed to open /dev/null");
+                    break :blk;
+                }
+
+                const success = switch (action) {
+                    BIND_ACTION_PIPE_SCROLLBACK => term_scrollback_to_text(term, &text, &len),
+                    BIND_ACTION_PIPE_VIEW => term_view_to_text(term, &text, &len),
+                    BIND_ACTION_PIPE_SELECTED => sel: {
+                        text = selection_to_text(term);
+                        len = if (text) |t| std.mem.len(t) else 0;
+                        break :sel text != null;
+                    },
+                    else => term_command_output_to_text(term, &text, &len),
+                };
+
+                if (!success)
+                    break :blk;
+
+                // Make write-end non-blocking; required by the FDM
+                {
+                    const flags = fcntl(pipe_fd[1], F_GETFL);
+                    if (flags < 0 or
+                        fcntl(pipe_fd[1], F_SETFL, flags | O_NONBLOCK) < 0)
+                    {
+                        log_errno(
+                            LOG_CLASS_ERROR, "input", "input.zig", @intCast(@src().line),
+                            "failed to make write-end of pipe non-blocking");
+                        break :blk;
+                    }
+                }
+
+                // Make sure write-end is closed on exec() - or the spawned
+                // program may not terminate
+                {
+                    const flags = fcntl(pipe_fd[1], F_GETFD);
+                    if (flags < 0 or
+                        fcntl(pipe_fd[1], F_SETFD, flags | FD_CLOEXEC) < 0)
+                    {
+                        log_errno(
+                            LOG_CLASS_ERROR, "input", "input.zig", @intCast(@src().line),
+                            "failed to set FD_CLOEXEC on writeend of pipe");
+                        break :blk;
+                    }
+                }
+
+                const argv: [*c]const [*c]u8 =
+                    if (aux._u.pipe.args) |a| @ptrCast(a) else null;
+                const cwd: [*c]const u8 = if (term.cwd) |c| c else null;
+
+                if (spawn(
+                        term.reaper, cwd, argv, pipe_fd[0], stdout_fd, stderr_fd,
+                        null, null, null) < 0)
+                    break :blk;
+
+                // Close read end
+                _ = close(pipe_fd[0]);
+                pipe_fd[0] = -1;
+
+                const raw = xmalloc(@sizeOf(PipeContext)) orelse unreachable;
+                const c: *PipeContext = @ptrCast(@alignCast(raw));
+                c.* = .{ .text = text, .idx = 0, .left = len };
+                ctx = c;
+
+                // Asynchronously write the output to the pipe
+                if (!fdm_add(term.fdm.?, pipe_fd[1], EPOLLOUT, &fdm_write_pipe, ctx))
+                    break :blk;
+
+                return true;
+            }
+
+            // pipe_err:
+            if (stdout_fd >= 0)
+                _ = close(stdout_fd);
+            if (stderr_fd >= 0)
+                _ = close(stderr_fd);
+            if (pipe_fd[0] >= 0)
+                _ = close(pipe_fd[0]);
+            if (pipe_fd[1] >= 0)
+                _ = close(pipe_fd[1]);
+            free(text);
+            free(ctx);
+            return true;
+        },
+
+        BIND_ACTION_SHOW_URLS_COPY,
+        BIND_ACTION_SHOW_URLS_LAUNCH,
+        BIND_ACTION_SHOW_URLS_PERSISTENT,
+        => {
+            std.debug.assert(!terminal_shim_urls_mode_active(term));
+
+            const url_action: c_int = if (action == BIND_ACTION_SHOW_URLS_COPY)
+                URL_ACTION_COPY
+            else if (action == BIND_ACTION_SHOW_URLS_LAUNCH)
+                URL_ACTION_LAUNCH
+            else
+                URL_ACTION_PERSISTENT;
+
+            const conf = term.conf.?;
+            urls_collect(term, url_action, &conf.url.preg, true, @ptrCast(&term.url.list));
+            urls_assign_key_combos(conf, @ptrCast(&term.url.list));
+            urls_render(term, &conf.url.launch);
+            return true;
+        },
+
+        BIND_ACTION_TEXT_BINDING => {
+            const aux = bindingAux(binding);
+            std.debug.assert(aux.type == .text);
+            const data: ?*const anyopaque =
+                if (aux._u.text.data) |d| @ptrCast(d) else null;
+            _ = term_to_slave(term, data, aux._u.text.len);
+            return true;
+        },
+
+        BIND_ACTION_PROMPT_PREV => {
+            if (grid != &term.normal)
+                return false;
+
+            const sb_start =
+                grid_sb_start_ignore_uninitialized(grid, term.rows);
+
+            // Check each row from current view-1 (that is, the first
+            // currently not visible row), up to, and including, the
+            // scrollback start
+            var r_sb_rel =
+                grid_row_abs_to_sb_precalc_sb_start(grid, sb_start, grid.view) - 1;
+            while (r_sb_rel >= 0) : (r_sb_rel -= 1) {
+                const r_abs =
+                    grid_row_sb_to_abs_precalc_sb_start(grid, sb_start, r_sb_rel);
+
+                const row = grid.rows.?[@intCast(r_abs)].?;
+
+                if (!row.shell_integration.prompt_marker)
+                    continue;
+
+                grid.view = r_abs;
+                term_damage_view(term);
+                render_refresh(term);
+                break;
+            }
+
+            return true;
+        },
+
+        BIND_ACTION_PROMPT_NEXT => {
+            if (grid != &term.normal)
+                return false;
+
+            const num_rows = grid.num_rows;
+
+            if (grid.view == grid.offset) {
+                // Already at the bottom
+                return true;
+            }
+
+            // Check each row from view+1, to the bottom of the scrollback
+            var r_abs = (grid.view + 1) & (num_rows - 1);
+            while (true) : (r_abs = (r_abs + 1) & (num_rows - 1)) {
+                const row = grid.rows.?[@intCast(r_abs)].?;
+
+                if (!row.shell_integration.prompt_marker) {
+                    if (r_abs == grid.offset + term.rows - 1) {
+                        // We've reached the bottom of the scrollback
+                        break;
+                    }
+                    continue;
+                }
+
+                const sb_start =
+                    grid_sb_start_ignore_uninitialized(grid, term.rows);
+                const ofs_sb_rel =
+                    grid_row_abs_to_sb_precalc_sb_start(grid, sb_start, grid.offset);
+                var new_view_sb_rel =
+                    grid_row_abs_to_sb_precalc_sb_start(grid, sb_start, r_abs);
+
+                new_view_sb_rel = @min(ofs_sb_rel, new_view_sb_rel);
+                grid.view = grid_row_sb_to_abs_precalc_sb_start(
+                    grid, sb_start, new_view_sb_rel);
+
+                term_damage_view(term);
+                render_refresh(term);
+                break;
+            }
+
+            return true;
+        },
+
+        BIND_ACTION_UNICODE_INPUT => {
+            unicode_mode_activate(term);
+            return true;
+        },
+
+        BIND_ACTION_QUIT => {
+            _ = term_shutdown(term);
+            return true;
+        },
+
+        BIND_ACTION_REGEX_LAUNCH, BIND_ACTION_REGEX_COPY => {
+            const aux = bindingAux(binding);
+            if (aux.type != .regex)
+                return true;
+
+            const name = aux._u.regex_name orelse return true;
+            const conf = term.conf.?;
+
+            var it = conf.custom_regexes.head;
+            while (it) |node| : (it = node.next) {
+                const regex = &node.item;
+
+                if (streqZ(regex.name, name)) {
+                    std.debug.assert(!terminal_shim_urls_mode_active(term));
+
+                    const url_action: c_int = if (action == BIND_ACTION_REGEX_LAUNCH)
+                        URL_ACTION_LAUNCH
+                    else
+                        URL_ACTION_COPY;
+
+                    if (regex.regex == null) {
+                        log_msg(
+                            LOG_CLASS_ERROR, "input", "input.zig", @intCast(@src().line),
+                            "regex:%s has no regex defined", name);
+                        return true;
+                    }
+                    if (url_action == URL_ACTION_LAUNCH and regex.launch.argv.args == null) {
+                        log_msg(
+                            LOG_CLASS_ERROR, "input", "input.zig", @intCast(@src().line),
+                            "regex:%s has no launch command defined", name);
+                        return true;
+                    }
+
+                    urls_collect(term, url_action, &regex.preg, false, @ptrCast(&term.url.list));
+                    urls_assign_key_combos(conf, @ptrCast(&term.url.list));
+                    urls_render(term, &regex.launch);
+                    return true;
+                }
+            }
+
+            log_msg(
+                LOG_CLASS_ERROR, "input", "input.zig", @intCast(@src().line),
+                "no regex section named '%s' defined in the configuration", name);
+
+            return true;
+        },
+
+        BIND_ACTION_THEME_SWITCH_DARK => {
+            term_theme_switch_to_dark(term);
+            return true;
+        },
+        BIND_ACTION_THEME_SWITCH_LIGHT => {
+            term_theme_switch_to_light(term);
+            return true;
+        },
+        BIND_ACTION_THEME_TOGGLE => {
+            term_theme_toggle(term);
+            return true;
+        },
+
+        BIND_ACTION_SELECT_BEGIN => {
+            selection_start(
+                term, seat.mouse.col, seat.mouse.row, .char_wise, false);
+            return true;
+        },
+        BIND_ACTION_SELECT_BEGIN_BLOCK => {
+            selection_start(
+                term, seat.mouse.col, seat.mouse.row, .block, false);
+            return true;
+        },
+        BIND_ACTION_SELECT_EXTEND => {
+            selection_extend(
+                seat, term, seat.mouse.col, seat.mouse.row, term.selection.kind);
+            return true;
+        },
+        BIND_ACTION_SELECT_EXTEND_CHAR_WISE => {
+            if (term.selection.kind != .block) {
+                selection_extend(
+                    seat, term, seat.mouse.col, seat.mouse.row, .char_wise);
+                return true;
+            }
+            return false;
+        },
+        BIND_ACTION_SELECT_WORD => {
+            selection_start(
+                term, seat.mouse.col, seat.mouse.row, .word_wise, false);
+            return true;
+        },
+        BIND_ACTION_SELECT_WORD_WS => {
+            selection_start(
+                term, seat.mouse.col, seat.mouse.row, .word_wise, true);
+            return true;
+        },
+        BIND_ACTION_SELECT_QUOTE => {
+            selection_start(
+                term, seat.mouse.col, seat.mouse.row, .quote_wise, false);
+            return true;
+        },
+        BIND_ACTION_SELECT_ROW => {
+            selection_start(
+                term, seat.mouse.col, seat.mouse.row, .line_wise, false);
+            return true;
+        },
+
+        // BIND_ACTION_COUNT is BUG() in C; treat it as "not handled".
+        else => {},
+    }
+
+    return false;
 }
 
 // ─────────────────────────────────────────────────────────────────────────
