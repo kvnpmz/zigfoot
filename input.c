@@ -1299,60 +1299,8 @@ input_repeat(struct seat *seat, uint32_t key)
 /* is_top_left() .. xcursor_for_csd_border(): ported to terminal.zig (chunk
  * C2). They are still called from here, via input.h. */
 
-static void
-mouse_button_state_reset(struct seat *seat)
-{
-    tll_free(seat->mouse.buttons);
-    seat->mouse.count = 0;
-    seat->mouse.last_released_button = 0;
-    memset(&seat->mouse.last_time, 0, sizeof(seat->mouse.last_time));
-}
 
- void
-mouse_coord_pixel_to_cell(struct seat *seat, const struct terminal *term,
-                          int x, int y)
-{
-    /*
-     * Translate x,y pixel coordinate to a cell coordinate, or clamp
-     * if the cursor is outside the grid. I.e. if it is inside the
-     * margins.
-     */
-    if (x < term->margins.left)
-        seat->mouse.col = 0;
-    else if (x >= term->width - term->margins.right)
-        seat->mouse.col = term->cols - 1;
-    else
-        seat->mouse.col = (x - term->margins.left) / term->cell_width;
 
-    if (y < term->margins.top)
-        seat->mouse.row = 0;
-    else if (y >= term->height - term->margins.bottom)
-        seat->mouse.row = term->rows - 1;
-    else
-        seat->mouse.row = (y - term->margins.top) / term->cell_height;
-}
-
-static bool
-touch_is_active(const struct seat *seat)
-{
-    if (seat->wl_touch == NULL) {
-        return false;
-    }
-
-    switch (seat->touch.state) {
-    case TOUCH_STATE_IDLE:
-    case TOUCH_STATE_INHIBITED:
-        return false;
-
-    case TOUCH_STATE_HELD:
-    case TOUCH_STATE_DRAGGING:
-    case TOUCH_STATE_SCROLLING:
-        return true;
-    }
-
-    BUG("Bad touch state: %d", seat->touch.state);
-    return false;
-}
 
 static void
 wl_pointer_enter(void *data, struct wl_pointer *wl_pointer,
@@ -2259,14 +2207,6 @@ mouse_scroll(struct seat *seat, int amount, enum wl_pointer_axis axis)
     }
 }
 
-static double
-mouse_scroll_multiplier(const struct terminal *term, const struct seat *seat)
-{
-    return (term->grid == &term->normal ||
-            (term_mouse_grabbed(term, seat) && term->alt_scrolling))
-        ? term->conf->scrollback.multiplier
-        : 1.0;
-}
 
 static void
 wl_pointer_axis(void *data, struct wl_pointer *wl_pointer,

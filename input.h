@@ -101,3 +101,6 @@ bool is_bottom_right(const struct terminal *term, int x, int y);
 enum cursor_shape xcursor_for_csd_border(struct terminal *term, int x, int y);
 void mouse_coord_pixel_to_cell(struct seat *seat, const struct terminal *term,
                                int x, int y);
+void mouse_button_state_reset(struct seat *seat);
+bool touch_is_active(const struct seat *seat);
+double mouse_scroll_multiplier(const struct terminal *term, const struct seat *seat);

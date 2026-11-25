@@ -71,6 +71,12 @@ bool legacy_kbd_protocol(struct seat *seat, struct terminal *term,
                           const struct kbd_ctx *ctx);
 bool kitty_kbd_protocol(struct seat *seat, struct terminal *term,
                         const struct kbd_ctx *ctx);
+void mouse_coord_pixel_to_cell(struct seat *seat, const struct terminal *term,
+                               int x, int y);
+void mouse_button_state_reset(struct seat *seat);
+bool touch_is_active(const struct seat *seat);
+double mouse_scroll_multiplier(const struct terminal *term,
+                               const struct seat *seat);
 bool keysym_is_modifier(xkb_keysym_t keysym);
 void modifier_string(xkb_mod_mask_t mods, size_t sz,
                      char mod_str[static sz], const struct seat *seat);
@@ -6121,6 +6127,94 @@ test_kbd_protocols(void)
     term_free(term);
 }
 
+/*
+ * Pointer helpers (input.zig, D4d1).
+ */
+static void
+test_pointer_helpers(void)
+{
+    struct terminal *term = term_new();
+    struct seat seat;
+    memset(&seat, 0, sizeof(seat));
+    static struct config conf;
+    memset(&conf, 0, sizeof(conf));
+
+    term->conf = &conf;
+    term->width = 100;
+    term->height = 60;
+    term->margins.left = 4;
+    term->margins.right = 2;
+    term->margins.top = 3;
+    term->margins.bottom = 1;
+    term->cell_width = 10;
+    term->cell_height = 20;
+    term->cols = 9;   /* (100 - 4 - 2) / 10 */
+    term->rows = 2;   /* (60 - 3 - 1) / 20 */
+
+    mouse_coord_pixel_to_cell(&seat, term, 0, 0);
+    check(seat.mouse.col == 0 && seat.mouse.row == 0,
+          "a pointer in the top-left margin clamps to cell 0,0");
+
+    mouse_coord_pixel_to_cell(&seat, term, 99, 59);
+    check(seat.mouse.col == 8 && seat.mouse.row == 1,
+          "a pointer in the bottom-right margin clamps to the last cell");
+
+    mouse_coord_pixel_to_cell(&seat, term, 4 + 35, 3 + 45);
+    check(seat.mouse.col == 3 && seat.mouse.row == 2,
+          "pixels inside the grid map to cells, truncating fractions");
+
+    /* Scroll multiplier */
+    conf.scrollback.multiplier = 3.0;
+    term->grid = &term->normal;
+    check(mouse_scroll_multiplier(term, &seat) == 3.0,
+          "the normal grid uses the configured scroll multiplier");
+
+    term->grid = &term->alt;
+    term->mouse_tracking = MOUSE_NONE;
+    term->alt_scrolling = false;
+    check(mouse_scroll_multiplier(term, &seat) == 1.0,
+          "the alt grid without a grab ignores the multiplier");
+
+    /* term_mouse_grabbed() falls back to "tracking == none" when the
+     * terminal has no wayland connection, which is what the harness has. */
+    term->mouse_tracking = MOUSE_NONE;
+    term->alt_scrolling = true;
+    check(mouse_scroll_multiplier(term, &seat) == 3.0,
+          "the alt grid uses the multiplier when grabbed + alt-scrolling");
+
+    term->alt_scrolling = false;
+    check(mouse_scroll_multiplier(term, &seat) == 1.0,
+          "the alt grid ignores the multiplier without alt-scrolling");
+
+    /* Touch state */
+    seat.wl_touch = NULL;
+    seat.touch.state = TOUCH_STATE_HELD;
+    check(!touch_is_active(&seat),
+          "a seat without wl_touch never has an active touch");
+
+    seat.wl_touch = (void *)0x1;
+    check(touch_is_active(&seat), "a held touch is active");
+    seat.touch.state = TOUCH_STATE_DRAGGING;
+    check(touch_is_active(&seat), "a dragging touch is active");
+    seat.touch.state = TOUCH_STATE_IDLE;
+    check(!touch_is_active(&seat), "an idle touch is not active");
+    seat.touch.state = TOUCH_STATE_INHIBITED;
+    check(!touch_is_active(&seat), "an inhibited touch is not active");
+
+    /* Button state */
+    seat.mouse.count = 3;
+    seat.mouse.last_released_button = BTN_LEFT;
+    seat.mouse.last_time.tv_sec = 5;
+    seat.mouse.last_time.tv_nsec = 7;
+    mouse_button_state_reset(&seat);
+    check(seat.mouse.count == 0 && seat.mouse.last_released_button == 0 &&
+          seat.mouse.last_time.tv_sec == 0 && seat.mouse.last_time.tv_nsec == 0,
+          "resetting the button state clears the click counters and timer");
+
+    term->conf = NULL;
+    term_free(term);
+}
+
 int
 main(void)
 {
@@ -6164,6 +6258,7 @@ main(void)
     test_modifier_helpers();
     test_keymap_lookup();
     test_kbd_protocols();
+    test_pointer_helpers();
     test_scrollback_indicator();
     test_search_box_offset();
     test_url_label();

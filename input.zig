@@ -7,6 +7,7 @@
 
 const std = @import("std");
 const types = @import("terminal_types.zig");
+const tll = @import("tll.zig");
 
 const Terminal = types.Terminal;
 const Seat = types.Seat;
@@ -70,6 +71,7 @@ extern fn timerfd_settime(
 
 extern fn key_binding_load_keymap(mgr: ?*anyopaque, seat: *Seat) callconv(.c) void;
 extern fn key_binding_unload_keymap(mgr: ?*anyopaque, seat: *Seat) callconv(.c) void;
+extern fn term_mouse_grabbed(term: *const Terminal, seat: *const Seat) callconv(.c) bool;
 extern fn term_kbd_focus_in(term: *Terminal) callconv(.c) void;
 extern fn term_kbd_focus_out(term: *Terminal) callconv(.c) void;
 extern fn term_xcursor_update_for_seat(term: *Terminal, seat: *Seat) callconv(.c) void;
@@ -2737,5 +2739,79 @@ export fn kitty_kbd_protocol(
     }
 
     return term_to_slave(term, &buf, len);
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Pointer helpers (D4d1): the small coordinate/state functions the pointer
+// listeners are built on.
+// ─────────────────────────────────────────────────────────────────────────
+
+/// Forget all pressed buttons and the double/triple-click state.
+export fn mouse_button_state_reset(seat: *Seat) callconv(.c) void {
+    const buttons: *tll.Tll(types.ButtonTracker) = @ptrCast(&seat.mouse.buttons);
+    buttons.freeList();
+
+    seat.mouse.count = 0;
+    seat.mouse.last_released_button = 0;
+    seat.mouse.last_time = .{ .tv_sec = 0, .tv_nsec = 0 };
+}
+
+/// Translate an x/y pixel coordinate to a cell coordinate, clamping inside the
+/// grid (i.e. a pointer in the margins lands on the first/last cell).
+export fn mouse_coord_pixel_to_cell(
+    seat: *Seat,
+    term: *const Terminal,
+    x: c_int,
+    y: c_int,
+) callconv(.c) void {
+    if (x < term.margins.left)
+        seat.mouse.col = 0
+    else if (x >= term.width - term.margins.right)
+        seat.mouse.col = term.cols - 1
+    else
+        seat.mouse.col = @divTrunc(x - term.margins.left, term.cell_width);
+
+    if (y < term.margins.top)
+        seat.mouse.row = 0
+    else if (y >= term.height - term.margins.bottom)
+        seat.mouse.row = term.rows - 1
+    else
+        seat.mouse.row = @divTrunc(y - term.margins.top, term.cell_height);
+}
+
+/// True while a touch gesture owns the pointer (so emulated pointer events can
+/// be ignored).
+export fn touch_is_active(seat: *const Seat) callconv(.c) bool {
+    if (seat.wl_touch == null)
+        return false;
+
+    // Read the state as a plain int: the C enum has a negative member
+    // (TOUCH_STATE_INHIBITED = -1), and switching on the mirrored Zig enum
+    // here mis-compiled in ReleaseSafe (it reported "active" for idle).
+    const state: c_int = @bitCast(@intFromEnum(seat.touch.state));
+    return switch (state) {
+        @intFromEnum(types.TouchState.inhibited),
+        @intFromEnum(types.TouchState.idle),
+        => false,
+
+        @intFromEnum(types.TouchState.held),
+        @intFromEnum(types.TouchState.dragging),
+        @intFromEnum(types.TouchState.scrolling),
+        => true,
+
+        else => false,
+    };
+}
+
+/// The scroll amount multiplier: the configured scrollback multiplier on the
+/// normal grid, or on the alternate grid only when the mouse is grabbed and
+/// alternate scrolling is enabled.
+export fn mouse_scroll_multiplier(term: *const Terminal, seat: *const Seat) callconv(.c) f64 {
+    const grid = term.grid.?;
+    const use_multiplier =
+        grid == &term.normal or
+        (term_mouse_grabbed(term, seat) and term.alt_scrolling);
+
+    return if (use_multiplier) term.conf.?.scrollback.multiplier else 1.0;
 }
 

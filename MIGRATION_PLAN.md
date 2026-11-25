@@ -873,12 +873,12 @@ Measured on this checkout, not carried over from §1.
 
 | Metric | 2026-11-24 | 2026-11-25 | Δ |
 |---|---|---|---|
-| Branch | +167 commits | **+191 commits** vs `origin/master` | +24 |
-| Foot-owned module C | 12,960 | **8,582** of 48,924 | −4,378 |
-| C eliminated | 73.5% | **82.5%** (40,342 lines) | +9pt |
+| Branch | +167 commits | **+192 commits** vs `origin/master` | +25 |
+| Foot-owned module C | 12,960 | **8,522** of 48,924 | −4,438 |
+| C eliminated | 73.5% | **82.6%** (40,402 lines) | +9.1pt |
 | `*-shim.c` accessors | 2,545 | **2,910** (11 files; `render.c` itself is gone) | +365 |
-| Zig source | ~37.8k | **45,501** lines / 42 files | +7.7k |
-| Harness assertions | 603 | **718** call sites (655 `check`, 63 `check_text`) + 30 Zig `test` blocks | +115 |
+| Zig source | ~37.8k | **45,565** lines / 42 files | +7.8k |
+| Harness assertions | 603 | **731** call sites (668 `check`, 63 `check_text`) + 30 Zig `test` blocks | +128 |
 | `meson test` | 5/5 × 3 dirs | **5/5 × 3 dirs** (`build`, `build-disabled`, `build-release`) | ✅ |
 | Real window launches | not verified | **6/6 pass** against the live `wayland-1` socket | ✅ |
 
@@ -894,7 +894,7 @@ Per-module burn-down (share of that module's original C that is gone):
 | `shm` | 329 / 1,110 | 70% | globals, `wl_shm`/`wl_buffer` stubs, punch-hole `#ifdef`s |
 | `debug` | 22 / 47 | 53% | ASAN stack-trace hook |
 | `render` | 0 / 5,479 | **100%** | `render.c` deleted in D3l4; `render.zig` is the module |
-| `input` | 2,582 / 3,687 | **30%** | D4a/b1/b2 done; D4c (`execute_binding`), D4d, D4e left |
+| `input` | 2,522 / 3,687 | **32%** | D4a/b1/b2/d1 done; D4c (`execute_binding`), D4d2, D4e left |
 | `url-mode` | 833 / 833 | 0% | |
 | `main` | 770 / 770 | 0% | |
 | `server` / `client` | 707 / 679 | 0% | |
@@ -903,8 +903,8 @@ Per-module burn-down (share of that module's original C that is gone):
 
 **Percent complete: 81% by C volume, ~75% by effort (band 72–77%), 32/45
 top-level modules (47 counting `spawn_template`) with zero C left.**
-**Post-D4b2b:** `input.c` is 3,618 → **2,582** (30% ported), module C 9,555 →
-**8,582**, harness 684 → **721** checks; `keymap.h` is down to 27 lines (types
+**Post-D4d1:** `input.c` is 3,618 → **2,522** (32% ported), module C 9,555 →
+**8,522**, harness 684 → **734** checks; `keymap.h` is down to 27 lines (types
 only — its 78 key tables are Zig data now), and `kitty-keymap.h`'s table is
 Zig too. `render.c` is **deleted** — 3,154 lines of C replaced by
 `render.zig` (5,933 lines) plus 1,765 lines of C-only shim (statistics,
@@ -976,7 +976,8 @@ dump (§14.5.2) for the cell/URL/CSD paths.
 | **D4b2b** done | `input`: **`legacy_kbd_protocol()`** (the MOD_ANY key-table lookup, modifyOtherKeys=2's XTerm emulation including the "is the base symbol a-z?" check, the sparse CSI-27 modifier parameter table as a `modParam()` switch, and the three Alt strategies: ESC prefix / 8th bit via `c32rtomb()` / ignore) and **`kitty_kbd_protocol()`** (all five flag bits, the "delegate to legacy" rule, the modifier-key self-inclusion trick via `xkb_state_update_key()`, the locked-vs-consumed text rule, the `is_text` scan with `isc32print()`, the plain-text/control-character fast paths, the `encoded_mods` bit packing, the shifted/unshifted/base key resolution with `xkb_keysym_to_utf32()` + `xkb_keymap_key_get_syms_by_level()`, the level-0 symbol rule for unencodable modifiers, the `:event` sub-parameter, and the CSI-u/CSI-~ formatter with alternate and associated-text sub-parameters). `kitty-keymap.h`'s 110-entry sorted table is Zig too (binary search instead of `bsearch()`), and `struct kbd_ctx` moved to `input.h` so C and Zig share it. 12 new harness checks read the encoders' output back out of a real pty: legacy plain text, Ctrl+a (control byte), Ctrl+é (CSI 27;5;233~), Alt+Return from the key table, releases; kitty plain text, report-all (`CSI 97u`), Ctrl (`CSI 97;5u`), and releases both with and without the report-events flag. **Note:** one of my own first expectations was wrong — Ctrl+a really does send 0x01, because `is_control_key()` covers keysym 0x40..0x7f and xkb already resolved the control character. The C behaviour was kept | D4b2a | 2.5d |
 | **D4b** | `key_press_release` (262) + `legacy_kbd_protocol` (158) + `kitty_kbd_protocol` (327) — port the C `UNITTEST` blocks into the harness as you go | 2–3d |
 | **D4c** | `execute_binding` (469) and the binding matchers | 1–1.5d |
-| **D4d** | pointer: `wl_pointer_enter/motion/leave/button/axis/frame` (~450) + scroll/mouse-binding tables | 1.5–2d |
+| **D4d1** done | `input`: the pointer helpers the listeners are built on — `mouse_button_state_reset()` (drops the button list and the double/triple-click counters and timer), `mouse_coord_pixel_to_cell()` (pixel → cell with the margins clamping to the first/last cell), `touch_is_active()` (idle/inhibited vs held/dragging/scrolling, plus the `wl_touch == NULL` short-circuit) and `mouse_scroll_multiplier()` (the configured scrollback multiplier on the normal grid, or on the alt grid only when the mouse is grabbed *and* alt-scrolling is on). 13 new harness checks, mostly around the coordinate clamping and the multiplier's four combinations | D4b2b | 0.5d |
+| **D4d2** | pointer listeners: `wl_pointer_enter/motion/leave/button/axis/frame`, `match_mouse_binding`, `mouse_scroll`, `alternate_scroll` (~450) | 1.5–2d |
 | **D4e** | touch + IME plumbing + the remaining seat glue | 1d |
 
 **Track D5 — mid-tier (≈5–6 dev-days).** `key-binding` (661) → `ime` (540) →
@@ -1031,7 +1032,14 @@ concurrently with D3 by different workers.
    but D3l3/D4 will add many fields).
 4. **Fuzz the VT core before E2's `ReleaseSafe` vs `ReleaseFast` call** (R3) —
    still open, and `input` is the module most exposed to hostile input.
-5. **Never let two `zig`/`ninja`/`meson` invocations share a build dir or the
+5. **Beware `switch` on a mirrored C enum with a negative member.** In
+   ReleaseSafe, `switch (seat.touch.state)` on the Zig mirror of
+   `enum touch_state` (which has `TOUCH_STATE_INHIBITED = -1`) mis-compiled:
+   an *idle* state (0) was reported as active. Comparing the state as a plain
+   `c_int` instead of switching on the enum fixed it, and both build dirs now
+   agree. Treat any enum with a negative member as "compare the integer" until
+   this is understood; the Debug build hid it.
+6. **Never let two `zig`/`ninja`/`meson` invocations share a build dir or the
    Zig cache.** This session lost an hour to a "nondeterministic Zig 0.16 DWARF
    bug" (`DWARF TODO: 'InputOutput' while updating constant`, `bad decl abbrev
    code: pad_1`, `failed to init dwarf: InputOutput`) that reproduced on
