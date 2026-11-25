@@ -972,6 +972,21 @@ compositor. Real presentation feedback is still not delivered to these
 short-lived windows, so `presented()` is covered by the fabricated-context
 checks, not by the launches.
 
+**Post-E1 (shim sweep):** the audit (`doc/shim-audit.md`) classified all 390
+functions in the 13 `*-shim.c` files: 259 class (a) keep, 57 class (b)
+delete, 74 class (c) port. Applied so far: `grid-shim.c` deleted wholesale
+(37 lines, a dead adapter), and every class-(b) accessor removed — 56
+functions in five batches (dcs/selection/csi/fcft glyphs 18, osc 9, notify
+14, sixel 15), with their call sites reading the probe-pinned mirrors
+directly. The two easy class-(c) groups followed (14 functions): the eight
+osc theme getters (over the now-Zig `term_theme_get()`) and the six sixel
+flag bits (a u8 of bit-fields in the mirror, exported back to csi.zig for
+XTSAVE). Shim total 3,417 → **3,174** lines. Remaining class (c): 60
+functions, mostly small tll/iterator helpers in `notify-shim.c` (13),
+`terminal-shim.c` (12) and `osc-shim.c` (11), plus `emoji_vs_compare()` and
+the presentation-statistics logger; they are recorded as post-1.0 backlog,
+not port debt, because §12.9 forbids deleting logic without moving it.
+
 **Post-E3 (merge of agent-c):** `doc/endgame-verification.md` landed (the
 remaining-C write-up, the matrix, the ReleaseSafe measurement, the
 execvpe coverage argument). §12's last open decisions are closed:
