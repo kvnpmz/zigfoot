@@ -107,6 +107,14 @@ C_TYPES: dict[str, str] = {
     "ShmBufferPrivate": "struct buffer_private",
     "ShmBufferChain": "struct buffer_chain",
     "ShmFormatConstants": "struct shm_format_constants",
+    "Server": "struct server",
+    "ServerClient": "struct client",
+    "TerminalInstance": "struct terminal_instance",
+    "ClientData": "struct client_data",
+    "ClientString": "struct client_string",
+    "ClientIpcHdr": "struct client_ipc_hdr",
+    "ClientIpcSigusr": "struct client_ipc_sigusr",
+    "SockaddrUn": "struct sockaddr_un",
 }
 
 NESTED_IN_TERMINAL: dict[str, str] = {
@@ -137,7 +145,7 @@ FIELD_RE = re.compile(
 
 TYPE_RE = re.compile(
     r'^pub const ([A-Za-z_][A-Za-z0-9_]*) = '
-    r'(extern struct|extern union|packed struct\([^)]+\)|struct) \{')
+    r'(extern struct|extern union|packed struct(?:\([^)]+\))?|struct) \{')
 
 
 def strip_comment(line: str) -> str:
@@ -322,6 +330,9 @@ def generate() -> str:
         '#include "config.h"',
         '#include "grid.h"',
         '#include "notify.h"',
+        '#include <sys/un.h>',
+        '#include "client-protocol.h"',
+        '#include "server.h"',
         '#include "shm.h"',
         '#include "terminal.h"',
         '#include "wayland.h"',

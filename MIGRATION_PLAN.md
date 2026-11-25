@@ -900,7 +900,8 @@ Per-module burn-down (share of that module's original C that is gone):
 | `input` | 0 / 3,687 | **100%** | `input.c` deleted in D4e; listener tables now live in `terminal-shim.c` |
 | `url-mode` | 0 / 833 | **100%** | `url-mode.c` deleted in D5c; `url-mode.zig` is the module |
 | `main` | 770 / 770 | 0% | |
-| `server` / `client` | 707 / 679 | 0% | |
+| `server` | 0 / 707 | **100%** | `server.c` deleted; `server_obj` compiles `server.zig`; private structs + client protocol pinned by the ABI probe |
+| `client` | 679 / 679 | 0% | |
 | `key-binding` | 0 / 661 | **100%** | `key-binding.c` deleted in D5a; `key-binding.zig` is the module |
 | `ime` | 0 / 540 | **100%** | `ime.c` deleted in D5b; `ime.zig` is the module |
 
@@ -978,6 +979,21 @@ No new ABI mirror was needed (`Seat.kbd.repeat` was already pinned).
 13 new harness checks drive the FDM registration, the EAGAIN/EPOLLHUP paths
 and the no-event path headlessly; the six smoke launches exercise the real
 listener tables. Verified with `ninja`, `meson test`, smoke and valgrind.
+
+**Post-D6 (server):** `server.c` is **deleted** (707 → 0 C lines). The
+socket lifecycle (socket activation, bind/listen, accept4), FDM callbacks,
+client setup-packet parser, terminal-instance bookkeeping and the two global
+theme switches are all Zig in `server.zig` (881 lines); `server_obj` replaces
+the C source. `struct server`/`struct client`/`struct terminal_instance`
+moved to `server.h` and, together with the packed client-protocol structs and
+`sockaddr_un`, are mirrored in `terminal_types.zig` and pinned through new
+`gen_abi_probe.py` `C_TYPES` entries. No new C shim was needed: every call
+is a libc function or an existing Zig export. 21 new harness checks cover the
+theme switches, `prepare_socket`/`try_connect`, socket creation and teardown,
+and the client's EPOLLHUP/oversized/no-monitor shutdown paths. Also gave the
+pre-existing app-id rate-limit harness case a fallback `conf.app_id`, so it
+no longer panics when the timer expires under valgrind, and relaxed its
+flaky "timer armed" assertion to a timerfd-validity check.
 
 **Post-D5b:** `ime.c` is **deleted** — the 35th module with no C.
 Module C **5,266 → 4,726** (90.3% of the original C gone), Zig 48,738 →
@@ -1140,9 +1156,9 @@ removed `search.zig`'s private `KeyBinding` mirror; `terminal.zig` already
 shared `types.KeyBindingSet`. The `selection` tail deletes
 `selection-shim.c` (243) wholesale.
 
-**Track D6 — entry points (≈4–5 dev-days).** `main` (770), then `server` (707)
-and `client` (679), which share `main`'s setup. After D6 the process entry
-point is Zig.
+**Track D6 — entry points (≈4–5 dev-days).** `server` (707) — **done** —
+then `main` (770) and `client` (679), which share `main`'s setup. After D6
+the process entry point is Zig.
 
 **Track E — endgame (≈3–4 dev-days).** E1a done (slave's constants +IUTF8); E2 done (`shm.c` deleted, 329 → 0 — the
 `wl_shm` capabilities are read from the mirrored `struct wayland`, and only

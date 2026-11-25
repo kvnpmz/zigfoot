@@ -14,6 +14,9 @@
 #include "config.h"
 #include "grid.h"
 #include "notify.h"
+#include <sys/un.h>
+#include "client-protocol.h"
+#include "server.h"
 #include "shm.h"
 #include "terminal.h"
 #include "wayland.h"
@@ -2987,6 +2990,79 @@ fprintf(out, "pub const ShmFormatConstants_wl_abgr2101010__size: usize = %zu;\n"
 fprintf(out, "pub const ShmFormatConstants_wl_abgr2101010: usize = %zu;\n", offsetof(struct shm_format_constants, wl_abgr2101010));
 fprintf(out, "pub const ShmFormatConstants_wl_abgr16161616__size: usize = %zu;\n", sizeof(((struct shm_format_constants *)0)->wl_abgr16161616));
 fprintf(out, "pub const ShmFormatConstants_wl_abgr16161616: usize = %zu;\n", offsetof(struct shm_format_constants, wl_abgr16161616));
+fprintf(out, "pub const Server__size: usize = %zu;\n", sizeof(struct server));
+fprintf(out, "pub const Server_conf__size: usize = %zu;\n", sizeof(((struct server *)0)->conf));
+fprintf(out, "pub const Server_conf: usize = %zu;\n", offsetof(struct server, conf));
+fprintf(out, "pub const Server_fdm__size: usize = %zu;\n", sizeof(((struct server *)0)->fdm));
+fprintf(out, "pub const Server_fdm: usize = %zu;\n", offsetof(struct server, fdm));
+fprintf(out, "pub const Server_reaper__size: usize = %zu;\n", sizeof(((struct server *)0)->reaper));
+fprintf(out, "pub const Server_reaper: usize = %zu;\n", offsetof(struct server, reaper));
+fprintf(out, "pub const Server_wayl__size: usize = %zu;\n", sizeof(((struct server *)0)->wayl));
+fprintf(out, "pub const Server_wayl: usize = %zu;\n", offsetof(struct server, wayl));
+fprintf(out, "pub const Server_fd__size: usize = %zu;\n", sizeof(((struct server *)0)->fd));
+fprintf(out, "pub const Server_fd: usize = %zu;\n", offsetof(struct server, fd));
+fprintf(out, "pub const Server_sock_path__size: usize = %zu;\n", sizeof(((struct server *)0)->sock_path));
+fprintf(out, "pub const Server_sock_path: usize = %zu;\n", offsetof(struct server, sock_path));
+fprintf(out, "pub const Server_clients__size: usize = %zu;\n", sizeof(((struct server *)0)->clients));
+fprintf(out, "pub const Server_clients: usize = %zu;\n", offsetof(struct server, clients));
+fprintf(out, "pub const Server_terminals__size: usize = %zu;\n", sizeof(((struct server *)0)->terminals));
+fprintf(out, "pub const Server_terminals: usize = %zu;\n", offsetof(struct server, terminals));
+fprintf(out, "pub const ServerClient__size: usize = %zu;\n", sizeof(struct client));
+fprintf(out, "pub const ServerClient_server__size: usize = %zu;\n", sizeof(((struct client *)0)->server));
+fprintf(out, "pub const ServerClient_server: usize = %zu;\n", offsetof(struct client, server));
+fprintf(out, "pub const ServerClient_fd__size: usize = %zu;\n", sizeof(((struct client *)0)->fd));
+fprintf(out, "pub const ServerClient_fd: usize = %zu;\n", offsetof(struct client, fd));
+fprintf(out, "pub const ServerClient_buffer__size: usize = %zu;\n", sizeof(((struct client *)0)->buffer));
+fprintf(out, "pub const ServerClient_buffer: usize = %zu;\n", offsetof(struct client, buffer));
+fprintf(out, "pub const ServerClient_buffer__abi_fields: usize = 1;\n");
+fprintf(out, "pub const ServerClient_buffer_data__size: usize = %zu;\n", sizeof(((struct client *)0)->buffer.data));
+fprintf(out, "pub const ServerClient_buffer_data: usize = %zu;\n", offsetof(struct client, buffer.data) - offsetof(struct client, buffer));
+fprintf(out, "pub const ServerClient_buffer_left__size: usize = %zu;\n", sizeof(((struct client *)0)->buffer.left));
+fprintf(out, "pub const ServerClient_buffer_left: usize = %zu;\n", offsetof(struct client, buffer.left) - offsetof(struct client, buffer));
+fprintf(out, "pub const ServerClient_buffer_idx__size: usize = %zu;\n", sizeof(((struct client *)0)->buffer.idx));
+fprintf(out, "pub const ServerClient_buffer_idx: usize = %zu;\n", offsetof(struct client, buffer.idx) - offsetof(struct client, buffer));
+fprintf(out, "pub const ServerClient_instance__size: usize = %zu;\n", sizeof(((struct client *)0)->instance));
+fprintf(out, "pub const ServerClient_instance: usize = %zu;\n", offsetof(struct client, instance));
+fprintf(out, "pub const TerminalInstance__size: usize = %zu;\n", sizeof(struct terminal_instance));
+fprintf(out, "pub const TerminalInstance_terminal__size: usize = %zu;\n", sizeof(((struct terminal_instance *)0)->terminal));
+fprintf(out, "pub const TerminalInstance_terminal: usize = %zu;\n", offsetof(struct terminal_instance, terminal));
+fprintf(out, "pub const TerminalInstance_server__size: usize = %zu;\n", sizeof(((struct terminal_instance *)0)->server));
+fprintf(out, "pub const TerminalInstance_server: usize = %zu;\n", offsetof(struct terminal_instance, server));
+fprintf(out, "pub const TerminalInstance_client__size: usize = %zu;\n", sizeof(((struct terminal_instance *)0)->client));
+fprintf(out, "pub const TerminalInstance_client: usize = %zu;\n", offsetof(struct terminal_instance, client));
+fprintf(out, "pub const TerminalInstance_conf__size: usize = %zu;\n", sizeof(((struct terminal_instance *)0)->conf));
+fprintf(out, "pub const TerminalInstance_conf: usize = %zu;\n", offsetof(struct terminal_instance, conf));
+fprintf(out, "pub const ClientData__size: usize = %zu;\n", sizeof(struct client_data));
+fprintf(out, "pub const ClientData_token_len__size: usize = %zu;\n", sizeof(((struct client_data *)0)->token_len));
+fprintf(out, "pub const ClientData_token_len: usize = %zu;\n", offsetof(struct client_data, token_len));
+fprintf(out, "pub const ClientData_exe_len__size: usize = %zu;\n", sizeof(((struct client_data *)0)->exe_len));
+fprintf(out, "pub const ClientData_exe_len: usize = %zu;\n", offsetof(struct client_data, exe_len));
+fprintf(out, "pub const ClientData_cwd_len__size: usize = %zu;\n", sizeof(((struct client_data *)0)->cwd_len));
+fprintf(out, "pub const ClientData_cwd_len: usize = %zu;\n", offsetof(struct client_data, cwd_len));
+fprintf(out, "pub const ClientData_override_count__size: usize = %zu;\n", sizeof(((struct client_data *)0)->override_count));
+fprintf(out, "pub const ClientData_override_count: usize = %zu;\n", offsetof(struct client_data, override_count));
+fprintf(out, "pub const ClientData_foot_argc__size: usize = %zu;\n", sizeof(((struct client_data *)0)->foot_argc));
+fprintf(out, "pub const ClientData_foot_argc: usize = %zu;\n", offsetof(struct client_data, foot_argc));
+fprintf(out, "pub const ClientData_slave_argc__size: usize = %zu;\n", sizeof(((struct client_data *)0)->slave_argc));
+fprintf(out, "pub const ClientData_slave_argc: usize = %zu;\n", offsetof(struct client_data, slave_argc));
+fprintf(out, "pub const ClientData_env_count__size: usize = %zu;\n", sizeof(((struct client_data *)0)->env_count));
+fprintf(out, "pub const ClientData_env_count: usize = %zu;\n", offsetof(struct client_data, env_count));
+fprintf(out, "pub const ClientString__size: usize = %zu;\n", sizeof(struct client_string));
+fprintf(out, "pub const ClientString_len__size: usize = %zu;\n", sizeof(((struct client_string *)0)->len));
+fprintf(out, "pub const ClientString_len: usize = %zu;\n", offsetof(struct client_string, len));
+fprintf(out, "pub const ClientIpcHdr__size: usize = %zu;\n", sizeof(struct client_ipc_hdr));
+fprintf(out, "pub const ClientIpcHdr_ipc_code__size: usize = %zu;\n", sizeof(((struct client_ipc_hdr *)0)->ipc_code));
+fprintf(out, "pub const ClientIpcHdr_ipc_code: usize = %zu;\n", offsetof(struct client_ipc_hdr, ipc_code));
+fprintf(out, "pub const ClientIpcHdr_size__size: usize = %zu;\n", sizeof(((struct client_ipc_hdr *)0)->size));
+fprintf(out, "pub const ClientIpcHdr_size: usize = %zu;\n", offsetof(struct client_ipc_hdr, size));
+fprintf(out, "pub const ClientIpcSigusr__size: usize = %zu;\n", sizeof(struct client_ipc_sigusr));
+fprintf(out, "pub const ClientIpcSigusr_signo__size: usize = %zu;\n", sizeof(((struct client_ipc_sigusr *)0)->signo));
+fprintf(out, "pub const ClientIpcSigusr_signo: usize = %zu;\n", offsetof(struct client_ipc_sigusr, signo));
+fprintf(out, "pub const SockaddrUn__size: usize = %zu;\n", sizeof(struct sockaddr_un));
+fprintf(out, "pub const SockaddrUn_sun_family__size: usize = %zu;\n", sizeof(((struct sockaddr_un *)0)->sun_family));
+fprintf(out, "pub const SockaddrUn_sun_family: usize = %zu;\n", offsetof(struct sockaddr_un, sun_family));
+fprintf(out, "pub const SockaddrUn_sun_path__size: usize = %zu;\n", sizeof(((struct sockaddr_un *)0)->sun_path));
+fprintf(out, "pub const SockaddrUn_sun_path: usize = %zu;\n", offsetof(struct sockaddr_un, sun_path));
 fprintf(out, "pub const Render__size: usize = %zu;\n", sizeof(((struct terminal *)0)->render));
 fprintf(out, "pub const Render_chains__size: usize = %zu;\n", sizeof(((struct terminal *)0)->render.chains));
 fprintf(out, "pub const Render_chains: usize = %zu;\n", offsetof(struct terminal, render.chains) - offsetof(struct terminal, render));
