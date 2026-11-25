@@ -401,7 +401,10 @@ export fn draw_styled_underline(
                 }
             }.get;
 
-            const base = thickness + extra;
+            // C advances by thickness + spacing[i], where spacing starts
+            // at thickness. The closed form therefore needs twice the
+            // thickness before distributing the remainder.
+            const base = thickness * 2 + extra;
 
             if (per_cell <= max_dots) {
                 var rects_buf: [max_dots]PixmanRectangle16 = undefined;
@@ -3278,6 +3281,11 @@ fn roundfDiv(v: c_int, scale: f32) c_int {
 /// `(int)roundf(3. * scale)`: the indicator/timer padding.
 fn osdMargin(scale: f32) c_int {
     return @intFromFloat(@round(@as(f64, 3.0 * scale)));
+}
+
+/// C-facing hook for the headless render parity corpus.
+export fn render_parity_osd_margin(scale: f32) callconv(.c) c_int {
+    return osdMargin(scale);
 }
 
 export fn render_scrollback_position(term: *Terminal) callconv(.c) void {
