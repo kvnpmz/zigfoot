@@ -61,6 +61,11 @@ int render_url_format_label(char32_t *label, const char32_t *key,
                             size_t entered_key_len, int max_cols);
 void render_dirty_overflowing_glyphs(struct terminal *term);
 /* Ported to input.zig (D4a). */
+const struct key_data *keymap_lookup(struct terminal *term,
+                                         xkb_keysym_t sym,
+                                         enum modifier mods);
+const struct key_data *keymap_data_for_sym(xkb_keysym_t sym,
+                                           size_t *count);
 bool keysym_is_modifier(xkb_keysym_t keysym);
 void modifier_string(xkb_mod_mask_t mods, size_t sz,
                      char mod_str[static sz], const struct seat *seat);
@@ -5918,6 +5923,56 @@ test_modifier_helpers(void)
         xkb_context_unref(xkb_ctx);
 }
 
+/*
+ * The VT key tables and keymap_lookup() (input.zig, D4b2).
+ *
+ * The expected sequences are the ones keymap.h documented in its own
+ * UNITTEST blocks, so these double as a parity check for the translation.
+ */
+static void
+test_keymap_lookup(void)
+{
+    struct terminal term;
+    memset(&term, 0, sizeof(term));
+    term.cursor_keys_mode = CURSOR_KEYS_NORMAL;
+    term.keypad_keys_mode = KEYPAD_DONTCARE;
+
+    const struct key_data *info =
+        keymap_lookup(&term, XKB_KEY_Escape, MOD_SHIFT);
+    check(info != NULL && strcmp(info->seq, "\033[27;2;27~") == 0,
+          "Shift+Escape is CSI 27;2;27~");
+
+    info = keymap_lookup(&term, XKB_KEY_Return, MOD_ALT);
+    check(info != NULL && strcmp(info->seq, "\033\r") == 0,
+          "Alt+Return is ESC CR");
+
+    term.modify_other_keys_2 = true;
+    info = keymap_lookup(&term, XKB_KEY_Return, MOD_ALT);
+    check(info != NULL && strcmp(info->seq, "\033[27;3;13~") == 0,
+          "modifyOtherKeys=2 turns Alt+Return into CSI 27;3;13~");
+    term.modify_other_keys_2 = false;
+
+    info = keymap_lookup(&term, XKB_KEY_ISO_Left_Tab, MOD_SHIFT | MOD_CTRL);
+    check(info != NULL && strcmp(info->seq, "\033[27;6;9~") == 0,
+          "Shift+Ctrl+ISO_Left_Tab is CSI 27;6;9~");
+
+    /* Cursor-key mode selects a different entry for the same keysym. */
+    info = keymap_lookup(&term, XKB_KEY_Up, MOD_ANY);
+    check(info != NULL && strcmp(info->seq, "\033[A") == 0,
+          "Up in normal cursor-key mode is CSI A");
+
+    term.cursor_keys_mode = CURSOR_KEYS_APPLICATION;
+    info = keymap_lookup(&term, XKB_KEY_Up, MOD_ANY);
+    check(info != NULL && strcmp(info->seq, "\033OA") == 0,
+          "Up in application cursor-key mode is SS3 A");
+
+    size_t count = 0;
+    check(keymap_data_for_sym(XKB_KEY_Escape, &count) != NULL && count > 0,
+          "Escape has a key table");
+    check(keymap_data_for_sym(0, &count) == NULL,
+          "an unknown keysym has no key table");
+}
+
 int
 main(void)
 {
@@ -5959,6 +6014,7 @@ main(void)
     test_buffer_release_early_outs();
     test_keyboard_setup();
     test_modifier_helpers();
+    test_keymap_lookup();
     test_scrollback_indicator();
     test_search_box_offset();
     test_url_label();

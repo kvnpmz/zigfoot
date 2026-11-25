@@ -4,6 +4,7 @@
 #include <wayland-client.h>
 
 #include "cursor-shape.h"
+#include "keymap.h"
 #include "misc.h"
 #include "wayland.h"
 
@@ -42,6 +43,9 @@ void modifier_string(xkb_mod_mask_t mods, size_t sz, char mod_str[static sz],
                      const struct seat *seat);
 void keyboard_repeat_info(void *data, struct wl_keyboard *wl_keyboard,
                           int32_t rate, int32_t delay);
+const struct key_data *keymap_data_for_sym(xkb_keysym_t sym, size_t *count);
+const struct key_data *keymap_lookup(struct terminal *term, xkb_keysym_t sym,
+                                     enum modifier mods);
 bool fdm_write_pipe(struct fdm *fdm, int fd, int events, void *data);
 void keyboard_keymap(void *data, struct wl_keyboard *wl_keyboard,
                      uint32_t format, int32_t fd, uint32_t size);

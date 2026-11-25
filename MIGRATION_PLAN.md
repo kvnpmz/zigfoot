@@ -873,12 +873,12 @@ Measured on this checkout, not carried over from §1.
 
 | Metric | 2026-11-24 | 2026-11-25 | Δ |
 |---|---|---|---|
-| Branch | +167 commits | **+189 commits** vs `origin/master` | +22 |
-| Foot-owned module C | 12,960 | **9,180** of 48,924 | −3,780 |
-| C eliminated | 73.5% | **80.8%** (39,744 lines) | +7.3pt |
+| Branch | +167 commits | **+190 commits** vs `origin/master` | +23 |
+| Foot-owned module C | 12,960 | **9,113** of 48,924 | −3,847 |
+| C eliminated | 73.5% | **81.4%** (39,811 lines) | +7.9pt |
 | `*-shim.c` accessors | 2,545 | **2,910** (11 files; `render.c` itself is gone) | +365 |
-| Zig source | ~37.8k | **43,482** lines / 42 files | +5.7k |
-| Harness assertions | 603 | **698** call sites (643 `check`, 55 `check_text`) + 30 Zig `test` blocks | +95 |
+| Zig source | ~37.8k | **44,910** lines / 42 files | +7.1k |
+| Harness assertions | 603 | **706** call sites (651 `check`, 55 `check_text`) + 30 Zig `test` blocks | +103 |
 | `meson test` | 5/5 × 3 dirs | **5/5 × 3 dirs** (`build`, `build-disabled`, `build-release`) | ✅ |
 | Real window launches | not verified | **6/6 pass** against the live `wayland-1` socket | ✅ |
 
@@ -894,7 +894,7 @@ Per-module burn-down (share of that module's original C that is gone):
 | `shm` | 329 / 1,110 | 70% | globals, `wl_shm`/`wl_buffer` stubs, punch-hole `#ifdef`s |
 | `debug` | 22 / 47 | 53% | ASAN stack-trace hook |
 | `render` | 0 / 5,479 | **100%** | `render.c` deleted in D3l4; `render.zig` is the module |
-| `input` | 3,243 / 3,687 | **12%** | D4a/b1 done (keyboard setup + modifier helpers); D4b2–D4e left |
+| `input` | 3,113 / 3,687 | **16%** | D4a/b1/b2a done; D4b2b (protocols), D4c–D4e left |
 | `url-mode` | 833 / 833 | 0% | |
 | `main` | 770 / 770 | 0% | |
 | `server` / `client` | 707 / 679 | 0% | |
@@ -903,8 +903,9 @@ Per-module burn-down (share of that module's original C that is gone):
 
 **Percent complete: 81% by C volume, ~75% by effort (band 72–77%), 32/45
 top-level modules (47 counting `spawn_template`) with zero C left.**
-**Post-D4b1:** `input.c` is 3,618 → **3,243** (12% ported), module C 9,555 →
-**9,180**, harness 684 → **701** checks. `render.c` is **deleted** — 3,154 lines of C replaced by
+**Post-D4b2a:** `input.c` is 3,618 → **3,113** (16% ported), module C 9,555 →
+**9,113**, harness 684 → **709** checks; `keymap.h` is down to 27 lines (types
+only — its 78 key tables are Zig data now). `render.c` is **deleted** — 3,154 lines of C replaced by
 `render.zig` (5,933 lines) plus 1,765 lines of C-only shim (statistics,
 `struct timeval`, protocol listener tables). `render` is the 32nd module with
 no C left; module C 12,709 → **9,555** (80.5% of the original C gone),
@@ -970,7 +971,8 @@ dump (§14.5.2) for the cell/URL/CSD paths.
 |---|---|---|
 | **D4a** done | `input`: `input.zig` created with the keyboard *setup* half — `fdm_write_pipe()` (the EPOLLOUT chunked write of a binding's feedback to the client), `keyboard_keymap()` (old xkb state teardown, the memfd `mmap()` + `xkb_keymap_new_from_buffer()`, the cached modifier indices, the legacy-vs-kitty significant-modifier masks, and the `virtual_modifiers` mask that papers over Mutter setting Alt/Meta/Super/... on top of the real modifiers), `keyboard_enter()` (NULL-surface guard, `term_kbd_focus_in()`), `keyboard_leave()` (repeat timer, modifier reset, compose-state reset, layout-index reset, `term_xcursor_update_for_seat()` + `term_kbd_focus_out()`, and the Sway-bug warning) and the repeat timer pair `start_repeater()`/`stop_repeater()` (rate/delay arithmetic with the ≥1 s normalisation, `dont_re_repeat`). libxkbcommon and libc are declared as plain Zig externs (all opaque pointers), so no new shim file was needed. 8 new harness checks for the repeat-timer short-circuits and the enter/leave bookkeeping; the keymap installation itself is exercised by the six smoke launches | D3l4 | 1d |
 | **D4b1** done | `input`: `get_current_modifiers()` (effective/consumed masks off the xkb state, with the locked-modifier filter), `keysym_is_modifier()` (Shift_L..Hyper_R, the ISO group/lock range, Mode_switch, Num_Lock), `modifier_string()` ("Shift+Control" from the keymap's modifier names, or `<none>`; C's bare `strcat()` became explicit length tracking, and a NULL keymap now renders `<none>` instead of dereferencing it) and the `keyboard_repeat_info()` listener. 9 new harness checks, including a real `xkb_keymap_new_from_names()` so the modifier-name path is exercised, not just the fallbacks | D4a | 0.5d |
-| **D4b2** | `keymap_data_for_sym` + `keymap_lookup` (needs `keymap.h`'s 78 key tables translated to Zig data), `keyboard_modifiers`, `keyboard_key`, `key_press_release`, `legacy_kbd_protocol`, `kitty_kbd_protocol` | 2–3d |
+| **D4b2a** done | `input`: **`keymap.h`'s 78 key tables translated to Zig** (925 entries) by a generator that runs the header through the C preprocessor first, so the `DEFAULT_MODS_FOR_KP/​SINGLE/TILDE()` macro tables and their string-literal splicing arrive expanded — the generator then only has to turn C's octal escapes into Zig `\xNN`, map `MOD_*`/`CURSOR_KEYS_*`/`KEYPAD_*` to numbers, and emit `KeyData` (an `extern struct` with the same field-for-field layout as C's `struct key_data`) plus `keymap_data_for_sym()` and **`keymap_lookup()`** with the modifyOtherKeys-state filtering and the cursor-keys/keypad mode matching. `keymap.h` keeps only `enum modifier` and `struct key_data` (27 lines). 8 new harness checks that double as a translation parity test — they use the sequences keymap.h's own `UNITTEST` blocks asserted (Shift+Escape, Alt+Return with and without modifyOtherKeys=2, Shift+Ctrl+ISO_Left_Tab) plus the cursor-key-mode pair (CSI A vs SS3 A) and the table lookup itself | D4b1 | 1.5d |
+| **D4b2b** | `keyboard_modifiers`, `keyboard_key`, `key_press_release`, `legacy_kbd_protocol`, `kitty_kbd_protocol` (~900 lines) | 2d |
 | **D4b** | `key_press_release` (262) + `legacy_kbd_protocol` (158) + `kitty_kbd_protocol` (327) — port the C `UNITTEST` blocks into the harness as you go | 2–3d |
 | **D4c** | `execute_binding` (469) and the binding matchers | 1–1.5d |
 | **D4d** | pointer: `wl_pointer_enter/motion/leave/button/axis/frame` (~450) + scroll/mouse-binding tables | 1.5–2d |
