@@ -62,13 +62,6 @@ static const struct wl_shm_listener shm_listener = {
     .format = &shm_format,
 };
 
-static void
-xdg_wm_base_ping(void *data, struct xdg_wm_base *shell, uint32_t serial)
-{
-    LOG_DBG("wm base ping");
-    xdg_wm_base_pong(shell, serial);
-}
-
 static const struct xdg_wm_base_listener xdg_wm_base_listener = {
     .ping = &xdg_wm_base_ping,
 };
@@ -102,80 +95,6 @@ static const struct zxdg_output_v1_listener xdg_output_listener = {
 static const struct wp_presentation_listener presentation_listener = {
     .clock_id = &clock_id,
 };
-
-static void
-color_manager_create_image_description(struct wayland *wayl)
-{
-    if (!wayl->color_management.have_feat_parametric)
-        return;
-
-    if (!wayl->color_management.have_primaries_srgb)
-        return;
-
-    if (!wayl->color_management.have_tf_ext_linear)
-        return;
-
-    struct wp_image_description_creator_params_v1 *params =
-        wp_color_manager_v1_create_parametric_creator(wayl->color_management.manager);
-
-    wp_image_description_creator_params_v1_set_tf_named(
-        params, WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_EXT_LINEAR);
-
-    wp_image_description_creator_params_v1_set_primaries_named(
-        params, WP_COLOR_MANAGER_V1_PRIMARIES_SRGB);
-
-    wayl->color_management.img_description =
-        wp_image_description_creator_params_v1_create(params);
-}
-
-static void
-color_manager_supported_intent(void *data,
-                               struct wp_color_manager_v1 *wp_color_manager_v1,
-                               uint32_t render_intent)
-{
-    struct wayland *wayl = data;
-    if (render_intent == WP_COLOR_MANAGER_V1_RENDER_INTENT_PERCEPTUAL)
-        wayl->color_management.have_intent_perceptual = true;
-}
-
-static void
-color_manager_supported_feature(void *data,
-                                struct wp_color_manager_v1 *wp_color_manager_v1,
-                                uint32_t feature)
-{
-    struct wayland *wayl = data;
-
-    if (feature == WP_COLOR_MANAGER_V1_FEATURE_PARAMETRIC)
-        wayl->color_management.have_feat_parametric = true;
-}
-
-static void
-color_manager_supported_tf_named(void *data,
-                                 struct wp_color_manager_v1 *wp_color_manager_v1,
-                                 uint32_t tf)
-{
-    struct wayland *wayl = data;
-    if (tf == WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_EXT_LINEAR)
-        wayl->color_management.have_tf_ext_linear = true;
-}
-
-static void
-color_manager_supported_primaries_named(void *data,
-                                        struct wp_color_manager_v1 *wp_color_manager_v1,
-                                        uint32_t primaries)
-{
-    struct wayland *wayl = data;
-    if (primaries == WP_COLOR_MANAGER_V1_PRIMARIES_SRGB)
-        wayl->color_management.have_primaries_srgb = true;
-}
-
-static void
-color_manager_done(void *data,
-                   struct wp_color_manager_v1 *wp_color_manager_v1)
-{
-    struct wayland *wayl = data;
-    color_manager_create_image_description(wayl);
-}
 
 static const struct wp_color_manager_v1_listener color_manager_listener = {
     .supported_intent = &color_manager_supported_intent,
@@ -243,88 +162,6 @@ fdm_repeat(struct fdm *fdm, int fd, int events, void *data)
         input_repeat(seat, seat->kbd.repeat.key);
     seat->kbd.repeat.dont_re_repeat = false;
     return true;
-}
-
-static void
-handle_global_remove(void *data, struct wl_registry *registry, uint32_t name)
-{
-    LOG_DBG("global removed: 0x%08x", name);
-
-    struct wayland *wayl = data;
-
-    /* Check if this is an output */
-    tll_foreach(wayl->monitors, it) {
-        struct monitor *mon = &it->item;
-
-        if (mon->wl_name != name)
-            continue;
-
-        LOG_INFO("monitor unplugged or disabled: %s", mon->name);
-
-        /*
-         * Update all terminals that are mapped here. On Sway 1.4,
-         * surfaces are *not* unmapped before the output is removed
-         */
-
-        tll_foreach(wayl->terms, t) {
-            tll_foreach(t->item->window->on_outputs, o) {
-                if (o->item->output == mon->output) {
-                    surface_leave(t->item->window, NULL, mon->output);
-                    break;
-                }
-            }
-        }
-
-        monitor_destroy(mon);
-        tll_remove(wayl->monitors, it);
-        goto ack_remove;
-    }
-
-    /* A seat? */
-    tll_foreach(wayl->seats, it) {
-        struct seat *seat = &it->item;
-
-        if (seat->wl_name != name)
-            continue;
-
-        LOG_INFO("seat destroyed: %s", seat->name);
-
-        if (seat->kbd_focus != NULL) {
-            LOG_WARN("compositor destroyed seat '%s' "
-                     "without sending a keyboard leave event",
-                     seat->name);
-
-            if (seat->wl_keyboard != NULL)
-                keyboard_listener.leave(
-                    seat, seat->wl_keyboard, -1, seat->kbd_focus->window->surface.surf);
-        }
-
-        if (seat->mouse_focus != NULL) {
-            LOG_WARN("compositor destroyed seat '%s' "
-                     "without sending a pointer leave event",
-                     seat->name);
-
-            if (seat->wl_pointer != NULL)
-                pointer_listener.leave(
-                    seat, seat->wl_pointer, -1, seat->mouse_focus->window->surface.surf);
-        }
-
-        seat_destroy(seat);
-        tll_remove(wayl->seats, it);
-        goto ack_remove;
-    }
-
-    LOG_WARN("unknown global removed: 0x%08x", name);
-
-ack_remove:
-    ;
-#if defined(WL_FIXES_ACK_GLOBAL_REMOVE_SINCE_VERSION)
-    if (wayl->fixes != NULL &&
-        wayl->fixes_version >= WL_FIXES_ACK_GLOBAL_REMOVE_SINCE_VERSION)
-    {
-        wl_fixes_ack_global_remove(wayl->fixes, wayl->registry, name);
-    }
-#endif
 }
 
 static const struct wl_registry_listener registry_listener = {
@@ -410,6 +247,18 @@ void wayland_shim_add_wm_base_listener(
 void wayland_shim_add_seat_listener(struct wl_seat *wl_seat, struct seat *seat)
 {
     wl_seat_add_listener(wl_seat, &seat_listener, seat);
+}
+
+void wayland_shim_keyboard_leave(
+    struct seat *seat, struct wl_keyboard *kbd, struct wl_surface *surface)
+{
+    keyboard_listener.leave(seat, kbd, -1, surface);
+}
+
+void wayland_shim_pointer_leave(
+    struct seat *seat, struct wl_pointer *pointer, struct wl_surface *surface)
+{
+    pointer_listener.leave(seat, pointer, -1, surface);
 }
 
 void wayland_shim_add_output_listener(

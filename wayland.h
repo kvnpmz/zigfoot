@@ -645,6 +645,20 @@ void seat_handle_capabilities(
 void handle_global(
     void *data, struct wl_registry *registry, uint32_t name,
     const char *interface, uint32_t version);
+void handle_global_remove(
+    void *data, struct wl_registry *registry, uint32_t name);
+void color_manager_supported_intent(
+    void *data, struct wp_color_manager_v1 *manager, uint32_t render_intent);
+void color_manager_supported_feature(
+    void *data, struct wp_color_manager_v1 *manager, uint32_t feature);
+void color_manager_supported_tf_named(
+    void *data, struct wp_color_manager_v1 *manager, uint32_t tf);
+void color_manager_supported_primaries_named(
+    void *data, struct wp_color_manager_v1 *manager, uint32_t primaries);
+void color_manager_done(
+    void *data, struct wp_color_manager_v1 *manager);
+void xdg_wm_base_ping(
+    void *data, struct xdg_wm_base *shell, uint32_t serial);
 void xdg_toplevel_decoration_configure(
     void *data, struct zxdg_toplevel_decoration_v1 *decoration, uint32_t mode);
 void fractional_scale_preferred_scale(

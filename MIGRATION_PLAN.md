@@ -650,9 +650,16 @@ utmp backends where available.
 
 ## 13. Sequenced backlog (refreshed 2026-11-24)
 
-State: **33,710 of 48,830 C lines gone (69.0%)**, ~56% by effort, 34 modules
-ported, 497 harness assertions, `meson test` 5/5 in three build dirs.
-Remaining C: 15,120 lines, 2,346 of which are `*-shim.c` accessors.
+State: **33,796 of 48,830 C lines gone (69.2%)**, ~56% by effort, 34 modules
+ported, 500 harness assertions, `meson test` 5/5 in three build dirs.
+Remaining module C: 15,034 lines, plus 2,270 lines of `*-shim.c` accessors.
+
+**`wayland` is done.** `wayland.c` is down from 2,884 lines to **359**, and what
+is left is glue rather than logic: the fourteen generated-protocol listener
+*tables* (their layout comes from the generated headers, so C pins it for
+free), the tiny `wayland_shim_add_*_listener()` forwarders, and the three FDM
+callbacks (`fdm_hook`, `fdm_wayl`, `fdm_repeat`) that the FDM hands opaque
+pointers to. `wayland.zig` holds the other ~3,000 lines.
 
 `smoke.sh` now launches **real windows**: weston's headless backend creates no
 `wl_seat`, so foot refused to start ("no seats available"). When `Xvfb` is
@@ -783,8 +790,7 @@ Order matters: `search` and `wayland` first (they unblock the rest), then
 | **D2k5** done | `wayland`: `wayl_init()` (calloc, FDM hook, `wl_display_connect`, registry + roundtrip, the seven hard interface requirements and five warnings, the second roundtrip that fires the deferred listeners, the monitor summary log line, non-blocking socket, `fdm_add`, `wl_display_prepare_read`) and `wayl_destroy()` (the "terminals still running" sweep, monitor/seat teardown, 24 interface destroys, `fdm_del_no_close`, flush + disconnect). `fdm_hook`, `fdm_wayl` and `registry_listener` stay in C behind four forwarders; 28 new shims. 2 new harness checks run the real init-failure path | D2k4 | 1d |
 | **D2k6** done | `wayland`: `seat_handle_capabilities()` — keyboard/pointer/touch object creation and release, the client-side pointer surface + viewport, the cursor-shape device, and the touch inhibit/restore rules. Seven more shims; the keyboard/pointer/touch listener tables come from input.c through three forwarders. 3 new harness checks; every smoke launch drives it (weston announces pointer+keyboard) | D2k5 | 1d |
 | **D2k7** done | `wayland`: `handle_global()` — all 23 interfaces, each with its required/preferred version (`min(version, preferred)`), including the seat's repeat timerfd + xkb compose setup and the "late global" re-scans (data device, primary selection, text input, xdg-output per monitor). Rather than mirror `struct wl_interface`, `wayland_shim_iface_id()` matches the name and `wayland_shim_registry_bind()` performs the bind in C, so Zig switches on an integer and the generated symbols stay in C. 5 new harness checks drive the unknown/too-old paths | D2k6 | 2d |
-| **D2k8** | `wayland`: `handle_global_remove` (80 lines), `fdm_hook`/`fdm_wayl`/`fdm_repeat` (68), `color_manager_*` (~60) — the last 510 lines of wayland.c | D2k7 | 1–2d |
-| **D2d** | `wayland`: `handle_global`/`handle_global_remove`, `wayl_init`/`wayl_destroy`, seat capabilities and data devices | D2c | 3–4d |
+| **D2k8** done | `wayland`: the tail — `handle_global_remove()` (monitor branch: log, `surface_leave()` for every terminal mapped there because compositors do not unmap first, then `monitor_destroy()`; seat branch: warn and synthesise the keyboard/pointer leave the compositor owed us, then `seat_destroy()`; unknown branch warns), the `fixes`-gated `wp_fixes_v1.ack_global_remove` helper, `colorManagerCreateImageDescription()` with the five `wp_color_manager_v1` callbacks (parametric creator → linear TF + sRGB primaries → image description), and `xdg_wm_base_ping()`. 3 new harness checks (unknown global, monitor removal, seat removal — the seat needs a real key-binding manager because `seat_destroy()` calls `key_binding_remove_seat()`). `wayland.c` is now 359 lines of listener tables + FDM glue | D2k7 | 1d |
 | **D3** | `render` (5,479) — split into D3a chains/damage/cursor, D3b grid/csd/box-drawing glyph cache, D3c sixel/notifications/search-highlight | biggest module; do it after `wayland` so the surface/scale paths are Zig | 1.5–2w |
 | **D4** | `input` (3,687) — split into D4a keyboard/legacy+kitty protocols, D4b pointer/mouse/touch, D4c compose/IME plumbing | after B2 + key-binding | 1–1.5w |
 | **D5** | `key-binding` (661), `ime` (540), `url-mode` (833), `selection` S1+S3 (~600) | after B2/D4 | 4–5d |
@@ -793,7 +799,9 @@ Order matters: `search` and `wayland` first (they unblock the rest), then
 ### Track E — endgame (~2–3 days)
 
 - **E1** delete the struct-mirror shims (not the compile-time-knowledge ones,
-  see §12.9); shrink `terminal-shim.c` (279) and `selection-shim.c` (227).
+  see §12.9); shrink `terminal-shim.c` (1,125) and `selection-shim.c` (243).
+  Several newer shims are generated-protocol static inlines rather than struct
+  mirrors — those stay (§12.9).
 - **E2** decisions to close: `ReleaseSafe` vs `ReleaseFast` (§12.4 — fuzz
   first), PGO, `translate-c` spike (§12.1 — recommend abandoning it: the
   probe + mirrors have not produced an ABI bug yet), meson vs `build.zig`

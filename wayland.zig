@@ -2834,3 +2834,177 @@ export fn handle_global(
         else => {},
     }
 }
+
+// ─────────────────────────────────────────────────────────────────────────
+// Registry global removal
+// ─────────────────────────────────────────────────────────────────────────
+
+extern fn wayland_shim_keyboard_leave(seat: *types.Seat, kbd: ?*anyopaque, surface: ?*anyopaque) callconv(.c) void;
+extern fn wayland_shim_pointer_leave(seat: *types.Seat, pointer: ?*anyopaque, surface: ?*anyopaque) callconv(.c) void;
+extern fn wayland_shim_fixes_ack_global_remove(fixes: ?*anyopaque, registry: ?*anyopaque, name: u32) callconv(.c) void;
+
+const V_FIXES_ACK_GLOBAL_REMOVE: c_int = 2;
+
+export fn handle_global_remove(data: ?*anyopaque, registry: ?*anyopaque, name: u32) callconv(.c) void {
+    log_msg(LOG_CLASS_DEBUG, "wayland", "wayland.zig", @intCast(@src().line), "global removed: 0x%08x", name);
+
+    const wayl: *types.Wayland = @ptrCast(@alignCast(data.?));
+
+    // Check if this is an output
+    {
+        const monitors: *MonitorList = @ptrCast(&wayl.monitors);
+        var it = monitors.foreach();
+        while (it.next()) |node| {
+            const mon = &node.item;
+
+            if (mon.wl_name != name)
+                continue;
+
+            log_msg(LOG_CLASS_INFO, "wayland", "wayland.zig", @intCast(@src().line), "monitor unplugged or disabled: %s", mon.name);
+
+            // Update all terminals that are mapped here. On Sway 1.4,
+            // surfaces are *not* unmapped before the output is removed.
+            {
+                const TerminalList = tll.Tll(?*anyopaque);
+                const terms: *TerminalList = @ptrCast(&wayl.terms);
+                var ti = (@constCast(terms)).foreach();
+                while (ti.next()) |tnode| {
+                    const term: *types.Terminal = @ptrCast(@alignCast(tnode.item.?));
+                    const win = term.window.?;
+
+                    const outputs: *WindowOutputList = @ptrCast(&win.on_outputs);
+                    var oi = outputs.foreach();
+                    while (oi.next()) |onode| {
+                        if (onode.item.?.output == mon.output) {
+                            surface_leave(win, null, mon.output);
+                            break;
+                        }
+                    }
+                }
+            }
+
+            monitor_destroy(mon);
+            monitors.removeNode(node);
+            return ackRemove(wayl, registry, name);
+        }
+    }
+
+    // A seat?
+    {
+        const seats: *SeatList = @ptrCast(&wayl.seats);
+        var it = seats.foreach();
+        while (it.next()) |node| {
+            const seat = &node.item;
+
+            if (seat.wl_name != name)
+                continue;
+
+            log_msg(LOG_CLASS_INFO, "wayland", "wayland.zig", @intCast(@src().line), "seat destroyed: %s", seat.name);
+
+            if (seat.kbd_focus != null) {
+                log_msg(LOG_CLASS_WARNING, "wayland", "wayland.zig", @intCast(@src().line), "compositor destroyed seat '%s' without sending a keyboard leave event", seat.name);
+
+                if (seat.wl_keyboard != null) {
+                    const focus: *types.Terminal = seat.kbd_focus.?;
+                    wayland_shim_keyboard_leave(seat, seat.wl_keyboard, focus.window.?.surface.surf);
+                }
+            }
+
+            if (seat.mouse_focus != null) {
+                log_msg(LOG_CLASS_WARNING, "wayland", "wayland.zig", @intCast(@src().line), "compositor destroyed seat '%s' without sending a pointer leave event", seat.name);
+
+                if (seat.wl_pointer != null) {
+                    const focus: *types.Terminal = seat.mouse_focus.?;
+                    wayland_shim_pointer_leave(seat, seat.wl_pointer, focus.window.?.surface.surf);
+                }
+            }
+
+            seat_destroy(seat);
+            seats.removeNode(node);
+            return ackRemove(wayl, registry, name);
+        }
+    }
+
+    log_msg(LOG_CLASS_WARNING, "wayland", "wayland.zig", @intCast(@src().line), "unknown global removed: 0x%08x", name);
+
+    ackRemove(wayl, registry, name);
+}
+
+fn ackRemove(wayl: *types.Wayland, registry: ?*anyopaque, name: u32) void {
+    if (wayl.fixes != null and wayl.fixes_version >= V_FIXES_ACK_GLOBAL_REMOVE)
+        wayland_shim_fixes_ack_global_remove(wayl.fixes, registry, name);
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Colour management
+// ─────────────────────────────────────────────────────────────────────────
+
+extern fn wayland_shim_color_create_parametric_creator(manager: ?*anyopaque) callconv(.c) ?*anyopaque;
+extern fn wayland_shim_color_params_set_tf_named(params: ?*anyopaque, tf: u32) callconv(.c) void;
+extern fn wayland_shim_color_params_set_primaries_named(params: ?*anyopaque, primaries: u32) callconv(.c) void;
+extern fn wayland_shim_color_params_create(params: ?*anyopaque) callconv(.c) ?*anyopaque;
+extern fn wayland_shim_wm_base_pong(shell: ?*anyopaque, serial: u32) callconv(.c) void;
+
+// color-management-v1.h
+const WP_COLOR_MANAGER_V1_RENDER_INTENT_PERCEPTUAL_ENUM: u32 = 0;
+const WP_COLOR_MANAGER_V1_FEATURE_PARAMETRIC: u32 = 1;
+const WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_EXT_LINEAR: u32 = 2;
+const WP_COLOR_MANAGER_V1_PRIMARIES_SRGB: u32 = 1;
+
+fn colorManagerCreateImageDescription(wayl: *types.Wayland) void {
+    if (!wayl.color_management.have_feat_parametric)
+        return;
+
+    if (!wayl.color_management.have_primaries_srgb)
+        return;
+
+    if (!wayl.color_management.have_tf_ext_linear)
+        return;
+
+    const params = wayland_shim_color_create_parametric_creator(wayl.color_management.manager);
+
+    wayland_shim_color_params_set_tf_named(params, WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_EXT_LINEAR);
+    wayland_shim_color_params_set_primaries_named(params, WP_COLOR_MANAGER_V1_PRIMARIES_SRGB);
+
+    wayl.color_management.img_description = wayland_shim_color_params_create(params);
+}
+
+export fn color_manager_supported_intent(data: ?*anyopaque, manager: ?*anyopaque, render_intent: u32) callconv(.c) void {
+    _ = manager;
+    const wayl: *types.Wayland = @ptrCast(@alignCast(data.?));
+    if (render_intent == WP_COLOR_MANAGER_V1_RENDER_INTENT_PERCEPTUAL_ENUM)
+        wayl.color_management.have_intent_perceptual = true;
+}
+
+export fn color_manager_supported_feature(data: ?*anyopaque, manager: ?*anyopaque, feature: u32) callconv(.c) void {
+    _ = manager;
+    const wayl: *types.Wayland = @ptrCast(@alignCast(data.?));
+    if (feature == WP_COLOR_MANAGER_V1_FEATURE_PARAMETRIC)
+        wayl.color_management.have_feat_parametric = true;
+}
+
+export fn color_manager_supported_tf_named(data: ?*anyopaque, manager: ?*anyopaque, tf: u32) callconv(.c) void {
+    _ = manager;
+    const wayl: *types.Wayland = @ptrCast(@alignCast(data.?));
+    if (tf == WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_EXT_LINEAR)
+        wayl.color_management.have_tf_ext_linear = true;
+}
+
+export fn color_manager_supported_primaries_named(data: ?*anyopaque, manager: ?*anyopaque, primaries: u32) callconv(.c) void {
+    _ = manager;
+    const wayl: *types.Wayland = @ptrCast(@alignCast(data.?));
+    if (primaries == WP_COLOR_MANAGER_V1_PRIMARIES_SRGB)
+        wayl.color_management.have_primaries_srgb = true;
+}
+
+export fn color_manager_done(data: ?*anyopaque, manager: ?*anyopaque) callconv(.c) void {
+    _ = manager;
+    const wayl: *types.Wayland = @ptrCast(@alignCast(data.?));
+    colorManagerCreateImageDescription(wayl);
+}
+
+export fn xdg_wm_base_ping(data: ?*anyopaque, shell: ?*anyopaque, serial: u32) callconv(.c) void {
+    _ = data;
+    log_msg(LOG_CLASS_DEBUG, "wayland", "wayland.zig", @intCast(@src().line), "wm base ping");
+    wayland_shim_wm_base_pong(shell, serial);
+}

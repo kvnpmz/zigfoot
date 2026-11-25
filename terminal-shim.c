@@ -673,6 +673,48 @@ void *wayland_shim_get_xdg_output(struct zxdg_output_manager_v1 *manager,
 
 bool wayland_shim_fdm_add_repeat(struct fdm *fdm, struct seat *seat);
 
+/* wayland.zig: colour management (D2k8). */
+void *wayland_shim_color_create_parametric_creator(
+    struct wp_color_manager_v1 *manager)
+{
+    return wp_color_manager_v1_create_parametric_creator(manager);
+}
+
+void wayland_shim_color_params_set_tf_named(
+    struct wp_image_description_creator_params_v1 *params, uint32_t tf)
+{
+    wp_image_description_creator_params_v1_set_tf_named(params, tf);
+}
+
+void wayland_shim_color_params_set_primaries_named(
+    struct wp_image_description_creator_params_v1 *params, uint32_t primaries)
+{
+    wp_image_description_creator_params_v1_set_primaries_named(params, primaries);
+}
+
+void *wayland_shim_color_params_create(
+    struct wp_image_description_creator_params_v1 *params)
+{
+    return wp_image_description_creator_params_v1_create(params);
+}
+
+void wayland_shim_wm_base_pong(struct xdg_wm_base *shell, uint32_t serial)
+{
+    xdg_wm_base_pong(shell, serial);
+}
+
+void wayland_shim_fixes_ack_global_remove(
+    struct wl_fixes *fixes, struct wl_registry *registry, uint32_t name)
+{
+#if defined(WL_FIXES_ACK_GLOBAL_REMOVE_SINCE_VERSION)
+    wl_fixes_ack_global_remove(fixes, registry, name);
+#else
+    (void)fixes;
+    (void)registry;
+    (void)name;
+#endif
+}
+
 
 int wayland_shim_fcntl_getfl(int fd)
 {

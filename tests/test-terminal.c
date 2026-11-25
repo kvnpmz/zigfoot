@@ -3836,6 +3836,40 @@ test_handle_global(void)
     check(tll_length(wayl.monitors) == 0, "a too-old output is rejected");
 }
 
+
+static void
+test_global_remove(void)
+{
+    struct wayland wayl = {0};
+
+    /* Unknown global: nothing is touched, no fixes ack */
+    handle_global_remove(&wayl, NULL, 0xdead);
+    check(tll_length(wayl.monitors) == 0 && tll_length(wayl.seats) == 0,
+          "removing an unknown global changes nothing");
+
+    /* A monitor is looked up by wl_name and destroyed. (No wl_output proxy
+     * here, so monitor_destroy() only has the strings to free.) */
+    struct monitor mon = {0};
+    mon.wayl = &wayl;
+    mon.wl_name = 42;
+    mon.name = xstrdup("DP-1");
+    tll_push_back(wayl.monitors, mon);
+
+    handle_global_remove(&wayl, NULL, 42);
+    check(tll_length(wayl.monitors) == 0, "the removed monitor is dropped");
+
+    /* A seat is looked up by wl_name and destroyed */
+    wayl.key_binding_manager = key_binding_manager_new();
+    struct seat seat = {0};
+    seat.wayl = &wayl;
+    seat.wl_name = 7;
+    seat.kbd.repeat.fd = -1;
+    tll_push_back(wayl.seats, seat);
+
+    handle_global_remove(&wayl, NULL, 7);
+    check(tll_length(wayl.seats) == 0, "the removed seat is dropped");
+}
+
 int
 main(void)
 {
@@ -3865,6 +3899,7 @@ main(void)
     test_wayl_init_failure();
     test_seat_capabilities();
     test_handle_global();
+    test_global_remove();
     test_wayland_misc();
     test_osc8();
     test_size_notifications();
