@@ -873,12 +873,12 @@ Measured on this checkout, not carried over from §1.
 
 | Metric | 2026-11-24 | 2026-11-25 | Δ |
 |---|---|---|---|
-| Branch | +167 commits | **+192 commits** vs `origin/master` | +25 |
-| Foot-owned module C | 12,960 | **8,522** of 48,924 | −4,438 |
-| C eliminated | 73.5% | **82.6%** (40,402 lines) | +9.1pt |
+| Branch | +167 commits | **+193 commits** vs `origin/master` | +26 |
+| Foot-owned module C | 12,960 | **8,470** of 48,924 | −4,490 |
+| C eliminated | 73.5% | **82.7%** (40,454 lines) | +9.2pt |
 | `*-shim.c` accessors | 2,545 | **2,910** (11 files; `render.c` itself is gone) | +365 |
-| Zig source | ~37.8k | **45,565** lines / 42 files | +7.8k |
-| Harness assertions | 603 | **731** call sites (668 `check`, 63 `check_text`) + 30 Zig `test` blocks | +128 |
+| Zig source | ~37.8k | **45,636** lines / 42 files | +7.9k |
+| Harness assertions | 603 | **735** call sites (672 `check`, 63 `check_text`) + 30 Zig `test` blocks | +132 |
 | `meson test` | 5/5 × 3 dirs | **5/5 × 3 dirs** (`build`, `build-disabled`, `build-release`) | ✅ |
 | Real window launches | not verified | **6/6 pass** against the live `wayland-1` socket | ✅ |
 
@@ -894,7 +894,7 @@ Per-module burn-down (share of that module's original C that is gone):
 | `shm` | 329 / 1,110 | 70% | globals, `wl_shm`/`wl_buffer` stubs, punch-hole `#ifdef`s |
 | `debug` | 22 / 47 | 53% | ASAN stack-trace hook |
 | `render` | 0 / 5,479 | **100%** | `render.c` deleted in D3l4; `render.zig` is the module |
-| `input` | 2,522 / 3,687 | **32%** | D4a/b1/b2/d1 done; D4c (`execute_binding`), D4d2, D4e left |
+| `input` | 2,472 / 3,687 | **33%** | D4a/b1/b2/b3/d1 done; D4c (`execute_binding`), D4d2, D4e left |
 | `url-mode` | 833 / 833 | 0% | |
 | `main` | 770 / 770 | 0% | |
 | `server` / `client` | 707 / 679 | 0% | |
@@ -903,8 +903,8 @@ Per-module burn-down (share of that module's original C that is gone):
 
 **Percent complete: 81% by C volume, ~75% by effort (band 72–77%), 32/45
 top-level modules (47 counting `spawn_template`) with zero C left.**
-**Post-D4d1:** `input.c` is 3,618 → **2,522** (32% ported), module C 9,555 →
-**8,522**, harness 684 → **734** checks; `keymap.h` is down to 27 lines (types
+**Post-D4b3:** `input.c` is 3,618 → **2,472** (33% ported), module C 9,555 →
+**8,470**, harness 684 → **738** checks; `keymap.h` is down to 27 lines (types
 only — its 78 key tables are Zig data now), and `kitty-keymap.h`'s table is
 Zig too. `render.c` is **deleted** — 3,154 lines of C replaced by
 `render.zig` (5,933 lines) plus 1,765 lines of C-only shim (statistics,
@@ -977,6 +977,7 @@ dump (§14.5.2) for the cell/URL/CSD paths.
 | **D4b** | `key_press_release` (262) + `legacy_kbd_protocol` (158) + `kitty_kbd_protocol` (327) — port the C `UNITTEST` blocks into the harness as you go | 2–3d |
 | **D4c** | `execute_binding` (469) and the binding matchers | 1–1.5d |
 | **D4d1** done | `input`: the pointer helpers the listeners are built on — `mouse_button_state_reset()` (drops the button list and the double/triple-click counters and timer), `mouse_coord_pixel_to_cell()` (pixel → cell with the margins clamping to the first/last cell), `touch_is_active()` (idle/inhibited vs held/dragging/scrolling, plus the `wl_touch == NULL` short-circuit) and `mouse_scroll_multiplier()` (the configured scrollback multiplier on the normal grid, or on the alt grid only when the mouse is grabbed *and* alt-scrolling is on). 13 new harness checks, mostly around the coordinate clamping and the multiplier's four combinations | D4b2b | 0.5d |
+| **D4b3** done | `input`: **`keyboard_modifiers()`** — the virtual-modifier masking (Mutter), the `xkb_state_update_mask()` call, and the four cached `shift`/`alt`/`ctrl`/`super` flags via `xkb_state_mod_index_is_active(..., XKB_STATE_MODS_EFFECTIVE)`, then the cursor refresh when the pointer sits on the grid. 4 new harness checks (no modifiers, ctrl+shift, the untouched pair, and a virtual modifier being ignored) against a real keymap. The big `UNITTEST` block that follows it in `input.c` still drives the Zig function through the C `key_press_release()` + the new protocol encoders, and still passes | D4d1 | 0.5d |
 | **D4d2** | pointer listeners: `wl_pointer_enter/motion/leave/button/axis/frame`, `match_mouse_binding`, `mouse_scroll`, `alternate_scroll` (~450) | 1.5–2d |
 | **D4e** | touch + IME plumbing + the remaining seat glue | 1d |
 

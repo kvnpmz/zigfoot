@@ -45,6 +45,10 @@ void modifier_string(xkb_mod_mask_t mods, size_t sz, char mod_str[static sz],
                      const struct seat *seat);
 void keyboard_repeat_info(void *data, struct wl_keyboard *wl_keyboard,
                           int32_t rate, int32_t delay);
+void keyboard_modifiers(void *data, struct wl_keyboard *wl_keyboard,
+                        uint32_t serial, uint32_t mods_depressed,
+                        uint32_t mods_latched, uint32_t mods_locked,
+                        uint32_t group);
 const struct key_data *keymap_data_for_sym(xkb_keysym_t sym, size_t *count);
 const struct key_data *keymap_lookup(struct terminal *term, xkb_keysym_t sym,
                                      enum modifier mods);

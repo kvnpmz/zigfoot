@@ -831,59 +831,9 @@ keyboard_key(void *data, struct wl_keyboard *wl_keyboard, uint32_t serial,
     key_press_release(seat, seat->kbd_focus, serial, key + 8, state);
 }
 
-static void
-keyboard_modifiers(void *data, struct wl_keyboard *wl_keyboard, uint32_t serial,
-                   uint32_t mods_depressed, uint32_t mods_latched,
-                   uint32_t mods_locked, uint32_t group)
-{
-    struct seat *seat = data;
-
-    mods_depressed &= ~seat->kbd.virtual_modifiers;
-    mods_latched &= ~seat->kbd.virtual_modifiers;
-    mods_locked &= ~seat->kbd.virtual_modifiers;
-
-#if defined(_DEBUG)
-    char depressed[256];
-    char latched[256];
-    char locked[256];
-
-    modifier_string(mods_depressed, sizeof(depressed), depressed, seat);
-    modifier_string(mods_latched, sizeof(latched), latched, seat);
-    modifier_string(mods_locked, sizeof(locked), locked, seat);
-
-    LOG_DBG(
-        "modifiers: depressed=%s (0x%x), latched=%s (0x%x), locked=%s (0x%x), "
-        "group=%u",
-        depressed, mods_depressed, latched, mods_latched, locked, mods_locked,
-        group);
-#endif
-
-    if (seat->kbd.xkb_state != NULL) {
-        xkb_state_update_mask(
-            seat->kbd.xkb_state, mods_depressed, mods_latched, mods_locked, 0, 0, group);
-
-        /* Update state of modifiers we're interested in for e.g mouse events */
-        seat->kbd.shift = seat->kbd.mod_shift != XKB_MOD_INVALID
-            ? xkb_state_mod_index_is_active(
-                seat->kbd.xkb_state, seat->kbd.mod_shift, XKB_STATE_MODS_EFFECTIVE)
-            : false;
-        seat->kbd.alt = seat->kbd.mod_alt != XKB_MOD_INVALID
-            ? xkb_state_mod_index_is_active(
-                seat->kbd.xkb_state, seat->kbd.mod_alt, XKB_STATE_MODS_EFFECTIVE)
-            : false;
-        seat->kbd.ctrl = seat->kbd.mod_ctrl != XKB_MOD_INVALID
-            ? xkb_state_mod_index_is_active(
-                seat->kbd.xkb_state, seat->kbd.mod_ctrl, XKB_STATE_MODS_EFFECTIVE)
-            : false;
-        seat->kbd.super = seat->kbd.mod_super != XKB_MOD_INVALID
-            ? xkb_state_mod_index_is_active(
-                seat->kbd.xkb_state, seat->kbd.mod_super, XKB_STATE_MODS_EFFECTIVE)
-            : false;
-    }
-
-    if (seat->kbd_focus && seat->kbd_focus->active_surface == TERM_SURF_GRID)
-        term_xcursor_update_for_seat(seat->kbd_focus, seat);
-}
+/* keyboard_modifiers(), keyboard_key() and input_repeat() live in input.zig
+ * (D4b3); this UNITTEST exercises them through the still-C key_press_release()
+ * + the Zig protocol encoders. */
 
 UNITTEST
 {

@@ -2815,3 +2815,62 @@ export fn mouse_scroll_multiplier(term: *const Terminal, seat: *const Seat) call
     return if (use_multiplier) term.conf.?.scrollback.multiplier else 1.0;
 }
 
+// ─────────────────────────────────────────────────────────────────────────
+// keyboard_modifiers (D4b3)
+// ─────────────────────────────────────────────────────────────────────────
+
+extern fn xkb_state_mod_index_is_active(
+    state: ?*anyopaque, idx: u32, components: u32) callconv(.c) c_int;
+
+/// The compositor's modifier state changed: feed it to xkb, cache the four
+/// modifiers foot cares about (for mouse events and shortcut matching), and
+/// refresh the cursor if the pointer is over the grid.
+export fn keyboard_modifiers(
+    data: ?*anyopaque,
+    wl_keyboard: ?*anyopaque,
+    serial: u32,
+    mods_depressed_in: u32,
+    mods_latched_in: u32,
+    mods_locked_in: u32,
+    group: u32,
+) callconv(.c) void {
+    _ = wl_keyboard;
+    _ = serial;
+
+    const seat: *Seat = @ptrCast(@alignCast(data orelse return));
+
+    // Some compositors (Mutter) report virtual modifiers in addition to the
+    // real ones; they must not take part in any matching.
+    const mods_depressed = mods_depressed_in & ~seat.kbd.virtual_modifiers;
+    const mods_latched = mods_latched_in & ~seat.kbd.virtual_modifiers;
+    const mods_locked = mods_locked_in & ~seat.kbd.virtual_modifiers;
+
+    // (C logged the three masks via modifier_string() under _DEBUG; the
+    // harness builds with -D_DEBUG but Zig has no such switch, and the
+    // strings are only useful when debugging interactively.)
+    if (seat.kbd.xkb_state) |state| {
+        _ = xkb_state_update_mask(
+            state, mods_depressed, mods_latched, mods_locked, 0, 0, group);
+
+        // Update the state of the modifiers we're interested in, for e.g.
+        // mouse events.
+        seat.kbd.shift = seat.kbd.mod_shift != XKB_MOD_INVALID and
+            xkb_state_mod_index_is_active(
+                state, seat.kbd.mod_shift, XKB_STATE_MODS_EFFECTIVE) == 1;
+        seat.kbd.alt = seat.kbd.mod_alt != XKB_MOD_INVALID and
+            xkb_state_mod_index_is_active(
+                state, seat.kbd.mod_alt, XKB_STATE_MODS_EFFECTIVE) == 1;
+        seat.kbd.ctrl = seat.kbd.mod_ctrl != XKB_MOD_INVALID and
+            xkb_state_mod_index_is_active(
+                state, seat.kbd.mod_ctrl, XKB_STATE_MODS_EFFECTIVE) == 1;
+        seat.kbd.super = seat.kbd.mod_super != XKB_MOD_INVALID and
+            xkb_state_mod_index_is_active(
+                state, seat.kbd.mod_super, XKB_STATE_MODS_EFFECTIVE) == 1;
+    }
+
+    if (seat.kbd_focus) |focused| {
+        if (focused.active_surface == .grid)
+            term_xcursor_update_for_seat(focused, seat);
+    }
+}
+

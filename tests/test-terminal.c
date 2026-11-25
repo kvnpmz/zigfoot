@@ -82,6 +82,10 @@ void modifier_string(xkb_mod_mask_t mods, size_t sz,
                      char mod_str[static sz], const struct seat *seat);
 bool start_repeater(struct seat *seat, uint32_t key);
 bool stop_repeater(struct seat *seat, uint32_t key);
+void keyboard_modifiers(void *data, struct wl_keyboard *wl_keyboard,
+                        uint32_t serial, uint32_t mods_depressed,
+                        uint32_t mods_latched, uint32_t mods_locked,
+                        uint32_t group);
 void keyboard_enter(void *data, struct wl_keyboard *wl_keyboard,
                     uint32_t serial, struct wl_surface *surface,
                     struct wl_array *keys);
@@ -6215,6 +6219,58 @@ test_pointer_helpers(void)
     term_free(term);
 }
 
+/*
+ * keyboard_modifiers() (input.zig, D4b3): the xkb state update and the
+ * cached shift/alt/ctrl/super flags, including the virtual-modifier masking.
+ */
+static void
+test_keyboard_modifiers(void)
+{
+    struct xkb_context *ctx = xkb_context_new(XKB_CONTEXT_NO_FLAGS);
+    struct xkb_keymap *km = ctx != NULL
+        ? xkb_keymap_new_from_names(ctx, NULL, XKB_KEYMAP_COMPILE_NO_FLAGS)
+        : NULL;
+    if (km == NULL) {
+        printf("skip: no xkb keymap available\n");
+        if (ctx != NULL)
+            xkb_context_unref(ctx);
+        return;
+    }
+
+    struct seat seat;
+    memset(&seat, 0, sizeof(seat));
+    seat.name = "modifier-test";
+    seat.kbd.xkb = ctx;
+    seat.kbd.xkb_keymap = km;
+    seat.kbd.xkb_state = xkb_state_new(km);
+    seat.kbd.mod_shift = xkb_keymap_mod_get_index(km, XKB_MOD_NAME_SHIFT);
+    seat.kbd.mod_ctrl = xkb_keymap_mod_get_index(km, XKB_MOD_NAME_CTRL);
+    seat.kbd.mod_alt = xkb_keymap_mod_get_index(km, XKB_MOD_NAME_ALT);
+    seat.kbd.mod_super = xkb_keymap_mod_get_index(km, XKB_MOD_NAME_LOGO);
+
+    keyboard_modifiers(&seat, NULL, 1, 0, 0, 0, 0);
+    check(!seat.kbd.shift && !seat.kbd.ctrl && !seat.kbd.alt && !seat.kbd.super,
+          "no depressed modifiers clears all four flags");
+
+    keyboard_modifiers(&seat, NULL, 2,
+                       (1u << seat.kbd.mod_ctrl) | (1u << seat.kbd.mod_shift),
+                       0, 0, 0);
+    check(seat.kbd.ctrl && seat.kbd.shift,
+          "ctrl+shift sets both cached flags");
+    check(!seat.kbd.alt && !seat.kbd.super,
+          "the other modifiers stay clear");
+
+    /* Virtual modifiers (Mutter) are masked out before xkb sees them. */
+    seat.kbd.virtual_modifiers = 1u << seat.kbd.mod_ctrl;
+    keyboard_modifiers(&seat, NULL, 3, 1u << seat.kbd.mod_ctrl, 0, 0, 0);
+    check(!seat.kbd.ctrl && !seat.kbd.shift,
+          "a virtual modifier is ignored");
+
+    xkb_state_unref(seat.kbd.xkb_state);
+    xkb_keymap_unref(km);
+    xkb_context_unref(ctx);
+}
+
 int
 main(void)
 {
@@ -6259,6 +6315,7 @@ main(void)
     test_keymap_lookup();
     test_kbd_protocols();
     test_pointer_helpers();
+    test_keyboard_modifiers();
     test_scrollback_indicator();
     test_search_box_offset();
     test_url_label();
