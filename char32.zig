@@ -195,3 +195,26 @@ export fn c32cat(dst: [*]u32, src: [*]const u32) callconv(.c) [*]u32 {
     return c32ncat(dst, src, std.math.maxInt(usize));
 }
 
+
+/// `wcscpy()`.
+export fn c32cpy(dst: [*]u32, src: [*]const u32) callconv(.c) [*]u32 {
+    var i: usize = 0;
+    while (src[i] != 0) : (i += 1)
+        dst[i] = src[i];
+    dst[i] = 0;
+    return dst;
+}
+
+/// `wcsncasecmp()`: the URL jump labels compare the entered keys this way.
+export fn c32ncasecmp(s1: [*]const u32, s2: [*]const u32, n: usize) callconv(.c) c_int {
+    return wcsncasecmp(s1, s2, n);
+}
+
+extern fn wcsncasecmp(s1: [*]const u32, s2: [*]const u32, n: usize) callconv(.c) c_int;
+extern fn towupper(wc: c_int) callconv(.c) c_int;
+
+/// `towupper()` on a char32_t (the locale-dependent libc one).
+export fn toc32upper(c: u32) callconv(.c) u32 {
+    return @bitCast(towupper(@bitCast(c)));
+}
+

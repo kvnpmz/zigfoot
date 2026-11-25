@@ -55,6 +55,9 @@
 
 /* Ported to render.zig; exposed for the harness only. */
 unsigned render_presentation_frame_count(int64_t total_us, float refresh);
+int render_url_format_label(char32_t *label, const char32_t *key,
+                            const char32_t *url, bool show_url,
+                            size_t entered_key_len, int max_cols);
 size_t render_search_box_glyph_offset(
     size_t glyph_offset, size_t visible_cells, size_t total_cells,
     size_t cursor_cell_idx);
@@ -5378,6 +5381,35 @@ test_search_box_offset(void)
 }
 
 
+/* D3k4: the jump-label text (the label sub-surfaces need a compositor) */
+static void
+test_url_label(void)
+{
+    char32_t label[32];
+    const char32_t key[] = {'a', 'b', 'c', 0};
+    const char32_t url[] = {'h', 't', 't', 'p', 0};
+
+    int cols = render_url_format_label(label, key, url, true, 0, 80);
+    check(label[0] == 'A' && label[1] == 'B' && label[2] == 'C' &&
+          label[3] == ':' && label[4] == ' ' && label[5] == 'h',
+          "the label is the upper-cased key, ': ', then the URL");
+    check(cols == 9, "the label's width is the whole string when it fits");
+
+    cols = render_url_format_label(label, key, url, true, 2, 80);
+    check(label[0] == ' ' && label[1] == ' ' && label[2] == 'C',
+          "already-entered key characters are blanked");
+    check(cols == 9, "blanked characters still occupy cells");
+
+    cols = render_url_format_label(label, key, NULL, false, 0, 2);
+    check(cols == 2, "a label wider than the window is clamped to max_cols");
+    check(label[1] == 0x2026, "the truncated label ends in an ellipsis");
+    check(label[2] == 0, "the truncated label is NUL-terminated");
+
+    check(render_url_format_label(label, key, NULL, false, 0, 0) == 0,
+          "max_cols 0 renders nothing");
+}
+
+
 int
 main(void)
 {
@@ -5412,6 +5444,7 @@ main(void)
     test_reapply_old_damage();
     test_scrollback_indicator();
     test_search_box_offset();
+    test_url_label();
     test_grid_render_scroll();
     test_render_sixel();
     test_csd_buttons();

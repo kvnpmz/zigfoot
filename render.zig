@@ -3816,3 +3816,282 @@ export fn render_search_box(term: *Terminal) callconv(.c) void {
     free(widths_raw);
 }
 
+
+
+// ─────────────────────────────────────────────────────────────────────────
+// URL jump labels (D3k4)
+// ─────────────────────────────────────────────────────────────────────────
+
+extern fn c32cpy(dst: [*]u32, src: [*]const u32) callconv(.c) [*]u32;
+extern fn c32ncasecmp(s1: [*]const u32, s2: [*]const u32, n: usize) callconv(.c) c_int;
+extern fn toc32upper(c: u32) callconv(.c) u32;
+
+const ELLIPSIS: u32 = 0x2026;
+const colon_space = [_:0]u32{ ':', ' ' };
+
+/// One label's geometry and text, built in the first pass so the second pass
+/// can allocate all buffers at once with shm_get_many().
+const UrlLabel = extern struct {
+    url: *const types.WlUrl,
+    text: [*]u32,
+    x: c_int,
+    y: c_int,
+};
+
+/// Builds the jump-label text in `label` and returns how many cells it
+/// occupies, or 0 when nothing is left to show. The buffer must hold
+/// `key_len + 2 + url_len + 1` chars. The label is the upper-cased key, then
+/// ": " and the URL (or just the key), with the already-entered key
+/// characters blanked and an ellipsis where it overflows `max_cols`.
+fn buildUrlLabel(
+    label: [*]u32,
+    key: [*]const u32,
+    url_wchars: [*]const u32,
+    show_url: bool,
+    entered_key_len: usize,
+    max_cols: c_int,
+) c_int {
+    const key_len = c32Len(key);
+    const chars: usize = key_len + (if (show_url) 2 + c32Len(url_wchars) else 0);
+    label[chars] = 0;
+
+    if (show_url) {
+        _ = c32cpy(label, key);
+        _ = c32cat(label, &colon_space);
+        _ = c32cat(label, url_wchars);
+    } else {
+        _ = c32ncpy(label, key, chars);
+    }
+
+    // Upper case the key characters
+    var i: usize = 0;
+    while (i < key_len) : (i += 1)
+        label[i] = toc32upper(label[i]);
+
+    // Blank the characters the user has already typed
+    i = 0;
+    while (i < entered_key_len) : (i += 1)
+        label[i] = ' ';
+
+    // Truncate so the label does not extend outside the window, without
+    // cutting a double-width character in half
+    var cols: c_int = 0;
+    i = 0;
+    while (i <= c32Len(label)) : (i += 1) {
+        const width_so_far: c_int = c32swidth(label, i);
+
+        if (width_so_far == -1)
+            continue;
+
+        if (width_so_far >= max_cols) {
+            if (i > 0)
+                label[i - 1] = ELLIPSIS;
+            label[i] = 0;
+            cols = max_cols;
+            break;
+        }
+
+        cols = width_so_far;
+    }
+
+    return cols;
+}
+
+/// Same as buildUrlLabel(), with a C-friendly signature, for the harness.
+export fn render_url_format_label(
+    label: [*]u32,
+    key: [*]const u32,
+    url: ?[*]const u32,
+    show_url: bool,
+    entered_key_len: usize,
+    max_cols: c_int,
+) callconv(.c) c_int {
+    return buildUrlLabel(
+        label, key, url orelse &empty_wtext, show_url, entered_key_len, max_cols);
+}
+
+export fn render_urls(term: *Terminal) callconv(.c) void {
+    const win = term.window.?;
+    const urls: *tll.Tll(types.WlUrl) = @ptrCast(&win.urls);
+    const url_count = urls.len();
+    std.debug.assert(url_count > 0);
+
+    const scale = term.scale;
+    const x_margin: c_int = @intFromFloat(@round(2.0 * @as(f64, scale)));
+    const y_margin: c_int = @intFromFloat(@round(1.0 * @as(f64, scale)));
+
+    const grid = term.grid.?;
+
+    // View start, counted from the *current* scrollback start
+    const scrollback_end: c_int = (grid.offset + term.rows) & (grid.num_rows - 1);
+    const view_start: c_int =
+        (grid.view - scrollback_end + grid.num_rows) & (grid.num_rows - 1);
+    const view_end: c_int = view_start + term.rows - 1;
+
+    const show_url = term.url.show_uri_on_jump_label;
+    const entered_key_len = c32Len(&term.url.keys);
+
+    // Pass one: build each label and its geometry, but do not render yet.
+    const info_raw = xmalloc(url_count * @sizeOf(UrlLabel)) orelse unreachable;
+    const info: [*]UrlLabel = @ptrCast(@alignCast(info_raw));
+    const widths_raw = xmalloc(url_count * @sizeOf(c_int)) orelse unreachable;
+    const widths: [*]c_int = @ptrCast(@alignCast(widths_raw));
+    const heights_raw = xmalloc(url_count * @sizeOf(c_int)) orelse unreachable;
+    const heights: [*]c_int = @ptrCast(@alignCast(heights_raw));
+
+    var render_count: usize = 0;
+
+    var it = urls.foreach();
+    while (it.next()) |node| {
+        const item = &node.item;
+        const url: *const types.Url = @ptrCast(@alignCast(item.url orelse continue));
+        const key = url.key orelse continue;
+
+        const surf = item.surf.surface.surf;
+        const sub_surf = item.surf.sub;
+        if (surf == null or sub_surf == null)
+            continue;
+
+        var hide = false;
+        const pos = &url.range.start;
+        const row_abs: c_int =
+            (pos.row - scrollback_end + grid.num_rows) & (grid.num_rows - 1);
+
+        if (row_abs < view_start or row_abs > view_end)
+            hide = true;
+        if (c32Len(key) <= entered_key_len)
+            hide = true;
+        if (c32ncasecmp(&term.url.keys, key, entered_key_len) != 0)
+            hide = true;
+
+        if (hide) {
+            wayland_shim_surface_attach(surf, null, 0, 0);
+            wayland_shim_surface_commit(surf);
+            continue;
+        }
+
+        const col: c_int = pos.col;
+        var row: c_int = pos.row - grid.view;
+        while (row < 0)
+            row += grid.num_rows;
+        row &= grid.num_rows - 1;
+
+        // Position the label slightly above and to the left
+        var x: c_int = col * term.cell_width - @divTrunc(15 * term.cell_width, 10);
+        var y: c_int = row * term.cell_height - @divTrunc(5 * term.cell_height, 10);
+
+        // Don't position it outside our window
+        if (x < -term.margins.left)
+            x = -term.margins.left;
+        if (y < -term.margins.top)
+            y = -term.margins.top;
+
+        // Maximum width of the label, in pixels
+        const max_width: c_int =
+            term.width - term.margins.left - term.margins.right - x;
+        const max_cols: c_int = @divTrunc(max_width, term.cell_width);
+
+        const key_len = c32Len(key);
+        const url_str = url.url orelse continue;
+        const url_str_len = std.mem.len(url_str);
+
+        var url_len: usize = mbsntoc32(null, url_str, url_str_len + 1, 0);
+        if (url_len == std.math.maxInt(usize))
+            url_len = 0;
+
+        const url_wchars_raw = xmalloc((url_len + 1) * @sizeOf(u32)) orelse unreachable;
+        const url_wchars: [*]u32 = @ptrCast(@alignCast(url_wchars_raw));
+        _ = mbsntoc32(url_wchars, url_str, url_str_len + 1, url_len + 1);
+
+        // Format the label, not yet subject to any size limitations
+        const label_raw = xmalloc(
+            (key_len + (if (show_url) 2 + url_len else 0) + 1) * @sizeOf(u32),
+        ) orelse unreachable;
+        const label: [*]u32 = @ptrCast(@alignCast(label_raw));
+
+        const cols = buildUrlLabel(
+            label, key, url_wchars, show_url, entered_key_len, max_cols);
+
+        free(url_wchars_raw);
+
+        if (cols == 0) {
+            free(label_raw);
+            continue;
+        }
+
+        const width: c_int = snapToScale(
+            x_margin + cols * term.cell_width + x_margin, scale);
+        const height: c_int = snapToScale(
+            y_margin + term.cell_height + y_margin, scale);
+
+        // The label buffer is heap allocated (C's was a VLA and got copied
+        // with xc32dup()); it is freed by the second pass.
+        info[render_count] = .{
+            .url = item,
+            .text = label,
+            .x = x,
+            .y = y,
+        };
+        widths[render_count] = width;
+        heights[render_count] = height;
+        render_count += 1;
+    }
+
+    if (render_count == 0) {
+        free(info_raw);
+        free(widths_raw);
+        free(heights_raw);
+        return;
+    }
+
+    // Pass two: one shared SHM pool for every label
+    const chain: *types.ShmBufferChain = @ptrCast(@alignCast(term.render.chains.url.?));
+    const bufs_raw = xmalloc(render_count * @sizeOf(?*Buffer)) orelse unreachable;
+    const bufs: [*]?*Buffer = @ptrCast(@alignCast(bufs_raw));
+
+    shm_get_many(chain, render_count, widths, heights, bufs);
+
+    const fg: u32 = if (term.conf.?.colors_dark.use_custom.jump_label)
+        term.conf.?.colors_dark.jump_label.fg
+    else
+        term.colors.table[0];
+    const bg: u32 = if (term.conf.?.colors_dark.use_custom.jump_label)
+        term.conf.?.colors_dark.jump_label.bg
+    else
+        term.colors.table[3];
+
+    var n: usize = 0;
+    while (n < render_count) : (n += 1) {
+        const sub_surf = &info[n].url.surf;
+        const label = info[n].text;
+        const x = info[n].x;
+        const y = info[n].y;
+
+        std.debug.assert(sub_surf.surface.surf != null);
+        std.debug.assert(sub_surf.sub != null);
+
+        const buf = bufs[n] orelse {
+            free(@ptrCast(label));
+            continue;
+        };
+
+        wayland_shim_subsurface_set_position(
+            sub_surf.sub,
+            roundfDiv(term.margins.left + x, scale),
+            roundfDiv(term.margins.top + y, scale),
+        );
+
+        render_osd(
+            term, sub_surf, @ptrCast(term.fonts[0]), buf, label,
+            fg, 0xff000000 | bg, @intCast(x_margin),
+        );
+
+        free(@ptrCast(label));
+    }
+
+    free(info_raw);
+    free(widths_raw);
+    free(heights_raw);
+    free(bufs_raw);
+}
+
