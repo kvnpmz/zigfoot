@@ -903,11 +903,14 @@ Per-module burn-down (share of that module's original C that is gone):
 
 **Percent complete: 74% by C volume, ~60% by effort (band 58–63%), 31/45
 top-level modules (46 counting `spawn_template`) with zero C left.**
-**Post-D3k2a:** `render.c` is 3,154 → **2,520** lines, module C 12,709 → **12,075**
-(75.3% of the original C gone), harness 605 → **637** checks, and
-`full-check.sh` now actually launches the five windows (§14.5.1). Real
-presentation feedback is not delivered to these short-lived smoke windows, so
-the callback is covered by the fabricated-context checks, not by the launches.
+**Post-D3k2b:** `render.c` is 3,154 → **2,334** lines (57.4% of `render` ported),
+module C 12,709 → **11,889** (75.7% of the original C gone), harness 605 →
+**639** checks, and `full-check.sh` now actually launches the five windows
+(§14.5.1). `smoke.sh` also runs a sixth launch with `render-timer=osd` +
+`scrollback-indicator=percentage`, which exercises the new OSD painter on a real
+compositor. Real presentation feedback is still not delivered to these
+short-lived windows, so `presented()` is covered by the fabricated-context
+checks, not by the launches.
 
 The effort figure is §13's 59% at 12,960 lines, advanced by the 251 lines D3e–D3i
 removed — all of them render code, the most expensive per line (1.4× weight),
@@ -944,7 +947,7 @@ high-blast-radius functions land last, after their helpers are already Zig.
 | **D3j** | `render_overlay()` + `render_overlay_single_pixel()` and `render_ime_preedit_for_seat()` / `render_ime_preedit()` (367 lines) | 1–2d |
 | **D3k1** done | `render`: the presentation-feedback trio — `sync_output` (empty), `presented` (the input→commit→presented breakdown, the monitor-frame bucket and the err/warn/info log, then the feedback teardown) and `discarded` — plus `render_init()`/`render_destroy()`: the two-pointer renderer object (C keeps a `_Static_assert` on the same size, since the still-C hook reads `renderer->wayl`) and the `fdm_hook_refresh_pending_terminals` registration (that hook lost its `static` until D3l4). `struct timeval` is platform-dependent, so the C-allocated presentation context is read through three accessors that die with `grid_render()`; the exit-time statistics and their `DESTRUCTOR` stay in C because the attribute is not portably expressible in Zig. 12 new harness checks: init/destroy against a real `fdm`, the frame arithmetic at 60/120 Hz and refresh=0, and `presented()` end-to-end for all four timing branches | D3j | 1d |
 | **D3k2a** done | `render`: `force_full_repaint()` (drain the scroll-damage list, repaint the margins, `term_damage_view()`) and `reapply_old_damage()` — the two-frames-old `memcpy` shortcut, the row scan that builds this frame's dirty region, the "every cell dirty" bail-out, the scroll-damage-dependent subtract-vs-copy clip choice, and the `PIXMAN_OP_SRC` composite of the old frame. C leaks the region it just built on the full-repaint branch; the Zig version `fini`s it before taking the same path. 4 new harness checks (memcpy path, composite path, scroll-damage drain, re-dirtying) | D3k1 | 0.5d |
-| **D3k2b** | `render_scrollback_position()` and `render_render_timer()` (~190) — both paint into a sub-surface buffer | D3k2a | 1d |
+| **D3k2b** done | `render`: `render_scrollback_position()` — the indicator create/destroy lifecycle (`wayl_win_subsurface_new()` on demand, destroy when the viewport returns to the bottom), the scrollback-start scan, the rebased-view percentage, the three formats (percentage text via `snprintf`+`mbstoc32`, line number with `ceilf(log10f(num_rows))` cells, configured text), the fractional-scale snapping of width/height/x/y, the fixed/relative vertical placement (search-box aware) and the off-screen unmap. `render_render_timer()` — the µs string, the same snapping, the sub-surface position and the OSD paint. 5 shared helpers (`snapToScale`, `roundfDiv`, `osdMargin`) keep the float semantics explicit. 2 new harness checks for the early-outs; `smoke.sh` now runs a sixth launch with `render-timer=osd` + `scrollback-indicator=percentage` so the painting paths execute against a real compositor | D3k2a | 1d |
 | **D3k3** | `render_search_box()` (343) — reuses D3i's OSD painter | 1–1.5d |
 | **D3k4** | `render_urls()` (226) | 1d |
 | **D3l1** | `render_worker_thread()`, `render_wait_for_preapply_damage()` (~150) — the thread/lock path, keep the C11 trap from C5 in mind | 1d |

@@ -3175,3 +3175,228 @@ export fn reapply_old_damage(term: *Terminal, new_buf: *Buffer, old: *Buffer) ca
     render_shim_region_fini(regionPtr(&dirty));
 }
 
+
+
+// ─────────────────────────────────────────────────────────────────────────
+// Scrollback indicator and render timer (D3k2b)
+// ─────────────────────────────────────────────────────────────────────────
+
+extern fn wayl_win_subsurface_new(
+    win: *types.WlWindow, surf: *types.WaylSubSurface, allow_pointer_input: bool,
+) callconv(.c) bool;
+extern fn wayl_win_subsurface_destroy(surf: ?*types.WaylSubSurface) callconv(.c) void;
+extern fn mbsntoc32(dst: ?[*]u32, src: [*c]const u8, nms: usize, len: usize) callconv(.c) usize;
+
+/// `roundf(scale * ceilf(v / scale))`: snap a pixel size outwards to the
+/// buffer scale.
+fn snapToScale(v: c_int, scale: f32) c_int {
+    return @intFromFloat(@round(scale * @ceil(@as(f32, @floatFromInt(v)) / scale)));
+}
+
+/// `roundf(v / scale)`: sub-surface positions are surface-local.
+fn roundfDiv(v: c_int, scale: f32) c_int {
+    return @intFromFloat(@round(@as(f32, @floatFromInt(v)) / scale));
+}
+
+/// `(int)roundf(3. * scale)`: the indicator/timer padding.
+fn osdMargin(scale: f32) c_int {
+    return @intFromFloat(@round(3.0 * @as(f64, scale)));
+}
+
+export fn render_scrollback_position(term: *Terminal) callconv(.c) void {
+    const conf = term.conf.?;
+
+    if (conf.scrollback.indicator.position == .none)
+        return;
+
+    const win = term.window.?;
+    const grid = term.grid.?;
+
+    if (grid.view == grid.offset) {
+        if (win.scrollback_indicator.surface.surf != null) {
+            wayl_win_subsurface_destroy(&win.scrollback_indicator);
+        }
+        return;
+    }
+
+    if (win.scrollback_indicator.surface.surf == null) {
+        if (!wayl_win_subsurface_new(win, &win.scrollback_indicator, false)) {
+            log_msg(
+                LOG_CLASS_ERROR, "render", "render.zig", @intCast(@src().line),
+                "failed to create scrollback indicator surface");
+            return;
+        }
+    }
+
+    std.debug.assert(win.scrollback_indicator.surface.surf != null);
+    std.debug.assert(win.scrollback_indicator.sub != null);
+
+    // Find the absolute row number of the scrollback start
+    var scrollback_start: c_int = grid.offset + term.rows;
+    var empty_rows: c_int = 0;
+    while (grid.rows.?[@intCast(scrollback_start & (grid.num_rows - 1))] == null) {
+        scrollback_start += 1;
+        empty_rows += 1;
+    }
+
+    // Rebase the viewport against the scrollback start (so that 0 is at the
+    // beginning of the scrollback)
+    var rebased_view: c_int = grid.view - scrollback_start + grid.num_rows;
+    rebased_view &= grid.num_rows - 1;
+
+    // How much of the scrollback is actually used?
+    const populated_rows: c_int = grid.num_rows - empty_rows;
+    std.debug.assert(populated_rows > 0);
+    std.debug.assert(populated_rows <= grid.num_rows);
+
+    // How far down in the scrollback we are:
+    //    0% -> at the beginning, 100% -> at the bottom
+    const percent: f64 = if (rebased_view + term.rows == populated_rows)
+        1.0
+    else
+        @as(f64, @floatFromInt(rebased_view)) /
+            @as(f64, @floatFromInt(populated_rows - term.rows));
+
+    var text_buf: [64]u32 = undefined;
+    var text: [*]const u32 = &text_buf;
+    var cell_count: c_int = 0;
+
+    switch (conf.scrollback.indicator.format) {
+        .percentage => {
+            var str_buf: [8]u8 = undefined;
+            const str = std.fmt.bufPrintZ(
+                &str_buf, "{d}%", .{@as(c_int, @intFromFloat(100.0 * percent))}) catch unreachable;
+            _ = mbsntoc32(&text_buf, str.ptr, text_buf.len, str.len);
+            cell_count = 3;
+        },
+
+        .lineno => {
+            var str_buf: [64]u8 = undefined;
+            const str = std.fmt.bufPrintZ(
+                &str_buf, "{d}", .{rebased_view + 1}) catch unreachable;
+            _ = mbsntoc32(&text_buf, str.ptr, text_buf.len, str.len);
+            cell_count = @intFromFloat(@ceil(@log10(@as(f32, @floatFromInt(grid.num_rows)))));
+        },
+
+        .text => {
+            text = conf.scrollback.indicator.text.?;
+            cell_count = @intCast(c32Len(text));
+        },
+    }
+
+    const scale = term.scale;
+    const margin = osdMargin(scale);
+
+    var width: c_int = margin + cell_count * term.cell_width + margin;
+    var height: c_int = margin + term.cell_height + margin;
+
+    width = snapToScale(width, scale);
+    height = snapToScale(height, scale);
+
+    // Where to render - parent relative coordinates
+    var surf_top: c_int = 0;
+    switch (conf.scrollback.indicator.position) {
+        .none => unreachable,
+
+        .fixed => surf_top = term.cell_height - margin,
+
+        .relative => {
+            var lines: c_int = term.rows - 2; // Avoid the first and last row
+            if (term.is_searching) {
+                // Don't collide with the scrollback search box
+                lines -= 1;
+            }
+
+            lines = @max(lines, 0);
+
+            const pixels: c_int = @max(lines * term.cell_height - height + 2 * margin, 0);
+            surf_top = term.cell_height - margin +
+                @as(c_int, @intFromFloat(percent * @as(f64, @floatFromInt(pixels))));
+        },
+    }
+
+    var x: c_int = term.width - margin - width;
+    var y: c_int = term.margins.top + surf_top;
+
+    x = snapToScale(x, scale);
+    y = snapToScale(y, scale);
+
+    if (y + height > term.height) {
+        wayland_shim_surface_attach(win.scrollback_indicator.surface.surf, null, 0, 0);
+        wayland_shim_surface_commit(win.scrollback_indicator.surface.surf);
+        return;
+    }
+
+    const chain: *types.ShmBufferChain =
+        @ptrCast(@alignCast(term.render.chains.scrollback_indicator.?));
+    const buf = shm_get_buffer(chain, width, height) orelse return;
+
+    wayland_shim_subsurface_set_position(
+        win.scrollback_indicator.sub, roundfDiv(x, scale), roundfDiv(y, scale));
+
+    var fg: u32 = term.colors.table[0];
+    var bg: u32 = term.colors.table[8 + 4];
+    if (conf.colors_dark.use_custom.scrollback_indicator) {
+        fg = conf.colors_dark.scrollback_indicator.fg;
+        bg = conf.colors_dark.scrollback_indicator.bg;
+    }
+
+    render_osd(
+        term,
+        &win.scrollback_indicator,
+        @ptrCast(term.fonts[0]),
+        buf,
+        text,
+        fg,
+        0xff000000 | bg,
+        @intCast(width - margin - @as(c_int, @intCast(c32Len(text))) * term.cell_width),
+    );
+}
+
+export fn render_render_timer(term: *Terminal, render_time: Timespec) callconv(.c) void {
+    const win = term.window.?;
+
+    const usecs: f64 =
+        @as(f64, @floatFromInt(render_time.tv_sec)) * 1000000.0 +
+        @as(f64, @floatFromInt(render_time.tv_nsec)) / 1000.0;
+
+    var str_buf: [256]u8 = undefined;
+    const str = std.fmt.bufPrintZ(&str_buf, "{d:.2} µs", .{usecs}) catch unreachable;
+
+    var text_buf: [256]u32 = undefined;
+    _ = mbsntoc32(&text_buf, str.ptr, text_buf.len, str.len);
+
+    const text: [*]const u32 = &text_buf;
+
+    const scale = term.scale;
+    const cell_count: c_int = @intCast(c32Len(text));
+    const margin = osdMargin(scale);
+
+    var width: c_int = margin + cell_count * term.cell_width + margin;
+    var height: c_int = margin + term.cell_height + margin;
+
+    width = snapToScale(width, scale);
+    height = snapToScale(height, scale);
+
+    const chain: *types.ShmBufferChain =
+        @ptrCast(@alignCast(term.render.chains.render_timer.?));
+    const buf = shm_get_buffer(chain, width, height) orelse return;
+
+    wayland_shim_subsurface_set_position(
+        win.render_timer.sub,
+        roundfDiv(margin, scale),
+        roundfDiv(term.margins.top + term.cell_height - margin, scale),
+    );
+
+    render_osd(
+        term,
+        &win.render_timer,
+        @ptrCast(term.fonts[0]),
+        buf,
+        text,
+        term.colors.table[0],
+        0xff000000 | term.colors.table[8 + 1],
+        @intCast(margin),
+    );
+}
+

@@ -5324,6 +5324,35 @@ test_reapply_old_damage(void)
 }
 
 
+/* D3k2b: the scrollback indicator's early-outs (the painting paths need a
+ * compositor; smoke.sh runs them with render-timer=osd). */
+static void
+test_scrollback_indicator(void)
+{
+    struct terminal *term = term_new();
+    static struct config conf;
+    memset(&conf, 0, sizeof(conf));
+
+    term->conf = &conf;
+    term->window = NULL; /* must not be touched while the indicator is off */
+
+    render_scrollback_position(term);
+    check(1, "the scrollback indicator is a no-op when disabled");
+
+    struct wl_window win = {0};
+    term->window = &win;
+    conf.scrollback.indicator.position = SCROLLBACK_INDICATOR_POSITION_FIXED;
+    term->grid->view = term->grid->offset;
+
+    render_scrollback_position(term);
+    check(win.scrollback_indicator.surface.surf == NULL,
+          "no indicator is created while the viewport is at the bottom");
+
+    term->window = NULL;
+    term_free(term);
+}
+
+
 int
 main(void)
 {
@@ -5356,6 +5385,7 @@ main(void)
     test_render_init();
     test_presentation_feedback();
     test_reapply_old_damage();
+    test_scrollback_indicator();
     test_grid_render_scroll();
     test_render_sixel();
     test_csd_buttons();

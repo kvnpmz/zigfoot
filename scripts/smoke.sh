@@ -123,4 +123,11 @@ run 20x5
 run 80x24 -m
 run 80x24 -F
 
+# The scrollback indicator and the render-timer OSD each paint into their own
+# sub-surface; enable both so those paths run against a real compositor.
+osd_conf=$tmp_dir/osd.ini
+printf '[main]\nfont=monospace:size=10\nrender-timer=osd\nscrollback-indicator=percentage\n' > "$osd_conf"
+run 80x24 -c "$osd_conf"
+
+
 echo "smoke: ok"
