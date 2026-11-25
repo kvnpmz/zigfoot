@@ -886,7 +886,7 @@ Per-module burn-down (share of that module's original C that is gone):
 
 | Module | C left / original | % | Note |
 |---|---|---|---|
-| 31 modules | 0 / — | **100%** | `async`…`box-drawing`, `search`, `terminal`, `log`, `grid`, `csi`, `sixel`, `osc`, `vt`… |
+| 32 modules | 0 / — | **100%** | `async`…`box-drawing`, `search`, `terminal`, `log`, `grid`, `csi`, `sixel`, `osc`, `vt`, `input`… |
 | `config` | 35 / 4,374 | 99% | only `config_regex_compile()` (§6.3) |
 | `wayland` | 359 / 2,884 | 88% | 27 listener tables + forwarders + 3 FDM callbacks |
 | `selection` | 844 / 2,967 | 72% | data-device / primary-selection listeners, DND |
@@ -894,15 +894,15 @@ Per-module burn-down (share of that module's original C that is gone):
 | `shm` | 329 / 1,110 | 70% | globals, `wl_shm`/`wl_buffer` stubs, punch-hole `#ifdef`s |
 | `debug` | 22 / 47 | 53% | ASAN stack-trace hook |
 | `render` | 0 / 5,479 | **100%** | `render.c` deleted in D3l4; `render.zig` is the module |
-| `input` | 680 / 3,687 | **82%** | keyboard, `execute_binding` and the pointer listeners done; only touch + seat glue (D4e) left |
+| `input` | 0 / 3,687 | **100%** | `input.c` deleted in D4e; listener tables now live in `terminal-shim.c` |
 | `url-mode` | 833 / 833 | 0% | |
 | `main` | 770 / 770 | 0% | |
 | `server` / `client` | 707 / 679 | 0% | |
 | `key-binding` | 661 / 661 | 0% | |
 | `ime` | 540 / 540 | 0% | |
 
-**Percent complete: 86.5% by C volume (post-D4d2b), ~81% by effort (band
-78–83%), 32/45 top-level modules (47 counting `spawn_template`) with zero C
+**Percent complete: 87.9% by C volume (post-D4e), ~83% by effort (band
+80–85%), 33/45 top-level modules (48 counting `spawn_template`) with zero C
 left.**
 **Post-D4d2a:** `input.c` is 3,618 → **2,040** (45% ported), module C 12,709 →
 **7,968**, harness 684 → **744** checks; every keyboard entry point is Zig,
@@ -919,6 +919,25 @@ the six windows
 compositor. Real presentation feedback is still not delivered to these
 short-lived windows, so `presented()` is covered by the fabricated-context
 checks, not by the launches.
+
+**Post-D4e:** `input.c` is **deleted** — the module is Zig only.
+Module C **6,607 → 5,927** (87.9% of the original C gone), Zig 47,861 →
+**48,057** lines, harness 767 → **781** checks, shim 2,939 → **2,974**. The
+five touch callbacks are Zig: `touch_to_scroll()` (cell-granular vertical and
+horizontal scroll from the touch delta), down (idle gate, long-press
+deadline, surface kind), up and motion (a held touch becomes a button
+press/release or a drag via synthesized `wl_pointer_*` calls, with the
+scroll-vs-long-press split and C's three-way fallthrough written out
+explicitly), frame (empty) and cancel. The three protocol listener tables
+(`keyboard`/`pointer`/`touch`) moved from `input.c` into
+`terminal-shim.c`, which already included `input.h` and owns
+`wayland_shim_add_*_listener()`. The 390-line keyboard-layout `UNITTEST`
+block (real `se`, `us+de(neo)` and `us(intl)` keymaps through the kitty
+encoder, read back from a pty) moved verbatim into `tests/test-terminal.c`
+as `test_keyboard_layouts()`, with its nine comparisons turned into named
+checks; the two small `keymap_lookup()` blocks were already covered by
+`test_keymap_lookup()` and were dropped. 6 new harness checks for the touch
+state machine.
 
 **Post-D4d2b:** `input.c` is 1,564 → **680** (82% ported), module C
 **7,491 → 6,607** (86.5% of the original C gone), Zig 46,884 → **47,861**
@@ -1018,7 +1037,7 @@ dump (§14.5.2) for the cell/URL/CSD paths.
 | **D4b3** done | `input`: **`keyboard_modifiers()`** — the virtual-modifier masking (Mutter), the `xkb_state_update_mask()` call, and the four cached `shift`/`alt`/`ctrl`/`super` flags via `xkb_state_mod_index_is_active(..., XKB_STATE_MODS_EFFECTIVE)`, then the cursor refresh when the pointer sits on the grid. 4 new harness checks (no modifiers, ctrl+shift, the untouched pair, and a virtual modifier being ignored) against a real keymap. The big `UNITTEST` block that follows it in `input.c` still drives the Zig function through the C `key_press_release()` + the new protocol encoders, and still passes | D4d1 | 0.5d |
 | **D4d2a** done | `input`: **`match_mouse_binding()`** — with a keyboard it walks `types.KeyBindingSet.mouse`, masks the selection-override modifiers out of the current mods, and picks the binding with the highest click count that is <= the seat's; without a keyboard it scans `conf.bindings.mouse` ignoring modifiers and synthesizes a static `KeyBinding` from the `ConfigKeyBinding` (the same trick C used). **`mouse_scroll()`** — axis+sign → wheel button, `term_mouse_grabbed()` → one `execute_binding()` with the scroll amount, otherwise `term_mouse_down()` per step plus one `term_mouse_up()`. 6 new harness checks: button/click-count matching, an unbound button, a modified binding being skipped without a keyboard, one wheel-down step and two wheel-up steps read back as SGR reports from a real pty, and silence when mouse tracking is off | D4b5 | 1d |
 | **D4d2b** done | `input`: the twelve **pointer listeners** — `wl_pointer_enter` (NULL-surface workaround, `term_surface_kind()`, the scale multiply, cursor-theme reload, per-surface CSD refresh), `wl_pointer_leave` (the touch-state gate as plain-int comparisons, xcursor-callback teardown, the full mouse reset, and `selection_finalize()`/CSD refresh for the old surface), the static `pointer_is_on_button()` inlined as a Zig helper, `wl_pointer_motion` (CSD hover flush, move-timer hand-off, the grid path: cell bookkeeping, `selection_update()`, the distance-proportional auto-scroll timer, and `term_mouse_motion()`), `fdm_csd_move()`, `wl_pointer_button` (click counting off `CLOCK_MONOTONIC` + `timespec_sub()`, the GNOME multi-press tracker workaround, title double-click/move-timer/window-menu, border resize edges, CSD button releases, and the grid press/release path through `match_mouse_binding()`/`execute_binding()`), plus `axis`/`axis_discrete`/`axis_value120`/`frame`/`axis_source`/`axis_stop` with their three accumulators. The listener table stays in C (like `keyboard_listener`), prototypes in `input.h`. `wl_fixed_t` is local 24.8 arithmetic rather than two new shims, `fabs()` is `@abs`, and three more xdg-shell requests got shims (`move`, `resize`, `show_window_menu`). Deliberate guard: motion/button with no mouse focus returns instead of dereferencing NULL. 11 new harness checks (NULL-surface enter, no-focus motion/axis/value120 early-outs, frame and axis-stop bookkeeping, and the full pointer-leave reset incl. button trackers) | D4c | 1.5d |
-| **D4e** | touch + IME plumbing + the remaining seat glue | 1d |
+| **D4e** done | `input`: the five **touch listeners** — `touch_to_scroll()` (the cell-granular delta scroll in both axes), `wl_touch_down` (idle gate, the long-press deadline from `conf.touch.long_press_delay`, surface kind), `wl_touch_up` and `wl_touch_motion` (a held touch becomes a synthesized LMB press and then either a scrolling touch or a drag through `wl_pointer_button`/`wl_pointer_motion`, with C's HELD→DRAGGING→SCROLLING fallthrough written out and the mouse-focus/active-surface temporarily swapped), `wl_touch_frame` and `wl_touch_cancel`. With this **`input.c` is deleted** (the 33rd module with no C): the three listener tables moved to `terminal-shim.c` (which already included `input.h` and owns `wayland_shim_add_*_listener()`), and the 390-line keyboard-layout `UNITTEST` moved to the harness as `test_keyboard_layouts()` (se / us+de(neo) / us(intl) keymaps through the kitty encoder, read back out of a pty; its nine assertions became named checks). The two `keymap_lookup()` blocks were already covered by `test_keymap_lookup()` and were dropped. 6 new harness checks for the touch state machine. No new shim functions — only the tables moved | D4d2b | 0.5d |
 
 **Track D5 — mid-tier (≈5–6 dev-days).** `key-binding` (661) → `ime` (540) →
 `url-mode` (833) → `selection`'s 844-line tail. Doing `key-binding` first

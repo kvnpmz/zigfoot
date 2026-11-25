@@ -86,6 +86,18 @@ void wl_pointer_axis_value120(void *data, struct wl_pointer *wl_pointer,
                               enum wl_pointer_axis axis, int32_t value120);
 #endif
 
+/* The touch callbacks: ported to input.zig (D4e). The listener table in
+ * terminal-shim.c references them. */
+void wl_touch_down(void *data, struct wl_touch *wl_touch, uint32_t serial,
+                   uint32_t time, struct wl_surface *surface, int32_t id,
+                   wl_fixed_t surface_x, wl_fixed_t surface_y);
+void wl_touch_up(void *data, struct wl_touch *wl_touch, uint32_t serial,
+                 uint32_t time, int32_t id);
+void wl_touch_motion(void *data, struct wl_touch *wl_touch, uint32_t time,
+                     int32_t id, wl_fixed_t surface_x, wl_fixed_t surface_y);
+void wl_touch_frame(void *data, struct wl_touch *wl_touch);
+void wl_touch_cancel(void *data, struct wl_touch *wl_touch);
+
 void keyboard_modifiers(void *data, struct wl_keyboard *wl_keyboard,
                         uint32_t serial, uint32_t mods_depressed,
                         uint32_t mods_latched, uint32_t mods_locked,

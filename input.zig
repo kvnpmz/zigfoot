@@ -4941,6 +4941,202 @@ export fn wl_pointer_axis_stop(
 }
 
 // ─────────────────────────────────────────────────────────────────────────
+// Touch listeners (D4e)
+//
+// A touch is translated into pointer events: down/up become a button
+// press/release, motion either drags (synthesized pointer motion) or scrolls.
+// The listener table stays in C; the prototypes are in input.h.
+// ─────────────────────────────────────────────────────────────────────────
+
+fn touchToScroll(seat: *Seat, term: *Terminal, surface_x: i32, surface_y: i32) bool {
+    var coord_updated = false;
+
+    const y = scaledFixedToInt(surface_y, term.scale);
+    const rows = @divTrunc(y - seat.mouse.y, term.cell_height);
+    if (rows != 0) {
+        mouse_scroll(seat, -rows, WL_POINTER_AXIS_VERTICAL_SCROLL);
+        seat.mouse.y += rows * term.cell_height;
+        coord_updated = true;
+    }
+
+    const x = scaledFixedToInt(surface_x, term.scale);
+    const cols = @divTrunc(x - seat.mouse.x, term.cell_width);
+    if (cols != 0) {
+        mouse_scroll(seat, -cols, WL_POINTER_AXIS_HORIZONTAL_SCROLL);
+        seat.mouse.x += cols * term.cell_width;
+        coord_updated = true;
+    }
+
+    return coord_updated;
+}
+
+export fn wl_touch_down(
+    data: ?*anyopaque,
+    wl_touch: ?*anyopaque,
+    serial: u32,
+    time: u32,
+    surface: ?*anyopaque,
+    id: i32,
+    surface_x: i32,
+    surface_y: i32,
+) callconv(.c) void {
+    const seat: *Seat = @ptrCast(@alignCast(data orelse return));
+
+    if (touchState(seat) != @intFromEnum(types.TouchState.idle))
+        return;
+
+    const win: *types.WlWindow = @ptrCast(@alignCast(
+        wayland_shim_surface_get_user_data(surface) orelse return));
+    const term: *Terminal = @ptrCast(@alignCast(win.term.?));
+
+    log_msg(
+        LOG_CLASS_DEBUG, "input", "input.zig", @intCast(@src().line),
+        "touch_down: touch=%p, x=%d, y=%d",
+        wl_touch, wlFixedToInt(surface_x), wlFixedToInt(surface_y));
+
+    const x = scaledFixedToInt(surface_x, term.scale);
+    const y = scaledFixedToInt(surface_y, term.scale);
+
+    seat.mouse.x = x;
+    seat.mouse.y = y;
+    mouse_coord_pixel_to_cell(seat, term, x, y);
+
+    seat.touch.state = .held;
+    seat.touch.serial = serial;
+    seat.touch.time = time +% term.conf.?.touch.long_press_delay;
+    seat.touch.surface = surface;
+    seat.touch.surface_kind = @intFromEnum(term_surface_kind(term, surface));
+    seat.touch.id = id;
+}
+
+export fn wl_touch_up(
+    data: ?*anyopaque,
+    wl_touch: ?*anyopaque,
+    serial: u32,
+    time: u32,
+    id: i32,
+) callconv(.c) void {
+    const seat: *Seat = @ptrCast(@alignCast(data orelse return));
+
+    const state = touchState(seat);
+    if (state <= 0 or id != seat.touch.id)
+        return;
+
+    log_msg(
+        LOG_CLASS_DEBUG, "input", "input.zig", @intCast(@src().line),
+        "touch_up: touch=%p", wl_touch);
+
+    const win: *types.WlWindow = @ptrCast(@alignCast(
+        wayland_shim_surface_get_user_data(seat.touch.surface) orelse return));
+    const term: *Terminal = @ptrCast(@alignCast(win.term.?));
+
+    const old_term = seat.mouse_focus;
+    const old_active_surface = term.active_surface;
+    seat.mouse_focus = term;
+    term.active_surface = @enumFromInt(seat.touch.surface_kind);
+
+    // C falls through HELD -> DRAGGING -> SCROLLING, so a held touch gets
+    // both the press and the release, and every terminal state clears the
+    // active surface.
+    if (state == @intFromEnum(types.TouchState.held)) {
+        wl_pointer_button(
+            seat, null, seat.touch.serial, time, @intCast(BTN_LEFT),
+            WL_POINTER_BUTTON_STATE_PRESSED);
+        wl_pointer_button(
+            seat, null, serial, time, @intCast(BTN_LEFT),
+            WL_POINTER_BUTTON_STATE_RELEASED);
+    } else if (state == @intFromEnum(types.TouchState.dragging)) {
+        wl_pointer_button(
+            seat, null, serial, time, @intCast(BTN_LEFT),
+            WL_POINTER_BUTTON_STATE_RELEASED);
+    } else if (state != @intFromEnum(types.TouchState.scrolling)) {
+        bug(
+            "input.zig", @intCast(@src().line), "wl_touch_up",
+            "Bad touch state: %d", state);
+    }
+
+    term.active_surface = .none;
+    seat.touch.state = .idle;
+
+    seat.mouse_focus = old_term;
+    term.active_surface = old_active_surface;
+}
+
+export fn wl_touch_motion(
+    data: ?*anyopaque,
+    wl_touch: ?*anyopaque,
+    time: u32,
+    id: i32,
+    surface_x: i32,
+    surface_y: i32,
+) callconv(.c) void {
+    const seat: *Seat = @ptrCast(@alignCast(data orelse return));
+
+    const state = touchState(seat);
+    if (state <= 0 or id != seat.touch.id)
+        return;
+
+    log_msg(
+        LOG_CLASS_DEBUG, "input", "input.zig", @intCast(@src().line),
+        "touch_motion: touch=%p, x=%d, y=%d",
+        wl_touch, wlFixedToInt(surface_x), wlFixedToInt(surface_y));
+
+    const win: *types.WlWindow = @ptrCast(@alignCast(
+        wayland_shim_surface_get_user_data(seat.touch.surface) orelse return));
+    const term: *Terminal = @ptrCast(@alignCast(win.term.?));
+
+    const old_term = seat.mouse_focus;
+    const old_active_surface = term.active_surface;
+    seat.mouse_focus = term;
+    term.active_surface = @enumFromInt(seat.touch.surface_kind);
+
+    if (state == @intFromEnum(types.TouchState.held)) {
+        if (time <= seat.touch.time and term.active_surface == .grid) {
+            if (touchToScroll(seat, term, surface_x, surface_y))
+                seat.touch.state = .scrolling;
+        } else {
+            wl_pointer_button(
+                seat, null, seat.touch.serial, time, @intCast(BTN_LEFT),
+                WL_POINTER_BUTTON_STATE_PRESSED);
+            seat.touch.state = .dragging;
+            wl_pointer_motion(seat, null, time, surface_x, surface_y);
+        }
+    } else if (state == @intFromEnum(types.TouchState.dragging)) {
+        wl_pointer_motion(seat, null, time, surface_x, surface_y);
+    } else if (state == @intFromEnum(types.TouchState.scrolling)) {
+        _ = touchToScroll(seat, term, surface_x, surface_y);
+    } else {
+        bug(
+            "input.zig", @intCast(@src().line), "wl_touch_motion",
+            "Bad touch state: %d", state);
+    }
+
+    seat.mouse_focus = old_term;
+    term.active_surface = old_active_surface;
+}
+
+export fn wl_touch_frame(
+    data: ?*anyopaque,
+    wl_touch: ?*anyopaque,
+) callconv(.c) void {
+    _ = data;
+    _ = wl_touch;
+}
+
+export fn wl_touch_cancel(
+    data: ?*anyopaque,
+    wl_touch: ?*anyopaque,
+) callconv(.c) void {
+    _ = wl_touch;
+    const seat: *Seat = @ptrCast(@alignCast(data orelse return));
+
+    if (touchState(seat) == @intFromEnum(types.TouchState.inhibited))
+        return;
+
+    seat.touch.state = .idle;
+}
+
+// ─────────────────────────────────────────────────────────────────────────
 // Binding-action constants (D4c groundwork)
 //
 // The values are emitted by asking the C compiler (scripts/gen_bind_enums.sh),

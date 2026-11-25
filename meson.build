@@ -838,7 +838,7 @@ footlib = static_library(
   fdm_obj, 'fdm.h',
   foot_features_obj, 'foot-features.h',
   'ime.c', 'ime.h',
-  'input.c', input_obj, 'input.h',
+  input_obj, 'input.h',
   'key-binding.c', 'key-binding.h',
   notify_obj, 'notify.h', 'notify-shim.c',
   quirks_obj, 'quirks.h',

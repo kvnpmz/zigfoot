@@ -6169,6 +6169,459 @@ test_keymap_lookup(void)
 }
 
 /*
+ * Touch listeners (input.zig, D4e).
+ *
+ * A touch needs a real wl_surface to be mapped to a window, so the harness
+ * covers the state machine only: the cancel paths and the early-outs.
+ */
+static void
+test_touch_listeners(void)
+{
+    struct seat seat;
+    memset(&seat, 0, sizeof(seat));
+    seat.name = "seat0";
+
+    seat.touch.state = TOUCH_STATE_INHIBITED;
+    seat.touch.id = 7;
+    wl_touch_cancel(&seat, NULL);
+    check(seat.touch.state == TOUCH_STATE_INHIBITED,
+          "touch-cancel keeps an inhibited touch inhibited");
+
+    seat.touch.state = TOUCH_STATE_HELD;
+    wl_touch_cancel(&seat, NULL);
+    check(seat.touch.state == TOUCH_STATE_IDLE,
+          "touch-cancel resets a held touch to idle");
+
+    /* A down event is only accepted when the touch is idle. */
+    seat.touch.state = TOUCH_STATE_HELD;
+    wl_touch_down(&seat, NULL, 1, 0, NULL, 3, 10 << 8, 20 << 8);
+    check(seat.touch.state == TOUCH_STATE_HELD && seat.touch.id == 7,
+          "touch-down is ignored unless the touch is idle");
+
+    /* up/motion in the idle state are dropped */
+    seat.touch.state = TOUCH_STATE_IDLE;
+    wl_touch_up(&seat, NULL, 2, 0, 3);
+    wl_touch_motion(&seat, NULL, 0, 3, 1 << 8, 1 << 8);
+    check(seat.touch.state == TOUCH_STATE_IDLE,
+          "touch-up and touch-motion in the idle state are dropped");
+
+    /* A non-matching id is ignored even in an active state */
+    seat.touch.state = TOUCH_STATE_HELD;
+    wl_touch_up(&seat, NULL, 2, 0, 4);
+    check(seat.touch.state == TOUCH_STATE_HELD,
+          "touch-up with a different id is ignored");
+
+    wl_touch_frame(&seat, NULL);
+}
+
+static void
+check_seq(const char *escape, ssize_t count, const char *expected,
+          const char *what)
+{
+    check(count == (ssize_t)strlen(expected) && strcmp(escape, expected) == 0,
+          what);
+}
+
+/*
+ * The keyboard-layout regression test that lived in input.c's UNITTEST
+ * block. It installs real keymaps (se, us+de(neo), us(intl)) and drives
+ * key_press_release() through the kitty encoder, read back out of a real
+ * pty. Moved here when input.c was deleted (D4e).
+ */
+static void
+test_keyboard_layouts(void)
+{
+    int chan[2];
+    xassert(pipe2(chan, O_CLOEXEC) == 0);
+
+    xassert(chan[0] >= 0);
+    xassert(chan[1] >= 0);
+
+    struct config conf = {0};
+    struct grid grid = {0};
+
+    struct terminal term = {
+        .conf = &conf,
+        .grid = &grid,
+        .ptmx = chan[1],
+        .selection = {
+            .coords = {
+                .start = {-1, -1},
+                .end = {-1, -1},
+            },
+            .auto_scroll = {
+                .fd = -1,
+             },
+        },
+    };
+
+    struct key_binding_manager *key_binding_manager = key_binding_manager_new();
+
+    struct wayland wayl = {
+        .key_binding_manager = key_binding_manager,
+        .terms = tll_init(),
+    };
+
+    struct seat seat = {
+        .wayl = &wayl,
+        .name = "unittest",
+    };
+
+    tll_push_back(wayl.terms, &term);
+    term.wl = &wayl;
+
+    seat.kbd.xkb = xkb_context_new(XKB_CONTEXT_NO_FLAGS);
+    xassert(seat.kbd.xkb != NULL);
+
+    grid.kitty_kbd.flags[0] = KITTY_KBD_DISAMBIGUATE | KITTY_KBD_REPORT_ALTERNATE;
+
+    /* Swedish keymap */
+    {
+        seat.kbd.xkb_keymap = xkb_keymap_new_from_names(
+            seat.kbd.xkb, &(struct xkb_rule_names){.layout = "se"}, XKB_KEYMAP_COMPILE_NO_FLAGS);
+        if (seat.kbd.xkb_keymap == NULL) {
+            /* Skip test */
+            goto no_keymap;
+        }
+
+        seat.kbd.xkb_state = xkb_state_new(seat.kbd.xkb_keymap);
+        xassert(seat.kbd.xkb_state != NULL);
+
+        seat.kbd.mod_shift = xkb_keymap_mod_get_index(seat.kbd.xkb_keymap, XKB_MOD_NAME_SHIFT);
+        seat.kbd.mod_alt = xkb_keymap_mod_get_index(seat.kbd.xkb_keymap, XKB_MOD_NAME_ALT) ;
+        seat.kbd.mod_ctrl = xkb_keymap_mod_get_index(seat.kbd.xkb_keymap, XKB_MOD_NAME_CTRL);
+        seat.kbd.mod_super = xkb_keymap_mod_get_index(seat.kbd.xkb_keymap, XKB_MOD_NAME_LOGO);
+        seat.kbd.mod_caps = xkb_keymap_mod_get_index(seat.kbd.xkb_keymap, XKB_MOD_NAME_CAPS);
+        seat.kbd.mod_num = xkb_keymap_mod_get_index(seat.kbd.xkb_keymap, XKB_MOD_NAME_NUM);
+
+        /* Significant modifiers in the legacy keyboard protocol */
+        seat.kbd.legacy_significant = 0;
+        if (seat.kbd.mod_shift != XKB_MOD_INVALID)
+            seat.kbd.legacy_significant |= 1 << seat.kbd.mod_shift;
+        if (seat.kbd.mod_alt != XKB_MOD_INVALID)
+            seat.kbd.legacy_significant |= 1 << seat.kbd.mod_alt;
+        if (seat.kbd.mod_ctrl != XKB_MOD_INVALID)
+            seat.kbd.legacy_significant |= 1 << seat.kbd.mod_ctrl;
+        if (seat.kbd.mod_super != XKB_MOD_INVALID)
+            seat.kbd.legacy_significant |= 1 << seat.kbd.mod_super;
+
+        /* Significant modifiers in the kitty keyboard protocol */
+        seat.kbd.kitty_significant = seat.kbd.legacy_significant;
+        if (seat.kbd.mod_caps != XKB_MOD_INVALID)
+            seat.kbd.kitty_significant |= 1 << seat.kbd.mod_caps;
+        if (seat.kbd.mod_num != XKB_MOD_INVALID)
+            seat.kbd.kitty_significant |= 1 << seat.kbd.mod_num;
+
+        key_binding_new_for_seat(key_binding_manager, &seat);
+        key_binding_load_keymap(key_binding_manager, &seat);
+
+        {
+            xkb_mod_mask_t mods = 1u << seat.kbd.mod_shift | 1u << seat.kbd.mod_ctrl;
+            keyboard_modifiers(&seat, NULL, 1337, mods, 0, 0, 0);
+            key_press_release(&seat, &term, 1337, KEY_A + 8, WL_KEYBOARD_KEY_STATE_PRESSED);
+
+            char escape[64] = {0};
+            ssize_t count = read(chan[0], escape, sizeof(escape));
+
+            /* key: 97 = 'a', alternate: 65 = 'A', base: N/A, mods: 6 = ctrl+shift */
+            const char expected_ctrl_shift_a[] = "\033[97:65;6u";
+            check_seq(escape, count, expected_ctrl_shift_a,
+                         "kitty: ctrl+shift+a is CSI 97:65;6u on the se layout");
+
+            key_press_release(&seat, &term, 1337, KEY_A + 8, WL_KEYBOARD_KEY_STATE_RELEASED);
+        }
+
+        {
+            xkb_mod_mask_t mods = 1u << seat.kbd.mod_shift | 1u << seat.kbd.mod_alt;
+            keyboard_modifiers(&seat, NULL, 1337, mods, 0, 0, 0);
+            key_press_release(&seat, &term, 1337, KEY_2 + 8, WL_KEYBOARD_KEY_STATE_PRESSED);
+
+            char escape[64] = {0};
+            ssize_t count = read(chan[0], escape, sizeof(escape));
+
+            /* key;. 50 = '2', alternate: 34 = '"', base: N/A, 4 = alt+shift */
+            const char expected_alt_shift_2[] = "\033[50:34;4u";
+            check_seq(escape, count, expected_alt_shift_2,
+                         "kitty: alt+shift+2 is CSI 50:34;4u on the se layout");
+
+            key_press_release(&seat, &term, 1337, KEY_2 + 8, WL_KEYBOARD_KEY_STATE_RELEASED);
+        }
+
+        {
+            xkb_mod_index_t alt_gr = xkb_keymap_mod_get_index(seat.kbd.xkb_keymap, "Mod5");
+            xassert(alt_gr != XKB_MOD_INVALID);
+
+            xkb_mod_mask_t mods = 1u << seat.kbd.mod_shift | 1u << seat.kbd.mod_alt | 1u << alt_gr;
+            keyboard_modifiers(&seat, NULL, 1337, mods, 0, 0, 0);
+            key_press_release(&seat, &term, 1337, KEY_2 + 8, WL_KEYBOARD_KEY_STATE_PRESSED);
+
+            char escape[64] = {0};
+            ssize_t count = read(chan[0], escape, sizeof(escape));
+
+            /* key; 178 = '²', alternate: N/A, base: 50 = '2', 4 = alt+shift (AltGr not part of the protocol) */
+            const char expected_altgr_alt_shift_2[] = "\033[178::50;4u";
+            check_seq(escape, count, expected_altgr_alt_shift_2,
+                         "kitty: altgr+alt+shift+2 is CSI 178::50;4u on the se layout");
+
+            key_press_release(&seat, &term, 1337, KEY_2 + 8, WL_KEYBOARD_KEY_STATE_RELEASED);
+        }
+
+        {
+            xkb_mod_mask_t mods = 1u << seat.kbd.mod_alt;
+            keyboard_modifiers(&seat, NULL, 1337, mods, 0, 0, 0);
+            key_press_release(&seat, &term, 1337, KEY_BACKSPACE + 8, WL_KEYBOARD_KEY_STATE_PRESSED);
+
+            char escape[64] = {0};
+            ssize_t count = read(chan[0], escape, sizeof(escape));
+
+            /* key; 127 = <backspace>, alternate: N/A, base: N/A, 3 = alt */
+            const char expected_alt_backspace[] = "\033[127;3u";
+            check_seq(escape, count, expected_alt_backspace,
+                         "kitty: alt+backspace is CSI 127;3u");
+
+            key_press_release(&seat, &term, 1337, KEY_BACKSPACE + 8, WL_KEYBOARD_KEY_STATE_RELEASED);
+        }
+
+        {
+            xkb_mod_mask_t mods = 1u << seat.kbd.mod_ctrl;
+            keyboard_modifiers(&seat, NULL, 1337, mods, 0, 0, 0);
+            key_press_release(&seat, &term, 1337, KEY_ENTER + 8, WL_KEYBOARD_KEY_STATE_PRESSED);
+
+            char escape[64] = {0};
+            ssize_t count = read(chan[0], escape, sizeof(escape));
+
+            /* key; 13 = <enter>, alternate: N/A, base: N/A, 5 = ctrl */
+            const char expected_ctrl_enter[] = "\033[13;5u";
+            check_seq(escape, count, expected_ctrl_enter,
+                         "kitty: ctrl+enter is CSI 13;5u");
+
+            key_press_release(&seat, &term, 1337, KEY_ENTER + 8, WL_KEYBOARD_KEY_STATE_RELEASED);
+        }
+
+        {
+            xkb_mod_mask_t mods = 1u << seat.kbd.mod_ctrl;
+            keyboard_modifiers(&seat, NULL, 1337, mods, 0, 0, 0);
+            key_press_release(&seat, &term, 1337, KEY_TAB + 8, WL_KEYBOARD_KEY_STATE_PRESSED);
+
+            char escape[64] = {0};
+            ssize_t count = read(chan[0], escape, sizeof(escape));
+
+            /* key; 9 = <tab>, alternate: N/A, base: N/A, 5 = ctrl */
+            const char expected_ctrl_tab[] = "\033[9;5u";
+            check_seq(escape, count, expected_ctrl_tab,
+                         "kitty: ctrl+tab is CSI 9;5u");
+
+            key_press_release(&seat, &term, 1337, KEY_TAB + 8, WL_KEYBOARD_KEY_STATE_RELEASED);
+        }
+
+        {
+            xkb_mod_mask_t mods = 1u << seat.kbd.mod_ctrl | 1u << seat.kbd.mod_shift;
+            keyboard_modifiers(&seat, NULL, 1337, mods, 0, 0, 0);
+            key_press_release(&seat, &term, 1337, KEY_LEFT + 8, WL_KEYBOARD_KEY_STATE_PRESSED);
+
+            char escape[64] = {0};
+            ssize_t count = read(chan[0], escape, sizeof(escape));
+
+            const char expected_ctrl_shift_left[] = "\033[1;6D";
+            check_seq(escape, count, expected_ctrl_shift_left,
+                         "kitty: ctrl+shift+left is the legacy CSI 1;6D");
+
+            key_press_release(&seat, &term, 1337, KEY_LEFT + 8, WL_KEYBOARD_KEY_STATE_RELEASED);
+        }
+        key_binding_unload_keymap(key_binding_manager, &seat);
+        key_binding_remove_seat(key_binding_manager, &seat);
+
+        xkb_state_unref(seat.kbd.xkb_state);
+        xkb_keymap_unref(seat.kbd.xkb_keymap);
+
+        seat.kbd.xkb_state = NULL;
+        seat.kbd.xkb_keymap = NULL;
+    }
+
+    /* de(neo) keymap */
+    {
+        seat.kbd.xkb_keymap = xkb_keymap_new_from_names(
+            seat.kbd.xkb, &(struct xkb_rule_names){.layout = "us,de(neo)"},
+            XKB_KEYMAP_COMPILE_NO_FLAGS);
+
+        if (seat.kbd.xkb_keymap == NULL) {
+            /* Skip test */
+            goto no_keymap;
+        }
+
+        seat.kbd.xkb_state = xkb_state_new(seat.kbd.xkb_keymap);
+        xassert(seat.kbd.xkb_state != NULL);
+
+        seat.kbd.mod_shift = xkb_keymap_mod_get_index(seat.kbd.xkb_keymap, XKB_MOD_NAME_SHIFT);
+        seat.kbd.mod_alt = xkb_keymap_mod_get_index(seat.kbd.xkb_keymap, XKB_MOD_NAME_ALT) ;
+        seat.kbd.mod_ctrl = xkb_keymap_mod_get_index(seat.kbd.xkb_keymap, XKB_MOD_NAME_CTRL);
+        seat.kbd.mod_super = xkb_keymap_mod_get_index(seat.kbd.xkb_keymap, XKB_MOD_NAME_LOGO);
+        seat.kbd.mod_caps = xkb_keymap_mod_get_index(seat.kbd.xkb_keymap, XKB_MOD_NAME_CAPS);
+        seat.kbd.mod_num = xkb_keymap_mod_get_index(seat.kbd.xkb_keymap, XKB_MOD_NAME_NUM);
+
+        /* Significant modifiers in the legacy keyboard protocol */
+        seat.kbd.legacy_significant = 0;
+        if (seat.kbd.mod_shift != XKB_MOD_INVALID)
+            seat.kbd.legacy_significant |= 1 << seat.kbd.mod_shift;
+        if (seat.kbd.mod_alt != XKB_MOD_INVALID)
+            seat.kbd.legacy_significant |= 1 << seat.kbd.mod_alt;
+        if (seat.kbd.mod_ctrl != XKB_MOD_INVALID)
+            seat.kbd.legacy_significant |= 1 << seat.kbd.mod_ctrl;
+        if (seat.kbd.mod_super != XKB_MOD_INVALID)
+            seat.kbd.legacy_significant |= 1 << seat.kbd.mod_super;
+
+        /* Significant modifiers in the kitty keyboard protocol */
+        seat.kbd.kitty_significant = seat.kbd.legacy_significant;
+        if (seat.kbd.mod_caps != XKB_MOD_INVALID)
+            seat.kbd.kitty_significant |= 1 << seat.kbd.mod_caps;
+        if (seat.kbd.mod_num != XKB_MOD_INVALID)
+            seat.kbd.kitty_significant |= 1 << seat.kbd.mod_num;
+
+        key_binding_new_for_seat(key_binding_manager, &seat);
+        key_binding_load_keymap(key_binding_manager, &seat);
+
+        {
+            /*
+             * In the de(neo) layout, the Y key generates 'k'. This
+             * means we should get a key+alternate that indicates 'k',
+             * but a base key that is 'y'.
+             */
+            xkb_mod_mask_t mods = 1u << seat.kbd.mod_shift | 1u << seat.kbd.mod_alt;
+            keyboard_modifiers(&seat, NULL, 1337, mods, 0, 0, 1);
+            key_press_release(&seat, &term, 1337, KEY_Y + 8, WL_KEYBOARD_KEY_STATE_PRESSED);
+
+            char escape[64] = {0};
+            ssize_t count = read(chan[0], escape, sizeof(escape));
+
+            /* key: 107 = 'k', alternate: 75 = 'K', base: 121 = 'y', mods: 4 = alt+shift */
+            const char expected_alt_shift_y[] = "\033[107:75:121;4u";
+            check_seq(escape, count, expected_alt_shift_y,
+                         "kitty: alt+shift+y is CSI 107:75:121;4u on de(neo)");
+
+            key_press_release(&seat, &term, 1337, KEY_Y + 8, WL_KEYBOARD_KEY_STATE_RELEASED);
+        }
+
+        key_binding_unload_keymap(key_binding_manager, &seat);
+        key_binding_remove_seat(key_binding_manager, &seat);
+
+        xkb_state_unref(seat.kbd.xkb_state);
+        xkb_keymap_unref(seat.kbd.xkb_keymap);
+
+        seat.kbd.xkb_state = NULL;
+        seat.kbd.xkb_keymap = NULL;
+    }
+
+    /* us(intl) keymap */
+    {
+        seat.kbd.xkb_keymap = xkb_keymap_new_from_names(
+            seat.kbd.xkb, &(struct xkb_rule_names){.layout = "us", .variant = "intl"},
+            XKB_KEYMAP_COMPILE_NO_FLAGS);
+
+        if (seat.kbd.xkb_keymap == NULL) {
+            /* Skip test */
+            goto no_keymap;
+        }
+
+        seat.kbd.xkb_state = xkb_state_new(seat.kbd.xkb_keymap);
+        xassert(seat.kbd.xkb_state != NULL);
+
+        seat.kbd.xkb_compose_table = xkb_compose_table_new_from_locale(
+            seat.kbd.xkb, setlocale(LC_CTYPE, NULL), XKB_COMPOSE_COMPILE_NO_FLAGS);
+        if (seat.kbd.xkb_compose_table == NULL)
+            goto no_keymap;
+
+        seat.kbd.xkb_compose_state = xkb_compose_state_new(
+            seat.kbd.xkb_compose_table, XKB_COMPOSE_STATE_NO_FLAGS);
+        if (seat.kbd.xkb_compose_state == NULL) {
+            xkb_compose_table_unref(seat.kbd.xkb_compose_table);
+            goto no_keymap;
+        }
+
+        seat.kbd.mod_shift = xkb_keymap_mod_get_index(seat.kbd.xkb_keymap, XKB_MOD_NAME_SHIFT);
+        seat.kbd.mod_alt = xkb_keymap_mod_get_index(seat.kbd.xkb_keymap, XKB_MOD_NAME_ALT) ;
+        seat.kbd.mod_ctrl = xkb_keymap_mod_get_index(seat.kbd.xkb_keymap, XKB_MOD_NAME_CTRL);
+        seat.kbd.mod_super = xkb_keymap_mod_get_index(seat.kbd.xkb_keymap, XKB_MOD_NAME_LOGO);
+        seat.kbd.mod_caps = xkb_keymap_mod_get_index(seat.kbd.xkb_keymap, XKB_MOD_NAME_CAPS);
+        seat.kbd.mod_num = xkb_keymap_mod_get_index(seat.kbd.xkb_keymap, XKB_MOD_NAME_NUM);
+
+        /* Significant modifiers in the legacy keyboard protocol */
+        seat.kbd.legacy_significant = 0;
+        if (seat.kbd.mod_shift != XKB_MOD_INVALID)
+            seat.kbd.legacy_significant |= 1 << seat.kbd.mod_shift;
+        if (seat.kbd.mod_alt != XKB_MOD_INVALID)
+            seat.kbd.legacy_significant |= 1 << seat.kbd.mod_alt;
+        if (seat.kbd.mod_ctrl != XKB_MOD_INVALID)
+            seat.kbd.legacy_significant |= 1 << seat.kbd.mod_ctrl;
+        if (seat.kbd.mod_super != XKB_MOD_INVALID)
+            seat.kbd.legacy_significant |= 1 << seat.kbd.mod_super;
+
+        /* Significant modifiers in the kitty keyboard protocol */
+        seat.kbd.kitty_significant = seat.kbd.legacy_significant;
+        if (seat.kbd.mod_caps != XKB_MOD_INVALID)
+            seat.kbd.kitty_significant |= 1 << seat.kbd.mod_caps;
+        if (seat.kbd.mod_num != XKB_MOD_INVALID)
+            seat.kbd.kitty_significant |= 1 << seat.kbd.mod_num;
+
+        key_binding_new_for_seat(key_binding_manager, &seat);
+        key_binding_load_keymap(key_binding_manager, &seat);
+
+        {
+            /*
+             * Test the compose sequence "shift+', shift+space"
+             *
+             * Should result in a double quote, but a regression
+             * caused it to instead emit a space. See #1987
+             *
+             * Note: "shift+', space" also results in a double quote,
+             * but never regressed to a space.
+             */
+            grid.kitty_kbd.flags[0] = KITTY_KBD_DISAMBIGUATE;
+            xkb_compose_state_reset(seat.kbd.xkb_compose_state);
+
+            xkb_mod_mask_t mods = 1u << seat.kbd.mod_shift;
+            keyboard_modifiers(&seat, NULL, 1337, mods, 0, 0, 1);
+
+            key_press_release(&seat, &term, 1337, KEY_APOSTROPHE + 8, WL_KEYBOARD_KEY_STATE_PRESSED);
+            key_press_release(&seat, &term, 1337, KEY_APOSTROPHE + 8, WL_KEYBOARD_KEY_STATE_RELEASED);
+
+            key_press_release(&seat, &term, 1337, KEY_SPACE + 8, WL_KEYBOARD_KEY_STATE_PRESSED);
+
+            char escape[64] = {0};
+            ssize_t count = read(chan[0], escape, sizeof(escape));
+
+            /* key: 34 = '"', alternate: N/A, base: N/A, mods: 2 = shift */
+            const char expected_shift_apostrophe[] = "\033[34;2u";
+            check_seq(escape, count, expected_shift_apostrophe,
+                         "kitty/compose: shift+' shift+space is CSI 34;2u on us(intl)");
+
+            key_press_release(&seat, &term, 1337, KEY_SPACE + 8, WL_KEYBOARD_KEY_STATE_RELEASED);
+
+            grid.kitty_kbd.flags[0] = KITTY_KBD_DISAMBIGUATE | KITTY_KBD_REPORT_ALTERNATE;
+        }
+
+        key_binding_unload_keymap(key_binding_manager, &seat);
+        key_binding_remove_seat(key_binding_manager, &seat);
+
+        xkb_compose_state_unref(seat.kbd.xkb_compose_state);
+        xkb_compose_table_unref(seat.kbd.xkb_compose_table);
+
+        xkb_state_unref(seat.kbd.xkb_state);
+        xkb_keymap_unref(seat.kbd.xkb_keymap);
+
+        seat.kbd.xkb_state = NULL;
+        seat.kbd.xkb_keymap = NULL;
+    }
+
+no_keymap:
+    xkb_context_unref(seat.kbd.xkb);
+    key_binding_manager_destroy(key_binding_manager);
+
+    tll_free(wayl.terms);
+    close(chan[0]);
+    close(chan[1]);
+}
+
+/*
  * The two keyboard-protocol encoders (input.zig, D4b2b).
  *
  * Both are pure functions of a struct kbd_ctx, so they can be driven directly
@@ -6589,6 +7042,8 @@ main(void)
     test_modifier_helpers();
     test_keymap_lookup();
     test_kbd_protocols();
+    test_keyboard_layouts();
+    test_touch_listeners();
     test_pointer_helpers();
     test_keyboard_modifiers();
     test_mouse_scroll();

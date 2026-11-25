@@ -916,6 +916,41 @@ struct wp_cursor_shape_device_v1 *wayland_shim_cursor_shape_get_pointer(
     return wp_cursor_shape_manager_v1_get_pointer(manager, pointer);
 }
 
+/* The protocol listener tables. The callbacks are Zig (input.zig); the
+ * tables stay C-side, as they are plain structs of function pointers, and
+ * wayland_shim_add_*_listener() below is what wayland.zig calls. */
+const struct wl_keyboard_listener keyboard_listener = {
+    .keymap = &keyboard_keymap,
+    .enter = &keyboard_enter,
+    .leave = &keyboard_leave,
+    .key = &keyboard_key,
+    .modifiers = &keyboard_modifiers,
+    .repeat_info = &keyboard_repeat_info,
+};
+
+const struct wl_pointer_listener pointer_listener = {
+    .enter = &wl_pointer_enter,
+    .leave = &wl_pointer_leave,
+    .motion = &wl_pointer_motion,
+    .button = &wl_pointer_button,
+    .axis = &wl_pointer_axis,
+    .frame = &wl_pointer_frame,
+    .axis_source = &wl_pointer_axis_source,
+    .axis_stop = &wl_pointer_axis_stop,
+    .axis_discrete = &wl_pointer_axis_discrete,
+#if defined(WL_POINTER_AXIS_VALUE120_SINCE_VERSION)
+    .axis_value120 = &wl_pointer_axis_value120,
+#endif
+};
+
+const struct wl_touch_listener touch_listener = {
+    .down = wl_touch_down,
+    .up = wl_touch_up,
+    .motion = wl_touch_motion,
+    .frame = wl_touch_frame,
+    .cancel = wl_touch_cancel,
+};
+
 void wayland_shim_add_keyboard_listener(
     struct wl_keyboard *kbd, struct seat *seat)
 {
