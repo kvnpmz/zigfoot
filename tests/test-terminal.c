@@ -1944,6 +1944,160 @@ test_shm_scroll(void)
     shm_chain_free(chain);
 }
 
+/* shm tail: the macro-valued format table, the compositor-capability
+ * thresholds, buffer bookkeeping, cache tie-breaks and the wl_buffer
+ * listener glue. All of it runs headless (chain->shm == NULL). */
+static int shm_test_release_count;
+static void *shm_test_release_data;
+
+static void
+shm_test_release(struct buffer *buf, void *data)
+{
+    (void)buf;
+    shm_test_release_count++;
+    shm_test_release_data = data;
+}
+
+static void
+test_shm_tail(void)
+{
+    const struct shm_format_constants *fc = shm_shim_format_constants();
+    check(fc->pixman_a8r8g8b8 == PIXMAN_a8r8g8b8,
+          "format table exposes the 8-bit pixman format");
+    check(fc->pixman_a2r10g10b10 == PIXMAN_a2r10g10b10,
+          "format table exposes the 10-bit RGB pixman format");
+    check(fc->pixman_a2b10g10r10 == PIXMAN_a2b10g10r10,
+          "format table exposes the 10-bit BGR pixman format");
+    check(fc->wl_argb8888 == WL_SHM_FORMAT_ARGB8888,
+          "format table exposes ARGB8888");
+    check(fc->wl_argb2101010 == WL_SHM_FORMAT_ARGB2101010,
+          "format table exposes ARGB2101010");
+    check(fc->wl_abgr2101010 == WL_SHM_FORMAT_ABGR2101010,
+          "format table exposes ABGR2101010");
+#if defined(HAVE_PIXMAN_RGBA_16)
+    check(fc->pixman_a16b16g16r16 == PIXMAN_a16b16g16r16,
+          "format table exposes the 16-bit pixman format");
+    check(fc->wl_abgr16161616 == WL_SHM_FORMAT_ABGR16161616,
+          "format table exposes ABGR16161616");
+#else
+    check(fc->pixman_a16b16g16r16 == 0 && fc->wl_abgr16161616 == 0,
+          "16-bit formats are zero without pixman RGBA16 support");
+#endif
+
+    struct wayland wl = {0};
+    struct buffer_chain *chain =
+        shm_chain_new(&wl, false, 1, SHM_BITS_AUTO, NULL, NULL);
+    check(chain != NULL, "AUTO bit depth creates a chain");
+    check(shm_chain_bit_depth(chain) == SHM_BITS_8,
+          "AUTO bit depth selects 8-bit surfaces");
+    check(chain->pixman_fmt == PIXMAN_a8r8g8b8 &&
+          chain->shm_format == WL_SHM_FORMAT_ARGB8888,
+          "8-bit chain uses the ARGB8888 formats");
+    shm_chain_free(chain);
+
+    wl.shm_have_abgr2101010 = true;
+    chain = shm_chain_new(&wl, false, 1, SHM_BITS_10, NULL, NULL);
+    check(shm_chain_bit_depth(chain) == SHM_BITS_10,
+          "ABGR2101010 alone satisfies a 10-bit request");
+    check(chain->shm_format == WL_SHM_FORMAT_ABGR2101010,
+          "BGR 10-bit surfaces use the ABGR2101010 shm format");
+    shm_chain_free(chain);
+
+    wl.shm_have_argb2101010 = true;
+    wl.shm_have_abgr161616 = true;
+    chain = shm_chain_new(&wl, false, 1, SHM_BITS_10, NULL, NULL);
+    check(chain->shm_format == WL_SHM_FORMAT_ARGB2101010,
+          "ARGB2101010 wins over ABGR2101010");
+    check(shm_chain_bit_depth(chain) == SHM_BITS_10,
+          "a 16-bit capability does not change a 10-bit request");
+    shm_chain_free(chain);
+
+#if defined(HAVE_PIXMAN_RGBA_16)
+    chain = shm_chain_new(&wl, false, 1, SHM_BITS_16, NULL, NULL);
+    check(shm_chain_bit_depth(chain) == SHM_BITS_16,
+          "ABGR16161616 satisfies a 16-bit request");
+    check(chain->shm_format == WL_SHM_FORMAT_ABGR16161616,
+          "16-bit surfaces use the ABGR16161616 shm format");
+    shm_chain_free(chain);
+#endif
+
+    /* Allocation bookkeeping: alignment and per-buffer pool offsets. */
+    shm_set_min_stride_alignment(64);
+    chain = shm_chain_new(NULL, false, 1, SHM_BITS_8, NULL, NULL);
+    struct buffer *aligned = shm_get_buffer(chain, 7, 3);
+    check(aligned != NULL && aligned->stride % 64 == 0,
+          "minimum stride alignment rounds the stride up");
+    struct buffer_private *priv = (struct buffer_private *)aligned;
+    check(aligned != NULL && priv->size == (size_t)aligned->stride * 3,
+          "buffer size follows the aligned stride");
+    check(aligned != NULL && aligned->data ==
+          (uint8_t *)priv->pool->real_mmapped + priv->offset,
+          "buffer data points into the pool at its offset");
+    shm_did_not_use_buf(aligned);
+    shm_unref(aligned);
+    shm_chain_free(chain);
+    shm_set_min_stride_alignment(0);
+
+    /* shm_get_many() skips zero-sized buffers but still shares one pool. */
+    chain = shm_chain_new(NULL, false, 1, SHM_BITS_8, NULL, NULL);
+    int widths[3] = {0, 2, 2};
+    int heights[3] = {2, 2, 0};
+    struct buffer *many[3] = {0};
+    shm_get_many(chain, 3, widths, heights, many);
+    check(many[0] == NULL && many[2] == NULL,
+          "zero-width/zero-height allocations return NULL");
+    check(many[1] != NULL, "non-empty shm_get_many buffer is allocated");
+    shm_fini();
+    shm_chain_free(chain);
+
+    /* Cache lookup: a younger candidate later in the chain wins. */
+    chain = shm_chain_new(NULL, false, 1, SHM_BITS_8, NULL, NULL);
+    struct buffer *older = shm_get_buffer(chain, 6, 3);
+    struct buffer *younger = shm_get_buffer(chain, 6, 3);
+    check(older != NULL && younger != NULL && older != younger,
+          "two same-sized buffers are cached");
+    shm_did_not_use_buf(older);
+    shm_did_not_use_buf(younger);
+    ((struct buffer_private *)younger)->public.age = 99;
+    ((struct buffer_private *)older)->public.age = 4;
+    struct buffer *picked = shm_get_buffer(chain, 6, 3);
+    check(picked == older, "cache lookup replaces a candidate with a younger one");
+    check(tll_length(chain->bufs) == 1, "the older cached buffer is dropped");
+    shm_did_not_use_buf(picked);
+    shm_unref(picked);
+    shm_chain_free(chain);
+
+    /* wl_buffer listener glue, driven by the headless sentinel. */
+    int marker = 42;
+    shm_test_release_count = 0;
+    shm_test_release_data = NULL;
+    chain = shm_chain_new(
+        NULL, false, 1, SHM_BITS_8, shm_test_release, &marker);
+    struct buffer *released = shm_get_buffer(chain, 4, 2);
+    check(released != NULL && released->wl_buf != NULL,
+          "headless buffer has a wl_buffer sentinel");
+    buffer_release(released, released->wl_buf);
+    check(!((struct buffer_private *)released)->busy,
+          "wl_buffer release clears the compositor-busy flag");
+    check(shm_test_release_count == 1 && shm_test_release_data == &marker,
+          "wl_buffer release invokes the chain's release callback");
+    shm_unref(released);
+    shm_chain_free(chain);
+
+    struct wl_shm_pool *stub_pool = shm_shim_wl_shm_create_pool(NULL, -1, 4096);
+    check(stub_pool != NULL, "headless pool creation returns a sentinel");
+    struct wl_buffer *stub_buf = shm_shim_wl_shm_pool_create_buffer(
+        stub_pool, 0, 1, 1, 4, WL_SHM_FORMAT_ARGB8888);
+    check(stub_buf != NULL, "headless buffer creation returns a sentinel");
+    shm_shim_wl_buffer_add_listener(stub_buf, NULL);
+    shm_shim_wl_buffer_destroy(stub_buf);
+    shm_shim_wl_shm_pool_destroy(stub_pool);
+
+    /* Reaching here without a crash proves the sentinel forwarders no-op. */
+    check(shm_test_release_count == 1,
+          "sentinel listener/destroy forwarders are harmless");
+}
+
 
 /* Read from a pty master until EOF/EIO or the deadline. */
 static size_t
@@ -7442,6 +7596,7 @@ main(void)
     test_shm_cache();
     test_shm_chain();
     test_shm_scroll();
+    test_shm_tail();
     test_slave_spawn();
     test_ime();
     test_cursor_shape();

@@ -2,6 +2,7 @@
 
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdint.h>
 #include <sys/types.h>
 
 #include <pixman.h>
@@ -52,6 +53,7 @@ struct buffer_pool {
     size_t ref_count;
 };
 
+/* Shared with shm.zig and pinned by the ABI probe, like struct buffer_pool. */
 struct buffer_chain;
 struct buffer_private {
     struct buffer public;
@@ -83,6 +85,36 @@ struct buffer_chain {
     void *cb_data;
 };
 
+
+/* Macro-valued pixman/wl_shm_format constants. Shared with shm.zig,
+ * mirrored in terminal_types.zig and pinned by the ABI probe; the values
+ * are supplied by shm-shim.c. */
+struct shm_format_constants {
+    uint32_t pixman_a8r8g8b8;
+    uint32_t pixman_a2r10g10b10;
+    uint32_t pixman_a2b10g10r10;
+    uint32_t pixman_a16b16g16r16;
+    uint32_t wl_argb8888;
+    uint32_t wl_argb2101010;
+    uint32_t wl_abgr2101010;
+    uint32_t wl_abgr16161616;
+};
+
+const struct shm_format_constants *shm_shim_format_constants(void);
+
+/* Exported from shm.zig; attached as the wl_buffer release listener by
+ * shm-shim.c, and driven directly by the headless harness. */
+void buffer_release(void *data, struct wl_buffer *wl_buffer);
+
+/* Generated-protocol forwarders in shm-shim.c (also driven by the harness). */
+void shm_shim_wl_buffer_destroy(struct wl_buffer *buffer);
+void shm_shim_wl_shm_pool_destroy(struct wl_shm_pool *pool);
+struct wl_shm_pool *shm_shim_wl_shm_create_pool(
+    struct wl_shm *shm, int fd, int32_t size);
+struct wl_buffer *shm_shim_wl_shm_pool_create_buffer(
+    struct wl_shm_pool *pool, int32_t offset, int32_t width, int32_t height,
+    int32_t stride, uint32_t format);
+void shm_shim_wl_buffer_add_listener(struct wl_buffer *buffer, void *data);
 
 void shm_fini(void);
 

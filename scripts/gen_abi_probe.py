@@ -106,6 +106,7 @@ C_TYPES: dict[str, str] = {
     "ShmBufferPool": "struct buffer_pool",
     "ShmBufferPrivate": "struct buffer_private",
     "ShmBufferChain": "struct buffer_chain",
+    "ShmFormatConstants": "struct shm_format_constants",
 }
 
 NESTED_IN_TERMINAL: dict[str, str] = {

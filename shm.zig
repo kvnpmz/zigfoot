@@ -2,19 +2,38 @@ const std = @import("std");
 const types = @import("terminal_types.zig");
 
 //
-// Chunks S1-S5 — the whole of shm.c except the platform shims: buffer lifetime
-// (S1), allocation (S2), the buffer cache (S3), chain construction/bit depth
-// (S4) and scrolling (S5). What is left in shm.c is the wl_shm protocol glue,
-// the wl_buffer_listener, the static globals, and one-line #ifdef shims for
-// memfd_create/SHM_ANON/mkostemp, fallocate punch-hole, mmap flags and sealing.
+// The shm module: buffer lifetime (S1), allocation (S2), the buffer cache
+// (S3), chain construction/bit depth (S4), scrolling (S5), and the state that
+// used to be static in shm.c (S6). shm.c is gone; shm-shim.c keeps only what
+// Zig cannot express: the generated wl_shm/wl_buffer request inlines and the
+// #ifdef'd platform tests and macro-valued format constants.
 //
 // The private structs live in shm.h so the ABI probe can pin them; this file
-// mirrors them in terminal_types.zig and owns the tllist heads it has to
-// manipulate after C stops touching them (deferred) or that it shares with C
-// (buffer_chain.bufs).
+// mirrors them in terminal_types.zig (including struct shm_format_constants)
+// and owns the tllist heads it has to manipulate after C stops touching them
+// (deferred) or that it shares with C (buffer_chain.bufs). The compositor's
+// format capabilities are read straight out of the mirrored struct wayland.
 //
 
 const LOG_CLASS_WARNING: c_int = 2;
+
+// State that used to be file-static in shm.c. main.c sets the first two
+// through shm_set_max_pool_size()/shm_set_min_stride_alignment().
+var max_pool_size: i64 = 512 * 1024 * 1024;
+var min_stride_alignment: usize = 0;
+
+// The fallocate() capability is probed once, on the first scrollable pool.
+// The raw, #ifdef'd probe lives in shm-shim.c.
+var punch_hole_probed: bool = false;
+var can_punch_hole: bool = false;
+
+export fn shm_set_max_pool_size(size: i64) callconv(.c) void {
+    max_pool_size = size;
+}
+
+export fn shm_set_min_stride_alignment(alignment: usize) callconv(.c) void {
+    min_stride_alignment = alignment;
+}
 
 extern fn log_msg(
     class: c_int,
@@ -315,7 +334,7 @@ export fn shm_get_buffer(
 //
 // Platform bits that are #ifdef-heavy in C (memfd vs FreeBSD shm_open vs
 // mkostemp, fallocate probing, sealing, mmap flags) and the generated Wayland
-// inline wrappers stay in shm.c; everything about sizes, offsets and buffer
+// inline wrappers stay in shm-shim.c; everything about sizes, offsets and buffer
 // ownership is here.
 //
 
@@ -331,11 +350,9 @@ extern fn log_errno(
 ) void;
 
 extern fn shm_shim_page_size() callconv(.c) usize;
-extern fn shm_shim_max_pool_size() callconv(.c) i64;
-extern fn shm_shim_min_stride_alignment() callconv(.c) usize;
 extern fn shm_shim_stride_for_format(fmt: c_int, width: c_int) callconv(.c) c_int;
 extern fn shm_shim_create_backing_file() callconv(.c) c_int;
-extern fn shm_shim_punch_hole_supported(fd: c_int) callconv(.c) bool;
+extern fn shm_shim_probe_punch_hole(fd: c_int) callconv(.c) bool;
 extern fn shm_shim_mmap_pool(fd: c_int, size: usize) callconv(.c) ?*anyopaque;
 extern fn shm_shim_seal_pool(fd: c_int) callconv(.c) void;
 extern fn shm_shim_wl_shm_create_pool(
@@ -363,10 +380,20 @@ extern fn pixman_image_create_bits_no_clear(
 ) callconv(.c) ?*anyopaque;
 extern fn pixman_region32_init(region: ?*anyopaque) callconv(.c) void;
 extern fn pixman_region32_clear(region: ?*anyopaque) callconv(.c) void;
-extern fn shm_shim_can_punch_hole() callconv(.c) bool;
 extern fn shm_shim_punch_hole(fd: c_int, ofs: i64, len: i64) callconv(.c) bool;
 extern fn memcpy(dest: ?*anyopaque, src: ?*const anyopaque, n: usize) callconv(.c) ?*anyopaque;
 extern fn memmove(dest: ?*anyopaque, src: ?*const anyopaque, n: usize) callconv(.c) ?*anyopaque;
+
+fn punchHoleSupported(fd: c_int) bool {
+    if (comptime @sizeOf(usize) != 8)
+        return false; // Not enough virtual address space in 32-bit
+
+    if (!punch_hole_probed) {
+        punch_hole_probed = true;
+        can_punch_hole = shm_shim_probe_punch_hole(fd);
+    }
+    return can_punch_hole;
+}
 
 fn logErr(msg: [*:0]const u8) void {
     log_msg(LOG_CLASS_ERROR, "shm", "shm.zig", @intCast(@src().line), "%s", msg);
@@ -481,7 +508,7 @@ fn getNewBuffers(
     const sizes = alloc.alloc(c_int, count) catch @panic("out of memory");
     defer alloc.free(sizes);
 
-    const alignment = shm_shim_min_stride_alignment();
+    const alignment = min_stride_alignment;
     var total_size: usize = 0;
 
     for (0..count) |i| {
@@ -505,7 +532,7 @@ fn getNewBuffers(
 
     const page_sz = shm_shim_page_size();
     const page: i64 = @intCast(page_sz);
-    const max_pool = shm_shim_max_pool_size();
+    const max_pool = max_pool_size;
 
     const pool_fd = shm_shim_create_backing_file();
     if (pool_fd == -1) {
@@ -530,7 +557,7 @@ fn getNewBuffers(
         abortAllocation(pool_fd, null, null, memfd_size);
     }
 
-    if (chain.scrollable and !shm_shim_punch_hole_supported(pool_fd)) {
+    if (chain.scrollable and !punchHoleSupported(pool_fd)) {
         offset = 0;
         memfd_size = @intCast(total_size);
         chain.scrollable = false;
@@ -642,29 +669,11 @@ export fn get_new_buffers(
 //
 // Chunk S4 — buffer-chain construction/free and bit depth. The pixman and
 // wl_shm_format constants, and the compositor's format capabilities, come
-// from shm.c because they are macros/enums or live in struct wayland.
+// from shm-shim.c because they are macros/enums; the compositor's capability
+// flags come from the mirrored struct wayland.
 //
 
-const ShmFormatConstants = extern struct {
-    pixman_a8r8g8b8: u32,
-    pixman_a2r10g10b10: u32,
-    pixman_a2b10g10r10: u32,
-    pixman_a16b16g16r16: u32,
-    wl_argb8888: u32,
-    wl_argb2101010: u32,
-    wl_abgr2101010: u32,
-    wl_abgr16161616: u32,
-};
-
-const ShmWaylandCaps = extern struct {
-    shm: ?*anyopaque,
-    abgr161616: bool,
-    argb2101010: bool,
-    abgr2101010: bool,
-};
-
-extern fn shm_shim_format_constants() callconv(.c) *const ShmFormatConstants;
-extern fn shm_shim_wayl_caps(wayl: ?*anyopaque) callconv(.c) ShmWaylandCaps;
+extern fn shm_shim_format_constants() callconv(.c) *const types.ShmFormatConstants;
 
 // enum shm_bit_depth { SHM_BITS_AUTO, SHM_BITS_8, SHM_BITS_10, SHM_BITS_16 }
 const SHM_BITS_8: c_int = 1;
@@ -686,7 +695,7 @@ fn logWarn(msg: [*:0]const u8) void {
 }
 
 export fn shm_chain_new(
-    wayl: ?*anyopaque,
+    wayl: ?*types.Wayland,
     scrollable: bool,
     pix_instances: usize,
     desired_bit_depth: c_int,
@@ -694,13 +703,16 @@ export fn shm_chain_new(
     cb_data: ?*anyopaque,
 ) callconv(.c) ?*types.ShmBufferChain {
     const constants = shm_shim_format_constants().*;
-    const caps = shm_shim_wayl_caps(wayl);
+    const shm: ?*anyopaque = if (wayl) |w| w.shm else null;
+    const abgr161616 = if (wayl) |w| w._shm_format_bits.abgr161616 else false;
+    const argb2101010 = if (wayl) |w| w._shm_format_bits.argb2101010 else false;
+    const abgr2101010 = if (wayl) |w| w._shm_format_bits.abgr2101010 else false;
 
     var pixman_fmt: u32 = constants.pixman_a8r8g8b8;
     var shm_fmt: u32 = constants.wl_argb8888;
 
     if (constants.pixman_a16b16g16r16 != 0 and desired_bit_depth == SHM_BITS_16) {
-        if (caps.abgr161616) {
+        if (abgr161616) {
             pixman_fmt = constants.pixman_a16b16g16r16;
             shm_fmt = constants.wl_abgr16161616;
 
@@ -715,7 +727,7 @@ export fn shm_chain_new(
     }
 
     if (desired_bit_depth >= SHM_BITS_10 and pixman_fmt == constants.pixman_a8r8g8b8) {
-        if (caps.argb2101010) {
+        if (argb2101010) {
             pixman_fmt = constants.pixman_a2r10g10b10;
             shm_fmt = constants.wl_argb2101010;
 
@@ -723,7 +735,7 @@ export fn shm_chain_new(
                 logged = true;
                 logInfo("using 10-bit RGB surfaces");
             }
-        } else if (caps.abgr2101010) {
+        } else if (abgr2101010) {
             pixman_fmt = constants.pixman_a2b10g10r10;
             shm_fmt = constants.wl_abgr2101010;
 
@@ -744,7 +756,7 @@ export fn shm_chain_new(
         mallocOrAbort(@sizeOf(types.ShmBufferChain))));
     chain.* = .{
         .bufs = .{ .head = null, .tail = null, .length = 0 },
-        .shm = caps.shm,
+        .shm = shm,
         .pix_instances = pix_instances,
         .scrollable = scrollable,
         .pixman_fmt = pixman_fmt,
@@ -786,16 +798,16 @@ export fn shm_chain_bit_depth(
 //
 // Chunk S5 — SHM scrolling. The punch-hole capability probe and the
 // fallocate() call are guarded by __SIZEOF_POINTER__/FALLOC_FL_PUNCH_HOLE in
-// shm.c (shm_shim_*), so the 32-bit and no-punch-hole builds fall out of
-// shmShimPunchHole() returning false and shm_can_scroll() returning false.
+// shm-shim.c, so the 32-bit and no-punch-hole builds fall out of
+// shm_shim_punch_hole() returning false and shm_can_scroll() returning false.
 //
 
 fn canScroll(buf: *const types.ShmBufferPrivate) bool {
     if (comptime @sizeOf(usize) != 8)
         return false; // Not enough virtual address space in 32-bit
 
-    return shm_shim_can_punch_hole() and
-        shm_shim_max_pool_size() > 0 and
+    return can_punch_hole and
+        max_pool_size > 0 and
         buf.scrollable;
 }
 
@@ -858,7 +870,7 @@ fn scrollForward(
 ) bool {
     const pool = buf.pool.?;
 
-    std.debug.assert(shm_shim_can_punch_hole());
+    std.debug.assert(can_punch_hole);
     std.debug.assert(buf.busy);
     std.debug.assert(buf.public.pix != null);
     std.debug.assert(buf.public.wl_buf != null);
@@ -869,7 +881,7 @@ fn scrollForward(
     std.debug.assert(rows > 0);
     std.debug.assert(diff < @as(i64, @intCast(buf.size)));
 
-    const max_pool = shm_shim_max_pool_size();
+    const max_pool = max_pool_size;
 
     if (buf.offset + diff + @as(i64, @intCast(buf.size)) > max_pool) {
         if (!wrapBuffer(buf, 0))
@@ -935,7 +947,7 @@ fn scrollReverse(
     const pool = buf.pool.?;
     std.debug.assert(pool.ref_count == 1);
 
-    const max_pool = shm_shim_max_pool_size();
+    const max_pool = max_pool_size;
     const diff: i64 = @as(i64, rows) * @as(i64, buf.public.stride);
 
     if (diff > buf.offset) {
