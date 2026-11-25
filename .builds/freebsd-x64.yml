@@ -4,6 +4,7 @@ packages:
   - libepoll-shim
   - meson
   - ninja
+  - zig
   - pkgconf
   - scdoc
   - wayland

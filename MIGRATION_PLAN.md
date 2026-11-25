@@ -963,6 +963,21 @@ compositor. Real presentation feedback is still not delivered to these
 short-lived windows, so `presented()` is covered by the fabricated-context
 checks, not by the launches.
 
+**Post-close-out checks (A, while E1/E3 ran):** upstream is clean
+(`git fetch origin`: 222 commits ahead, 0 behind — nothing to port). The
+CI Zig job would have failed at configure time: it passed `-Dime=disabled`,
+which is not a boolean, and meson.build refuses `-Dime=false` outright —
+fixed to `-Dime=true`, and `.builds/freebsd-x64.yml` now installs `zig`
+too. A fourth, non-standard configuration builds and passes 5/5 outside
+the gate matrix (`-Ddefault-terminfo=foot-extra`,
+`-Dcustom-terminfo-install-location=lib/foot/terminfo`,
+`-Dgrapheme-clustering=disabled`): the generated build options carry
+`foot_terminfo_path="/usr/local/lib/foot/terminfo"` and
+`default_terminfo="foot-extra"` (visible in `--help`), which no build dir
+in `full-check.sh` exercises. Local investigation artifacts are now
+gitignored (§14.6), and four modules' comments no longer reference deleted
+C files.
+
 **Post-D6a (client, merge of agent-b2):** `client.c` is **deleted** — the
 43rd module with no C. `client.zig` (727 lines) is the footclient entry
 point: option parsing, `-D`/URI handling, socket discovery, the setup
