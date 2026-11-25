@@ -2663,7 +2663,6 @@ extern fn render_refresh(term: *types.Terminal) callconv(.c) void;
 extern fn render_refresh_title(term: *types.Terminal) callconv(.c) void;
 extern fn render_refresh_icon(term: *types.Terminal) callconv(.c) void;
 extern fn render_refresh_app_id(term: *types.Terminal) callconv(.c) void;
-extern fn term_xcursor_update(term: *types.Terminal) callconv(.c) void;
 extern fn xstrdup(s: [*:0]const u8) callconv(.c) ?[*:0]u8;
 
 export fn term_osc8_open(term: *types.Terminal, id: u64, uri: [*:0]const u8) void {
@@ -3648,4 +3647,230 @@ export fn term_ime_set_cursor_rect(
             seat.ime.cursor_rect.pending.height = height;
         }
     }
+}
+
+//
+// Chunk C2 — mouse grab state and cursor shape selection.
+//
+// term_mouse_grabbed() and the term_xcursor_update() pair lived in terminal.c;
+// the CSD border corner helpers (is_top_left() and friends) and
+// xcursor_for_csd_border() lived in input.c. All of them are pure decisions
+// over the terminal/seat/window mirrors, so they are ported here. The
+// dependencies that are still C are the modifier/key-binding lookups
+// (input.c/key-binding.c), the xcursor loader (render.c) and the server-side
+// cursor-shape name mapping (cursor-shape.zig).
+//
+
+extern fn get_current_modifiers(
+    seat: *const types.Seat,
+    effective: ?*u32, // xkb_mod_mask_t *
+    consumed: ?*u32,
+    key: u32,
+    filter_locked: bool,
+) callconv(.c) void;
+
+/// Mirrors key-binding.h's `struct key_binding_set`, of which only
+/// selection_overrides is read here. The whole struct gets mirrored when
+/// key-binding.c is ported (track D5); the check below keeps this one honest
+/// until then (offsetof/sizeof verified against C).
+const KeyBindingSet = extern struct {
+    key: types.Tll(?*anyopaque),
+    search: types.Tll(?*anyopaque),
+    url: types.Tll(?*anyopaque),
+    mouse: types.Tll(?*anyopaque),
+    selection_overrides: u32, // xkb_mod_mask_t
+};
+
+comptime {
+    if (@offsetOf(KeyBindingSet, "selection_overrides") != 96 or
+        @sizeOf(KeyBindingSet) != 104)
+        @compileError("struct key_binding_set layout doesn't match the Zig mirror");
+}
+
+extern fn key_binding_for(
+    mgr: ?*anyopaque,
+    conf: ?*const types.Config,
+    seat: *const types.Seat,
+) callconv(.c) ?*KeyBindingSet;
+extern fn render_xcursor_is_valid(seat: *const types.Seat, xcursor: [*c]const u8) callconv(.c) bool;
+extern fn render_xcursor_set(seat: *types.Seat, term: *types.Terminal, shape: types.CursorShape) callconv(.c) bool;
+extern fn cursor_string_to_server_shape(xcursor: [*c]const u8, bound_version: c_int) callconv(.c) c_int;
+extern fn bug(
+    file: [*:0]const u8,
+    line: c_int,
+    func: [*:0]const u8,
+    fmt: [*:0]const u8,
+    ...
+) callconv(.c) noreturn;
+
+/// A missing wayland instance can't produce override modifiers, and C never
+/// dereferences it in a valid program: the `orelse` paths below degrade to
+/// the same "no override modifiers pressed" answer the C expression gives.
+export fn term_mouse_grabbed(term: *const types.Terminal, seat: *const types.Seat) callconv(.c) bool {
+    var mods: u32 = 0;
+    get_current_modifiers(seat, &mods, null, 0, true);
+
+    const wayl = term.wl orelse return term.mouse_tracking == .none;
+    const bindings = key_binding_for(wayl.key_binding_manager, term.conf, seat) orelse
+        return term.mouse_tracking == .none;
+
+    const override_modmask = bindings.selection_overrides;
+    const has_focus = if (seat.kbd_focus) |focus| focus == term else false;
+    const override_mods_pressed = seat.kbd.xkb_keymap != null and
+        mods != 0 and (mods & override_modmask) == override_modmask;
+
+    return term.mouse_tracking == .none or
+        (has_focus and override_mods_pressed);
+}
+
+//
+// CSD border hit testing. C compares an integer coordinate against a float
+// expression, i.e. single precision (int -> float); mirrored the same way.
+//
+
+fn csdTitleSize(term: *const types.Terminal) f32 {
+    const conf = term.conf orelse return 0;
+    return @floatFromInt(conf.csd.title_height);
+}
+
+fn csdBorderSize(term: *const types.Terminal) f32 {
+    const conf = term.conf orelse return 0;
+    return @floatFromInt(conf.csd.border_width);
+}
+
+fn isTopLeft(term: *const types.Terminal, x: c_int, y: c_int) bool {
+    const win = term.window orelse return false;
+    const scale = term.scale;
+    return !win.is_constrained_top and !win.is_constrained_left and
+        ((term.active_surface == .border_left and
+            @as(f32, @floatFromInt(y)) < 10.0 * scale) or
+        (term.active_surface == .border_top and
+            @as(f32, @floatFromInt(x)) < (10.0 + csdBorderSize(term)) * scale));
+}
+
+fn isTopRight(term: *const types.Terminal, x: c_int, y: c_int) bool {
+    const win = term.window orelse return false;
+    const scale = term.scale;
+    return !win.is_constrained_top and !win.is_constrained_right and
+        ((term.active_surface == .border_right and
+            @as(f32, @floatFromInt(y)) < 10.0 * scale) or
+        (term.active_surface == .border_top and
+            @as(f32, @floatFromInt(x)) > @as(f32, @floatFromInt(term.width)) +
+            csdBorderSize(term) * scale - 10.0 * scale));
+}
+
+fn isBottomLeft(term: *const types.Terminal, x: c_int, y: c_int) bool {
+    const win = term.window orelse return false;
+    const scale = term.scale;
+    return !win.is_constrained_bottom and !win.is_constrained_left and
+        ((term.active_surface == .border_left and
+            @as(f32, @floatFromInt(y)) > csdTitleSize(term) * scale +
+            @as(f32, @floatFromInt(term.height))) or
+        (term.active_surface == .border_bottom and
+            @as(f32, @floatFromInt(x)) < (10.0 + csdBorderSize(term)) * scale));
+}
+
+fn isBottomRight(term: *const types.Terminal, x: c_int, y: c_int) bool {
+    const win = term.window orelse return false;
+    const scale = term.scale;
+    return !win.is_constrained_bottom and !win.is_constrained_right and
+        ((term.active_surface == .border_right and
+            @as(f32, @floatFromInt(y)) > csdTitleSize(term) * scale +
+            @as(f32, @floatFromInt(term.height))) or
+        (term.active_surface == .border_bottom and
+            @as(f32, @floatFromInt(x)) > @as(f32, @floatFromInt(term.width)) +
+            csdBorderSize(term) * scale - 10.0 * scale));
+}
+
+// Exported because input.c's border-drag code still calls these helpers
+// (it is ported in track D4).
+
+export fn is_top_left(term: *const types.Terminal, x: c_int, y: c_int) callconv(.c) bool {
+    return isTopLeft(term, x, y);
+}
+
+export fn is_top_right(term: *const types.Terminal, x: c_int, y: c_int) callconv(.c) bool {
+    return isTopRight(term, x, y);
+}
+
+export fn is_bottom_left(term: *const types.Terminal, x: c_int, y: c_int) callconv(.c) bool {
+    return isBottomLeft(term, x, y);
+}
+
+export fn is_bottom_right(term: *const types.Terminal, x: c_int, y: c_int) callconv(.c) bool {
+    return isBottomRight(term, x, y);
+}
+
+export fn xcursor_for_csd_border(term: *types.Terminal, x: c_int, y: c_int) callconv(.c) types.CursorShape {
+    const win = term.window orelse {
+        bug(@src().file, @intCast(@src().line), "xcursor_for_csd_border", "no window");
+    };
+
+    if (isTopLeft(term, x, y))
+        return .top_left_corner
+    else if (isTopRight(term, x, y))
+        return .top_right_corner
+    else if (isBottomLeft(term, x, y))
+        return .bottom_left_corner
+    else if (isBottomRight(term, x, y))
+        return .bottom_right_corner
+    else if (term.active_surface == .border_left)
+        return if (!win.is_constrained_left) .left_side else .left_ptr
+    else if (term.active_surface == .border_right)
+        return if (!win.is_constrained_right) .right_side else .left_ptr
+    else if (term.active_surface == .border_top)
+        return if (!win.is_constrained_top) .top_side else .left_ptr
+    else if (term.active_surface == .border_bottom)
+        return if (!win.is_constrained_bottom) .bottom_side else .left_ptr
+    else {
+        bug(@src().file, @intCast(@src().line), "xcursor_for_csd_border", "Unreachable");
+    }
+}
+
+export fn term_xcursor_update_for_seat(term: *types.Terminal, seat: *types.Seat) callconv(.c) void {
+    const shape: types.CursorShape = switch (term.active_surface) {
+        .grid => blk: {
+            if (seat.pointer.hidden)
+                break :blk .hidden;
+
+            // C dereferences term->wl here; a missing wayland instance is
+            // invalid, so treat it as "no server-side cursor support".
+            const shape_manager_version: c_int = if (term.wl) |wayl|
+                wayl.shape_manager_version
+            else
+                0;
+
+            if (cursor_string_to_server_shape(term.mouse_user_cursor, shape_manager_version) != 0 or
+                render_xcursor_is_valid(seat, term.mouse_user_cursor))
+            {
+                break :blk .custom;
+            }
+
+            if (term_mouse_grabbed(term, seat))
+                break :blk .text;
+
+            break :blk .left_ptr;
+        },
+
+        .title, .button_minimize, .button_maximize, .button_close => .left_ptr,
+
+        .border_left, .border_right, .border_top, .border_bottom => xcursor_for_csd_border(
+            term,
+            seat.mouse.x,
+            seat.mouse.y,
+        ),
+
+        .none => return,
+    };
+
+    if (shape == .none)
+        bug(@src().file, @intCast(@src().line), "term_xcursor_update_for_seat", "xcursor not set");
+
+    _ = render_xcursor_set(seat, term, shape);
+}
+
+export fn term_xcursor_update(term: *types.Terminal) callconv(.c) void {
+    var it = seats(term);
+    while (it.next()) |seat|
+        term_xcursor_update_for_seat(term, seat);
 }

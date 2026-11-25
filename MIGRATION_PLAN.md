@@ -650,13 +650,20 @@ utmp backends where available.
 
 ## 13. Sequenced backlog (refreshed 2026-11-24)
 
-State: **28,054 of 48,830 C lines gone (57.5%)**, ~43% by effort, 31 modules
-ported, 323 harness assertions, `meson test` 5/5 in three build dirs.
-Remaining C: 20,836 hand-written lines + 1,391 shim lines.
+State: **28,210 of 48,830 C lines gone (57.8%)**, ~43% by effort, 31 modules
+ported, 339 harness assertions, `meson test` 5/5 in three build dirs.
+Remaining C: 20,620 lines, 1,391 of which are `*-shim.c` accessors.
 
-Track C is underway: C1 (the IME wrappers) is in (`1515fd13`). The build loop
-was also measured and fixed - see section 10; a `terminal_types.zig`-touching
-rebuild went from 215 s to 13 s.
+Track C is underway: C1 (the IME wrappers) is in (`1515fd13`), C2 (mouse grab
+and CSD cursor shapes) is in. The build loop was also measured and fixed - see
+section 10; a `terminal_types.zig`-touching rebuild went from 215 s to 13 s.
+
+C2 needed one field of `struct key_binding_set` (`selection_overrides`).
+Rather than mirror all of `key-binding.h` early, `terminal.zig` carries a
+five-field local mirror whose layout is pinned by a compile-time
+`@offsetOf`/`@sizeOf` check (96/104, verified against C). It moves into
+`terminal_types.zig` with the rest of the header when `key-binding.c` is
+ported (D5).
 
 Track B is done (commits ec838c9a, aef90c27): **all of `wayland.h` is mirrored
 and ABI-pinned**, `struct seat` included, and the 18 accessors that existed
@@ -720,7 +727,7 @@ fabricates `struct terminal` today).
 | Chunk | Work | Depends on | Est. |
 |---|---|---|---|
 | **C1** done | T4 IME accessors (`term_ime_is_enabled/enable/disable/reset/set_cursor_rect`, ~60 lines) | B2, ime.c | 0.5d |
-| **C2** | T8 xcursor (`term_xcursor_update_for_seat`, `term_xcursor_update`, ~53 lines) | B2 | 0.5d |
+| **C2** done | T8 xcursor: `term_mouse_grabbed`, `term_xcursor_update_for_seat`, `term_xcursor_update` from `terminal.c` plus `xcursor_for_csd_border()` and its four corner helpers from `input.c` (~110 lines). `terminal.c` is 1,609 lines, `input.c` 3,618. 16 new harness checks | B2 | 0.5d |
 | **C3** | T11a: utmp helpers, `fdm_delayed_render`, `initialize_render_workers`, `term_window_configured` | B1, render | 1–2d |
 | **C4** | T11b: `term_init` (342 lines) | C3, wayland, render | 1–2d |
 | **C5** | T11c: `term_shutdown`/`shutdown_maybe_done`/`fdm_shutdown`/`fdm_terminate_timeout`/`fdm_client_terminated` | C4 | 1d |

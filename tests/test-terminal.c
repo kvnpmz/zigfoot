@@ -33,6 +33,7 @@
 #include <termios.h>
 #include <linux/input-event-codes.h>
 #include "input.h"
+#include "key-binding.h"
 #include <sys/timerfd.h>
 #include <sys/mman.h>
 #include <sys/wait.h>
@@ -2033,6 +2034,102 @@ log_capture_end(struct log_capture *cap, char *buf, size_t cap_len)
  * ime.c's ime_enable()/ime_reset_preedit() both return early on a seat with
  * no text-input manager and no preedit, so no compositor is needed. */
 static void
+test_cursor_shape(void)
+{
+    struct terminal *term = term_new();
+    struct wayland wl = {0};
+    struct wl_window win = {0};
+    static struct config conf; /* too large for the stack */
+    memset(&conf, 0, sizeof(conf));
+
+    term->wl = &wl;
+    term->window = &win;
+    term->conf = &conf;
+    term->scale = 1.0f;
+    term->width = 100;
+    term->height = 50;
+
+    conf.csd.title_height = 20;
+    conf.csd.border_width = 1;
+
+    struct seat seat = {0};
+    seat.wayl = &wl;
+    seat.mouse_focus = term;
+
+    wl.key_binding_manager = key_binding_manager_new();
+
+    /* term_mouse_grabbed() */
+    term->mouse_tracking = MOUSE_NONE;
+    check(term_mouse_grabbed(term, &seat),
+          "mouse tracking off reports the mouse as grabbed");
+
+    term->mouse_tracking = MOUSE_CLICK;
+    check(!term_mouse_grabbed(term, &seat),
+          "mouse tracking without a grab modifier is not grabbed");
+
+    /* xcursor_for_csd_border(): corners first, then the border sides. */
+    term->active_surface = TERM_SURF_BORDER_LEFT;
+    check(xcursor_for_csd_border(term, 0, 5) == CURSOR_SHAPE_TOP_LEFT_CORNER,
+          "left border, near the top, is the top-left corner");
+    check(xcursor_for_csd_border(term, 0, 60) == CURSOR_SHAPE_LEFT_SIDE,
+          "left border, below the title bar, is the left side");
+    win.is_constrained_left = true;
+    check(xcursor_for_csd_border(term, 0, 60) == CURSOR_SHAPE_LEFT_PTR,
+          "a constrained left border falls back to the pointer");
+    win.is_constrained_left = false;
+
+    term->active_surface = TERM_SURF_BORDER_RIGHT;
+    check(xcursor_for_csd_border(term, 0, 5) == CURSOR_SHAPE_TOP_RIGHT_CORNER,
+          "right border, near the top, is the top-right corner");
+    check(xcursor_for_csd_border(term, 0, 60) == CURSOR_SHAPE_RIGHT_SIDE,
+          "right border, below the title bar, is the right side");
+
+    term->active_surface = TERM_SURF_BORDER_TOP;
+    check(xcursor_for_csd_border(term, 5, 0) == CURSOR_SHAPE_TOP_LEFT_CORNER,
+          "top border, left end, is the top-left corner");
+    check(xcursor_for_csd_border(term, 95, 0) == CURSOR_SHAPE_TOP_RIGHT_CORNER,
+          "top border, right end, is the top-right corner");
+    check(xcursor_for_csd_border(term, 50, 0) == CURSOR_SHAPE_TOP_SIDE,
+          "top border, middle, is the top side");
+    win.is_constrained_top = true;
+    check(xcursor_for_csd_border(term, 50, 0) == CURSOR_SHAPE_LEFT_PTR,
+          "a constrained top border falls back to the pointer");
+    check(xcursor_for_csd_border(term, 5, 0) == CURSOR_SHAPE_LEFT_PTR,
+          "a constrained top border has no corners either");
+    win.is_constrained_top = false;
+
+    term->active_surface = TERM_SURF_BORDER_BOTTOM;
+    check(xcursor_for_csd_border(term, 5, 0) == CURSOR_SHAPE_BOTTOM_LEFT_CORNER,
+          "bottom border, left end, is the bottom-left corner");
+    check(xcursor_for_csd_border(term, 95, 0) == CURSOR_SHAPE_BOTTOM_RIGHT_CORNER,
+          "bottom border, right end, is the bottom-right corner");
+    check(xcursor_for_csd_border(term, 50, 0) == CURSOR_SHAPE_BOTTOM_SIDE,
+          "bottom border, middle, is the bottom side");
+
+    /* term_xcursor_update(): a terminal that isn't on any surface asks for no
+     * cursor at all. The seats are visited, but left alone. */
+    term->active_surface = TERM_SURF_NONE;
+    struct seat s0 = {0};
+    struct seat s1 = {0};
+    s0.pointer.shape = CURSOR_SHAPE_HIDDEN; /* sentinel */
+    s1.pointer.shape = CURSOR_SHAPE_HIDDEN;
+    tll_push_back(wl.seats, s0);
+    tll_push_back(wl.seats, s1);
+    term_xcursor_update(term);
+    check(tll_front(wl.seats).pointer.shape == CURSOR_SHAPE_HIDDEN &&
+          tll_back(wl.seats).pointer.shape == CURSOR_SHAPE_HIDDEN,
+          "TERM_SURF_NONE leaves every seat's cursor untouched");
+    tll_free(wl.seats);
+
+    key_binding_manager_destroy(wl.key_binding_manager);
+
+    term->window = NULL;
+    term->wl = NULL;
+    term->conf = NULL;
+    term_free(term);
+}
+
+static void
 test_ime(void)
 {
     struct wayland wl = {0};
@@ -2838,6 +2935,7 @@ main(void)
     test_shm_scroll();
     test_slave_spawn();
     test_ime();
+    test_cursor_shape();
     test_quirks();
     test_version_and_features();
     test_log();

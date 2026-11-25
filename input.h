@@ -37,6 +37,12 @@ void get_current_modifiers(const struct seat *seat,
                            xkb_mod_mask_t *consumed,
                            uint32_t key, bool filter_locked);
 
+/* is_top_left() and friends are ported to terminal.zig (chunk C2), but are
+ * still needed by the border-drag code here. */
+bool is_top_left(const struct terminal *term, int x, int y);
+bool is_top_right(const struct terminal *term, int x, int y);
+bool is_bottom_left(const struct terminal *term, int x, int y);
+bool is_bottom_right(const struct terminal *term, int x, int y);
 enum cursor_shape xcursor_for_csd_border(struct terminal *term, int x, int y);
 void mouse_coord_pixel_to_cell(struct seat *seat, const struct terminal *term,
                                int x, int y);

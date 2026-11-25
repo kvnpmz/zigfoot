@@ -2332,77 +2332,8 @@ input_repeat(struct seat *seat, uint32_t key)
     key_press_release(seat, term, seat->kbd.serial, key, XKB_KEY_DOWN);
 }
 
-static bool
-is_top_left(const struct terminal *term, int x, int y)
-{
-    int csd_border_size = term->conf->csd.border_width;
-    return (
-        (!term->window->is_constrained_top && !term->window->is_constrained_left) &&
-        ((term->active_surface == TERM_SURF_BORDER_LEFT && y < 10 * term->scale) ||
-         (term->active_surface == TERM_SURF_BORDER_TOP && x < (10 + csd_border_size) * term->scale)));
-}
-
-static bool
-is_top_right(const struct terminal *term, int x, int y)
-{
-    int csd_border_size = term->conf->csd.border_width;
-    return (
-        (!term->window->is_constrained_top && !term->window->is_constrained_right) &&
-        ((term->active_surface == TERM_SURF_BORDER_RIGHT && y < 10 * term->scale) ||
-         (term->active_surface == TERM_SURF_BORDER_TOP && x > term->width + 1 * csd_border_size * term->scale - 10 * term->scale)));
-}
-
-static bool
-is_bottom_left(const struct terminal *term, int x, int y)
-{
-    int csd_title_size = term->conf->csd.title_height;
-    int csd_border_size = term->conf->csd.border_width;
-    return (
-        (!term->window->is_constrained_bottom && !term->window->is_constrained_left) &&
-        ((term->active_surface == TERM_SURF_BORDER_LEFT && y > csd_title_size * term->scale + term->height) ||
-         (term->active_surface == TERM_SURF_BORDER_BOTTOM && x < (10 + csd_border_size) * term->scale)));
-}
-
-static bool
-is_bottom_right(const struct terminal *term, int x, int y)
-{
-    int csd_title_size = term->conf->csd.title_height;
-    int csd_border_size = term->conf->csd.border_width;
-    return (
-        (!term->window->is_constrained_bottom && !term->window->is_constrained_right) &&
-        ((term->active_surface == TERM_SURF_BORDER_RIGHT && y > csd_title_size * term->scale + term->height) ||
-         (term->active_surface == TERM_SURF_BORDER_BOTTOM && x > term->width + 1 * csd_border_size * term->scale - 10 * term->scale)));
-}
-
-enum cursor_shape
-xcursor_for_csd_border(struct terminal *term, int x, int y)
-{
-    if (is_top_left(term, x, y))                              return CURSOR_SHAPE_TOP_LEFT_CORNER;
-    else if (is_top_right(term, x, y))                        return CURSOR_SHAPE_TOP_RIGHT_CORNER;
-    else if (is_bottom_left(term, x, y))                      return CURSOR_SHAPE_BOTTOM_LEFT_CORNER;
-    else if (is_bottom_right(term, x, y))                     return CURSOR_SHAPE_BOTTOM_RIGHT_CORNER;
-
-    else if (term->active_surface == TERM_SURF_BORDER_LEFT)
-        return !term->window->is_constrained_left
-            ? CURSOR_SHAPE_LEFT_SIDE : CURSOR_SHAPE_LEFT_PTR;
-
-    else if (term->active_surface == TERM_SURF_BORDER_RIGHT)
-        return !term->window->is_constrained_right
-            ? CURSOR_SHAPE_RIGHT_SIDE : CURSOR_SHAPE_LEFT_PTR;
-
-    else if (term->active_surface == TERM_SURF_BORDER_TOP)
-        return !term->window->is_constrained_top
-            ? CURSOR_SHAPE_TOP_SIDE : CURSOR_SHAPE_LEFT_PTR;
-
-    else if (term->active_surface == TERM_SURF_BORDER_BOTTOM)
-        return !term->window->is_constrained_bottom
-            ? CURSOR_SHAPE_BOTTOM_SIDE : CURSOR_SHAPE_LEFT_PTR;
-
-    else {
-        BUG("Unreachable");
-        return CURSOR_SHAPE_NONE;
-    }
-}
+/* is_top_left() .. xcursor_for_csd_border(): ported to terminal.zig (chunk
+ * C2). They are still called from here, via input.h. */
 
 static void
 mouse_button_state_reset(struct seat *seat)
