@@ -2317,86 +2317,6 @@ wayl_roundtrip(struct wayland *wayl)
     wayl_flush(wayl);
 }
 
-static void
-surface_scale_explicit_width_height(
-    const struct wl_window *win, const struct wayl_surface *surf,
-    int width, int height, float scale, bool verify)
-{
-    if (term_fractional_scaling(win->term)) {
-        LOG_DBG("scaling by a factor of %.2f using fractional scaling "
-                "(width=%d, height=%d) ", scale, width, height);
-
-        if (verify) {
-            if ((int)roundf(scale * (int)roundf(width / scale)) != width) {
-                BUG("width=%d is not valid with scaling factor %.2f (%d != %d)",
-                    width, scale,
-                    (int)roundf(scale * (int)roundf(width / scale)),
-                    width);
-            }
-
-            if ((int)roundf(scale * (int)roundf(height / scale)) != height) {
-                BUG("height=%d is not valid with scaling factor %.2f (%d != %d)",
-                    height, scale,
-                    (int)roundf(scale * (int)roundf(height / scale)),
-                    height);
-            }
-        }
-
-        xassert(surf->viewport != NULL);
-        wl_surface_set_buffer_scale(surf->surf, 1);
-        wp_viewport_set_destination(
-            surf->viewport, roundf(width / scale), roundf(height / scale));
-    } else {
-        const char *mode UNUSED = term_preferred_buffer_scale(win->term)
-            ? "wl_surface.preferred_buffer_scale"
-            : "legacy mode";
-        LOG_DBG("scaling by a factor of %.2f using %s "
-                "(width=%d, height=%d)" , scale, mode, width, height);
-
-        xassert(scale == floorf(scale));
-        const int iscale = (int)floorf(scale);
-
-        if (verify) {
-            if (width % iscale != 0) {
-                BUG("width=%d is not valid with scaling factor %.2f (%d %% %d != 0)",
-                    width, scale, width, iscale);
-            }
-
-            if (height % iscale != 0) {
-                BUG("height=%d is not valid with scaling factor %.2f (%d %% %d != 0)",
-                    height, scale, height, iscale);
-            }
-        }
-
-        wl_surface_set_buffer_scale(surf->surf, iscale);
-    }
-}
-
-void
-wayl_surface_scale_explicit_width_height(
-    const struct wl_window *win, const struct wayl_surface *surf,
-    int width, int height, float scale)
-{
-    surface_scale_explicit_width_height(win, surf, width, height, scale, false);
-}
-
-void
-wayl_surface_scale(const struct wl_window *win, const struct wayl_surface *surf,
-                   const struct buffer *buf, float scale)
-{
-    surface_scale_explicit_width_height(
-        win, surf, buf->width, buf->height, scale, true);
-}
-
-void
-wayl_win_scale(struct wl_window *win, const struct buffer *buf)
-{
-    const struct terminal *term = win->term;
-    const float scale = term->scale;
-
-    wayl_surface_scale(win, &win->surface, buf, scale);
-}
-
 void
 wayl_win_alpha_changed(struct wl_window *win)
 {
@@ -2499,22 +2419,6 @@ wayl_win_ring_bell(const struct wl_window *win)
 
     xdg_system_bell_v1_ring(win->term->wl->system_bell, win->surface.surf);
     return true;
-}
-
-bool
-wayl_win_csd_titlebar_visible(const struct wl_window *win)
-{
-    return win->csd_mode == CSD_YES &&
-        !win->is_fullscreen &&
-        !(win->is_maximized && win->term->conf->csd.hide_when_maximized);
-}
-
-bool
-wayl_win_csd_borders_visible(const struct wl_window *win)
-{
-    return win->csd_mode == CSD_YES &&
-        !win->is_fullscreen &&
-        !win->is_maximized;
 }
 
 bool

@@ -3426,6 +3426,44 @@ test_output(void)
     free(mon.description);
 }
 
+
+static void
+test_csd_visibility(void)
+{
+    struct terminal term = {0};
+    struct config conf = {0};
+    struct wl_window win = {0};
+
+    win.term = &term;
+    term.conf = &conf;
+    win.csd_mode = CSD_YES;
+
+    check(wayl_win_csd_titlebar_visible(&win), "CSDs: titlebar is visible");
+    check(wayl_win_csd_borders_visible(&win), "CSDs: borders are visible");
+
+    win.is_fullscreen = true;
+    check(!wayl_win_csd_titlebar_visible(&win), "fullscreen hides the titlebar");
+    check(!wayl_win_csd_borders_visible(&win), "fullscreen hides the borders");
+
+    win.is_fullscreen = false;
+    win.is_maximized = true;
+    check(!wayl_win_csd_borders_visible(&win), "maximized hides the borders");
+    check(wayl_win_csd_titlebar_visible(&win),
+          "maximized keeps the titlebar unless configured otherwise");
+
+    conf.csd.hide_when_maximized = true;
+    check(!wayl_win_csd_titlebar_visible(&win),
+          "hide-when-maximized hides the titlebar");
+
+    win.is_maximized = false;
+    win.csd_mode = CSD_NO;
+    check(!wayl_win_csd_titlebar_visible(&win), "CSD_NO hides the titlebar");
+    check(!wayl_win_csd_borders_visible(&win), "CSD_NO hides the borders");
+
+    win.csd_mode = CSD_UNKNOWN;
+    check(!wayl_win_csd_titlebar_visible(&win), "an unknown CSD mode hides the titlebar");
+}
+
 int
 main(void)
 {
@@ -3448,6 +3486,7 @@ main(void)
     test_emoji_vs_table();
     test_search();
     test_output();
+    test_csd_visibility();
     test_osc8();
     test_size_notifications();
     test_flash();

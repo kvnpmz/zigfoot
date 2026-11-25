@@ -308,6 +308,18 @@ bool terminal_shim_hasc32upper(const char32_t *s)
     return hasc32upper(s);
 }
 
+/* Generated-protocol static inlines (wayland.zig cannot see them). */
+void wayland_shim_surface_set_buffer_scale(struct wl_surface *surf, int32_t scale)
+{
+    wl_surface_set_buffer_scale(surf, scale);
+}
+
+void wayland_shim_viewport_set_destination(
+    struct wp_viewport *viewport, int32_t width, int32_t height)
+{
+    wp_viewport_set_destination(viewport, width, height);
+}
+
 /* grid.h's grid_row_absolute_in_view() is a static inline. */
 int terminal_shim_grid_row_absolute_in_view(const struct grid *grid, int row_no)
 {

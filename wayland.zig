@@ -235,3 +235,115 @@ export fn clock_id(data: ?*anyopaque, wp_presentation: ?*anyopaque, clk_id: u32)
     wayl.presentation_clock_id = clk_id;
     log_msg(LOG_CLASS_DEBUG, "wayland", "wayland.zig", @intCast(@src().line), "presentation clock ID: %u", clk_id);
 }
+
+// ─────────────────────────────────────────────────────────────────────────
+// Surface scaling
+// ─────────────────────────────────────────────────────────────────────────
+
+extern fn term_fractional_scaling(term: *const types.Terminal) callconv(.c) bool;
+extern fn term_preferred_buffer_scale(term: *const types.Terminal) callconv(.c) bool;
+// Generated-protocol static inlines, wrapped in terminal-shim.c.
+extern fn wayland_shim_surface_set_buffer_scale(surf: ?*anyopaque, scale: i32) callconv(.c) void;
+extern fn wayland_shim_viewport_set_destination(viewport: ?*anyopaque, width: i32, height: i32) callconv(.c) void;
+extern fn bug(
+    file: [*:0]const u8,
+    line: c_int,
+    func: [*:0]const u8,
+    fmt: [*:0]const u8,
+    ...
+) callconv(.c) noreturn;
+
+fn surfaceScaleExplicitWidthHeight(
+    win: *const types.WlWindow,
+    surf: *const types.WaylSurface,
+    width: c_int,
+    height: c_int,
+    scale: f32,
+    verify: bool,
+) void {
+    const term: *types.Terminal = @ptrCast(@alignCast(win.term.?));
+
+    if (term_fractional_scaling(term)) {
+        log_msg(LOG_CLASS_DEBUG, "wayland", "wayland.zig", @intCast(@src().line), "scaling by a factor of %.2f using fractional scaling (width=%d, height=%d) ", scale, width, height);
+
+        if (verify) {
+            const w2: c_int = @intFromFloat(@round(scale * @round(@as(f32, @floatFromInt(width)) / scale)));
+            if (w2 != width)
+                bug(@src().file, @intCast(@src().line), "surface_scale_explicit_width_height", "width=%d is not valid with scaling factor %.2f (%d != %d)", width, scale, w2, width);
+
+            const h2: c_int = @intFromFloat(@round(scale * @round(@as(f32, @floatFromInt(height)) / scale)));
+            if (h2 != height)
+                bug(@src().file, @intCast(@src().line), "surface_scale_explicit_width_height", "height=%d is not valid with scaling factor %.2f (%d != %d)", height, scale, h2, height);
+        }
+
+        std.debug.assert(surf.viewport != null);
+        wayland_shim_surface_set_buffer_scale(surf.surf, 1);
+        wayland_shim_viewport_set_destination(
+            surf.viewport,
+            @intFromFloat(@round(@as(f32, @floatFromInt(width)) / scale)),
+            @intFromFloat(@round(@as(f32, @floatFromInt(height)) / scale)),
+        );
+    } else {
+        const mode: [*:0]const u8 = if (term_preferred_buffer_scale(term))
+            "wl_surface.preferred_buffer_scale"
+        else
+            "legacy mode";
+        log_msg(LOG_CLASS_DEBUG, "wayland", "wayland.zig", @intCast(@src().line), "scaling by a factor of %.2f using %s (width=%d, height=%d)", scale, mode, width, height);
+
+        std.debug.assert(scale == @floor(scale));
+        const iscale: c_int = @intFromFloat(@floor(scale));
+
+        if (verify) {
+            if (@mod(width, iscale) != 0)
+                bug(@src().file, @intCast(@src().line), "surface_scale_explicit_width_height", "width=%d is not valid with scaling factor %.2f (%d %% %d != 0)", width, scale, width, iscale);
+
+            if (@mod(height, iscale) != 0)
+                bug(@src().file, @intCast(@src().line), "surface_scale_explicit_width_height", "height=%d is not valid with scaling factor %.2f (%d %% %d != 0)", height, scale, height, iscale);
+        }
+
+        wayland_shim_surface_set_buffer_scale(surf.surf, iscale);
+    }
+}
+
+export fn wayl_surface_scale_explicit_width_height(
+    win: *const types.WlWindow,
+    surf: *const types.WaylSurface,
+    width: c_int,
+    height: c_int,
+    scale: f32,
+) callconv(.c) void {
+    surfaceScaleExplicitWidthHeight(win, surf, width, height, scale, false);
+}
+
+export fn wayl_surface_scale(
+    win: *const types.WlWindow,
+    surf: *const types.WaylSurface,
+    buf: *const types.Buffer,
+    scale: f32,
+) callconv(.c) void {
+    surfaceScaleExplicitWidthHeight(win, surf, buf.width, buf.height, scale, true);
+}
+
+export fn wayl_win_scale(win: *types.WlWindow, buf: *const types.Buffer) callconv(.c) void {
+    const term: *types.Terminal = @ptrCast(@alignCast(win.term.?));
+    wayl_surface_scale(win, &win.surface, buf, term.scale);
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// CSD visibility
+// ─────────────────────────────────────────────────────────────────────────
+
+export fn wayl_win_csd_titlebar_visible(win: *const types.WlWindow) callconv(.c) bool {
+    return win.csd_mode == .yes and
+        !win.is_fullscreen and
+        !(win.is_maximized and blk: {
+        const term: *types.Terminal = @ptrCast(@alignCast(win.term.?));
+        break :blk term.conf.?.csd.hide_when_maximized;
+    });
+}
+
+export fn wayl_win_csd_borders_visible(win: *const types.WlWindow) callconv(.c) bool {
+    return win.csd_mode == .yes and
+        !win.is_fullscreen and
+        !win.is_maximized;
+}
