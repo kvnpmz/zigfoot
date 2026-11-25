@@ -694,6 +694,23 @@ void terminal_shim_xdg_toplevel_unset_fullscreen(struct xdg_toplevel *toplevel)
 {
     xdg_toplevel_unset_fullscreen(toplevel);
 }
+void terminal_shim_xdg_toplevel_move(struct xdg_toplevel *toplevel,
+                                     struct wl_seat *seat, uint32_t serial)
+{
+    xdg_toplevel_move(toplevel, seat, serial);
+}
+void terminal_shim_xdg_toplevel_resize(struct xdg_toplevel *toplevel,
+                                       struct wl_seat *seat, uint32_t serial,
+                                       uint32_t edges)
+{
+    xdg_toplevel_resize(toplevel, seat, serial, edges);
+}
+void terminal_shim_xdg_toplevel_show_window_menu(struct xdg_toplevel *toplevel,
+                                                 struct wl_seat *seat,
+                                                 uint32_t serial, int x, int y)
+{
+    xdg_toplevel_show_window_menu(toplevel, seat, serial, x, y);
+}
 /* char32.h's comparison and predicate helpers are static inlines. */
 int terminal_shim_c32ncmp(const char32_t *s1, const char32_t *s2, size_t n)
 {

@@ -3964,6 +3964,983 @@ export fn execute_binding(
 }
 
 // ─────────────────────────────────────────────────────────────────────────
+// Pointer listeners (D4d2b)
+//
+// The twelve wl_pointer callbacks. The listener table itself stays in C
+// (like keyboard_listener); input.h carries the prototypes.
+// ─────────────────────────────────────────────────────────────────────────
+
+const BTN_LEFT: c_int = 0x110;
+const BTN_RIGHT: c_int = 0x111;
+
+const WL_POINTER_BUTTON_STATE_RELEASED: u32 = 0;
+const WL_POINTER_BUTTON_STATE_PRESSED: u32 = 1;
+const WL_POINTER_AXIS_HORIZONTAL_SCROLL: u32 = 1;
+
+const CLOCK_MONOTONIC: c_int = 1;
+const TFD_CLOEXEC: c_int = 0x80000;
+const TFD_NONBLOCK: c_int = 0x800;
+
+// enum xdg_toplevel_resize_edge
+const XDG_TOPLEVEL_RESIZE_EDGE_NONE: u32 = 0;
+const XDG_TOPLEVEL_RESIZE_EDGE_TOP: u32 = 1;
+const XDG_TOPLEVEL_RESIZE_EDGE_BOTTOM: u32 = 2;
+const XDG_TOPLEVEL_RESIZE_EDGE_LEFT: u32 = 4;
+const XDG_TOPLEVEL_RESIZE_EDGE_TOP_LEFT: u32 = 5;
+const XDG_TOPLEVEL_RESIZE_EDGE_BOTTOM_LEFT: u32 = 6;
+const XDG_TOPLEVEL_RESIZE_EDGE_RIGHT: u32 = 8;
+const XDG_TOPLEVEL_RESIZE_EDGE_TOP_RIGHT: u32 = 9;
+const XDG_TOPLEVEL_RESIZE_EDGE_BOTTOM_RIGHT: u32 = 10;
+
+/// render.zig's `struct csd_data`, returned by value.
+const CsdData = extern struct {
+    x: c_int,
+    y: c_int,
+    width: c_int,
+    height: c_int,
+};
+
+extern fn get_csd_data(term: *const Terminal, surf_idx: types.CsdSurface) callconv(.c) CsdData;
+extern fn term_surface_kind(term: *const Terminal, surface: ?*const anyopaque) callconv(.c) types.TermSurface;
+extern fn render_refresh_csd(term: *Terminal) callconv(.c) void;
+extern fn wayl_reload_xcursor_theme(seat: *Seat, new_scale: f32) callconv(.c) bool;
+extern fn wayland_shim_wl_callback_destroy(cb: ?*anyopaque) callconv(.c) void;
+extern fn selection_finalize(seat: ?*anyopaque, term: *Terminal, serial: u32) callconv(.c) void;
+extern fn selection_update(term: *Terminal, col: c_int, row: c_int) callconv(.c) void;
+extern fn selection_start_scroll_timer(
+    term: *Terminal, interval_ns: c_int, direction: c_int, col: c_int) callconv(.c) void;
+extern fn selection_stop_scroll_timer(term: *Terminal) callconv(.c) void;
+extern fn term_mouse_motion(
+    term: *Terminal,
+    button: c_int,
+    row_idx: c_int,
+    col: c_int,
+    row_pixels: c_int,
+    col_pixels: c_int,
+    shift_in: bool,
+    alt_in: bool,
+    ctrl_in: bool,
+) callconv(.c) void;
+extern fn timespec_sub(a: *const types.Timespec, b: *const types.Timespec, res: *types.Timespec) callconv(.c) void;
+extern fn search_cancel(term: *Terminal) callconv(.c) void;
+extern fn urls_reset(term: *Terminal) callconv(.c) void;
+extern fn is_top_left(term: *const Terminal, x: c_int, y: c_int) callconv(.c) bool;
+extern fn is_top_right(term: *const Terminal, x: c_int, y: c_int) callconv(.c) bool;
+extern fn is_bottom_left(term: *const Terminal, x: c_int, y: c_int) callconv(.c) bool;
+extern fn is_bottom_right(term: *const Terminal, x: c_int, y: c_int) callconv(.c) bool;
+extern fn timerfd_create(clockid: c_int, flags: c_int) callconv(.c) c_int;
+extern fn terminal_shim_xdg_toplevel_move(
+    toplevel: ?*anyopaque, seat: ?*anyopaque, serial: u32) callconv(.c) void;
+extern fn terminal_shim_xdg_toplevel_resize(
+    toplevel: ?*anyopaque, seat: ?*anyopaque, serial: u32, edges: u32) callconv(.c) void;
+extern fn terminal_shim_xdg_toplevel_show_window_menu(
+    toplevel: ?*anyopaque, seat: ?*anyopaque, serial: u32, x: c_int, y: c_int) callconv(.c) void;
+extern fn bug(
+    file: [*:0]const u8,
+    line: c_int,
+    func: [*:0]const u8,
+    fmt: [*:0]const u8,
+    ...
+) callconv(.c) noreturn;
+
+// wayland-util.h's wl_fixed_t helpers: 24.8 fixed point.
+fn wlFixedToInt(v: i32) c_int {
+    return @divTrunc(v, 256);
+}
+
+fn wlFixedToDouble(v: i32) f64 {
+    return @as(f64, @floatFromInt(v)) / 256.0;
+}
+
+/// C's `int x = wl_fixed_to_int(v) * term->scale;` (float multiply, truncate).
+fn scaledFixedToInt(v: i32, scale: f32) c_int {
+    return @intFromFloat(@as(f32, @floatFromInt(wlFixedToInt(v))) * scale);
+}
+
+fn mouseButtons(seat: *Seat) *tll.Tll(types.ButtonTracker) {
+    return @ptrCast(&seat.mouse.buttons);
+}
+
+fn mouseButtonsConst(seat: *const Seat) *const tll.Tll(types.ButtonTracker) {
+    return @ptrCast(&seat.mouse.buttons);
+}
+
+/// The touch state as a plain integer: the C enum has a negative member
+/// (see touch_is_active()).
+fn touchState(seat: *const Seat) c_int {
+    return @bitCast(@intFromEnum(seat.touch.state));
+}
+
+fn pointerIsOnButton(
+    term: *const Terminal,
+    seat: *const Seat,
+    csd_surface: types.CsdSurface,
+) bool {
+    if (seat.mouse.x < 0)
+        return false;
+    if (seat.mouse.y < 0)
+        return false;
+
+    const info = get_csd_data(term, csd_surface);
+    if (seat.mouse.x > info.width)
+        return false;
+
+    if (seat.mouse.y > info.height)
+        return false;
+
+    return true;
+}
+
+export fn wl_pointer_enter(
+    data: ?*anyopaque,
+    wl_pointer: ?*anyopaque,
+    serial: u32,
+    surface: ?*anyopaque,
+    surface_x: i32,
+    surface_y: i32,
+) callconv(.c) void {
+    if (surface == null) {
+        // Seen on mutter-3.38
+        log_msg(
+            LOG_CLASS_WARNING, "input", "input.zig", @intCast(@src().line),
+            "compositor sent pointer_enter event with a NULL surface");
+        return;
+    }
+
+    const seat: *Seat = @ptrCast(@alignCast(data orelse return));
+
+    const win: *types.WlWindow = @ptrCast(@alignCast(
+        wayland_shim_surface_get_user_data(surface) orelse return));
+    const term: *Terminal = @ptrCast(@alignCast(win.term.?));
+
+    seat.mouse_focus = term;
+    term.active_surface = term_surface_kind(term, surface);
+
+    if (touch_is_active(seat))
+        return;
+
+    const x = scaledFixedToInt(surface_x, term.scale);
+    const y = scaledFixedToInt(surface_y, term.scale);
+
+    seat.pointer.serial = serial;
+    seat.pointer.hidden = false;
+    seat.mouse.x = x;
+    seat.mouse.y = y;
+
+    log_msg(
+        LOG_CLASS_DEBUG, "input", "input.zig", @intCast(@src().line),
+        "pointer-enter: pointer=%p, serial=%u, surface = %p, new-moused = %p, " ++
+            "x=%d, y=%d",
+        wl_pointer, serial, surface, term, x, y);
+
+    std.debug.assert(mouseButtonsConst(seat).len() == 0);
+
+    _ = wayl_reload_xcursor_theme(seat, term.scale); // Scale may have changed
+    term_xcursor_update_for_seat(term, seat);
+
+    switch (term.active_surface) {
+        .grid => mouse_coord_pixel_to_cell(seat, term, x, y),
+
+        .title,
+        .border_left,
+        .border_right,
+        .border_top,
+        .border_bottom,
+        => {},
+
+        .button_minimize,
+        .button_maximize,
+        .button_close,
+        => render_refresh_csd(term),
+
+        .none => bug("input.zig", @intCast(@src().line), "wl_pointer_enter", "Invalid surface type"),
+    }
+}
+
+export fn wl_pointer_leave(
+    data: ?*anyopaque,
+    wl_pointer: ?*anyopaque,
+    serial: u32,
+    surface: ?*anyopaque,
+) callconv(.c) void {
+    const seat: *Seat = @ptrCast(@alignCast(data orelse return));
+
+    if (seat.wl_touch != null) {
+        const state = touchState(seat);
+        if (state == @intFromEnum(types.TouchState.inhibited)) {
+            seat.touch.state = .idle;
+        } else if (state == @intFromEnum(types.TouchState.held) or
+            state == @intFromEnum(types.TouchState.dragging) or
+            state == @intFromEnum(types.TouchState.scrolling))
+        {
+            return;
+        }
+    }
+
+    const old_moused = seat.mouse_focus;
+
+    log_msg(
+        LOG_CLASS_DEBUG, "input", "input.zig", @intCast(@src().line),
+        "%s: pointer-leave: pointer=%p, serial=%u, surface = %p, old-moused = %p",
+        seat.name.?, wl_pointer, serial, surface, old_moused);
+
+    seat.pointer.hidden = false;
+
+    if (seat.pointer.xcursor_callback != null) {
+        // A cursor frame callback may never be called if the pointer leaves
+        // our surface
+        wayland_shim_wl_callback_destroy(seat.pointer.xcursor_callback);
+        seat.pointer.xcursor_callback = null;
+        seat.pointer.xcursor_pending = false;
+    }
+
+    // Reset last-set-xcursor, to ensure we update it on a pointer-enter event
+    seat.pointer.shape = .none;
+
+    // Reset mouse state
+    seat.mouse.x = 0;
+    seat.mouse.y = 0;
+    seat.mouse.col = 0;
+    seat.mouse.row = 0;
+    mouse_button_state_reset(seat);
+    for (&seat.mouse.aggregated) |*amount|
+        amount.* = 0.0;
+    seat.mouse.have_discrete = false;
+
+    seat.mouse_focus = null;
+    if (old_moused) |old| {
+        if (surface != null) {
+            // Sway 1.4 sends this event with a NULL surface when we destroy
+            // the window
+            const win: *types.WlWindow = @ptrCast(@alignCast(
+                wayland_shim_surface_get_user_data(surface) orelse return));
+            std.debug.assert(old == @as(*Terminal, @ptrCast(@alignCast(win.term.?))));
+        }
+
+        const active_surface = old.active_surface;
+
+        old.active_surface = .none;
+
+        switch (active_surface) {
+            .button_minimize,
+            .button_maximize,
+            .button_close,
+            => {
+                if (old.shutdown.in_progress)
+                    return;
+
+                render_refresh_csd(old);
+            },
+
+            .grid => selection_finalize(seat, old, seat.pointer.serial),
+
+            .none,
+            .title,
+            .border_left,
+            .border_right,
+            .border_top,
+            .border_bottom,
+            => {},
+        }
+    } else {
+        log_msg(
+            LOG_CLASS_WARNING, "input", "input.zig", @intCast(@src().line),
+            "compositor sent pointer_leave event without a pointer_enter " ++
+                "event: surface=%p", surface);
+    }
+}
+
+export fn wl_pointer_motion(
+    data: ?*anyopaque,
+    wl_pointer: ?*anyopaque,
+    time: u32,
+    surface_x: i32,
+    surface_y: i32,
+) callconv(.c) void {
+    _ = time;
+    const seat: *Seat = @ptrCast(@alignCast(data orelse return));
+
+    // Touch-emulated pointer events have wl_pointer == NULL.
+    if (wl_pointer != null and touch_is_active(seat))
+        return;
+
+    const term = seat.mouse_focus orelse return;
+
+    const win = term.window.?;
+
+    log_msg(
+        LOG_CLASS_DEBUG, "input", "input.zig", @intCast(@src().line),
+        "pointer_motion: pointer=%p, x=%d, y=%d",
+        wl_pointer, wlFixedToInt(surface_x), wlFixedToInt(surface_y));
+
+    const x = scaledFixedToInt(surface_x, term.scale);
+    const y = scaledFixedToInt(surface_y, term.scale);
+
+    var surf_kind = term.active_surface;
+    var button: c_int = 0;
+    var send_to_client = false;
+    var is_on_button = false;
+
+    // If current surface is a button, check if pointer was on it *before*
+    // the motion event
+    switch (surf_kind) {
+        .button_minimize => is_on_button = pointerIsOnButton(term, seat, .minimize),
+        .button_maximize => is_on_button = pointerIsOnButton(term, seat, .maximize),
+        .button_close => is_on_button = pointerIsOnButton(term, seat, .close),
+
+        .none,
+        .grid,
+        .title,
+        .border_left,
+        .border_right,
+        .border_top,
+        .border_bottom,
+        => {},
+    }
+
+    seat.pointer.hidden = false;
+    seat.mouse.x = x;
+    seat.mouse.y = y;
+
+    term_xcursor_update_for_seat(term, seat);
+
+    const buttons = mouseButtons(seat);
+    if (buttons.len() > 0) {
+        const tracker = buttons.frontConst();
+        surf_kind = @enumFromInt(tracker.surf_kind);
+        button = tracker.button;
+        send_to_client = tracker.send_to_client;
+    }
+
+    switch (surf_kind) {
+        .none => {},
+
+        .button_minimize => {
+            if (pointerIsOnButton(term, seat, .minimize) != is_on_button)
+                render_refresh_csd(term);
+        },
+        .button_maximize => {
+            if (pointerIsOnButton(term, seat, .maximize) != is_on_button)
+                render_refresh_csd(term);
+        },
+        .button_close => {
+            if (pointerIsOnButton(term, seat, .close) != is_on_button)
+                render_refresh_csd(term);
+        },
+
+        .title => {
+            // We've started a 'move' timer, but user started dragging right
+            // away - abort the timer and initiate the actual move right away
+            if (button == BTN_LEFT and win.csd.move_timeout_fd != -1) {
+                _ = fdm_del(seat.wayl.?.fdm.?, win.csd.move_timeout_fd);
+                win.csd.move_timeout_fd = -1;
+                terminal_shim_xdg_toplevel_move(
+                    win.xdg_toplevel, seat.wl_seat, win.csd.serial);
+            }
+        },
+
+        .border_left,
+        .border_right,
+        .border_top,
+        .border_bottom,
+        => {},
+
+        .grid => {
+            const old_col = seat.mouse.col;
+            const old_row = seat.mouse.row;
+
+            mouse_coord_pixel_to_cell(seat, term, seat.mouse.x, seat.mouse.y);
+
+            std.debug.assert(seat.mouse.col >= 0 and seat.mouse.col < term.cols);
+            std.debug.assert(seat.mouse.row >= 0 and seat.mouse.row < term.rows);
+
+            // Cursor has moved to a different cell since last time
+            const cursor_is_on_new_cell =
+                old_col != seat.mouse.col or old_row != seat.mouse.row;
+
+            if (cursor_is_on_new_cell) {
+                // Prevent multiple/different mouse bindings from triggering
+                // if the mouse has moved "too much" (to another cell)
+                seat.mouse.count = 0;
+            }
+
+            // Cursor is inside the grid, i.e. *not* in the margins
+            const cursor_is_on_grid = seat.mouse.col >= 0 and seat.mouse.row >= 0;
+
+            const auto_scroll_direction: types.SelectionScrollDirection =
+                if (term.selection.coords.end.row < 0)
+                    .not
+                else if (y < term.margins.top)
+                    .up
+                else if (y > term.height - term.margins.bottom)
+                    .down
+                else
+                    .not;
+
+            if (auto_scroll_direction == .not)
+                selection_stop_scroll_timer(term);
+
+            // Update selection
+            if (!term.is_searching) {
+                if (auto_scroll_direction != .not) {
+                    // Start 'selection auto-scrolling'
+                    //
+                    // The speed of the scrolling is proportional to the
+                    // distance between the mouse and the grid; the further
+                    // away the mouse is, the faster we scroll.
+                    //
+                    // Note that the speed is measured in 'intervals (in ns)
+                    // between each timed scroll of a single line'.
+                    //
+                    // Thus, the further away the mouse is, the smaller
+                    // interval value we use.
+                    const distance: c_int = if (auto_scroll_direction == .up)
+                        term.margins.top - y
+                    else
+                        y - (term.height - term.margins.bottom);
+
+                    std.debug.assert(distance > 0);
+                    const divisor: c_int = @intFromFloat(
+                        @as(f32, @floatFromInt(distance)) *
+                            term.conf.?.scrollback.multiplier / term.scale);
+
+                    selection_start_scroll_timer(
+                        term,
+                        @divTrunc(400_000_000, if (divisor > 0) divisor else 1),
+                        @intFromEnum(auto_scroll_direction),
+                        seat.mouse.col);
+                }
+
+                if (term.selection.ongoing and
+                    (cursor_is_on_new_cell or
+                        (term.selection.coords.end.row < 0 and
+                            seat.mouse.x >= term.margins.left and
+                            seat.mouse.x < term.width - term.margins.right and
+                            seat.mouse.y >= term.margins.top and
+                            seat.mouse.y < term.height - term.margins.bottom)))
+                {
+                    selection_update(term, seat.mouse.col, seat.mouse.row);
+                }
+            }
+
+            // Send mouse event to client application
+            if (!term_mouse_grabbed(term, seat) and
+                (cursor_is_on_new_cell or
+                    term.mouse_reporting == .sgr_pixels) and
+                ((button == 0 and cursor_is_on_grid) or
+                    (button != 0 and send_to_client)))
+            {
+                std.debug.assert(seat.mouse.col < term.cols);
+                std.debug.assert(seat.mouse.row < term.rows);
+
+                term_mouse_motion(
+                    term,
+                    button,
+                    seat.mouse.row,
+                    seat.mouse.col,
+                    seat.mouse.y - term.margins.top,
+                    seat.mouse.x - term.margins.left,
+                    seat.kbd.shift,
+                    seat.kbd.alt,
+                    seat.kbd.ctrl);
+            }
+        },
+    }
+}
+
+fn fdm_csd_move(
+    fdm: *anyopaque,
+    fd: c_int,
+    events: c_int,
+    data: ?*anyopaque,
+) callconv(.c) bool {
+    _ = events;
+    const seat: *Seat = @ptrCast(@alignCast(data orelse return true));
+    _ = fdm_del(fdm, fd);
+
+    const term = seat.mouse_focus orelse {
+        log_msg(
+            LOG_CLASS_WARNING, "input", "input.zig", @intCast(@src().line),
+            "%s: CSD move timeout triggered, but seat's has no mouse focused terminal",
+            seat.name.?);
+        return true;
+    };
+
+    const win = term.window.?;
+
+    win.csd.move_timeout_fd = -1;
+    terminal_shim_xdg_toplevel_move(win.xdg_toplevel, seat.wl_seat, win.csd.serial);
+    return true;
+}
+
+export fn wl_pointer_button(
+    data: ?*anyopaque,
+    wl_pointer: ?*anyopaque,
+    serial: u32,
+    time: u32,
+    button: u32,
+    state: u32,
+) callconv(.c) void {
+    _ = time;
+    log_msg(
+        LOG_CLASS_DEBUG, "input", "input.zig", @intCast(@src().line),
+        "BUTTON: pointer=%p, serial=%u, button=%x, state=%u",
+        wl_pointer, serial, button, state);
+
+    std.debug.assert(serial != 0);
+
+    const seat: *Seat = @ptrCast(@alignCast(data orelse return));
+
+    // Touch-emulated pointer events have wl_pointer == NULL.
+    if (wl_pointer != null and touch_is_active(seat))
+        return;
+
+    const term = seat.mouse_focus orelse return;
+
+    seat.pointer.serial = serial;
+    seat.pointer.hidden = false;
+
+    var surf_kind: types.TermSurface = .none;
+    var send_to_client = false;
+
+    const buttons = mouseButtons(seat);
+
+    if (state == WL_POINTER_BUTTON_STATE_PRESSED) {
+        if (seat.wl_touch != null and
+            touchState(seat) == @intFromEnum(types.TouchState.idle))
+        {
+            seat.touch.state = .inhibited;
+        }
+
+        // Time since last click
+        var now: types.Timespec = undefined;
+        var since_last: types.Timespec = undefined;
+        _ = clock_gettime(CLOCK_MONOTONIC, @ptrCast(&now));
+        timespec_sub(&now, &seat.mouse.last_time, &since_last);
+
+        if (seat.mouse.last_released_button == button and
+            since_last.tv_sec == 0 and since_last.tv_nsec <= 300 * 1000 * 1000)
+        {
+            seat.mouse.count += 1;
+        } else
+            seat.mouse.count = 1;
+
+        // Workaround GNOME bug: dragging the window, then stopping the drag
+        // (releasing the mouse button) *without* moving the mouse, and then
+        // clicking twice, waiting for the CSD timer, and finally clicking
+        // once more, leaves LMB tracked as held because GNOME sends no
+        // pointer-leave. Drop the stale tracker instead of asserting.
+        var it = buttons.foreach();
+        while (it.next()) |node| {
+            if (node.item.button == button) {
+                log_msg(
+                    LOG_CLASS_WARNING, "input", "input.zig", @intCast(@src().line),
+                    "multiple button press events for button %d " ++
+                        "(compositor bug?)", button);
+                buttons.removeNode(node);
+                break;
+            }
+        }
+
+        // _DEBUG-only in C; kept as a debug-build check here.
+        var dbg = buttons.foreach();
+        while (dbg.next()) |node|
+            std.debug.assert(node.item.button != button);
+
+        // Remember which surface "owns" this button, so that we can send
+        // motion and button release events to that surface, even if the
+        // pointer is no longer over it.
+        buttons.pushBack(.{
+            .button = @intCast(button),
+            .surf_kind = @intFromEnum(term.active_surface),
+            .send_to_client = false,
+        });
+
+        seat.mouse.last_time = now;
+
+        surf_kind = term.active_surface;
+        send_to_client = false; // For now; may be set if a binding consumes it
+    } else {
+        var have_button = false;
+        var it = buttons.foreach();
+        while (it.next()) |node| {
+            if (node.item.button == button) {
+                have_button = true;
+                surf_kind = @enumFromInt(node.item.surf_kind);
+                send_to_client = node.item.send_to_client;
+                buttons.removeNode(node);
+                break;
+            }
+        }
+
+        if (seat.wl_touch != null and
+            touchState(seat) == @intFromEnum(types.TouchState.inhibited))
+        {
+            if (buttons.len() == 0)
+                seat.touch.state = .idle;
+        }
+
+        if (!have_button) {
+            // Seen on Sway with slurp: press and hold LMB, cancel slurp with
+            // escape, release LMB -> stray release.
+            log_msg(
+                LOG_CLASS_WARNING, "input", "input.zig", @intCast(@src().line),
+                "stray button release event (compositor bug?)");
+            return;
+        }
+
+        seat.mouse.last_released_button = @intCast(button);
+    }
+
+    switch (surf_kind) {
+        .title => {
+            const win = term.window.?;
+            if (state == WL_POINTER_BUTTON_STATE_PRESSED) {
+                // Toggle maximized state on double-click
+                if (term.conf.?.csd.double_click_to_maximize and
+                    button == BTN_LEFT and
+                    seat.mouse.count == 2)
+                {
+                    if (win.is_maximized)
+                        terminal_shim_xdg_toplevel_unset_maximized(win.xdg_toplevel)
+                    else
+                        terminal_shim_xdg_toplevel_set_maximized(win.xdg_toplevel);
+                } else if (button == BTN_LEFT and win.csd.move_timeout_fd < 0) {
+                    const timeout = Itimerspec{
+                        .it_interval = .{ .tv_sec = 0, .tv_nsec = 0 },
+                        .it_value = .{ .tv_sec = 0, .tv_nsec = 200_000_000 },
+                    };
+
+                    const fd = timerfd_create(CLOCK_MONOTONIC, TFD_CLOEXEC | TFD_NONBLOCK);
+                    if (fd >= 0 and
+                        timerfd_settime(fd, 0, &timeout, null) == 0 and
+                        fdm_add(seat.wayl.?.fdm.?, fd, EPOLLIN, &fdm_csd_move, seat))
+                    {
+                        win.csd.move_timeout_fd = fd;
+                        win.csd.serial = serial;
+                    } else {
+                        log_errno(
+                            LOG_CLASS_ERROR, "input", "input.zig", @intCast(@src().line),
+                            "failed to configure XDG toplevel move timer FD");
+                        if (fd >= 0)
+                            _ = close(fd);
+                    }
+                }
+
+                if (button == BTN_RIGHT and buttons.len() == 1) {
+                    const info = get_csd_data(term, .title);
+                    terminal_shim_xdg_toplevel_show_window_menu(
+                        win.xdg_toplevel,
+                        seat.wl_seat,
+                        seat.pointer.serial,
+                        seat.mouse.x + info.x,
+                        seat.mouse.y + info.y);
+                }
+            } else if (state == WL_POINTER_BUTTON_STATE_RELEASED) {
+                if (win.csd.move_timeout_fd >= 0) {
+                    _ = fdm_del(seat.wayl.?.fdm.?, win.csd.move_timeout_fd);
+                    win.csd.move_timeout_fd = -1;
+                }
+            }
+            return;
+        },
+
+        .border_left,
+        .border_right,
+        .border_top,
+        .border_bottom,
+        => {
+            if (button == BTN_LEFT and state == WL_POINTER_BUTTON_STATE_PRESSED) {
+                var resize_type: u32 = XDG_TOPLEVEL_RESIZE_EDGE_NONE;
+
+                const x = seat.mouse.x;
+                const y = seat.mouse.y;
+
+                if (is_top_left(term, x, y))
+                    resize_type = XDG_TOPLEVEL_RESIZE_EDGE_TOP_LEFT
+                else if (is_top_right(term, x, y))
+                    resize_type = XDG_TOPLEVEL_RESIZE_EDGE_TOP_RIGHT
+                else if (is_bottom_left(term, x, y))
+                    resize_type = XDG_TOPLEVEL_RESIZE_EDGE_BOTTOM_LEFT
+                else if (is_bottom_right(term, x, y))
+                    resize_type = XDG_TOPLEVEL_RESIZE_EDGE_BOTTOM_RIGHT
+                else {
+                    const win = term.window.?;
+                    if (term.active_surface == .border_left and
+                        !win.is_constrained_left)
+                    {
+                        resize_type = XDG_TOPLEVEL_RESIZE_EDGE_LEFT;
+                    } else if (term.active_surface == .border_right and
+                        !win.is_constrained_right)
+                    {
+                        resize_type = XDG_TOPLEVEL_RESIZE_EDGE_RIGHT;
+                    } else if (term.active_surface == .border_top and
+                        !win.is_constrained_top)
+                    {
+                        resize_type = XDG_TOPLEVEL_RESIZE_EDGE_TOP;
+                    } else if (term.active_surface == .border_bottom and
+                        !win.is_constrained_bottom)
+                    {
+                        resize_type = XDG_TOPLEVEL_RESIZE_EDGE_BOTTOM;
+                    }
+                }
+
+                if (resize_type != XDG_TOPLEVEL_RESIZE_EDGE_NONE) {
+                    terminal_shim_xdg_toplevel_resize(
+                        term.window.?.xdg_toplevel, seat.wl_seat, serial, resize_type);
+                }
+            }
+            return;
+        },
+
+        .button_minimize => {
+            if (button == BTN_LEFT and
+                pointerIsOnButton(term, seat, .minimize) and
+                state == WL_POINTER_BUTTON_STATE_RELEASED)
+            {
+                terminal_shim_xdg_toplevel_set_minimized(term.window.?.xdg_toplevel);
+            }
+        },
+
+        .button_maximize => {
+            if (button == BTN_LEFT and
+                pointerIsOnButton(term, seat, .maximize) and
+                state == WL_POINTER_BUTTON_STATE_RELEASED)
+            {
+                if (term.window.?.is_maximized)
+                    terminal_shim_xdg_toplevel_unset_maximized(term.window.?.xdg_toplevel)
+                else
+                    terminal_shim_xdg_toplevel_set_maximized(term.window.?.xdg_toplevel);
+            }
+        },
+
+        .button_close => {
+            if (button == BTN_LEFT and
+                pointerIsOnButton(term, seat, .close) and
+                state == WL_POINTER_BUTTON_STATE_RELEASED)
+            {
+                _ = term_shutdown(term);
+            }
+        },
+
+        .grid => {
+            search_cancel(term);
+            urls_reset(term);
+
+            const cursor_is_on_grid = seat.mouse.col >= 0 and seat.mouse.row >= 0;
+
+            switch (state) {
+                WL_POINTER_BUTTON_STATE_PRESSED => {
+                    var consumed = false;
+
+                    if (cursor_is_on_grid and term_mouse_grabbed(term, seat)) {
+                        const match = match_mouse_binding(seat, term, @intCast(button));
+
+                        if (match) |m|
+                            consumed = execute_binding(seat, term, m, serial, 1);
+                    }
+
+                    send_to_client = !consumed and cursor_is_on_grid;
+
+                    if (send_to_client)
+                        buttons.back().send_to_client = true;
+
+                    if (send_to_client and
+                        !term_mouse_grabbed(term, seat) and
+                        cursor_is_on_grid)
+                    {
+                        term_mouse_down(
+                            term,
+                            @intCast(button),
+                            seat.mouse.row,
+                            seat.mouse.col,
+                            seat.mouse.y - term.margins.top,
+                            seat.mouse.x - term.margins.left,
+                            seat.kbd.shift,
+                            seat.kbd.alt,
+                            seat.kbd.ctrl);
+                    }
+                },
+
+                WL_POINTER_BUTTON_STATE_RELEASED => {
+                    selection_finalize(seat, term, serial);
+
+                    if (send_to_client and !term_mouse_grabbed(term, seat)) {
+                        term_mouse_up(
+                            term,
+                            @intCast(button),
+                            seat.mouse.row,
+                            seat.mouse.col,
+                            seat.mouse.y - term.margins.top,
+                            seat.mouse.x - term.margins.left,
+                            seat.kbd.shift,
+                            seat.kbd.alt,
+                            seat.kbd.ctrl);
+                    }
+                },
+
+                else => {},
+            }
+        },
+
+        .none => bug("input.zig", @intCast(@src().line), "wl_pointer_button", "Invalid surface type"),
+    }
+}
+
+export fn wl_pointer_axis(
+    data: ?*anyopaque,
+    wl_pointer: ?*anyopaque,
+    time: u32,
+    axis: u32,
+    value: i32,
+) callconv(.c) void {
+    _ = wl_pointer;
+    _ = time;
+    const seat: *Seat = @ptrCast(@alignCast(data orelse return));
+
+    if (touch_is_active(seat))
+        return;
+
+    if (seat.mouse.have_discrete)
+        return;
+
+    const term = seat.mouse_focus orelse
+        bug("input.zig", @intCast(@src().line), "wl_pointer_axis", "no mouse focus");
+
+    std.debug.assert(axis < seat.mouse.aggregated.len);
+
+    const idx: usize = @intCast(axis);
+
+    // Aggregate scrolled amount until we get at least 1.0
+    //
+    // Without this, very slow scrolling will never actually scroll anything.
+    seat.mouse.aggregated[idx] +=
+        mouse_scroll_multiplier(term, seat) * wlFixedToDouble(value);
+    if (@abs(seat.mouse.aggregated[idx]) < @as(f64, @floatFromInt(term.cell_height)))
+        return;
+
+    const lines: c_int = @intFromFloat(
+        seat.mouse.aggregated[idx] / @as(f64, @floatFromInt(term.cell_height)));
+    mouse_scroll(seat, lines, axis);
+    seat.mouse.aggregated[idx] -=
+        @as(f64, @floatFromInt(lines)) * @as(f64, @floatFromInt(term.cell_height));
+}
+
+export fn wl_pointer_axis_discrete(
+    data: ?*anyopaque,
+    wl_pointer: ?*anyopaque,
+    axis: u32,
+    discrete: i32,
+) callconv(.c) void {
+    _ = wl_pointer;
+    log_msg(
+        LOG_CLASS_DEBUG, "input", "input.zig", @intCast(@src().line),
+        "axis_discrete: %d", discrete);
+
+    const seat: *Seat = @ptrCast(@alignCast(data orelse return));
+
+    if (touch_is_active(seat))
+        return;
+
+    seat.mouse.have_discrete = true;
+    var amount: c_int = discrete;
+
+    if (axis == WL_POINTER_AXIS_HORIZONTAL_SCROLL) {
+        // Treat mouse wheel left/right as regular buttons
+    } else {
+        const term = seat.mouse_focus orelse return;
+        amount = @intFromFloat(
+            @as(f64, @floatFromInt(amount)) * mouse_scroll_multiplier(term, seat));
+    }
+
+    mouse_scroll(seat, amount, axis);
+}
+
+export fn wl_pointer_axis_value120(
+    data: ?*anyopaque,
+    wl_pointer: ?*anyopaque,
+    axis: u32,
+    value120: i32,
+) callconv(.c) void {
+    _ = wl_pointer;
+    log_msg(
+        LOG_CLASS_DEBUG, "input", "input.zig", @intCast(@src().line),
+        "axis_value120: %d -> %.2f", value120, @as(f32, @floatFromInt(value120)) / 120.0);
+
+    const seat: *Seat = @ptrCast(@alignCast(data orelse return));
+
+    if (touch_is_active(seat))
+        return;
+
+    seat.mouse.have_discrete = true;
+
+    // 120 corresponds to a single "low-res" scroll step.
+    //
+    // When doing high-res scrolling, take the scrollback.multiplier, and
+    // calculate how many degrees there are per line. With
+    // scrollback.multiplier = 3, we have 120 / 3 == 40.
+    //
+    // Then, accumulate high-res scroll events, until we have *at least* that
+    // much. Translate the accumulated value to number of lines, and scroll,
+    // keeping the remainder (always less than the per-line value).
+    const term = seat.mouse_focus orelse return;
+    const multiplier = mouse_scroll_multiplier(term, seat);
+    const per_line = 120.0 / multiplier;
+
+    const idx: usize = @intCast(axis);
+    std.debug.assert(idx < seat.mouse.aggregated_120.len);
+
+    seat.mouse.aggregated_120[idx] += @floatFromInt(value120);
+
+    if (@abs(seat.mouse.aggregated_120[idx]) < per_line)
+        return;
+
+    const lines: c_int = @intFromFloat(seat.mouse.aggregated_120[idx] / per_line);
+    mouse_scroll(seat, lines, axis);
+    seat.mouse.aggregated_120[idx] -= @as(f64, @floatFromInt(lines)) * per_line;
+}
+
+export fn wl_pointer_frame(
+    data: ?*anyopaque,
+    wl_pointer: ?*anyopaque,
+) callconv(.c) void {
+    _ = wl_pointer;
+    const seat: *Seat = @ptrCast(@alignCast(data orelse return));
+
+    if (touch_is_active(seat))
+        return;
+
+    seat.mouse.have_discrete = false;
+}
+
+export fn wl_pointer_axis_source(
+    data: ?*anyopaque,
+    wl_pointer: ?*anyopaque,
+    axis_source: u32,
+) callconv(.c) void {
+    _ = data;
+    _ = wl_pointer;
+    _ = axis_source;
+}
+
+export fn wl_pointer_axis_stop(
+    data: ?*anyopaque,
+    wl_pointer: ?*anyopaque,
+    time: u32,
+    axis: u32,
+) callconv(.c) void {
+    _ = wl_pointer;
+    _ = time;
+    const seat: *Seat = @ptrCast(@alignCast(data orelse return));
+
+    if (touch_is_active(seat))
+        return;
+
+    std.debug.assert(axis < seat.mouse.aggregated.len);
+    seat.mouse.aggregated[@intCast(axis)] = 0.0;
+}
+
+// ─────────────────────────────────────────────────────────────────────────
 // Binding-action constants (D4c groundwork)
 //
 // The values are emitted by asking the C compiler (scripts/gen_bind_enums.sh),

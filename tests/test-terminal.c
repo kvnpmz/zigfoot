@@ -5471,6 +5471,87 @@ test_execute_binding(void)
     term_free(term);
 }
 
+/*
+ * Pointer listeners (input.zig, D4d2b).
+ *
+ * The CSD and grid paths need a compositor or a focused terminal; what is
+ * covered here is the state machine the listeners own: the NULL-surface
+ * workaround, the no-focus early-outs, the frame/discrete bookkeeping and
+ * the full pointer-leave reset.
+ */
+static void
+test_pointer_listeners(void)
+{
+    struct seat seat;
+    memset(&seat, 0, sizeof(seat));
+    seat.name = "seat0";
+    seat.mouse_focus = NULL;
+
+    /* enter with a NULL surface is the mutter-3.38 workaround */
+    wl_pointer_enter(&seat, NULL, 1, NULL, 0, 0);
+    check(seat.mouse_focus == NULL,
+          "pointer-enter with a NULL surface is ignored");
+
+    /* motion with no focus returns without touching the seat */
+    wl_pointer_motion(&seat, NULL, 0, 10 << 8, 20 << 8);
+    check(seat.mouse.x == 0 && seat.mouse.y == 0,
+          "pointer-motion without a mouse focus is ignored");
+
+    /* a discrete event earlier in the frame suppresses the low-res axis */
+    seat.mouse.have_discrete = true;
+    wl_pointer_axis(&seat, NULL, 0, 0, -120 << 8);
+    check(seat.mouse.aggregated[0] == 0.0,
+          "pointer-axis is ignored after a discrete axis event");
+
+    wl_pointer_frame(&seat, NULL);
+    check(!seat.mouse.have_discrete,
+          "pointer-frame clears have_discrete");
+
+    /* value120 without a focus only marks the frame */
+    wl_pointer_axis_value120(&seat, NULL, 0, 120);
+    check(seat.mouse.have_discrete && seat.mouse.aggregated_120[0] == 0.0,
+          "pointer-axis-value120 without a mouse focus only flags the frame");
+
+    /* axis_stop clears the low-res accumulator */
+    seat.mouse.aggregated[1] = 42.0;
+    wl_pointer_axis_stop(&seat, NULL, 0, 1);
+    check(seat.mouse.aggregated[1] == 0.0,
+          "pointer-axis-stop clears the accumulator");
+
+    /* axis_source is a no-op and must not touch anything */
+    wl_pointer_axis_source(&seat, NULL, 1);
+
+    /* leave resets the pointer/mouse state and drops the button trackers */
+    seat.mouse.x = 5;
+    seat.mouse.y = 6;
+    seat.mouse.col = 1;
+    seat.mouse.row = 2;
+    seat.pointer.hidden = true;
+    seat.pointer.shape = CURSOR_SHAPE_TEXT;
+    seat.mouse.aggregated[0] = 3.5;
+    seat.mouse.have_discrete = true;
+    tll_push_back(
+        seat.mouse.buttons,
+        ((struct button_tracker){
+            .button = BTN_LEFT,
+            .surf_kind = TERM_SURF_GRID,
+            .send_to_client = true}));
+
+    wl_pointer_leave(&seat, NULL, 2, NULL);
+
+    check(seat.mouse.x == 0 && seat.mouse.y == 0 &&
+          seat.mouse.col == 0 && seat.mouse.row == 0,
+          "pointer-leave zeroes the pointer position and cell");
+    check(tll_length(seat.mouse.buttons) == 0,
+          "pointer-leave drops the button trackers");
+    check(seat.mouse.aggregated[0] == 0.0 && !seat.mouse.have_discrete,
+          "pointer-leave clears the scroll accumulators");
+    check(seat.pointer.shape == CURSOR_SHAPE_NONE,
+          "pointer-leave resets the cursor shape");
+    check(seat.mouse_focus == NULL,
+          "pointer-leave clears the mouse focus");
+}
+
 static void
 test_scrollback_indicator(void)
 {
@@ -6512,6 +6593,7 @@ main(void)
     test_keyboard_modifiers();
     test_mouse_scroll();
     test_execute_binding();
+    test_pointer_listeners();
     test_scrollback_indicator();
     test_search_box_offset();
     test_url_label();
