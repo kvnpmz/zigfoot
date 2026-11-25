@@ -34,6 +34,14 @@ void input_repeat(struct seat *seat, uint32_t key);
 
 /* Ported to input.zig (D4a). The protocol listeners in input.c still call
  * these. */
+void get_current_modifiers(const struct seat *seat, xkb_mod_mask_t *effective,
+                           xkb_mod_mask_t *consumed, uint32_t key,
+                           bool filter_locked);
+bool keysym_is_modifier(xkb_keysym_t keysym);
+void modifier_string(xkb_mod_mask_t mods, size_t sz, char mod_str[static sz],
+                     const struct seat *seat);
+void keyboard_repeat_info(void *data, struct wl_keyboard *wl_keyboard,
+                          int32_t rate, int32_t delay);
 bool fdm_write_pipe(struct fdm *fdm, int fd, int events, void *data);
 void keyboard_keymap(void *data, struct wl_keyboard *wl_keyboard,
                      uint32_t format, int32_t fd, uint32_t size);

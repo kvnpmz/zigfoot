@@ -686,41 +686,6 @@ UNITTEST
     xassert(streq(info->seq, "\033[27;3;13~"));
 }
 
-void
-get_current_modifiers(const struct seat *seat,
-                      xkb_mod_mask_t *effective,
-                      xkb_mod_mask_t *consumed, uint32_t key,
-                      bool filter_locked)
-{
-    if (unlikely(seat->kbd.xkb_state == NULL)) {
-        if (effective != NULL)
-            *effective = 0;
-        if (consumed != NULL)
-            *consumed = 0;
-    }
-
-    else {
-        const xkb_mod_mask_t locked =
-            xkb_state_serialize_mods(seat->kbd.xkb_state, XKB_STATE_MODS_LOCKED);
-
-        if (effective != NULL) {
-            *effective = xkb_state_serialize_mods(
-                seat->kbd.xkb_state, XKB_STATE_MODS_EFFECTIVE);
-
-            if (filter_locked)
-                *effective &= ~locked;
-        }
-
-        if (consumed != NULL) {
-            *consumed = xkb_state_key_get_consumed_mods2(
-                seat->kbd.xkb_state, key, XKB_CONSUMED_MODE_XKB);
-
-            if (filter_locked)
-                *consumed &= ~locked;
-        }
-    }
-}
-
 struct kbd_ctx {
     xkb_layout_index_t layout;
     xkb_keycode_t key;
@@ -1253,46 +1218,6 @@ emit_escapes:
 
     return term_to_slave(term, buf, sizeof(buf) - left);
 }
-
-/* Copied from libxkbcommon (internal function) */
-static bool
-keysym_is_modifier(xkb_keysym_t keysym)
-{
-    return
-        (keysym >= XKB_KEY_Shift_L && keysym <= XKB_KEY_Hyper_R) ||
-        /* libX11 only goes up to XKB_KEY_ISO_Level5_Lock. */
-        (keysym >= XKB_KEY_ISO_Lock && keysym <= XKB_KEY_ISO_Last_Group_Lock) ||
-        keysym == XKB_KEY_Mode_switch ||
-        keysym == XKB_KEY_Num_Lock;
-}
-
-#if defined(_DEBUG)
-static void
-modifier_string(xkb_mod_mask_t mods, size_t sz, char mod_str[static sz], const struct seat *seat)
-{
-    if (sz == 0)
-        return;
-
-    mod_str[0] = '\0';
-
-    for (size_t i = 0; i < sizeof(xkb_mod_mask_t) * 8; i++) {
-        if (!(mods & (1u << i)))
-            continue;
-
-        strcat(mod_str, xkb_keymap_mod_get_name(seat->kbd.xkb_keymap, i));
-        strcat(mod_str, "+");
-    }
-
-    if (mod_str[0] != '\0') {
-        /* Strip the last '+' */
-        mod_str[strlen(mod_str) - 1] = '\0';
-    }
-
-    if (mod_str[0] == '\0') {
-        strcpy(mod_str, "<none>");
-    }
-}
-#endif
 
 static void
 key_press_release(struct seat *seat, struct terminal *term, uint32_t serial,
@@ -2011,16 +1936,6 @@ no_keymap:
     tll_free(wayl.terms);
     close(chan[0]);
     close(chan[1]);
-}
-
-static void
-keyboard_repeat_info(void *data, struct wl_keyboard *wl_keyboard,
-                     int32_t rate, int32_t delay)
-{
-    struct seat *seat = data;
-    LOG_DBG("keyboard repeat: rate=%d, delay=%d", rate, delay);
-    seat->kbd.repeat.rate = rate;
-    seat->kbd.repeat.delay = delay;
 }
 
 const struct wl_keyboard_listener keyboard_listener = {

@@ -61,6 +61,9 @@ int render_url_format_label(char32_t *label, const char32_t *key,
                             size_t entered_key_len, int max_cols);
 void render_dirty_overflowing_glyphs(struct terminal *term);
 /* Ported to input.zig (D4a). */
+bool keysym_is_modifier(xkb_keysym_t keysym);
+void modifier_string(xkb_mod_mask_t mods, size_t sz,
+                     char mod_str[static sz], const struct seat *seat);
 bool start_repeater(struct seat *seat, uint32_t key);
 bool stop_repeater(struct seat *seat, uint32_t key);
 void keyboard_enter(void *data, struct wl_keyboard *wl_keyboard,
@@ -5860,6 +5863,61 @@ test_keyboard_setup(void)
     close(seat.kbd.repeat.fd);
 }
 
+/*
+ * Modifier helpers (input.zig, D4b1).
+ */
+static void
+test_modifier_helpers(void)
+{
+    /* Modifier keysyms: Shift_L..Hyper_R, the ISO_* locks, Mode_switch and
+     * Num_Lock - and nothing else. */
+    check(keysym_is_modifier(XKB_KEY_Shift_L), "Shift_L is a modifier");
+    check(keysym_is_modifier(XKB_KEY_Hyper_R), "Hyper_R is a modifier");
+    check(keysym_is_modifier(XKB_KEY_ISO_Level3_Shift),
+          "the ISO_Level* keys are modifiers");
+    check(!keysym_is_modifier(XKB_KEY_Return), "Return is not a modifier");
+    check(!keysym_is_modifier(XKB_KEY_a), "a letter is not a modifier");
+
+    /* modifier_string() needs an xkb keymap to name the modifiers. */
+    struct xkb_context *xkb_ctx = xkb_context_new(XKB_CONTEXT_NO_FLAGS);
+    struct xkb_keymap *km = xkb_ctx != NULL
+        ? xkb_keymap_new_from_names(xkb_ctx, NULL, XKB_KEYMAP_COMPILE_NO_FLAGS)
+        : NULL;
+
+    struct seat seat;
+    memset(&seat, 0, sizeof(seat));
+    char buf[64];
+
+    if (km != NULL) {
+        seat.kbd.xkb_keymap = km;
+        const xkb_mod_index_t shift =
+            xkb_keymap_mod_get_index(km, XKB_MOD_NAME_SHIFT);
+
+        memset(buf, 'x', sizeof(buf));
+        modifier_string(1u << shift, sizeof(buf), buf, &seat);
+        check_text(buf, "Shift", "a single modifier is rendered by name");
+
+        modifier_string(0, sizeof(buf), buf, &seat);
+        check_text(buf, "<none>", "an empty mask renders as <none>");
+
+        xkb_keymap_unref(km);
+    } else {
+        printf("skip: no xkb keymap available\n");
+    }
+
+    seat.kbd.xkb_keymap = NULL;
+    modifier_string(0, sizeof(buf), buf, &seat);
+    check_text(buf, "<none>",
+               "no keymap still renders <none> instead of crashing");
+
+    buf[0] = 'x';
+    modifier_string(1, 0, buf, &seat);
+    check(buf[0] == 'x', "a zero-sized buffer is not written to");
+
+    if (xkb_ctx != NULL)
+        xkb_context_unref(xkb_ctx);
+}
+
 int
 main(void)
 {
@@ -5900,6 +5958,7 @@ main(void)
     test_xcursor_set_early_outs();
     test_buffer_release_early_outs();
     test_keyboard_setup();
+    test_modifier_helpers();
     test_scrollback_indicator();
     test_search_box_offset();
     test_url_label();

@@ -455,3 +455,137 @@ export fn keyboard_leave(
                 "event: surface=%p", surface);
     }
 }
+
+// ─────────────────────────────────────────────────────────────────────────
+// Modifier helpers (D4b1): the xkb state queries every protocol function
+// goes through, plus the keyboard repeat-info listener.
+// ─────────────────────────────────────────────────────────────────────────
+
+const XKB_STATE_MODS_LOCKED: u32 = 1 << 2;
+const XKB_STATE_MODS_EFFECTIVE: u32 = 1 << 3;
+const XKB_CONSUMED_MODE_XKB: c_int = 0;
+
+// Keysyms from xkbcommon-keysyms.h.
+const XKB_KEY_Shift_L: u32 = 0xffe1;
+const XKB_KEY_Hyper_R: u32 = 0xffee;
+const XKB_KEY_ISO_Lock: u32 = 0xfe01;
+const XKB_KEY_ISO_Last_Group_Lock: u32 = 0xfe0f;
+const XKB_KEY_Mode_switch: u32 = 0xff7e;
+const XKB_KEY_Num_Lock: u32 = 0xff7f;
+
+extern fn xkb_state_serialize_mods(state: ?*anyopaque, components: u32) callconv(.c) u32;
+extern fn xkb_state_key_get_consumed_mods2(
+    state: ?*anyopaque, key: u32, mode: c_int) callconv(.c) u32;
+extern fn xkb_keymap_mod_get_name(keymap: ?*anyopaque, idx: u32) callconv(.c) ?[*:0]const u8;
+
+/// The currently effective modifiers, and (optionally) the ones the key
+/// consumed. `filter_locked` drops the locked (CapsLock/NumLock) mods.
+export fn get_current_modifiers(
+    seat: *const Seat,
+    effective: ?*u32,
+    consumed: ?*u32,
+    key: u32,
+    filter_locked: bool,
+) callconv(.c) void {
+    const state = seat.kbd.xkb_state;
+
+    if (state == null) {
+        if (effective) |e| e.* = 0;
+        if (consumed) |c| c.* = 0;
+        return;
+    }
+
+    const locked = xkb_state_serialize_mods(state, XKB_STATE_MODS_LOCKED);
+
+    if (effective) |e| {
+        e.* = xkb_state_serialize_mods(state, XKB_STATE_MODS_EFFECTIVE);
+        if (filter_locked)
+            e.* &= ~locked;
+    }
+
+    if (consumed) |c| {
+        c.* = xkb_state_key_get_consumed_mods2(state, key, XKB_CONSUMED_MODE_XKB);
+        if (filter_locked)
+            c.* &= ~locked;
+    }
+}
+
+/// Modifier keys proper: Shift_L..Hyper_R, the ISO_* group/lock keys,
+/// Mode_switch and Num_Lock.
+export fn keysym_is_modifier(keysym: u32) callconv(.c) bool {
+    return
+        (keysym >= XKB_KEY_Shift_L and keysym <= XKB_KEY_Hyper_R) or
+        (keysym >= XKB_KEY_ISO_Lock and keysym <= XKB_KEY_ISO_Last_Group_Lock) or
+        keysym == XKB_KEY_Mode_switch or
+        keysym == XKB_KEY_Num_Lock;
+}
+
+/// Render a modifier mask as "Mod1+Shift" (or "<none>"). C used strcat() into
+/// a caller-provided buffer; this appends with an explicit length so a short
+/// buffer truncates instead of overflowing (it never does in practice).
+export fn modifier_string(
+    mods: u32,
+    sz: usize,
+    mod_str: [*]u8,
+    seat: *const Seat,
+) callconv(.c) void {
+    if (sz == 0)
+        return;
+
+    mod_str[0] = 0;
+    var len: usize = 0;
+
+    const keymap = seat.kbd.xkb_keymap orelse {
+        if (sz >= "<none>".len + 1)
+            @memcpy(mod_str[0.."<none>".len], "<none>");
+        mod_str["<none>".len] = 0;
+        return;
+    };
+
+    var i: u32 = 0;
+    while (i < 32) : (i += 1) {
+        if (mods & (@as(u32, 1) << @intCast(i)) == 0)
+            continue;
+
+        const name = xkb_keymap_mod_get_name(keymap, i) orelse continue;
+        const n = std.mem.len(name);
+
+        if (len + n + 1 >= sz)
+            break;
+
+        @memcpy(mod_str[len .. len + n], name[0..n]);
+        len += n;
+        mod_str[len] = '+';
+        len += 1;
+    }
+
+    if (len > 0) {
+        // Strip the last '+'
+        len -= 1;
+        mod_str[len] = 0;
+    }
+
+    if (len == 0) {
+        const none = "<none>";
+        const n = @min(none.len, sz - 1);
+        @memcpy(mod_str[0..n], none[0..n]);
+        mod_str[n] = 0;
+    }
+}
+
+export fn keyboard_repeat_info(
+    data: ?*anyopaque,
+    wl_keyboard: ?*anyopaque,
+    rate: i32,
+    delay: i32,
+) callconv(.c) void {
+    _ = wl_keyboard;
+    const seat: *Seat = @ptrCast(@alignCast(data orelse return));
+
+    log_msg(
+        LOG_CLASS_DEBUG, "input", "input.zig", @intCast(@src().line),
+        "keyboard repeat: rate=%d, delay=%d", rate, delay);
+
+    seat.kbd.repeat.rate = rate;
+    seat.kbd.repeat.delay = delay;
+}
