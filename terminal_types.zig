@@ -2566,6 +2566,18 @@ pub const ShmBufferPrivate = extern struct {
     cb_data: ?*anyopaque,
 };
 
+/// shm.h: struct shm_format_constants (macro values provided by shm-shim.c).
+pub const ShmFormatConstants = extern struct {
+    pixman_a8r8g8b8: u32,
+    pixman_a2r10g10b10: u32,
+    pixman_a2b10g10r10: u32,
+    pixman_a16b16g16r16: u32,
+    wl_argb8888: u32,
+    wl_argb2101010: u32,
+    wl_abgr2101010: u32,
+    wl_abgr16161616: u32,
+};
+
 pub const ShmBufferChain = extern struct {
     bufs: TllBufferPrivate,
     shm: ?*anyopaque,
@@ -2594,4 +2606,5 @@ test "shm layout matches C probe" {
     expectAbi(ShmBufferPool, "ShmBufferPool");
     expectAbi(ShmBufferPrivate, "ShmBufferPrivate");
     expectAbi(ShmBufferChain, "ShmBufferChain");
+    expectAbi(ShmFormatConstants, "ShmFormatConstants");
 }

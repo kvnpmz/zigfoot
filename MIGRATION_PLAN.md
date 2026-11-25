@@ -24,7 +24,7 @@ foot-owned C lines are gone (44.7%)**, replaced by ~22.7k lines of Zig
 | State | Modules |
 |---|---|
 | **Ported, C deleted** (28) | `async`, `base64`, `char32`, `commands`, `composed`, `csi`, `cursor-shape`, `dcs`, `extract`, `fdm`, `grid`, `hsl`, `misc`, `notify`, `osc`, `reaper`, `sixel`, `spawn`, `spawn_template`, `tokenize`, `uri`, `log`, `user-notification`, `unicode-mode`, `vt`, `xmalloc`, `xsnprintf`, and **`config`** (the parser, the logger tail and the fcft accessors are Zig; the 35 surviving C lines are `config_regex_compile()` only — see §6.3) |
-| **In progress** (Zig + remaining C + shims) | `terminal.c` (1,780 left), `selection.c` (844 left), `shm.c` (329 left — globals, 32-bit/punch-hole `#ifdef` shims, the `wl_buffer_listener` and the `wl_shm` protocol stubs; `shm.zig` is 1,014 lines), `debug.c` (22 left — the ASAN stack-trace hook), `config.c` (35 left — the regex_t shim), `slave.c` (158 left — O_*/F_*/TIOCSCTTY/_CS_PATH constants, the IUTF8 termios block, signal-mask restoration and the execvpe shim; `slave.zig` is 663 lines) |
+| **In progress** (Zig + remaining C + shims) | `terminal.c` (1,780 left), `selection.c` (844 left), `debug.c` (22 left — the ASAN stack-trace hook), `config.c` (35 left — the regex_t shim), `slave.c` (158 left — O_*/F_*/TIOCSCTTY/_CS_PATH constants, the IUTF8 termios block, signal-mask restoration and the execvpe shim; `slave.zig` is 663 lines) |
 | **Untouched** (13 modules, ~21.2k lines) | `box-drawing` (3,450), `render` (5,479), `input` (3,690), `wayland` (2,881), `search` (1,512), `url-mode` (833), `main` (751), `server` (688), `key-binding` (661), `client` (629), `ime` (532), `quirks` (86), `foot-features` (42) |
 
 **Progress read two ways:** 45% by C volume, but roughly **35% by effort**,
@@ -889,12 +889,12 @@ Per-module burn-down (share of that module's original C that is gone):
 
 | Module | C left / original | % | Note |
 |---|---|---|---|
-| 35 modules | 0 / — | **100%** | `async`…`box-drawing`, `search`, `terminal`, `log`, `grid`, `csi`, `sixel`, `osc`, `vt`, `input`, `key-binding`, `ime`, `url-mode`… |
+| 36 modules | 0 / — | **100%** | `async`…`box-drawing`, `search`, `terminal`, `log`, `grid`, `csi`, `sixel`, `osc`, `vt`, `input`, `key-binding`, `ime`, `url-mode`, `shm`… |
 | `config` | 35 / 4,374 | 99% | only `config_regex_compile()` (§6.3) |
 | `wayland` | 359 / 2,884 | 88% | 27 listener tables + forwarders + 3 FDM callbacks |
 | `selection` | 687 / 2,967 | **77%** | receive path, data-device/DND listeners, `selection-shim.c` |
 | `slave` | 106 / 573 | **81%** | signal reset, terminfo path and execvpe left |
-| `shm` | 329 / 1,110 | 70% | globals, `wl_shm`/`wl_buffer` stubs, punch-hole `#ifdef`s |
+| `shm` | 0 / 1,110 | **100%** | `shm.c` deleted in E2; generated protocol inlines + `#ifdef` platform tests live in `shm-shim.c`; `shm.zig` is 1,028 lines |
 | `debug` | 22 / 47 | 53% | ASAN stack-trace hook |
 | `render` | 0 / 5,479 | **100%** | `render.c` deleted in D3l4; `render.zig` is the module |
 | `input` | 0 / 3,687 | **100%** | `input.c` deleted in D4e; listener tables now live in `terminal-shim.c` |
@@ -904,8 +904,8 @@ Per-module burn-down (share of that module's original C that is gone):
 | `key-binding` | 0 / 661 | **100%** | `key-binding.c` deleted in D5a; `key-binding.zig` is the module |
 | `ime` | 0 / 540 | **100%** | `ime.c` deleted in D5b; `ime.zig` is the module |
 
-**Percent complete: 92.5% by C volume (post-D5d-a), ~86% by effort (band
-83–88%), 36/45 top-level modules (51 counting `spawn_template`) with zero C
+**Percent complete: 93.1% by C volume (post-E2 merge), ~87% by effort (band
+84–90%), 37/45 top-level modules (52 counting `spawn_template`) with zero C
 left.**
 **Post-D4d2a:** `input.c` is 3,618 → **2,040** (45% ported), module C 12,709 →
 **7,968**, harness 684 → **744** checks; every keyboard entry point is Zig,
@@ -922,6 +922,19 @@ the six windows
 compositor. Real presentation feedback is still not delivered to these
 short-lived windows, so `presented()` is covered by the fabricated-context
 checks, not by the launches.
+
+**Post-E2 (merge of `agent-c`):** `shm.c` is **deleted** — the 37th module
+with no C. Module C 3,684 → **3,355** of 48,924 (93.1% eliminated). The
+remaining C glue moved to a dedicated `shm-shim.c` (208 lines): the
+generated `wl_shm`/`wl_buffer` request inlines and the `wl_buffer_listener`
+table, the `_SC_PAGE_SIZE`/punch-hole/`mmap`/`seal` platform probes, and the
+macro-valued format constants. `shm.zig` gained the pool alignment and
+max-size state and the one-shot punch-hole cache; compositor format
+capabilities are read from the ABI-pinned `Wayland._shm_format_bits` mirror
+instead of a C accessor. One new mirror (`types.ShmFormatConstants`) is
+probe-pinned. 32 new harness checks. Verified by the agent in its own
+worktree, and re-verified here after the merge: 5/5 × 3 dirs, 6 launches,
+valgrind clean.
 
 **Post-D5d-a:** the data-source half of `selection` is Zig: `target`, `send`,
 `cancelled`, the three DnD stubs, `primary_send`/`primary_cancelled`, and the
@@ -964,6 +977,21 @@ remains in `slave.c` is only the signal-mask restore, the compile-time
 terminfo path and `execvpe()`. 9 new harness checks; the full harness also
 runs clean under **valgrind** (0 errors; gdb and valgrind are both present in
 this container). Module C 4,726 → 4,674, harness 805 → **814** checks.
+
+**Post-E2 (shm):** `shm.c` is **deleted** — the module is 100% Zig apart
+from the C-only boundary. The file-static pool/alignment/punch-hole state is
+in `shm.zig`, the compositor capability flags are read from the mirrored
+`struct wayland` (including the packed SHM-format bit-field byte), and the
+pixman/wl_shm_format table is the ABI-pinned `struct shm_format_constants`
+(added to `terminal_types.zig` and to `gen_abi_probe.py`'s `C_TYPES`).
+`shm-shim.c` (208 lines) keeps only generated wl_shm/wl_buffer request
+inlines, the headless sentinels they have to recognise, the
+`memfd_create`/SHM_ANON/mkostemp, fallocate, mmap and sealing `#ifdef`s, and
+`_SC_PAGE_SIZE`. The wl_buffer `release` listener callback itself is Zig.
+32 new harness checks (format table, 8/10/16-bit thresholds, stride
+alignment, zero-sized `shm_get_many` entries, cache age tie-break, release
+callback and sentinel forwarders; +32 `check()` call sites). Verified
+with `ninja`, `meson test`, six smoke launches and valgrind (0 errors).
 
 **Post-D5b:** `ime.c` is **deleted** — the 35th module with no C.
 Module C **5,266 → 4,726** (90.3% of the original C gone), Zig 48,738 →
@@ -1130,8 +1158,10 @@ shared `types.KeyBindingSet`. The `selection` tail deletes
 and `client` (679), which share `main`'s setup. After D6 the process entry
 point is Zig.
 
-**Track E — endgame (≈3–4 dev-days).** E1a done (slave's constants +IUTF8). `wayland`'s 359 glue lines, `shm`'s 329
-(pull the `wl_shm` stubs behind a mirrored `struct shm_wayland_caps`), `slave`'s
+**Track E — endgame (≈3–4 dev-days).** E1a done (slave's constants +IUTF8); E2 done (`shm.c` deleted, 329 → 0 — the
+`wl_shm` capabilities are read from the mirrored `struct wayland`, and only
+the generated protocol inlines and `#ifdef` platform tests stay in
+`shm-shim.c`). What is left is `wayland`'s 359 glue lines, `slave`'s
 158 constants/execvpe, `config`'s 35-line regex shim, `debug`'s 22-line ASAN
 hook; then delete every struct-mirror shim. Note the shim count has *grown*
 during D2/D3 (2,465 → 2,524) because generated protocol inlines need

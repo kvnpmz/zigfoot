@@ -882,7 +882,7 @@ footlib = static_library(
   render_obj, 'render.h',
   search_obj, 'search.h',
   'server.c', 'server.h', 'client-protocol.h',
-  shm_obj, 'shm.c', 'shm.h',
+  shm_obj, 'shm-shim.c', 'shm.h',
   slave_obj, 'slave.c', 'slave.h',
   spawn_obj, spawn_template_obj, 'spawn.h',
   tokenize_obj, 'tokenize.h',
