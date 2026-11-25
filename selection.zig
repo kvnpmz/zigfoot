@@ -2845,6 +2845,7 @@ export fn selection_data_device_enter(
     std.debug.assert(offer == seat.clipboard.data_offer);
 
     if (seat.clipboard.mime_type != .unset) {
+        std.debug.assert(seat.clipboard.window == null);
         var it = terms(wayl);
         while (it.next()) |term| {
             // Remember _which_ terminal the current DnD offer is targeting

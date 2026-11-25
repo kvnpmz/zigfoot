@@ -675,7 +675,7 @@ export fn notify_notify(term: *types.Terminal, notif_in: *types.Notification) ca
 
     const app_id: [*:0]const u8 = if (notif.app_id) |a| a else if (term.app_id) |a| a else term.conf.?.app_id orelse "";
 
-    const title: [*:0]const u8 = if (notif.title) |t| t else if (notif.body) |b| b else "";
+    const title: [*:0]const u8 = if (notif.title) |t| t else if (notif.body) |b| b else return false;
 
     const body: [*:0]const u8 = if (notif.title != null and notif.body != null) notif.body.? else "";
 
