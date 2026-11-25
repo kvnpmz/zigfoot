@@ -2345,6 +2345,78 @@ test_destroy(void)
 }
 
 static void
+test_term_reset(void)
+{
+    struct terminal *term = term_new();
+    static struct config conf;
+    memset(&conf, 0, sizeof(conf));
+    /* term_reset()'s hard path allocates rows in both grids; the harness's
+     * term_new() only sets up the normal one. */
+    term->alt.num_rows = SCROLLBACK_ROWS;
+    term->alt.num_cols = COLS;
+    term->alt.rows = xcalloc(SCROLLBACK_ROWS, sizeof(term->alt.rows[0]));
+    xassert(term->alt.rows != NULL);
+
+    conf.title = "foot";
+    conf.initial_color_theme = COLOR_THEME_DARK;
+    term->conf = &conf;
+    term->blink.fd = -1;
+
+    /* Both the title and the app-id refresh go straight into a wayland
+     * request unless it is within 8.3 ms of the previous update; stamp the
+     * timers so they take the (harmless) timerfd path instead. */
+    struct wl_window win = {0};
+    term->window = &win;
+    clock_gettime(CLOCK_MONOTONIC, &term->render.title.last_update);
+    clock_gettime(CLOCK_MONOTONIC, &term->render.app_id.last_update);
+
+    /* Soft reset: modes only. */
+    term->reverse = true;
+    term->mouse_tracking = MOUSE_DRAG;
+    term->charsets.selected = G1;
+    term->focus_events = true;
+    term->insert_mode = true;
+    term->vt.state = 42;
+    term->colors.active_theme = COLOR_THEME_LIGHT;
+
+    term_reset(term, false);
+
+    check(!term->reverse, "soft reset clears reverse video");
+    check(term->mouse_tracking == MOUSE_NONE, "soft reset disables mouse tracking");
+    check(term->charsets.selected == G0, "soft reset selects G0");
+    check(!term->focus_events, "soft reset disables focus events");
+    check(!term->insert_mode, "soft reset disables insert mode");
+    check(term->vt.state == 0, "soft reset returns the VT parser to ground");
+    check(term->colors.active_theme == COLOR_THEME_LIGHT,
+          "soft reset keeps the colour theme");
+    check(strcmp(term->vt.osc8.uri == NULL ? "" : term->vt.osc8.uri, "") == 0,
+          "soft reset drops any pending OSC 8 URI");
+
+    /* Hard reset: everything, including the grid and the theme. */
+    term->grid = &term->alt;
+    term->origin = ORIGIN_RELATIVE;
+    term->colors.active_theme = COLOR_THEME_LIGHT;
+    term->cursor_blink.decset = true;
+
+    term_reset(term, true);
+
+    check(term->grid == &term->normal, "hard reset returns to the normal grid");
+    check(term->origin == ORIGIN_ABSOLUTE, "hard reset clears origin mode");
+    check(term->colors.active_theme == COLOR_THEME_DARK,
+          "hard reset reapplies the initial colour theme");
+    check(!term->cursor_blink.decset, "hard reset clears DECSET 12");
+    check(term->normal.cur_row == term->normal.rows[0] &&
+          term->alt.cur_row == term->alt.rows[0],
+          "hard reset points both grids at their first row");
+    check(term->scroll_region.start == 0 && term->scroll_region.end == term->rows,
+          "hard reset restores the full scroll region");
+
+    term->window = NULL;
+    term->conf = NULL;
+    check(term_destroy(term) == 0, "a reset terminal still destroys cleanly");
+}
+
+static void
 test_ime(void)
 {
     struct wayland wl = {0};
@@ -3158,6 +3230,7 @@ main(void)
     test_surface_kind();
     test_shutdown();
     test_destroy();
+    test_term_reset();
     test_quirks();
     test_version_and_features();
     test_log();

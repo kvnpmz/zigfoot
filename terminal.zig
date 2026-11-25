@@ -933,7 +933,7 @@ export fn term_damage_color(
 
         if (current_row.extra) |extra| {
             const underlines = &extra.underline_ranges;
-            var i: c_int = 0;
+    var i: c_int = 0;
 
             while (i < underlines.count) : (i += 1) {
                 const range = &underlines.v.?[@intCast(i)];
@@ -4811,4 +4811,221 @@ export fn term_destroy(term_arg: ?*types.Terminal) callconv(.c) c_int {
         log_msg(LOG_CLASS_WARNING, "terminal", "terminal.zig", @intCast(@src().line), "failed to trim memory");
 
     return ret;
+}
+//
+// Chunk C6 — term_reset(). A straight transcription: every field it touches is
+// in the mirror, and the helpers it calls (term_set_window_title, erase_line,
+// grid_row_and_alloc, term_damage_all, ...) are already Zig or C externs.
+//
+
+
+const SIXEL_MAX_COLORS: c_uint = 1024;
+const SIXEL_MAX_WIDTH: c_uint = 10000;
+const SIXEL_MAX_HEIGHT: c_uint = 10000;
+
+/// terminal.h: `bool scrolling:1; bool use_private_palette:1;
+/// bool cursor_right_of_graphics:1;` (LSB first, as everywhere in foot).
+const SixelFlags = packed struct(u8) {
+    scrolling: bool = false,
+    use_private_palette: bool = false,
+    cursor_right_of_graphics: bool = false,
+    _unused: u5 = 0,
+};
+
+fn freeStringTll(list: *types.TllInt) void {
+    const l: *tll.Tll(?[*:0]u8) = @ptrCast(@alignCast(list));
+    l.freeListAndFree(&freeString);
+}
+
+fn freeTllNodes(list: *types.TllInt) void {
+    const l: *tll.Tll(c_int) = @ptrCast(@alignCast(list));
+    l.freeList();
+}
+
+fn freeDamageList(list: *types.DamageList) void {
+    const l: *tll.Tll(types.Damage) = @ptrCast(@alignCast(list));
+    l.freeList();
+}
+
+export fn term_reset(term: *types.Terminal, hard: bool) callconv(.c) void {
+    log_msg(
+        LOG_CLASS_INFO,
+        "terminal",
+        "terminal.zig",
+        @intCast(@src().line),
+        "%s resetting the terminal",
+        @as([*:0]const u8, if (hard) "hard" else "soft"),
+    );
+
+    term.cursor_keys_mode = .normal;
+    term.keypad_keys_mode = .numerical;
+    term.reverse = false;
+    term.hide_cursor = false;
+    term.reverse_wrap = true;
+    term.auto_margin = true;
+    term.insert_mode = false;
+    term.bracketed_paste = false;
+    term.focus_events = false;
+    term.visibility_reports = false;
+    term.num_lock_modifier = true;
+    term.bell_action_enabled = true;
+    term.mouse_tracking = .none;
+    term.mouse_reporting = .normal;
+    term.charsets.selected = .g0;
+    term.charsets.set = .{ .ascii, .ascii, .ascii, .ascii };
+    term.saved_charsets = term.charsets;
+    freeStringTll(&term.window_title_stack);
+    if (term.conf) |conf| {
+        if (conf.title) |title|
+            term_set_window_title(term, title);
+    }
+    term_set_app_id(term, null);
+
+    term_set_user_mouse_cursor(term, null);
+
+    term.modify_other_keys_2 = false;
+    @memset(std.mem.asBytes(&term.normal.kitty_kbd.flags), 0);
+    @memset(std.mem.asBytes(&term.alt.kitty_kbd.flags), 0);
+    term.normal.kitty_kbd.idx = 0;
+    term.alt.kitty_kbd.idx = 0;
+
+    term.scroll_region.start = 0;
+    term.scroll_region.end = term.rows;
+
+    std.c.free(term.vt.osc8.uri);
+    std.c.free(term.vt.osc.data);
+
+    term.vt = std.mem.zeroes(types.Vt); // .state = 0 == STATE_GROUND
+
+    if (term.grid == &term.alt) {
+        term.grid = &term.normal;
+        selection_cancel(term);
+    }
+
+    term.meta.esc_prefix = true;
+    term.meta.eight_bit = true;
+
+    {
+        const images: *tll.Tll(types.Sixel) = @ptrCast(@alignCast(&term.normal.sixel_images));
+        var it = images.foreach();
+        while (it.next()) |node| {
+            sixel_destroy(&node.item);
+            images.removeNode(node);
+        }
+    }
+    {
+        const images: *tll.Tll(types.Sixel) = @ptrCast(@alignCast(&term.alt.sixel_images));
+        var it = images.foreach();
+        while (it.next()) |node| {
+            sixel_destroy(&node.item);
+            images.removeNode(node);
+        }
+    }
+
+    notify_free(term, &term.kitty_notification);
+    {
+        const notifications: *tll.Tll(types.Notification) = @ptrCast(@alignCast(&term.active_notifications));
+        var it = notifications.foreach();
+        while (it.next()) |node| {
+            notify_free(term, &node.item);
+            notifications.removeNode(node);
+        }
+    }
+
+    for (&term.notification_icons) |*icon|
+        notify_icon_free(icon);
+
+    if (term.conf) |conf|
+        term.grapheme_shaping = conf.tweak.grapheme_shaping;
+
+    // meson refuses a Zig build with -Dime=false (see term_kbd_focus_out()).
+    term_ime_enable(term);
+
+    term.bits_affecting_ascii_printer.value = 0;
+    term_update_ascii_printer(term);
+
+    if (!hard)
+        return;
+
+    const conf = term.conf orelse return;
+
+    var theme: ?*const types.ColorTheme = null;
+    switch (conf.initial_color_theme) {
+        .dark => theme = &conf.colors_dark,
+        .light => theme = &conf.colors_light,
+        .color_theme_1, .color_theme_2 => {
+            bug(@src().file, @intCast(@src().line), "term_reset", "COLOR_THEME_1/2 should not be used");
+        },
+    }
+
+    term.flash.active = false;
+    term.blink.state = .on;
+    if (term.fdm) |fdm_ptr| _ = fdm_del(fdm_ptr, term.blink.fd);
+    term.blink.fd = -1;
+    if (theme) |t|
+        term_theme_apply(term, t);
+    term.colors.active_theme = conf.initial_color_theme;
+    std.c.free(term.color_stack.stack);
+    term.color_stack.stack = null;
+    term.color_stack.size = 0;
+    term.color_stack.idx = 0;
+    term.origin = .absolute;
+    term.normal.cursor.lcf = false;
+    term.alt.cursor.lcf = false;
+    // C: (struct cursor){.point = {0, 0}}, i.e. lcf is cleared too.
+    term.normal.cursor = .{ .point = .{ .col = 0, .row = 0 }, .lcf = false };
+    term.normal.saved_cursor = .{ .point = .{ .col = 0, .row = 0 }, .lcf = false };
+    term.alt.cursor = .{ .point = .{ .col = 0, .row = 0 }, .lcf = false };
+    term.alt.saved_cursor = .{ .point = .{ .col = 0, .row = 0 }, .lcf = false };
+    term.cursor_style = conf.cursor.style;
+    term.cursor_blink.decset = false;
+    term.cursor_blink.deccsusr = conf.cursor.blink.enabled;
+    term_cursor_blink_update(term);
+    selection_cancel(term);
+    term.normal.offset = 0;
+    term.normal.view = 0;
+    term.alt.offset = 0;
+    term.alt.view = 0;
+
+    var i: c_int = 0;
+    while (i < term.rows) : (i += 1) {
+        const r = terminal_shim_grid_row_and_alloc(&term.normal, i).?;
+        erase_line(term, r);
+    }
+    i = 0;
+    while (i < term.rows) : (i += 1) {
+        const r = terminal_shim_grid_row_and_alloc(&term.alt, i).?;
+        erase_line(term, r);
+    }
+    i = term.rows;
+    while (i < term.normal.num_rows) : (i += 1) {
+        const rows = term.normal.rows.?;
+        grid_row_free(rows[@intCast(i)]);
+        rows[@intCast(i)] = null;
+    }
+    i = term.rows;
+    while (i < term.alt.num_rows) : (i += 1) {
+        const rows = term.alt.rows.?;
+        grid_row_free(rows[@intCast(i)]);
+        rows[@intCast(i)] = null;
+    }
+    term.normal.cur_row = term.normal.rows.?[0];
+    term.alt.cur_row = term.alt.rows.?[0];
+    freeDamageList(&term.normal.scroll_damage);
+    freeDamageList(&term.alt.scroll_damage);
+    term.render.last_cursor.row = null;
+    term_damage_all(term);
+
+    var flags: SixelFlags = @bitCast(term.sixel._sixel_flags);
+    flags.scrolling = true;
+    flags.cursor_right_of_graphics = false;
+    flags.use_private_palette = true;
+    term.sixel._sixel_flags = @bitCast(flags);
+    term.sixel.max_width = SIXEL_MAX_WIDTH;
+    term.sixel.max_height = SIXEL_MAX_HEIGHT;
+    term.sixel.palette_size = SIXEL_MAX_COLORS;
+    std.c.free(term.sixel.private_palette);
+    std.c.free(term.sixel.shared_palette);
+    term.sixel.private_palette = null;
+    term.sixel.shared_palette = null;
 }

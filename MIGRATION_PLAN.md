@@ -650,9 +650,11 @@ utmp backends where available.
 
 ## 13. Sequenced backlog (refreshed 2026-11-24)
 
-State: **28,852 of 48,830 C lines gone (59.1%)**, ~43% by effort, 31 modules
-ported, 369 harness assertions, `meson test` 5/5 in three build dirs.
-Remaining C: 19,978 lines, 1,411 of which are `*-shim.c` accessors.
+State: **29,002 of 48,830 C lines gone (59.4%)**, ~43% by effort, 31 modules
+ported, 384 harness assertions, `meson test` 5/5 in three build dirs.
+Remaining C: 19,828 lines, 1,411 of which are `*-shim.c` accessors.
+`terminal.c` is down to 819 lines: only `term_init()` (plus one unit-test
+block) is left in it.
 
 Track C is underway: C1 (the IME wrappers) is in (`1515fd13`), C2 (mouse grab
 and CSD cursor shapes) is in. The build loop was also measured and fixed - see
@@ -734,7 +736,8 @@ fabricates `struct terminal` today).
 | **C4b** | T11b part 1: `term_init` (~408 lines incl. its error paths) | C3, wayland, render | 1–2d |
 | **C4b** done | T11c: `term_shutdown`, `shutdown_maybe_done`, `fdm_shutdown`, `fdm_terminate_timeout`, `fdm_client_terminated` (~218 lines). Only `term_destroy` and `wayl_win_destroy` remain externs. 8 new harness checks run the real shutdown against a real `fdm` | C4a | 1d |
 | **C5** done | T11d part 1: `term_destroy()` + `sig_alarm()` (~240 lines) — the whole teardown, including the worker-pool wake/join and the blocking SIGALRM/waitpid slave reap. 3 new harness checks (a bare terminal, NULL, and a terminal with a live render worker that must be joined) | C4b | 1d |
-| **C6** | T11d part 2: `term_reset` (~311 lines) | C5 | 1d |
+| **C6** done | T11d part 2: `term_reset()` (~150 lines). 16 new harness checks cover the soft path (modes, charsets, VT state, `OSC 8` buffer, theme left alone) and the hard path (grid switch, theme reapplied, cursors/scroll region, rows re-allocated and the scrollback freed) | C5 | 1d |
+| **C7** | T11b: `term_init()` (~410 lines) — the last function in `terminal.c` | C6, wayland, render | 1–2d |
 
 **C5 found a real toolchain trap:** C11 `thrd_create()`/`thrd_join()` are
 broken when called *from a Zig object* here — `thrd_create()` returns
