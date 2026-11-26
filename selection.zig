@@ -1150,11 +1150,18 @@ export fn selection_update(
     const row_end = grid.rows.?[end_row_idx] orelse return;
 
     // If an end point points into the pad area of a multi-cell character,
-    // back off to the start of that character.
-    while (row_start.cells.?[@intCast(new_start.col)].wc == CELL_SPACER) {
+    // back off to the start of that character. C decrements a signed int with
+    // no lower bound here; column 0 is the floor (a multi-column character
+    // never crosses into the previous row), so clamping keeps the C behaviour
+    // while avoiding an out-of-range index.
+    while (new_start.col > 0 and
+        row_start.cells.?[@intCast(new_start.col)].wc == CELL_SPACER)
+    {
         new_start.col -= 1;
     }
-    while (row_end.cells.?[@intCast(new_end.col)].wc == CELL_SPACER) {
+    while (new_end.col > 0 and
+        row_end.cells.?[@intCast(new_end.col)].wc == CELL_SPACER)
+    {
         new_end.col -= 1;
     }
 

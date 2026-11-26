@@ -144,8 +144,8 @@ export fn extract_finish_wide(
     return true;
 }
 
-export fn extract_finish(ctx: *Context, text: *?[*:0]u8, len: *usize) bool {
-    len.* = 0;
+export fn extract_finish(ctx: *Context, text: *?[*:0]u8, len: ?*usize) bool {
+    if (len) |l| l.* = 0;
 
     var wtext: ?[*]u32 = null;
     if (!extract_finish_wide(ctx, &wtext, null))
@@ -158,7 +158,7 @@ export fn extract_finish(ctx: *Context, text: *?[*:0]u8, len: *usize) bool {
     };
 
     text.* = bytes;
-    len.* = std.mem.len(bytes);
+    if (len) |l| l.* = std.mem.len(bytes);
     std.c.free(wide);
     return true;
 }

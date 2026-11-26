@@ -2597,7 +2597,7 @@ extern fn extract_one(
     col: c_int,
     context: *anyopaque,
 ) callconv(.c) bool;
-extern fn extract_finish(context: *anyopaque, text: *?[*:0]u8, len: *usize) callconv(.c) bool;
+extern fn extract_finish(context: *anyopaque, text: *?[*:0]u8, len: ?*usize) callconv(.c) bool;
 
 fn rowsToText(
     term: *const types.Terminal,

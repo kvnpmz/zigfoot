@@ -912,6 +912,76 @@ extract_row(struct terminal *term, struct row *r, int col_start, int col_end,
     return text;
 }
 
+/*
+ * Mouse-selection lifecycle: selection_start() -> selection_update() ->
+ * selection_finalize()/selection_to_text(). These drove real crashes:
+ *
+ *  - selection_to_text() calls extract_finish(..., NULL) for the length, and
+ *    the Zig extract_finish dereferenced it unconditionally (SIGSEGV on every
+ *    completed selection with selection-target=primary|clipboard|both);
+ *  - selection_update() backs an endpoint off pad cells with an unbounded
+ *    decrement, which in Zig is an out-of-range index once it reaches -1.
+ *
+ * Both are geometry-only, so they run without a seat, a window or a config.
+ */
+static void
+test_selection_lifecycle(void)
+{
+    struct config conf = {0};
+    static char32_t delims[] = {(char32_t)',', (char32_t)'.', 0};
+    conf.word_delimiters = delims;
+    conf.scrollback.multiplier = 1.0f;
+    conf.selection_target = SELECTION_TARGET_PRIMARY;
+
+    struct terminal *term = term_new();
+    term->conf = &conf;
+
+    struct row *r = term->normal.rows[2];
+    for (int c = 0; c < COLS; c++)
+        r->cells[c].wc = (char32_t)('a' + c);
+
+    /* Char-wise, then copy the text (this used to segfault). */
+    selection_start(term, 1, 2, SELECTION_CHAR_WISE, false);
+    selection_update(term, 3, 2);
+    char *text = selection_to_text(term);
+    check_text(text, "bcd", "selection: char-wise selection_to_text");
+    free(text);
+    selection_cancel(term);
+
+    /* Finalize with the default target: selection_to_primary ->
+     * selection_to_text -> extract_finish(NULL). It must not crash, and the
+     * selection must be marked not-ongoing afterwards. */
+    selection_start(term, 0, 2, SELECTION_CHAR_WISE, false);
+    selection_update(term, COLS - 1, 2);
+    selection_finalize(NULL, term, 1);
+    check(!term->selection.ongoing, "selection: finalize clears ongoing");
+    check(term->selection.coords.start.row >= 0,
+          "selection: finalize keeps the coords");
+    selection_cancel(term);
+
+    /* Word-wise over a pad cell in column 0: the backoff must stop at 0
+     * instead of walking to -1. */
+    struct row *pad = term->normal.rows[3];
+    pad->cells[0].wc = CELL_SPACER;
+    for (int c = 1; c < COLS; c++)
+        pad->cells[c].wc = (char32_t)('a' + c);
+
+    selection_start(term, 0, 3, SELECTION_WORD_WISE, false);
+    selection_update(term, 0, 3);
+    check(term->selection.coords.end.col >= 0,
+          "selection: word-wise backoff stops at column 0");
+    selection_cancel(term);
+
+    /* Leftward drag whose endpoint is that pad cell. */
+    selection_start(term, COLS - 1, 3, SELECTION_CHAR_WISE, false);
+    selection_update(term, 0, 3);
+    check(term->selection.coords.end.col >= 0,
+          "selection: leftward drag backoff stops at column 0");
+    selection_cancel(term);
+
+    term_free(term);
+}
+
 static void
 test_extract_kinds(void)
 {
@@ -8412,6 +8482,7 @@ main(void)
     test_flash();
     test_scrollback_commands();
     test_extract_kinds();
+    test_selection_lifecycle();
     test_extract_tabs();
     test_receive_paste_normalisation();
     test_receive_uri_list();
