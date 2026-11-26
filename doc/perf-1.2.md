@@ -140,13 +140,64 @@ line contains both `-O3 -O2`, so the last (`-O2`) wins. It is not a separate
   comparison as a whole-path comparison rather than a microbenchmark of one
   parser function.
 
+## Window/compositor follow-up (2026-11-26)
+
+The headless run above was followed by a real-window measurement once a
+Wayland compositor was available in the same container. `scripts/perf-startup.py`
+interleaves the four binaries, times the child's first exec against the parent's
+realtime clock, and times full process lifetime (20 repetitions):
+
+| Variant | startup to child exec, median/p95 (ms) | full lifetime, median/p95 (ms) |
+|---|---:|---:|
+| C `-O3` | 15.60 / 16.84 | 32.01 / 32.21 |
+| C `-O2` | 15.53 / 19.63 | 32.07 / 64.26 |
+| Zig ReleaseSafe | 18.91 / 24.68 | **114.45 / 114.93** |
+| Zig ReleaseFast | 20.72 / 22.97 | **64.61 / 65.34** |
+
+Command:
+
+```sh
+XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=wayland-1 \
+  scripts/perf-startup.py --builds <perf-cache>/head-<sha>-oracle-<sha>/builds --reps 20
+```
+
+**Findings.** Startup to first child exec is ~21% (ReleaseSafe) to ~33%
+(ReleaseFast) slower than C: +3.3 to +5.1 ms. Window teardown is the larger
+effect: total lifetime is 114 ms for ReleaseSafe and 65 ms for ReleaseFast
+against 32 ms for C, i.e. the post-child work takes ~82 ms / ~33 ms instead of
+~16 ms. Both are stable (spread < 1 ms across 20 runs), so this is not noise.
+
+Diagnostics so far:
+
+* `scrollback.lines=10/1000/10000` changes nothing (ReleaseSafe lifetime
+  114.5 ms in all three), so it is not proportional to scrollback rows.
+* With `workers=0/1/12` (single runs, ms): C 18/17/17, ReleaseSafe 39/35/71,
+  ReleaseFast 29/25/43. Render-worker shutdown accounts for part of the gap,
+  but not all of it.
+* Callgrind instruction counts for the same launch: Zig ReleaseSafe 214.8M vs
+  C `-O3` 136.4M (+57%). The extra work is rendering, not term initialisation:
+  Zig shows `render_cell` (7.6M) and 19.5M `memset` instructions reached
+  through ~25k `pixman_fill` calls, while C shows neither — i.e. Zig paints an
+  initial full-screen frame before the child exits and C appears not to. The
+  very stable ~100 ms ReleaseSafe teardown looks more like waiting for
+  buffer release / worker shutdown than like data-proportional work. Those are
+  hypotheses from the profiles, not yet proven by instrumentation.
+
+**Not fixed here.** The obvious follow-ups are lazy/zero-free scrollback
+initialisation and a cheaper way to join the render workers. First-frame
+latency, FPS and input latency are still not measured: this compositor does
+not deliver `wp_presentation` feedback (foot printed no presentation
+statistics), and there is no frame-timing instrumentation in the tree.
+
 ## Not measured (and why)
 
-* **No compositor / Wayland socket**: no FPS, frame time, startup-to-first-frame,
-  input latency, resize latency or Wayland protocol throughput. `foot --version`
-  was deliberately **not** timed: it exits before config parsing, terminal
-  creation or any Wayland connection, so its process startup would mostly
-  measure dynamic linking and would be misleading as "foot startup".
+* **Frame-level metrics**: the headless run had no compositor at all. The
+  follow-up above measures window startup and teardown, but not FPS, frame
+  time, startup-to-first-frame, input latency, resize latency or Wayland
+  protocol throughput, because the compositor delivers no presentation
+  feedback and the tree has no frame instrumentation. `foot --version` was
+  deliberately **not** timed for startup: it exits before config parsing,
+  terminal creation or any Wayland connection.
 * **No `hyperfine`, `perf` or equivalent**: timings are wall-clock medians of
   process runs; no CPU pinning, no isolation, no instruction/branch counters
   and no confidence intervals beyond the printed samples.
