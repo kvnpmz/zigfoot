@@ -91,9 +91,15 @@ if [ -z "${WAYLAND_DISPLAY:-}" ]; then
             fi
             sleep 0.1
         done
-    else
-        echo "smoke: no WAYLAND_DISPLAY and no weston; skipping window launches"
+    elif [ "${FOOT_ALLOW_NO_COMPOSITOR:-0}" = 1 ]; then
+        echo "smoke: SKIP window launches (no WAYLAND_DISPLAY and no weston/Xvfb; FOOT_ALLOW_NO_COMPOSITOR=1)"
         exit 0
+    else
+        # Version/config checks alone do not exercise the wayland/render
+        # ports. Never report success when zero windows were launched.
+        echo "smoke: no WAYLAND_DISPLAY and no weston/Xvfb; cannot launch windows" >&2
+        echo "smoke: start a compositor, or set FOOT_ALLOW_NO_COMPOSITOR=1 to skip explicitly" >&2
+        exit 1
     fi
 fi
 

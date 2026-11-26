@@ -4,8 +4,12 @@
 /subprojects/*/
 /subprojects/.wraplock
 __pycache__/
-
-# Local investigation artifacts (never part of the tree)
+/.zigcache/
+/.zig-cache*/
+.mypy_cache/
+.ruff_cache/
+/build/
+/build-*/
 /capture/
 /inbox/
 /investigation.cany/

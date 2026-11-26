@@ -12,16 +12,21 @@ Base: `9f4f1def`. Audit date: 2026-11-25.
 > reclassified as class (a): they exist so the generated `wl_interface`
 > symbols stay in one C TU.
 >
-> **All class-c rows are now closed (2026-11-25, base `98f999c6`).** The last
-> body, `log_presentation_statistics()`, is reclassified as class (a): it is a
-> `__attribute__((destructor))` function that the C runtime must run after
-> `main` returns, which Zig cannot express without more C glue (MIGRATION_PLAN
-> §15.3). Shims are 2,554 lines in 11 files; the table below stays as the audit
-> record and its per-row class is historical.
+> **All class-c rows are now closed (reconciled 2026-11-26).** The last body,
+> `log_presentation_statistics()`, is Zig as of `b77c7706`
+> (`render_log_presentation_statistics()`, called at the end of `foot_main`);
+> it is no longer a live class-(a) shim body. Rows marked DONE below were
+> likewise verified in Zig. Shims are **2,552 lines in 11 files** on the
+> 1.2 tree (the +12 lines are the URL-regex no-capture-group guard); the table
+> below stays as an audit record and its per-row class and body count are
+> historical.
 
 ## Scope and result
 
-The checkout has 13 `*-shim.c` files, not 11. The files contain 390 functions and 3,417 lines.
+At the original audit base the checkout had 13 `*-shim.c` files, not 11, with
+390 functions and 3,417 lines. The 1.2 tree has **11 files / 2,552 lines**
+(`git ls-files '*shim.c' | xargs wc -l`); the counts below are the historical
+audit snapshot.
 
 - Class a: 259 functions. Keep them.
 - Class b: 57 functions. One dead mirror adapter was deleted.
@@ -58,12 +63,12 @@ Class c means that logic leaked into the shim. The action is a later port. The t
 
 ## Function table
 
-Action `HOLD` is a class b deletion that needs a module-owner call-site edit. Action `PORT` is class c. The number is the C body line count.
+Action `HOLD` is a class b deletion that needs a module-owner call-site edit. Action `PORT` is class c. The number is the C body line count. `DONE` rows are historical PORT candidates verified as already ported to Zig (`rg -n --glob '*.zig' <name>`); their C body is gone.
 
 | File | Function | Class | Action |
 |---|---|---|---|
-| `csi-shim.c` | `csi_xtsave_get()` | c | PORT (5 body lines) |
-| `csi-shim.c` | `csi_xtsave_set()` | c | PORT (7 body lines) |
+| `csi-shim.c` | `csi_xtsave_get()` | c | DONE — Zig in `csi.zig` (was PORT, 5 body lines) |
+| `csi-shim.c` | `csi_xtsave_set()` | c | DONE — Zig in `csi.zig` (was PORT, 7 body lines) |
 | `csi-shim.c` | `csi_size_notifications()` | b | HOLD for module owner |
 | `csi-shim.c` | `csi_grapheme_shaping()` | b | HOLD for module owner |
 | `csi-shim.c` | `csi_set_grapheme_shaping()` | b | HOLD for module owner |
@@ -76,12 +81,12 @@ Action `HOLD` is a class b deletion that needs a module-owner call-site edit. Ac
 | `csi-shim.c` | `csi_conf_tweak_sixel()` | b | HOLD for module owner |
 | `csi-shim.c` | `csi_set_url_ime_reenable_after_url_mode()` | b | HOLD for module owner |
 | `csi-shim.c` | `csi_c32width()` | a | KEEP |
-| `csi-shim.c` | `csi_window_first_output_px_width()` | c | PORT (7 body lines) |
-| `csi-shim.c` | `csi_window_first_output_px_height()` | c | PORT (7 body lines) |
-| `csi-shim.c` | `csi_window_on_outputs_count()` | c | PORT (4 body lines) |
-| `csi-shim.c` | `csi_window_title_stack_len()` | c | PORT (3 body lines) |
-| `csi-shim.c` | `csi_window_title_stack_push()` | c | PORT (3 body lines) |
-| `csi-shim.c` | `csi_window_title_stack_pop()` | c | PORT (4 body lines) |
+| `csi-shim.c` | `csi_window_first_output_px_width()` | c | DONE — Zig in `csi.zig` (was PORT, 7 body lines) |
+| `csi-shim.c` | `csi_window_first_output_px_height()` | c | DONE — Zig in `csi.zig` (was PORT, 7 body lines) |
+| `csi-shim.c` | `csi_window_on_outputs_count()` | c | DONE — Zig in `csi.zig` (was PORT, 4 body lines) |
+| `csi-shim.c` | `csi_window_title_stack_len()` | c | DONE — Zig in `csi.zig` (was PORT, 3 body lines) |
+| `csi-shim.c` | `csi_window_title_stack_push()` | c | DONE — Zig in `csi.zig` (was PORT, 3 body lines) |
+| `csi-shim.c` | `csi_window_title_stack_pop()` | c | DONE — Zig in `csi.zig` (was PORT, 4 body lines) |
 | `csi-shim.c` | `csi_foot_version_major()` | a | KEEP |
 | `csi-shim.c` | `csi_foot_version_minor()` | a | KEEP |
 | `csi-shim.c` | `csi_foot_version_patch()` | a | KEEP |
@@ -113,7 +118,7 @@ Action `HOLD` is a class b deletion that needs a module-owner call-site edit. Ac
 | `notify-shim.c` | `notify_term_reaper()` | b | HOLD for module owner |
 | `notify-shim.c` | `notify_active_push_back()` | c | PORT (3 body lines) |
 | `notify-shim.c` | `notify_active_back()` | c | PORT (4 body lines) |
-| `notify-shim.c` | `notify_active_len()` | c | PORT (3 body lines) |
+| `notify-shim.c` | `notify_active_len()` | c | DONE — Zig in `notify.zig` (was PORT, 3 body lines) |
 | `notify-shim.c` | `notify_active_back_after_push()` | c | PORT (3 body lines) |
 | `notify-shim.c` | `notify_actions_first()` | c | PORT (4 body lines) |
 | `notify-shim.c` | `notify_actions_next()` | c | PORT (10 body lines) |
@@ -402,7 +407,7 @@ Action `HOLD` is a class b deletion that needs a module-owner call-site edit. Ac
 | `terminal-shim.c` | `wayland_shim_surface_set_buffer_scale()` | a | KEEP |
 | `terminal-shim.c` | `wayland_shim_viewport_set_destination()` | a | KEEP |
 | `terminal-shim.c` | `terminal_shim_grid_row_absolute_in_view()` | a | KEEP |
-| `terminal-shim.c` | `log_presentation_statistics()` | a | KEEP — `__attribute__((destructor))`; the C runtime must call it after `main` (see MIGRATION_PLAN §15.3) |
+| `terminal-shim.c` | `log_presentation_statistics()` | a | DONE — now Zig (`render_log_presentation_statistics()`, `b77c7706`); was the last class-(c) body |
 | `terminal-shim.c` | `render_presentation_ctx_term()` | a | KEEP |
 | `terminal-shim.c` | `render_presentation_ctx_input()` | a | KEEP |
 | `terminal-shim.c` | `render_presentation_ctx_commit()` | a | KEEP |

@@ -733,8 +733,20 @@ bool url_shim_regex_match(const regex_t *preg, const char *str,
     if (matched) {
         *so0 = matches[0].rm_so;
         *eo0 = matches[0].rm_eo;
-        *so1 = matches[1].rm_so;
-        *eo1 = matches[1].rm_eo;
+
+        /*
+         * The URL regex is required to have a marked subexpression
+         * (config.zig rejects one without it), but do not read past the
+         * single regmatch_t we allocated if a caller ever passes an
+         * ungrouped pattern: report an empty group 1 instead.
+         */
+        if (nmatch >= 2) {
+            *so1 = matches[1].rm_so;
+            *eo1 = matches[1].rm_eo;
+        } else {
+            *so1 = 0;
+            *eo1 = 0;
+        }
     }
     free(matches);
     return matched;

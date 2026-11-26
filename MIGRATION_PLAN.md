@@ -1478,24 +1478,59 @@ the scoreboard diffs stay readable. (`reference/` is tracked — leave it.)
 This is the section the next agent reads first. §14 is history; this is the
 state after `port-c2` and the three audits landed.
 
+> **Reading rule (1.2 final):** §15.1–§15.5a contain numbers that were true at
+> earlier points in the integration and are marked historical below. §15.7
+> (1.0) and §15.9 (1.1) are explicitly historical. **§15.10 is the authoritative
+> 1.2-final snapshot**, measured on `ab5f4261`; every number there carries its
+> reproducing command. Do not mix release numbers.
+
 ### 15.1 Integration state
+
+> Historical integration snapshot, with 1.2-final corrections called out here
+> and in §15.10. Commands for the final numbers were run on `ab5f4261`.
 
 | Metric | Value |
 |---|---:|
 | Module C remaining | **0 lines** — `config.c` and `slave.c` are deleted |
-| `*-shim.c` | **2,540 lines / 11 files**, all class (a) |
-| Generated `abi_probe.c` | 3,478 lines |
-| Zig source | 55,184 lines |
+| `*-shim.c` | **2,552 lines / 11 files**, all class (a) |
+| Generated `abi_probe.c` | 3,838 lines |
+| Zig source | 55,293 lines |
 | Unported modules | **0** |
 | Class-(c) shim functions left | **0**, see §15.3 |
-| Harness | 1,001 checks, 8 meson suites |
+| Harness | 1,040 `ok:` lines in aggregate (990 terminal + 11 regex + 39 shims), 9 meson suites |
+| C compiled by a default build | **20,673 unique lines** (1.2 final, measured on `ab5f4261` by `wc -l` over shims + generated C + test C + utility C; historical values: 19,826 at 1.1, 20,500 pre-final) |
+| C built only on demand | 1,218 lines (PGO + fuzz drivers) |
 | Open audit findings | **0**; 34 of 34 closed |
+
+The "no hand-written C" headline needs this qualification: **the foot and
+footclient binaries contain no hand-written C except the 11 class-(a)
+`*-shim.c` files (2,552 lines); the other 6,117 C lines a default build
+compiles are generated protocol/ABI/colour tables; a further 11,805 test
+lines and 199 utility lines are hand-written but not linked into
+foot/footclient, and 1,218 lines (fuzz + PGO drivers) are built only on
+demand.** Measured on `ab5f4261` by `wc -l $(git ls-files '*-shim.c') abi_probe.c $(git ls-files '*.zig') tests/test-*.c build/*.c utils/xtgettcap.c pgo/pgo.c tests/fuzz-vt.c`: the 6,117 generated lines are `srgb.c` (518), `abi_probe.c` (3,838) and 17 wayland-scanner stubs (1,761); the 11,805 test lines are `test-terminal.c` (8,473), `test-config.c` (2,091), `test-config-stubs.c` (28), `test-execvpe.c` (279), `test-regex.c` (109), `test-render-parity.c` (575) and `test-shims.c` (250); `utils/xtgettcap.c` is 199 lines; `pgo/pgo.c` (441) + `tests/fuzz-vt.c` (777) = 1,218 on-demand lines. The historical 1.1 figures were 11,330 test lines / 19,826 unique C lines; the pre-final figures 11,632 / 20,500. "100% Zig" is true only of module logic, not of every C line in a build.
+
+The 1,040 `ok:` lines reproduce as an aggregate, not as coverage in all nine
+suites: `rg -c '^ok:'` over the meson testlog gives 1040 = 990 from
+`terminal-harness` + 11 from `regex` + 39 from `shims`; `config`,
+`render-parity`, `abi-probe-up-to-date` and both `zig-*` suites print none.
+Measured on `ab5f4261` by `rg -o '\bcheck\s*\(' tests/test-terminal.c | wc -l`,
+`test-terminal.c` has **875 `check()` call sites**; `check_text()` adds 67
+(942 combined, measured by `rg -o '\bcheck_text\s*\('`), so the shorthand
+"875 check()/check_text() sites" counts `check()` only. The historical audit
+noted 16 tautological `check(1/true, ...)` sites; that detail was not
+re-derived in this pass.
 
 Merged into `feature/zig-migration` in this session: `port-c2` (`dad2f048`),
 `audit-vt` (`0ad2e56b`), `audit-surface` (`2b058876`), `audit-plumbing`
-(`98f999c6`). Gate: `scripts/full-check.sh` green on all three build dirs,
-six window launches; `valgrind -q --error-exitcode=99 ./build/tests/
-test-terminal` clean.
+(`98f999c6`). 1.2-final gate, measured on `ab5f4261` by `sh scripts/full-check.sh`: exit 0,
+9/9 in all three build dirs, parity PASS and six smoke launches. The leak gate
+`valgrind -q --error-exitcode=99 --leak-check=full ./build/tests/test-terminal`
+now exits **0**; the exit-99 fixture records in §15.5 are historical.
+
+The 1.2 follow-up (§15.10) keeps these numbers current: it adds the shims
+suite, the ABI element/`epoll_event`/tll probes, the execvpe edge-case tests
+and the clean-clone gate. The table above is the integrated 1.2 tree.
 
 ### 15.2 Finding ledger
 
@@ -1534,7 +1569,9 @@ kept only for `__attribute__((destructor))`. It is Zig as of `b77c7706`
 `foot_main`), and `config.c` and `slave.c` were deleted in `fe88f7ce` and
 `ebbdadd8`. There are now **zero class-(c) shim bodies**: every line of
 `*-shim.c` is class (a) — generated protocol inlines, listener tables, C
-macros and libc types — and no hand-written foot C remains at all.
+macros and libc types — and no hand-written *module* C remains. The shims
+themselves are still hand-written C (2,552 lines), as are the test and
+utility C files; see §15.1 for the full accounting.
 
 ### 15.4 Divergences recorded in this session
 
@@ -1548,6 +1585,15 @@ macros and libc types — and no hand-written foot C remains at all.
   NULL; C dereferences. Unreachable with a real window, and the harness builds
   a bare one, so the guard makes the valgrind run deterministic rather than
   changing product behaviour.
+- **NULL-window fallbacks in `terminal.zig`** — accepted, same class as V-01
+  and harmless in real sessions (a terminal always has a window once it can
+  render): `windowScale()` (~505) uses `term.window orelse return 0.0` where C
+  reads `win->scale` unchecked; `windowPreferredBufferScale()` (~510) returns
+  0 instead of dereferencing `win->preferred_buffer_scale`; `getFontDpi()`
+  (~537) reaches `font_dpi_before_unmap`, then `firstMonitor()`, then 96.0
+  instead of assuming `term->window` is present; `getFontSubpixel()` (~560)
+  falls back to `WL_OUTPUT_SUBPIXEL_UNKNOWN` instead of assuming the window's
+  output list is reachable.
 - **PL-06** — `xreallocarray(ptr, 0, n)` and an overflowing product now abort
   *before* touching `ptr`. C has the same preconditions; the port had dropped
   them and silently freed the caller's buffer through `realloc(p, 0)`.
@@ -1558,24 +1604,59 @@ macros and libc types — and no hand-written foot C remains at all.
   `4d9df1d6` restores C's `== CURSOR_BLINK_ON`; the harness had encoded the
   inverted phase in two checks and follows C as of merge `5c508c64`.
 
-### 15.5 Verification on the integrated tree
+### 15.5 Verification on the integrated tree — HISTORICAL
 
-| Check | Result |
+> Pre-final snapshot. The valgrind and parity rows below were true before the
+> leak fix and the widened corpus; the 1.2-final results are in §15.10.
+
+| Check | Result (historical) |
 |---|---|
-| `scripts/full-check.sh` | 8/8 in `build`, `build-disabled`, `build-release`; smoke ok |
-| `valgrind -q --error-exitcode=99 ./build/tests/test-terminal` | clean |
+| `scripts/full-check.sh` | 9/9 in `build`, `build-disabled`, `build-release`; stale logs rejected; parity invoked; smoke ok |
+| `scripts/check-clean-clone.sh` | clone @ `zig-migration-1.2` builds and passes 9/9 |
+| `scripts/check-version.sh` | numeric macros on a non-semver tag |
+| `valgrind -q --error-exitcode=99 ./build/tests/test-terminal` | exit 0, no errors |
+| `valgrind -q --error-exitcode=99 --leak-check=full ./build/tests/test-terminal` | exit 99: 0 FAILs; 32 parent + 14 per child "definitely lost" fixture records (see below) |
 | `valgrind --leak-check=full ./build/tests/test-config` | no definite loss |
 | `scripts/fuzz-vt.sh 120` | PASS, 24,000 iterations |
 | `scripts/check-targets.sh` | PASS, 2 targets x 5 files |
 | `python3 scripts/gen_abi_probe.py --check` | clean |
-| `scripts/render-parity.sh` | PASS, 447 cells, 2 scales, byte-identical |
+| `scripts/render-parity.sh` | PASS with `ORACLE_REF=6b3f557d`, 447 cells total, both TOTAL hashes byte-identical |
+
+"Render parity 447 cells x 2 scales" was misleading: 447 is the **two-scale
+total**, not a per-scale count. The recorded `TOTAL` hashes are
+`988ac8ef344eb1a5` (1.04999995) and `69a7dfb30f5f754d` (0.833333313); the
+Zig and C hash dumps are byte-identical, including all 447 per-cell hashes.
+**1.2-final correction:** measured on `ab5f4261` by
+`ORACLE_REF=6b3f557d scripts/render-parity.sh`, the corpus is 1,058 cells
+across three scales (§15.10).
+
+The terminal-harness valgrind claim is narrower than it sounds.
+`valgrind -q --error-exitcode=99 ./build/tests/test-terminal` exits 0 with
+`terminal harness: all checks passed`. Adding `--leak-check=full` still exits
+99: after the 1.2 fixes there are **0 FAILs**, but the parent's persistent
+harness fixtures (`term_new`/`row_new` grids, `term_with_fonts`,
+`render.customGlyph`, key-binding managers) and the copies inherited by
+forked children are reported as "definitely lost" (32 parent records, 14 per
+child). Those are test fixtures, not product allocations; making the run exit
+0 needs a harness teardown or suppression file, and is recorded as an open
+limitation rather than hidden. The three former FAILs (`xreallocarray`,
+`non-CSD`/`fullscreen` weston quirk) are fixed by accepting valgrind's 99
+status only in the fork-child assertions that check the child's behaviour.
+`scripts/full-check.sh` no longer accepts an empty/`Ok: 0` log: it requires
+`Ok >= 9`, `Fail: 0` and no skips, and deletes stale logs before running.
+**1.2-final leak gate:** measured on `ab5f4261` by
+`valgrind -q --error-exitcode=99 --leak-check=full ./build/tests/test-terminal`,
+the command exits 0; 8 residual 320 B records (2,048 direct + 512 indirect,
+2,560 B total) come from libfontconfig/libexpat `XML_ParseBuffer` in non-main
+logs only, with no foot frame and none in the main process (§15.10).
 
 Accepted gaps, from `doc/portability.md` and `doc/parity-report.md` — each is
 unverified *here* and provable only on the target:
 
-- FreeBSD `epoll_event` (16 bytes, `data` at 8) and the epoll-shim constants in
-  `server.zig` are pinned by comptime constants, not by a FreeBSD C probe; no
-  FreeBSD headers exist in the cross gate.
+- Linux `epoll_event` is now probed (`EpollEvent` in `abi_probe.c`, consumed
+  by `fdm.zig` and `terminal_types.zig`). FreeBSD's epoll-shim layout
+  (16 bytes, `data` at 8) is still pinned by comptime constants, not by a
+  FreeBSD C probe; no FreeBSD headers exist in the cross gate.
 - The aarch64 `epoll_event` shape is checked against the packed C struct
   definition and the audit, not against an aarch64 C probe on this host.
 - `regex_t` is an opaque buffer whose size, alignment and `re_nsub` offset
@@ -1584,7 +1665,44 @@ unverified *here* and provable only on the target:
   `regex_t` is covered by that per-target probe rather than by a cross
   compile.
 - The private `Stat`/`sockaddr_un`/`Passwd`/`sigaction` mirrors were replaced
-  or probed in `port-abi-2` (`a458b54f`); no unprobed mirror remains.
+  or probed in `port-abi-2` (`a458b54f`). The eight config element types that
+  had no `expectAbi()` (`ConfigFont`, `ConfigFontList`, `ConfigSpawnTemplate`,
+  `Argv`, `BindingAux`, `ConfigKeyBinding`, `ConfigKeyBindingList`,
+  `CustomRegex`) are now pinned directly, array element layouts are recursed
+  by `expectAbi`, and the `tll(struct seat)` node/list shape is probed
+  (`SeatNode`/`SeatList`) and checked against both Zig node mirrors. The
+  remaining target-only gap is FreeBSD's epoll-shim layout (above); there is
+  no unprobed native mirror.
+
+### 15.5a Known limitations / not verified — HISTORICAL
+
+> This paragraph describes the pre-widening corpus. The 1.2-final corpus and
+> its limitations are recorded in §15.10.
+
+The parity corpus in `tests/test-render-parity.c` did **not** cover bar,
+underline or beam cursors; double-width, combining or grapheme shaping;
+emoji or fallback fonts; sixel/graphics; CSD bottom/right/min/max/close;
+real shm allocation or damage tracking; wayland protocol interaction;
+integer HiDPI 2.0; or subpixel rendering. It painted only block-cursor,
+cell-attribute, OSD and CSD top/left/title cases at two fractional scales.
+
+The C side of parity is pinned: `scripts/render-parity.sh` defaults to
+`ORACLE_REF=6b3f557d`, creates a throwaway worktree under `mktemp -d`, deletes
+stale hash dumps first and fails if the ref is missing or the oracle build
+fails. It no longer depends on a pre-existing `/tmp/agent-c` tree or on
+whatever `origin/master` happens to be. The recorded hashes reproduced on the pre-final tree; the final hashes are in
+§15.10.
+
+`full-check.sh`'s `report()` historically accepted a log with `Ok: 0 / Fail:
+0` as success because it only grepped for `Fail: 0`; 1.2 requires
+`Ok >= 9`, `Fail: 0`, no skips, and removes stale logs before each run. ASan
+cannot complete the
+terminal harness in this container (the C test build hits
+`-Wshift-negative-value`, and after that fix Clang ASAN fails to deallocate
+its arena); GCC ASAN is not reachable via Meson here. FreeBSD and aarch64
+ABI coverage is compile-only (`scripts/check-targets.sh` uses
+`zig build-obj -fno-emit-bin`), and no FreeBSD headers are present for a
+native probe.
 
 ### 15.6 Closing sequence
 
@@ -1616,18 +1734,23 @@ The gate was run on this tree, in this order, all green:
 | Check | Result |
 |---|---|
 | `scripts/full-check.sh` | 6/6 in `build`, `build-disabled`, `build-release`; six window launches ok |
-| terminal harness under valgrind | exit 0, no errors |
+| terminal harness under valgrind | exit 0 for `valgrind -q --error-exitcode=99 ...` only; see §15.5 |
 | config harness `--leak-check=full` | exit 0, no definite loss |
 | `scripts/fuzz-vt.sh 120` | PASS, 24,000 iterations |
 | 10 seeds under valgrind | all clean (incl. seed 58, VT-08) |
 | `scripts/check-targets.sh` | PASS, 2 targets x 5 files |
 | `python3 scripts/gen_abi_probe.py --check` | clean |
-| `scripts/render-parity.sh` | PASS, 447 cells x 2 scales, byte-identical |
+| `scripts/render-parity.sh` | PASS, 447 cells total (227 + 220), byte-identical |
 
-What the migration leaves in C, and why, is the two entries in
+These two tables are the historical 1.0 snapshot; the corrected readings of
+the valgrind and parity claims are in §15.5.
+
+At that tag, what the migration left in C was the two entries in
 `doc/endgame-verification.md` (libc-private regex and `execvpe`) plus the
-destructor in §15.3. Everything else is Zig, including the four private ABI
-mirrors that `port-abi-2` either replaced with `std.c` types or probed.
+destructor in §15.3. Both entries and the destructor are Zig as of 1.1
+(§15.9); everything else in the module layer is Zig, including the four
+private ABI mirrors that `port-abi-2` either replaced with `std.c` types or
+probed.
 
 The accepted gaps in §15.5 are unchanged and remain target-only claims:
 FreeBSD epoll layout and epoll-shim constants (comptime-pinned), and the
@@ -1658,28 +1781,90 @@ class-(c) shim body:
   last statement of `foot_main`. | fixed `b77c7706` |
 
 Gate after the three: 6/6 in all three dirs, six smoke launches, terminal
-harness clean under valgrind, 10/10 manual Debug launches clean.
+harness clean under the exact valgrind command in §15.5, 10/10 manual Debug
+launches clean.
 
-### 15.9 1.1: no hand-written C
+### 15.9 1.1: no hand-written module C
 
-Tag **`zig-migration-1.1`** deletes the last hand-written C in the tree:
+> **Status: historical / superseded.** The `zig-migration-1.1` tag points at
+> `00cdb2c0`, whose `generate-version.sh` leaves the non-semver tag string in
+> `FOOT_MAJOR/MINOR/PATCH`; a clean clone of that tag does not compile. The
+> recorded 8/8 gate was also run with `meson test --no-rebuild` over binaries
+> older than the final commits. §15.10 is the current, reproducible result.
+> The tag is left in place as the audit snapshot.
+
+Tag **`zig-migration-1.1`** deletes the last hand-written *module* C in the
+tree (the shims, test C and utility C remain — §15.1):
 
 | Unit | Was | Now |
 |---|---|---|
 | `config.c` | 35 lines, `config_regex_compile()` over `regex_t` | `config.zig`: opaque `[RegexT__size]u8 align(RegexT__align)` buffer, `regcomp`/`regerror`/`regfree` declared directly, `re_nsub` read at the probed offset (`c92be7cc`, deleted `fe88f7ce`) |
-| `slave.c` | 64 lines, glibc `execvpe` + a non-equivalent PATH walk | `slave.zig`: glibc semantics written down and tested (`doc/execvpe.md`, `tests/test-execvpe.c`; `30feac4c`, deleted `ebbdadd8`, renamed `20471353`) |
+| `slave.c` | 64 lines, glibc `execvpe` + a non-equivalent PATH walk | `slave.zig`: glibc search rules plus the documented envp-PATH divergence, written down in `doc/execvpe.md` and tested in `tests/test-execvpe.c` (`30feac4c`, deleted `ebbdadd8`, renamed `20471353`) |
 
-Final numbers: **0 module-C lines**, 11 shim files / 2,540 lines (all class
-(a)), 3,478 generated probe lines, 55,184 Zig lines, 1,001 harness checks in
-8 meson suites.
+1.1 final numbers: **0 module-C lines**, 11 shim files / 2,540 lines (all
+class (a)), 3,478 generated probe lines, 55,184 Zig lines, 1,001 `ok:` lines
+in aggregate (990 terminal + 11 regex) across 8 meson suites. Current 1.2
+numbers are in §15.1/§15.10.
 
-The only C a build of this tree contains is generated: the wayland-scanner
-protocol stubs and `abi_probe.c`. "100% Zig" in the sense that matters —
-every line a human wrote for foot is Zig.
+At 1.1 a default build compiled 19,826 unique C lines; only 5,757 of them
+were generated (`srgb.c`, `abi_probe.c`, 17 wayland-scanner stubs). The other
+13,069 were hand-written: 2,540 class-(a) shim lines linked into the binaries,
+11,330 test lines and 199 utility lines that were not. A further 1,218 lines
+(PGO and fuzz drivers) are built only on demand. "100% Zig" is true of the
+module layer, not of the build. See §15.1 for the per-file accounting.
 
 Gate on the 1.1 tree: full-check 8/8 in all three build dirs plus six window
-launches; terminal harness clean under valgrind; config and regex harnesses
-clean with full leak checking; the execvpe test green including its eight
-glibc-semantics cases; fuzz 120 PASS; `check-targets.sh` PASS for FreeBSD and
-aarch64; probe check clean; render parity 447 cells x 2 scales, byte-identical.
+launches; terminal harness clean under the exact command in §15.5 (not with
+`--leak-check=full`); config and regex harnesses clean with full leak
+checking; the execvpe test green including its eight glibc-search cases
+(eleven cases in `fix/exec`, which also adds the documented envp-PATH
+divergence); fuzz 120 PASS; `check-targets.sh` PASS for FreeBSD and aarch64;
+probe check clean; render parity 447 cells total (227 @1.04999995 +
+220 @0.833333313), byte-identical to the C oracle.
 
+### 15.10 1.2 final — measured on `ab5f4261` (2026-11-26)
+
+This is the authoritative 1.2 snapshot. All results below were reproduced in
+a clean worktree whose HEAD is `ab5f4261b684c2073a30d2b4c046b2fc0adfb13a`.
+Every number carries its command; numbers in §15.1/§15.5/§15.5a/§15.7/§15.9
+are explicitly historical and must not be mixed with these.
+
+**Provenance table (1.2 final).** "Measured on ab5f4261 by <command>" means the
+command was run in that worktree during this documentation pass.
+
+| Check | 1.2-final result | Provenance (measured on ab5f4261 by …) |
+|---|---|---|
+| Meson suites, three configs | **9/9**, `Fail: 0`, no skips in `build`, `build-disabled` (grapheme clustering off) and `build-release` (ReleaseSafe). Registered suites: `execvpe`, `regex`, `shims`, `config`, `abi-probe-up-to-date`, `render-parity`, `zig-grid`, `zig-terminal_types`, `terminal-harness`. | `meson test -C build`, `meson test -C build-disabled`, `meson test -C build-release`; full gate: `sh scripts/full-check.sh` (exit 0, 9/9 × 3, parity PASS, six smoke launches) |
+| Gate semantics | `EXPECTED_SUITES=9`: both the registered suite list and the summary count must equal 9, plus `Fail: 0` and no skips; stale logs are deleted, parity is invoked and its status propagates. Smoke fails with no real window launch unless `FOOT_ALLOW_NO_COMPOSITOR=1` is set explicitly. | `rg -n 'EXPECTED_SUITES\|listed\|rm -f\|render-parity.sh' scripts/full-check.sh` and `rg -n 'FOOT_ALLOW_NO_COMPOSITOR\|cannot launch' scripts/smoke.sh` (source inspection); `scripts/smoke.sh` (six launches, `smoke: ok`) |
+| Harness `ok:` lines | **1,040** total = **990** `terminal-harness` + **39** `shims` + **11** `regex`; `config`, `render-parity`, `abi-probe-up-to-date` and both `zig-*` suites print none. | `awk '/^test: /{s=$2}/^ok:/{n[s]++}END{for(k in n)print k,n[k]}' build/meson-logs/testlog.txt` and `rg -c '^ok:' build/meson-logs/testlog.txt` |
+| Harness call sites | **875 `check()` call sites**; `check_text()` adds 67 (942 combined). Historical note: "875 check()/check_text()" counted only `check()`. | `rg -o '\bcheck\s*\(' tests/test-terminal.c \| wc -l` and `rg -o '\bcheck_text\s*\(' tests/test-terminal.c \| wc -l` |
+| execvpe | **11/11** cases PASS: empty file → `ENOENT`, empty PATH → cwd, `ESTALE`/`ENODEV`/`ETIMEDOUT` continue the search, and PATH from `envp` overrides `getenv`/`environ` (documented divergence). | `meson test -C build` (testlog section `foot:execvpe`); `rg -n 'ESTALE\|ENODEV\|ETIMEDOUT\|pathFromEnv' slave.zig` |
+| shims | **39** checks, all pass, including memfd/seal/punch-hole and the regex-without-capture-group path. | `meson test -C build` (testlog section `foot:shims`) |
+| Render parity | **1,058 cells across 3 scales** (historical corpus: 447 across 2). `TOTAL e5184e0fe5898153` at 1.04999995, `TOTAL b7cebabc45627f13` at 0.833333313, `TOTAL 87c0bab0d0d6829b` at scale 2; per-scale cell counts 362/348/348. New coverage: cursor styles (underline/beam/hollow × focus × blink — foot has no `CURSOR_BAR`; `cursor.style=bar` is a legacy alias of beam), integer HiDPI 2.0, double-width CJK + spacer cells + composed clusters with grapheme shaping enabled, CSD bottom and right, and the sixel pass (two synthetic sixels through the real `render_sixel_images()`/`sixel_sync_cache()`, SRC and OVER compositing). Script is hermetic (`$TMPDIR` work dir + `EXIT` trap removes its oracle worktree) and pinned to `ORACLE_REF=6b3f557d`. | `ORACLE_REF=6b3f557d bash scripts/render-parity.sh` (PASS, 1,058 cells); `./build/tests/test-render-parity` (hashes and per-scale counts); `rg -n 'mktemp\|trap\|ORACLE_REF' scripts/render-parity.sh` |
+| Leak gate | `valgrind -q --error-exitcode=99 --leak-check=full ./build/tests/test-terminal` exits **0**; main process **0 definitely/indirectly lost**. Residual: **8 records × 320 B = 2,560 B total (2,048 direct + 512 indirect)**, all in non-main (worker/child) logs, stacks in libfontconfig/libexpat `XML_ParseBuffer`, no foot frame. `test-shims` and `test-execvpe` also 0 definite/indirect. | `valgrind -q --error-exitcode=99 --leak-check=full ./build/tests/test-terminal` (exit 0, 8 matching records parsed from the log by PID); `valgrind -q --error-exitcode=99 --leak-check=full ./build/tests/test-shims` and `…test-execvpe` (exit 0, no loss lines) |
+| Fuzz | `fuzz-vt: PASS seeds=120 iterations=24000`; **8.0 s** wall here (the supplied 8.4 s is timing variance). Work dir is per-invocation (`mktemp`), so concurrent runs are safe. | `bash scripts/fuzz-vt.sh 120` (exit 0); `rg -n 'mktemp\|trap' scripts/fuzz-vt.sh` |
+| Cross targets | **10 combinations, 0 SKIP**: `x86_64-freebsd` and `aarch64-linux-gnu`, each with `fdm.zig`, `spawn.zig`, `slave.zig`, `main.zig`, `server.zig`. Compile-only (`zig build-obj -fno-emit-bin`). Linux `epoll_event` is probed natively (12 bytes, `data` at 4); FreeBSD constants are cross-derived (16 bytes, `data` at 8) and checked by comptime assertions. | `sh scripts/check-targets.sh` (exit 0, 10 `check-targets:` lines); `rg -n 'EpollEvent' build/c_layout.zig`; `sed -n '1,40p' fdm.zig` |
+| ABI | `gen_abi_probe.py --check` clean; `abi_probe.c` **3,838 lines**; 11 `*-shim.c` files **2,552 lines**; tracked Zig **55,293 lines**. Eight config element mirrors have direct `expectAbi`; fixed-size arrays of mirrors recurse (`Config.fonts[4]`, `Terminal.notification_icons[32]`, `KeySet.vmods[8]`, `WlWindow.csd.surface[]`, `Vt.params.v[16]`); Linux epoll_event is probed; the tll seat node/head are probed. Accepted gaps: pointer-reached element types rely on direct `expectAbi`, and the tll node is probed only via the seat instantiation. | `python3 scripts/gen_abi_probe.py --check`; `wc -l abi_probe.c $(git ls-files '*-shim.c') $(git ls-files '*.zig')`; `rg -n 'expectAbi\((ConfigFont\|…)' terminal_types.zig`; `rg -n '\.@"array"\|fonts: \[4\]\|notification_icons: \[32\]\|vmods: \[8\]\|surface: \[\|v: \[16\]' terminal_types.zig` |
+| Version / clean clone | `FOOT_VERSION` **1.28.0-345-gab5f4261**, integer macros **1/28/0**, `check-version: ok`; a clean clone with `.git` builds and passes **9/9**; `check-clean-clone: ok`. Plain `git describe --always --tags` yields `zig-migration-1.1-29-gab5f4261`; the version macro uses the semver-only describe (`--match '[0-9]*'`). | `scripts/check-version.sh`, `sh generate-version.sh 1.28.0 . <tmp>`, `sh scripts/check-clean-clone.sh` (`Ok: 9 Fail: 0`), `git describe --always --tags` |
+
+**Source accounting (measured on ab5f4261 by `wc -l` over the tracked files
+and generated build outputs; also stated verbatim in `doc/release-1.2.md`):**
+0 module-C lines; the foot/footclient binaries contain no hand-written C
+except the 11 class-(a) `*-shim.c` files (2,552 lines); a default build also
+compiles generated C (6,117 lines: `srgb.c` 518 + `abi_probe.c` 3,838 + 17
+protocol stubs 1,761) and test/tool C that is not linked into the binaries
+(11,805 test lines + 199 utility lines, 20,673 unique C lines in total);
+1,218 lines (`pgo/pgo.c` 441 + `tests/fuzz-vt.c` 777) build only on demand.
+The historical 1.1 figures (19,826 unique / 11,330 test lines) and the
+pre-final 11,632/20,500 figures are superseded, not deleted.
+
+**Known limitations (1.2 final; measured where a command applies):**
+render parity cannot cover sixel escape decoding, real image cache rescaling
+or shm/compositor presentation (source inspection of
+`tests/test-render-parity.c`; the corpus feeds prebuilt pixman images to
+`render_sixel_images()`); the corpus does not cover per-codepoint fallback or
+every cursor enum (source inspection: three cursor styles, grapheme shaping
+enabled); valgrind still shows fontconfig residue in non-main logs (measured
+above); FreeBSD/aarch64 remain compile-only claims (measured by
+`scripts/check-targets.sh`); ASan is broken in this container (historical
+observation in §15.5a, not re-run on `ab5f4261` — unverified here).

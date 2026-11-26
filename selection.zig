@@ -2280,8 +2280,10 @@ fn fdmReceive(fdm_opaque: *Fdm, fd: c_int, events: c_int, data: ?*anyopaque) cal
         return receiveDone(fdm_opaque, fd, ctx);
 
     // Reset timeout timer
-    if (timerfd_settime(ctx.timeout_fd, 0, &ctx.timeout, null) < 0)
+    if (timerfd_settime(ctx.timeout_fd, 0, &ctx.timeout, null) < 0) {
+        log_errno(LOG_CLASS_ERROR, "selection", "selection.zig", @intCast(@src().line), "failed to re-arm clipboard timeout timer");
         return false;
+    }
 
     while (true) {
         var text: [256]u8 = undefined;
@@ -2291,6 +2293,7 @@ fn fdmReceive(fdm_opaque: *Fdm, fd: c_int, events: c_int, data: ?*anyopaque) cal
             const err = __errno_location().*;
             if (err == EAGAIN or err == 11) // EAGAIN || EWOULDBLOCK
                 return true;
+            log_errno(LOG_CLASS_ERROR, "selection", "selection.zig", @intCast(@src().line), "failed to read clipboard data");
             break;
         }
 

@@ -34,6 +34,7 @@ class Field(TypedDict):
     kind: str
     base: str
     gated: bool
+    array: bool
     nested: list["Field"]
 
 
@@ -112,6 +113,8 @@ C_TYPES: dict[str, str] = {
     "WlWindow": "struct wl_window",
     "Wayland": "struct wayland",
     "Seat": "struct seat",
+    "SeatNode": "__typeof__(*foot_wayland_probe.seats.head)",
+    "SeatList": "__typeof__(foot_wayland_probe.seats)",
     "Buffer": "struct buffer",
     "ShmBufferPool": "struct buffer_pool",
     "ShmBufferPrivate": "struct buffer_private",
@@ -128,6 +131,7 @@ C_TYPES: dict[str, str] = {
     "LinuxStat": "struct stat",
     "PtOrPx": "struct pt_or_px",
     "Timespec": "struct timespec",
+    "EpollEvent": "struct epoll_event",
     "TllStr": "__typeof__(foot_tll_str_probe)",
     "EnvVar": "struct env_var",
     "EnvVarNode": "__typeof__(*foot_env_var_probe.head)",
@@ -210,6 +214,14 @@ def parse_fields(lines: list[str], lo: int, hi: int) -> list[Field]:
             gated = True
             typ = "gated"
 
+        # A fixed-size array holds its elements by value, so their layout is
+        # part of the containing struct's ABI. Slices and pointers (`[]T`,
+        # `[*]T`, `[*:0]T`) do not; an empty/`*` bracket is not matched here.
+        array = False
+        if re.match(r'^\[[^\]]+\]', typ):
+            typ = typ[typ.find("]") + 1:].lstrip()
+            array = True
+
         nested: list[Field] = []
         kind = "scalar"
         if re.match(r'^(extern )?((packed )?(struct|union)(\([^)]*\))?)\s*\{',
@@ -227,6 +239,7 @@ def parse_fields(lines: list[str], lo: int, hi: int) -> list[Field]:
             "kind": kind,
             "base": base,
             "gated": gated,
+            "array": array,
             "nested": nested,
         })
     return fields
@@ -321,6 +334,24 @@ def emit_fields(out: list[str], prefix: str, root: str, path: list[str],
         if base in SKIP or base in PACKED:
             continue
         info = types.get(base)
+        if field["array"] and info is not None and info["kind"] == "struct":
+            # Pin every element, not just the array's total byte size. The
+            # element's fields are emitted relative to element zero, under a
+            # separate prefix so expectAbi() can recurse with the right size.
+            element_path = path + [field["name"] + "[0]"]
+            element_key = key + "__element"
+            if field["gated"]:
+                out.append("#if defined(FOOT_GRAPHEME_CLUSTERING)")
+            out.append(
+                f'fprintf(out, "pub const {key}__abi_fields: usize = 1;\\n");')
+            out.append(
+                f'fprintf(out, "pub const {element_key}__size: usize = %zu;\\n", '
+                f'sizeof({c_member(root, path, field["name"] + "[0]")}));')
+            emit_fields(out, element_key, root, element_path,
+                        info["fields"], types, in_union, element_path)
+            if field["gated"]:
+                out.append("#endif")
+            continue
         if info is not None and info["kind"] == "struct":
             out.append(
                 f'fprintf(out, "pub const {key}__abi_fields: usize = 1;\\n");')
@@ -355,6 +386,7 @@ def generate() -> str:
         '#include "notify.h"',
         '#include <sys/un.h>',
         '#include <sys/stat.h>',
+        '#include <sys/epoll.h>',
         '#include <time.h>',
         '#include "client-protocol.h"',
         '#include <regex.h>',
@@ -370,6 +402,8 @@ def generate() -> str:
         "static foot_tll_str_t foot_tll_str_probe;",
         "static env_var_list_t foot_env_var_probe;",
         "static user_notifications_t foot_notification_probe;",
+        "/* wayland.seats is a tll(struct seat): probe its head and node. */",
+        "static struct wayland foot_wayland_probe;",
         "",
         "int main(int argc, char **argv) {",
         "    FILE *out = stdout;",

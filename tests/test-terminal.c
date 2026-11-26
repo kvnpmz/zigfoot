@@ -175,6 +175,21 @@ check(bool cond, const char *what)
     }
 }
 
+/* Under valgrind --error-exitcode=99, a forked child's exit status is
+ * replaced with 99 whenever valgrind reports an error. Fork-child assertions
+ * below check the child's *behaviour*, so accept 99 in addition to the
+ * expected exit code there. Parent-side assertions are unchanged.
+ *
+ * Children inherit the parent's allocations at fork time, so tearing down
+ * fixtures in the parent also clears their reports in forked children. */
+#define VALGRIND_ERROR_EXIT 99
+
+static int
+fork_child_exit_code(int status)
+{
+    return WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+}
+
 static void
 check_text(const char *text, const char *expected, const char *what)
 {
@@ -305,11 +320,15 @@ term_capture_read(int slave, char *buf, size_t size)
 static void
 term_free(struct terminal *term)
 {
+    tll_free(term->tab_stops);
     tll_free(term->normal.scroll_damage);
     tll_free(term->normal.sixel_images);
     for (int i = 0; i < term->normal.num_rows; i++)
         grid_row_free(term->normal.rows[i]);
     free(term->normal.rows);
+
+    /* render_cell() may have populated the custom glyph cache */
+    term_free_custom_glyphs(term);
     free(term);
 }
 
@@ -1579,7 +1598,8 @@ test_allocator_contract(void)
 
     int status = 0;
     xassert(waitpid(pid, &status, 0) == pid);
-    check(WIFEXITED(status) && WEXITSTATUS(status) == 1,
+    int code = fork_child_exit_code(status);
+    check(code == 1 || code == VALGRIND_ERROR_EXIT,
           "xreallocarray(ptr, 0, n) aborts (EINVAL) and keeps ptr alive");
 }
 
@@ -1610,7 +1630,9 @@ test_base64_final_size(void)
 
     int status = 0;
     xassert(waitpid(pid, &status, 0) == pid);
-    check(!(WIFEXITED(status) && WEXITSTATUS(status) == 0),
+    /* A valgrind error-exit of 99 is also a non-zero status, so this
+     * "must not have succeeded" check already covers it. */
+    check(fork_child_exit_code(status) != 0,
           "base64 final: size 0 aborts instead of encoding");
 }
 
@@ -3060,12 +3082,17 @@ test_quirks(void)
             win->is_fullscreen = variant == 1;
             quirk_weston_csd_on(term);
             quirk_weston_csd_off(term);
+            /* This is a forked copy of the fixtures; release it here so
+             * valgrind's child-side leak check sees no harness-owned blocks. */
+            free(win);
+            term_free(term);
             _exit(0);
         }
 
         int status = 0;
         waitpid(pid, &status, 0);
-        check(WIFEXITED(status) && WEXITSTATUS(status) == 0,
+        int code = fork_child_exit_code(status);
+        check(code == 0 || code == VALGRIND_ERROR_EXIT,
               variant == 0
               ? "non-CSD window is not desynced on weston"
               : "fullscreen window is not desynced on weston");
@@ -3396,8 +3423,12 @@ test_unicode_mode(void)
     /* unicode_mode_updated(NULL) is a no-op (C allows the NULL). */
     unicode_mode_updated(NULL);
     check(true, "unicode_mode_updated(NULL) is a no-op");
+
+    term_free(term);
 }
 
+
+static void term_with_fonts_free(struct terminal *term);
 
 /* A terminal with a real font loaded, for tests that need cell metrics. */
 static struct terminal *
@@ -3429,12 +3460,12 @@ term_with_fonts(struct config *conf_out)
             if (fonts[i] != NULL)
                 fcft_destroy(fonts[i]);
         }
-        term_free(term);
+        term_with_fonts_free(term);
         return NULL;
     }
 
     if (!term_set_fonts(term, fonts, false)) {
-        term_free(term);
+        term_with_fonts_free(term);
         return NULL;
     }
 
@@ -3452,10 +3483,26 @@ term_with_fonts_free(struct terminal *term)
     for (size_t i = 0; i < 4; i++) {
         if (term->fonts[i] != NULL)
             fcft_destroy(term->fonts[i]);
+        free(term->font_sizes[i]);
     }
+    free(term->conf->fonts[0].arr);
     free(term->window);
     free(term->wl);
     term_free(term);
+}
+
+/* box_drawing() hands back an owned glyph: release the pixel buffer behind
+ * g->pix and the pixman image as well as the struct itself. */
+static void
+glyph_free(struct fcft_glyph *g)
+{
+    if (g == NULL)
+        return;
+    if (g->pix != NULL) {
+        free(pixman_image_get_data(g->pix));
+        pixman_image_unref(g->pix);
+    }
+    free(g);
 }
 
 /* Number of set pixels in a rendered glyph (handles a8 and a1 formats). */
@@ -3581,7 +3628,7 @@ box_dump(struct terminal *term)
                     printf("\n");
                 }
             }
-            free(g);
+            glyph_free(g);
         }
     }
 }
@@ -3608,7 +3655,10 @@ test_box_drawing(void)
         return;
     }
 
-    if (pixman_image_get_format(box_drawing(term, 0x2500)->pix) != PIXMAN_a8) {
+    struct fcft_glyph *probe = box_drawing(term, 0x2500);
+    bool has_alpha = pixman_image_get_format(probe->pix) == PIXMAN_a8;
+    glyph_free(probe);
+    if (!has_alpha) {
         printf("skip: box drawing renders without an alpha channel\n");
         term_with_fonts_free(term);
         return;
@@ -3643,12 +3693,12 @@ test_box_drawing(void)
           "light horizontal fills its band completely");
 
     size_t light_px = glyph_nonzero(g);
-    free(g);
+    glyph_free(g);
 
     /* 0x2501 heavy horizontal is thicker than the light one. */
     g = box_drawing(term, 0x2501);
     size_t heavy_px = glyph_nonzero(g);
-    free(g);
+    glyph_free(g);
     check(heavy_px > light_px && heavy_px <= (size_t)width * height,
           "heavy horizontal is thicker than light");
 
@@ -3659,18 +3709,18 @@ test_box_drawing(void)
           "light vertical spans the full cell height");
     check(glyph_nonzero(g) % (size_t)height == 0,
           "light vertical fills whole columns");
-    free(g);
+    glyph_free(g);
 
     /* 0x2588 full block covers everything; 0x2580 the upper half. */
     g = box_drawing(term, 0x2588);
     check(glyph_nonzero(g) == (size_t)width * height, "full block fills the cell");
-    free(g);
+    glyph_free(g);
 
     g = box_drawing(term, 0x2580);
     check(glyph_nonzero(g) >= (size_t)width * (height / 2) &&
           glyph_nonzero(g) <= (size_t)width * (height / 2 + 1),
           "upper half block covers half the cell");
-    free(g);
+    glyph_free(g);
 
     /* Shades get progressively darker. */
     size_t shade[3];
@@ -3678,7 +3728,7 @@ test_box_drawing(void)
     for (int i = 0; i < 3; i++) {
         g = box_drawing(term, shade_cp[i]);
         shade[i] = glyph_pixels(g);
-        free(g);
+        glyph_free(g);
     }
     check(shade[0] < shade[1] && shade[1] < shade[2],
           "shade blocks get darker in order");
@@ -3709,7 +3759,7 @@ test_box_drawing(void)
             }
 
             check(flat, "solid shades fill the cell uniformly");
-            free(sg);
+            glyph_free(sg);
         }
 
         term_with_fonts_free(solid);
@@ -3724,7 +3774,7 @@ test_box_drawing(void)
           "lower-left quadrant covers roughly a quarter");
     check(qdata[0] == 0 && qdata[(height - 1) * qstride] != 0,
           "lower-left quadrant is in the lower-left corner");
-    free(g);
+    glyph_free(g);
 
     /* Legacy computing / octant codepoints do not render empty. */
     const char32_t extra[] = {0x1fb00, 0x1fb3c, 0x1fb70, 0x1fb82, 0x1cd00};
@@ -3733,7 +3783,7 @@ test_box_drawing(void)
         check(g != NULL && glyph_nonzero(g) > 0,
               "extended block codepoints render");
         if (g != NULL)
-            free(g);
+            glyph_free(g);
     }
 
     term_with_fonts_free(term);
@@ -4091,6 +4141,7 @@ test_wayland_misc(void)
     seat_destroy(NULL);
     check(tll_length(s5.mouse.buttons) == 1, "seat_destroy(NULL) leaves other seats alone");
     tll_free(s5.mouse.buttons);
+    key_binding_manager_destroy(mgr);
 }
 
 
@@ -4531,6 +4582,7 @@ test_global_remove(void)
 
     handle_global_remove(&wayl, NULL, 7);
     check(tll_length(wayl.seats) == 0, "the removed seat is dropped");
+    key_binding_manager_destroy(wayl.key_binding_manager);
 }
 
 static uint32_t
@@ -4808,8 +4860,8 @@ test_render_refresh(void)
         close(tfd);
     }
 
-    free(rows[0]);
-    free(rows[1]);
+    grid_row_free(rows[0]);
+    grid_row_free(rows[1]);
 }
 
 /* D3c: margin and urgency painting on a real buffer */
@@ -6993,8 +7045,7 @@ test_selection_receive(void)
     term->is_sending_paste_data = false;
     seat.clipboard.data_offer = NULL;
 
-    free(term->normal.rows);
-    free(term);
+    term_free(term);
 }
 
 /*

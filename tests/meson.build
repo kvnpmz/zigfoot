@@ -7,7 +7,12 @@ config_test = executable(
   config_obj,
   wl_proto_headers,
   link_with: [common, tokenize],
-  dependencies: [pixman, xkb, fontconfig, wayland_client, fcft, tllist])
+  dependencies: [pixman, xkb, fontconfig, wayland_client, fcft, tllist],
+  # b_ndebug=if-release in the top-level project would compile this target
+  # with -DNDEBUG in a release build, turning xassert() into UNREACHABLE()
+  # and making "config" trivially pass. Keep the test's assertions live;
+  # this only affects the test executable, not the product's C flags.
+  override_options: ['b_ndebug=false'])
 
 test('config', config_test)
 
@@ -84,3 +89,14 @@ render_parity_harness = executable(
   ])
 
 test('render-parity', render_parity_harness)
+
+# Shim regression tests: the memfd/fallocate/seal bodies in shm-shim.c and the
+# regexec() span copy in terminal-shim.c, driven without a compositor or pty.
+shims_test = executable(
+  'test-shims',
+  'test-shims.c',
+  include_directories: '..',
+  dependencies: foot_deps,
+  link_with: footlib)
+
+test('shims', shims_test)

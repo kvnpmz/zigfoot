@@ -1,123 +1,69 @@
-# Endgame verification
+# Endgame verification — 1.2 final
 
-Base: `9f4f1def` (Agent A's merge, includes the D6 server port).
+Base: `ab5f4261` (measured in a clean worktree, 2026-11-26).
 Toolchain: `/opt/zig/zig` 0.16.0, GCC 14.2.1, Clang 21.1.8.
-Date: 2026-11-25.
 
-> **Refreshed after integration @ `98f999c6`.** Shims are 2,554 lines in 11
-> files, and the only remaining class-(c) body is the exit-time
-> `log_presentation_statistics()` destructor (MIGRATION_PLAN §15.3). The
-> 99-line argument below is unchanged and still the reason those lines stay.
+This is the 1.2 verification matrix. Every result below was reproduced on
+`ab5f4261`; historical 1.0/1.1 results are kept at the bottom, explicitly
+labelled, and are not evidence for 1.2. The full ledger with per-number
+provenance is `MIGRATION_PLAN.md` §15.10.
 
-## Remaining C
+| Check | Command | Result (measured on ab5f4261) |
+|---|---|---|
+| Full gate | `sh scripts/full-check.sh` | Exit 0. `build`, `build-disabled`, `build-release`: **9/9**, `Fail: 0`, no skips; render parity invoked; six smoke launches, `smoke: ok`. |
+| Debug suite list | `meson test -C build` | **9/9**: `execvpe`, `regex`, `shims`, `config`, `abi-probe-up-to-date`, `render-parity`, `zig-grid`, `zig-terminal_types`, `terminal-harness`. |
+| Disabled-features config | `meson test -C build-disabled` | **9/9**, `Fail: 0` (grapheme clustering off). |
+| ReleaseSafe config | `meson test -C build-release` | **9/9**, `Fail: 0`; the config test overrides `b_ndebug=false`. |
+| Harness assertions | `awk '/^test: /{s=$2}/^ok:/{n[s]++}END{for(k in n)print k,n[k]}' build/meson-logs/testlog.txt` | **1,040 `ok:` lines** = 990 terminal-harness + 39 shims + 11 regex. `test-terminal.c` has 875 `check()` sites (67 `check_text()` sites in addition; 942 combined), measured by `rg -o '\bcheck\s*\('`. |
+| execvpe | `meson test -C build` (testlog `foot:execvpe`) | **11/11 PASS**: empty file → `ENOENT`, empty PATH → cwd, `ESTALE`/`ENODEV`/`ETIMEDOUT` continue, PATH from `envp` beats `getenv`/`environ` (documented divergence). |
+| Shim regressions | `meson test -C build` (testlog `foot:shims`) | **39 checks**, all pass (memfd/seal/punch-hole, regex without a capture group). |
+| Render parity | `ORACLE_REF=6b3f557d bash scripts/render-parity.sh` | **PASS, 1,058 cells across 3 scales** (362/348/348). `TOTAL e5184e0fe5898153` (1.04999995), `TOTAL b7cebabc45627f13` (0.833333313), `TOTAL 87c0bab0d0d6829b` (scale 2). Script uses a fresh `$TMPDIR` work dir and removes its pinned oracle worktree via an `EXIT` trap. |
+| Leak gate | `valgrind -q --error-exitcode=99 --leak-check=full ./build/tests/test-terminal` | Exit **0**; main process **0 definitely/indirectly lost**. Residual: **8 records × 320 B (2,560 B total = 2,048 direct + 512 indirect)** in non-main (worker/child) logs only, stacks in libfontconfig/libexpat `XML_ParseBuffer`, no foot frame. |
+| Other leak gates | `valgrind -q --error-exitcode=99 --leak-check=full ./build/tests/test-shims` and `./build/tests/test-execvpe` | Both exit 0, no definitely/indirectly lost lines. |
+| Fuzz | `bash scripts/fuzz-vt.sh 120` | `fuzz-vt: PASS seeds=120 iterations=24000`; 8.0 s wall here (the supplied 8.4 s is timing variance). The script takes its own `mktemp` work dir per invocation, so concurrent runs are safe. |
+| Cross targets | `sh scripts/check-targets.sh` | Exit 0: **10 combinations** (x86_64-freebsd and aarch64-linux-gnu × fdm/spawn/slave/main/server), **0 SKIP**. Compile-only (`zig build-obj -fno-emit-bin`). |
+| ABI freshness | `python3 scripts/gen_abi_probe.py --check` | Clean. `abi_probe.c` 3,838 lines; 11 `*-shim.c` files 2,552 lines; tracked Zig 55,293 lines (all by `wc -l`). |
+| ABI coverage | `rg -n 'expectAbi\(' terminal_types.zig`; `rg -n 'EpollEvent' build/c_layout.zig` | Eight config element mirrors have direct `expectAbi`; fixed arrays recurse (`Config.fonts[4]`, `Terminal.notification_icons[32]`, `KeySet.vmods[8]`, `WlWindow.csd.surface[]`, `Vt.params.v[16]`); native probe: Linux `epoll_event` 12 bytes / `data` at 4; FreeBSD 16/8 is cross-derived. Accepted gaps: pointer-reached element types rely on direct `expectAbi`; tll node is probed only via the seat instantiation. |
+| Version | `scripts/check-version.sh`; `sh generate-version.sh 1.28.0 . <tmp>` | `check-version: ok`, `FOOT_VERSION` **1.28.0-345-gab5f4261**, macros **1/28/0**. Plain `git describe --always --tags` prints `zig-migration-1.1-29-gab5f4261`; the version macro uses the semver-only describe. |
+| Clean clone | `sh scripts/check-clean-clone.sh` | `check-clean-clone: ok`, `Ok: 9 Fail: 0`; a clone with `.git` builds at `ab5f4261` (the 1.1 defect is fixed). |
+| Real launch | `scripts/smoke.sh` | Six window launches (80x24, 132x43, 20x5, maximized, fullscreen, OSD+scrollback), `smoke: ok`. Source inspection (`rg -n FOOT_ALLOW_NO_COMPOSITOR scripts/smoke.sh`) confirms it fails when no window can be launched unless that variable is explicitly 1. |
 
-**None that a human wrote.** `config.c` and `slave.c` were the last two files
-(99 lines between them); both are Zig as of `zig-migration-1.1` — `regex_t`
-lives behind the ABI probe in `config.zig`, and `execvpe`'s glibc semantics
-are written down and tested in `slave.zig`. The sections below keep the
-original arguments for the record. What a build still compiles as C is
-generated: wayland-scanner protocol stubs and `abi_probe.c`.
+## What the gate actually enforces
 
-### `slave.c` — 64 lines, `slave_execvpe()`
+Verified by source inspection on `ab5f4261` (`rg -n 'EXPECTED_SUITES|listed|rm -f|render-parity.sh' scripts/full-check.sh`):
+`EXPECTED_SUITES=9`; the registered suite count and the Meson summary count
+must both equal 9; `Fail: 0` and no skips are required; stale logs are deleted
+before each run; parity is invoked and a failure propagates. `scripts/smoke.sh`
+requires a real window launch unless `FOOT_ALLOW_NO_COMPOSITOR=1` is set
+explicitly.
 
-- Zig 0.16 has no `execvpeZ` or `execvpe`. `rg -n 'execvpe|execvp' /opt/zig/lib/std --glob '*.zig'` finds only comments in `std/Io/Threaded.zig`, `std/Io/Uring.zig` and `std/Io/Dispatch.zig`; there is no declaration. `std.posix` exposes no exec wrapper, and `std.c` exposes only `execve` (`/opt/zig/lib/std/c.zig:10705`).
-- `slave.zig:148` declares `extern fn slave_execvpe(file, argv, envp)`; `slave.zig:430` calls it after building the NULL-terminated `argv`/`envp` arrays and rewriting `argv[0]` for a login shell.
-- On glibc (`EXECVPE` defined) the helper calls `execvpe(file, argv, envp)`. The PATH search must use the caller's `envp`, not `getenv("PATH")`. The portable `#else` branch uses `getenv("PATH")`, `confstr(_CS_PATH)`, `strtok`, `access(F_OK)` and one `execve`; it does not implement the glibc retry semantics.
-- A Zig PATH walk would have to reproduce: PATH taken from `envp`; one `execve` attempt per `:`-separated candidate; continue on `EACCES` and remember the last error; on `ENOEXEC` retry the file through `/bin/sh`; preserve the NULL-terminated `argv` layout, `argv[0]` and `envp` unchanged; return `-1` with the same errno.
-- Rule from SKILLS: keep a C helper when Zig lacks the API. That is why these 64 lines stay.
+## Known limitations (1.2 final)
 
-### `config.c` — 35 lines, `config_regex_compile()`
+- Render parity cannot cover sixel escape decoding, real image cache rescaling
+  or shm/compositor presentation: the corpus feeds two prebuilt pixman images
+  into the real `render_sixel_images()`/`sixel_sync_cache()` path; no VT
+  parser, shm pool or compositor is involved (source inspection of
+  `tests/test-render-parity.c`).
+- The corpus does not cover per-codepoint fallback or every cursor enum
+  (source inspection: three cursor styles, grapheme shaping enabled).
+- Valgrind still shows fontconfig residue in non-main logs (measured above).
+- FreeBSD/aarch64 remain compile-only claims (measured by
+  `scripts/check-targets.sh`); no FreeBSD headers or aarch64 C probe run here.
+- ASan is broken in this container — historical observation recorded below;
+  **unverified on ab5f4261** (not re-run in this pass).
 
-- `regex_t` is libc-private. glibc and musl disagree on its layout, so Zig keeps `Config.url.preg` opaque and pins only its size through `abi.Config_url_preg__size`. `config.zig` calls `regcomp()`/`regfree()` directly where only the opaque object is needed.
-- The one operation that reads libc-private state stays C: `regcomp(preg, regex, REG_EXTENDED)`; on failure, `regerror()` into `err_buf` and return `-1`; if `preg->re_nsub == 0`, `regfree()` and return `-2`; otherwise return `0`.
-- `config.zig:841-858` and `config.zig:3761-3768` map those three return values. No second regex implementation is needed.
+## Historical (not 1.2 evidence)
 
-### Definition of Done
-
-"No module-specific C left" now means: no C source file for any module, with exactly two named exceptions — `slave.c` (`execvpe()`, 64 lines) and `config.c` (`regex_t` wrapper, 35 lines). Total: 99 lines. Both exceptions are libc-API boundaries, not migration debt.
-
-## Verification
-
-Commands run from `/workspace-c` with `ZIG_GLOBAL_CACHE_DIR=/tmp/agent-c/zig-cache`.
-
-### Full matrix
-
-Command: `scripts/full-check.sh`. It builds `build` (debug), `build-disabled` (grapheme clustering off) and `build-release` (ReleaseSafe), runs `meson test --no-rebuild` in each, then runs `scripts/smoke.sh`.
-
-```
-build            Ok: 5  Fail: 0
-build-disabled   Ok: 5  Fail: 0
-build-release    Ok: 5  Fail: 0
---- smoke ---
-smoke: ./build/foot --version
-smoke: ./build/foot -C -c <temp config>
-warn: main.zig:206: 'C' is not a UTF-8 locale, falling back to 'C.UTF-8'
-smoke: launching at 80x24
-smoke: launching at 132x43
-smoke: launching at 20x5
-smoke: launching at 80x24
-smoke: launching at 80x24
-smoke: launching at 80x24
-smoke: ok
-```
-
-Result: 5/5 in all three directories; 6/6 window launches. The locale warning is pre-existing and harmless. Full script exit status: 0.
-
-### Valgrind
-
-Command: `valgrind -q --error-exitcode=99 ./build/tests/test-terminal`.
-
-Result: exit 0; last line `terminal harness: all checks passed`. No valgrind errors. The log still carries the pre-existing Zig DWARF line-info warnings from earlier builds; they do not affect the exit status.
-
-### ASAN
-
-Setup: `CC=clang meson setup build-asan --buildtype=debug -Db_sanitize=address`. Meson warned that Clang ASAN with `b_lundef` may not link; that warning was not reached.
-
-`ninja -C build-asan` exits 1. `meson test -C build-asan` exits 125 with "Could not rebuild /workspace-c/build-asan". Exact failing command:
-
-```
-clang -Itests/test-terminal.p -Itests -I../tests -I. -I.. -I/usr/include/pixman-1 -I/usr/include/freetype2 -I/usr/include/libpng16 -I/usr/include/harfbuzz -I/usr/include/glib-2.0 -I/usr/lib64/glib-2.0/include -fdiagnostics-color=always -fsanitize=address -fno-omit-frame-pointer -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Werror -std=c11 -O0 -g -Wno-c2y-extensions -DMEMFD_CREATE -DEXECVPE -DSIGABBREV_NP -D_GNU_SOURCE=200809L '-DFOOT_DEFAULT_TERM="foot"' '-DUTMP_ADD="add"' '-DUTMP_DEL="del"' '-DUTMP_DEFAULT_HELPER_PATH="/usr/lib/utempter/utempter"' -D_DEBUG -DFOOT_IME_ENABLED=1 -pedantic -fstrict-aliasing -Wstrict-aliasing -fmacro-prefix-map=../= -DFOOT_GRAPHEME_CLUSTERING=1 -DHAVE_PIXMAN_RGBA_16 -DHAVE_XDG_TOPLEVEL_TAG=1 -DHAVE_EXT_BACKGROUND_EFFECT=1 -DUTF8PROC_EXPORTS -pthread -MD -MQ tests/test-terminal.p/test-terminal.c.o -MF tests/test-terminal.p/test-terminal.c.o.d -o tests/test-terminal.p/test-terminal.c.o -c ../tests/test-terminal.c
-```
-
-Diagnostic: `tests/test-terminal.c:5854:45: error: shifting a negative signed value is undefined [-Werror,-Wshift-negative-value]` for `wl_pointer_axis(&seat, NULL, 0, 0, -120 << 8);`. The prompt expected line 5505; merges moved it to 5854. `git blame` attributes the line to `79bd8dc3` (D4d2b pointer-listener harness), not to upstream foot and not to E3 work.
-
-**Resolved after this run.** The owner (A) fixed the line to `(-120) * 256`
-(same value, defined behaviour), and the ASAN build now completes. Two
-further results:
-
-- `test-config` under ASAN: **clean** (exit 0, no sanitizer output) — but only
-  after a real leak it exposed was fixed. LeakSanitizer (and valgrind,
-  which reproduced it reliably: 8,411 B direct + 60,912 B indirect,
-  `re_compile_internal` via `config_regex_compile()`) showed that the new
-  `test_config_load_from_xdg` never freed the partially loaded config after
-  its expected fatal-load failure, so the URL regex and the default
-  key/search/url/mouse bindings leaked. Added the missing `config_free()`.
-  `valgrind --leak-check=full ./build/tests/test-config` is now 0 bytes lost,
-  0 errors.
-- `test-terminal` under ASAN: still cannot complete in this container. After
-  ~600 checks ASAN's own allocator aborts (`AddressSanitizer failed to
-  deallocate 0x40000 bytes ... error code 22` / `Failed to munmap`), with
-  and without `quarantine_size_mb=0`. A trivial clang-ASAN binary runs fine
-  and `test-config` passes, so this is the mixed C-ASAN/uninstrumented-Zig
-  build in this environment, not a product finding. GCC ASAN is not
-  reachable: meson refuses `-Db_sanitize=address` with gcc here ("Linker gcc
-  does not support sanitizer arguments"). The gate's valgrind run covers
-  the harness instead.
-
-### ReleaseSafe vs ReleaseFast
-
-Measurement: three wall-clock runs of the ReleaseSafe harness in `build-release`:
-
-```
-release_harness_wall=4.376 s
-release_harness_wall=4.259 s
-release_harness_wall=4.251 s
-```
-
-Mean 4.30 s. `build-release` maps to Zig `ReleaseSafe` in `compile_zig.py`; Meson has no `ReleaseFast` buildtype, and editing build files is outside this task, so no ReleaseFast binary was measured.
-
-Recommendation: keep `ReleaseSafe` as the default. The measured harness is 4.3 s with integer-overflow, bounds and pointer-safety checks active; those checks are the reason several port bugs were caught during D2-D6. `ReleaseFast` removes them without a measured gain, so the trade is one-way risk. If a real hot path is later identified, build one target with `ReleaseFast`, benchmark that path against `ReleaseSafe`, and only then consider a per-module exception.
-
-### execvpe coverage
-
-All six smoke launches run `foot -e sh -c 'printf "smoke\n"; exit 0'` at 80x24, 132x43, 20x5, 80x24 maximized, 80x24 fullscreen, and 80x24 with `render-timer=osd` + `scrollback-indicator=percentage`. Each launch spawns the shell through `slave.zig` and `slave_execvpe()`, using the caller's envp. The harness also drives the failure path: `tests/test-terminal.c:6969` checks `slave_execvpe("/foot-fuzz-missing", argv, envp) == -1` with `errno == ENOENT`. Result: launch coverage intact, failure-path check green.
+- 1.0 snapshot: 6 meson suites, 988 harness checks, 2,554 shim lines, 3,472
+  probe lines, 54,961 Zig lines; 6/6 in three dirs; parity 447 cells across two
+  scales (`MIGRATION_PLAN.md` §15.7).
+- 1.1 snapshot: 8 suites, 1,001 `ok:` lines, 2,540 shim lines, 3,478 probe
+  lines, 55,184 Zig lines; parity 447 cells; the tag did not build from a clean
+  clone (`MIGRATION_PLAN.md` §15.9).
+- Pre-final 1.2 integration snapshot: leak gate exited 99 with fixture records
+  and parity was 447 cells (`MIGRATION_PLAN.md` §15.5). Both are fixed in the
+  matrix above.
+- ASAN (historical, not re-run here): clang ASAN could not complete the terminal
+  harness in this container (allocator `munmap` failure); GCC ASAN is not
+  reachable via Meson. `test-config` was clean under ASAN after a missing
+  `config_free()` was added. Do not present any of this as a 1.2 measurement.

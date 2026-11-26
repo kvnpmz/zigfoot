@@ -2,19 +2,25 @@
 # Build and run the standalone VT fuzz harness against a frozen footlib.
 set -euo pipefail
 
-if [[ $# -gt 1 ]]; then
+if [ "$#" -gt 1 ]; then
     echo "usage: $0 [seeds]" >&2
     exit 2
 fi
 seeds=${1:-40}
-if [[ ! $seeds =~ ^[1-9][0-9]*$ ]] || (( seeds > 10000 )); then
+case $seeds in
+    ''|*[!0-9]*|0*) valid=no ;;
+    *) valid=yes ;;
+esac
+if [ "$valid" != yes ] || [ "$seeds" -gt 10000 ]; then
     echo "seed count must be in 1..10000" >&2
     exit 2
 fi
 
-root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
-work=/tmp/fuzz-vt
-mkdir -p "$work"
+root=$(cd -- "$(dirname -- "$0")/.." && pwd)
+# Each invocation gets its own directory: concurrent checks must not reuse
+# another run's snapshot archives, objects or failure artifacts.
+work=$(mktemp -d "${TMPDIR:-/tmp}/fuzz-vt.XXXXXX")
+trap 'rm -rf -- "$work"' EXIT HUP INT TERM
 cd "$root"
 
 # ninja is used only to print existing commands.  Do not invoke a build target.
@@ -77,26 +83,27 @@ snapshot_archive() {
     local source=$1 objects_file=$2
     local name member src object index=0
     name=$(basename -- "$source")
-    local -a objects=()
-    if [[ $(head -c 8 "$source") == '!<thin>' ]]; then
+    set --
+    if [ "$(head -c 8 "$source")" = '!<thin>' ]; then
         mkdir -p "$work/objects"
+        ar t "$source" > "$work/$objects_file.members"
         while IFS= read -r member; do
             src=build/$member
-            if [[ ! -f $src ]]; then
+            if [ ! -f "$src" ]; then
                 src=$member
             fi
             object=$(printf '%s/objects/%s-%04d-%s' "$work" "$objects_file" "$index" "$(basename -- "$member")")
             cp -- "$src" "$object"
-            objects+=("$object")
+            set -- "$@" "$object"
             index=$((index + 1))
-        done < <(ar t "$source")
+        done < "$work/$objects_file.members"
     fi
     cp -- "$source" "$work/$name.thin.a"
-    if (( ${#objects[@]} > 0 )); then
+    if [ "$#" -gt 0 ]; then
         # A regular archive is self-contained; a thin archive resolves members
         # against the linker cwd and would silently read the live build/ tree.
         rm -f -- "$work/$name"
-        ar rcs "$work/$name" "${objects[@]}"
+        ar rcs "$work/$name" "$@"
     else
         cp -- "$work/$name.thin.a" "$work/$name"
     fi
@@ -143,14 +150,14 @@ cc "$@" \
 } > "$work/build-command.txt"
 
 completed=0
-for ((seed = 1; seed <= seeds; seed++)); do
+seed=1
+while [ "$seed" -le "$seeds" ]; do
     artifact="$work/fail-$seed"
     : > "$artifact"
     if FUZZ_VT_FAIL="$artifact" timeout 30 \
         "$work/fuzz-vt" "$seed" 200 \
         > "$work/stdout-$seed" 2> "$work/stderr-$seed"; then
         completed=$((completed + 1))
-        continue
     else
         status=$?
     echo "fuzz-vt: seed=$seed failed (status=$status)" >&2
@@ -160,5 +167,6 @@ for ((seed = 1; seed <= seeds; seed++)); do
     echo "fuzz-vt: FAIL seeds=$completed/$seeds seed=$seed"
     exit 1
     fi
+    seed=$((seed + 1))
 done
 echo "fuzz-vt: PASS seeds=$completed iterations=$((completed * 200))"

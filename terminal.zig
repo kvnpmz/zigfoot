@@ -1124,6 +1124,7 @@ export fn fdm_flash(fdm_opaque: *anyopaque, fd: c_int, events: c_int, data: ?*an
     const ret = read(term.flash.fd, &expiration_count, @sizeOf(u64));
     if (ret < 0) {
         if (__errno_location().* == EAGAIN) return true;
+        logErrno("failed to read flash timer");
         return false;
     }
 
@@ -1147,6 +1148,7 @@ fn fdm_blink(fdm_opaque: *anyopaque, fd: c_int, events: c_int, data: ?*anyopaque
     const ret = read(term.blink.fd, &expiration_count, @sizeOf(u64));
     if (ret < 0) {
         if (__errno_location().* == EAGAIN) return true;
+        logErrno("failed to read blink timer");
         return false;
     }
 
@@ -1182,7 +1184,10 @@ export fn term_arm_blink_timer(term: *types.Terminal) callconv(.c) void {
     if (term.blink.fd >= 0) return;
 
     const fd = timerfd_create(CLOCK_MONOTONIC, TFD_CLOEXEC | TFD_NONBLOCK);
-    if (fd < 0) return;
+    if (fd < 0) {
+        logErrno("failed to create blink timer FD");
+        return;
+    }
 
     if (!fdm_add(term.fdm orelse return, fd, EPOLLIN, &fdm_blink, term)) {
         _ = close(fd);
@@ -1195,6 +1200,7 @@ export fn term_arm_blink_timer(term: *types.Terminal) callconv(.c) void {
     };
 
     if (timerfd_settime(fd, 0, &timer, null) < 0) {
+        logErrno("failed to arm blink timer");
         _ = fdm_del(term.fdm orelse return, fd);
     }
 
@@ -1227,6 +1233,7 @@ fn fdm_cursor_blink(fdm_opaque: *anyopaque, fd: c_int, events: c_int, data: ?*an
     const ret = read(term.cursor_blink.fd, &expiration_count, @sizeOf(u64));
     if (ret < 0) {
         if (__errno_location().* == EAGAIN) return true;
+        logErrno("failed to read cursor blink timer");
         return false;
     }
 
@@ -1243,7 +1250,10 @@ fn fdm_cursor_blink(fdm_opaque: *anyopaque, fd: c_int, events: c_int, data: ?*an
 export fn cursor_blink_rearm_timer(term: *types.Terminal) callconv(.c) bool {
     if (term.cursor_blink.fd < 0) {
         const fd = timerfd_create(CLOCK_MONOTONIC, TFD_CLOEXEC | TFD_NONBLOCK);
-        if (fd < 0) return false;
+        if (fd < 0) {
+            logErrno("failed to create cursor blink timer FD");
+            return false;
+        }
 
         if (!fdm_add(term.fdm orelse return false, fd, EPOLLIN, &fdm_cursor_blink, term)) {
             _ = close(fd);
@@ -1262,6 +1272,7 @@ export fn cursor_blink_rearm_timer(term: *types.Terminal) callconv(.c) bool {
     };
 
     if (timerfd_settime(term.cursor_blink.fd, 0, &timer, null) < 0) {
+        logErrno("failed to arm cursor blink timer");
         _ = fdm_del(term.fdm orelse return false, term.cursor_blink.fd);
         term.cursor_blink.fd = -1;
         return false;
@@ -3565,7 +3576,8 @@ export fn term_kbd_focus_in(term: *types.Terminal) void {
 
 //
 // erase_cell_range / erase_line — grid helpers, called from term_erase()
-// (already Zig) through terminal_shim_erase_line() and by C for now.
+// (already Zig) through terminal_shim_erase_line(); the shim only forwards
+// to this Zig export and contains no logic.
 //
 
 const COLOR_SRC_DEFAULT: u2 = 0;

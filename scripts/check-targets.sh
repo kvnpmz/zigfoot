@@ -35,6 +35,10 @@ for target in x86_64-freebsd aarch64-linux-gnu; do
                     "-Mroot=$source" "-Mbuild_options=$tmp/build_options.zig" \
                     "-Mc_layout=$layout"
                 ;;
+            fdm.zig)
+                # fdm imports c_layout only on Linux (for epoll_event).
+                set -- "$@" --dep c_layout "-Mroot=$source" "-Mc_layout=$layout"
+                ;;
             *)
                 set -- "$@" "-Mroot=$source"
                 ;;

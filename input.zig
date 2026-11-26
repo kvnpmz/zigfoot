@@ -1,9 +1,9 @@
 //! Zig port of input.c, started with the keyboard device setup (D4a):
 //! keymap installation, keyboard enter/leave and the key-repeat timer.
 //!
-//! The protocol listeners themselves stay in input.c for now (they are
-//! generated-struct layouts); everything they call is either here or in
-//! terminal.zig.
+//! The generated listener tables and add_listener() calls live in
+//! wayland-shim.c; every callback they invoke is Zig, here or in the
+//! other ported modules.
 
 const std = @import("std");
 const types = @import("terminal_types.zig");

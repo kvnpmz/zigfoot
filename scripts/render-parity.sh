@@ -1,16 +1,55 @@
 #!/usr/bin/env bash
-# Build and compare the headless pixman corpus against origin/master.
+# Build and compare the headless pixman corpus against a pinned C oracle.
 set -euo pipefail
 
 root=$(cd -- "$(dirname -- "$0")/.." && pwd)
-work=/tmp/agent-c/render-parity
-oracle=/tmp/agent-c/c-oracle
+WORK=${WORK:-$(mktemp -d "${TMPDIR:-/tmp}/foot-render-parity.XXXXXX")}
+ORACLE_REF=${ORACLE_REF:-6b3f557d}
+work=$WORK
+oracle=$work/oracle
 mkdir -p "$work"
 exec 9>"$work/lock"
 flock 9
-export ZIG_GLOBAL_CACHE_DIR=/tmp/agent-c/zig-cache
 
-ninja -C "$root/build" -j4 tests/test-terminal > "$work/zig-build.log" 2>&1
+cleanup() {
+    rc=$?
+    trap - EXIT
+    git -C "$root" worktree remove --force "$oracle" >/dev/null 2>&1 || true
+    git -C "$root" worktree prune >/dev/null 2>&1 || true
+    rm -rf "$work"
+    exit "$rc"
+}
+trap cleanup EXIT
+
+export ZIG_GLOBAL_CACHE_DIR=${ZIG_GLOBAL_CACHE_DIR:-$work/zig-cache}
+
+# Never let a hash dump from an earlier run (or a failed build) be compared
+# as if it were this run's result.
+rm -f "$work/c.hashes" "$work/zig.hashes"
+
+if ! git -C "$root" cat-file -e "${ORACLE_REF}^{commit}" 2>/dev/null; then
+    echo "render-parity: oracle ref '$ORACLE_REF' is missing from $root" >&2
+    exit 1
+fi
+if [ -e "$oracle" ]; then
+    # A reused WORK is fine only if its worktree is still the pinned commit.
+    want=$(git -C "$root" rev-parse "${ORACLE_REF}^{commit}")
+    have=$(git -C "$oracle" rev-parse HEAD 2>/dev/null || true)
+    if [ "$have" != "$want" ]; then
+        echo "render-parity: $oracle is at '$have', not '$want' (use a fresh WORK=...)" >&2
+        exit 1
+    fi
+elif ! git -C "$root" worktree add --detach "$oracle" "$ORACLE_REF" \
+        > "$work/c-worktree.log" 2>&1; then
+    echo "render-parity: could not create oracle worktree at $ORACLE_REF" >&2
+    tail -20 "$work/c-worktree.log" >&2
+    exit 1
+fi
+
+if ! ninja -C "$root/build" -j4 tests/test-terminal > "$work/zig-build.log" 2>&1; then
+    echo "render-parity: Zig build failed (see $work/zig-build.log)" >&2
+    exit 1
+fi
 zig_compile=$(ninja -C "$root/build" -t commands tests/test-terminal |
     grep -F ' -c ../tests/test-terminal.c' | head -1)
 zig_link=$(ninja -C "$root/build" -t commands tests/test-terminal |
@@ -55,21 +94,19 @@ subprocess.run(words, cwd=build, check=True)
 PY
 "$work/test-zig" > "$work/zig.hashes"
 
-if [ ! -e "$oracle/.git" ]; then
-    git -C "$root" worktree add --detach "$oracle" origin/master
-fi
-want=$(git -C "$root" rev-parse origin/master)
-if [ "$(git -C "$oracle" rev-parse HEAD)" != "$want" ]; then
-    git -C "$oracle" checkout --detach "$want"
-fi
 cp "$root/tests/test-render-parity.c" "$oracle/tests/test-render-parity.c"
-if [ ! -f "$oracle/build-parity/meson-info/intro-buildoptions.json" ]; then
-    meson setup "$oracle/build-parity" "$oracle" \
-        -Ddocs=disabled -Dthemes=false > "$work/c-setup.log" 2>&1
+if [ ! -f "$oracle/build-parity/meson-info/intro-buildoptions.json" ] &&
+        ! meson setup "$oracle/build-parity" "$oracle" \
+            -Ddocs=disabled -Dthemes=false > "$work/c-setup.log" 2>&1; then
+    echo "render-parity: C oracle setup failed (see $work/c-setup.log)" >&2
+    exit 1
 fi
-ninja -C "$oracle/build-parity" -j4 foot > "$work/c-build.log" 2>&1
+if ! ninja -C "$oracle/build-parity" -j4 foot > "$work/c-build.log" 2>&1; then
+    echo "render-parity: C oracle build failed (see $work/c-build.log)" >&2
+    exit 1
+fi
 
-# origin/master keeps the corpus painters static. Remove only these linkage
+# The pinned C oracle keeps the corpus painters static. Remove only these linkage
 # qualifiers in private source copies. Function bodies stay unchanged, except
 # that generated Wayland protocol requests are replaced with no-ops: the corpus
 # has no compositor connection.
@@ -80,7 +117,7 @@ import re
 import sys
 
 render = pathlib.Path(sys.argv[1]).read_text()
-for name in ("render_cell", "render_osd", "render_csd_border", "render_csd_title"):
+for name in ("render_cell", "render_osd", "render_csd_border", "render_csd_title", "render_sixel_images"):
     pattern = r"\bstatic\s+(int|void)\s+" + name + r"\s*\("
     render, count = re.subn(pattern, r"\1 " + name + "(", render)
     if count != 1:
@@ -199,7 +236,7 @@ PY
 "$work/test-c" > "$work/c.hashes"
 
 if cmp -s "$work/c.hashes" "$work/zig.hashes"; then
-    echo "render-parity: PASS ($(grep -c '^CELL ' "$work/zig.hashes") cells, 2 scales)"
+    echo "render-parity: PASS ($(grep -c '^CELL ' "$work/zig.hashes") cells, 3 scales)"
     grep '^TOTAL ' "$work/zig.hashes"
     exit 0
 fi

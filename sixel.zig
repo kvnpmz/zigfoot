@@ -88,9 +88,8 @@ export fn sixel_geometry_report_max(term: *types.Terminal) callconv(.c) void {
 }
 
 // ── Chunk B1: color_decode_srgb + sixel_fini ─────────────────────
-// color_decode_srgb is not yet called from Zig (its callers —
-// sixel_init and decgci — are still in C); it is exported for the
-// upcoming chunk that ports those callers.
+// color_decode_srgb is called from Zig by sixel_init and decgci in this
+// file; it stays exported so the C ABI shim reaches the same function.
 
 extern const srgb_decode_8_to_16_table: [256]u16;
 extern const srgb_decode_8_to_8_table: [256]u8;

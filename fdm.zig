@@ -5,7 +5,9 @@ const SigSet = std.c.sigset_t;
 const KSigaction = std.c.Sigaction;
 
 // Linux packs epoll_event. The epoll-shim ABI on FreeBSD follows the
-// natural alignment of its epoll_data_t member instead.
+// natural alignment of its epoll_data_t member instead. The mirror lives here
+// because fdm owns the epoll FDs; terminal_types.zig mirrors and probe-checks
+// the same C type, so a layout drift is caught by the native build.
 const EpollEvent = if (builtin.os.tag == .linux)
     extern struct { events: u32 align(1), data: u64 align(1) }
 else
@@ -13,13 +15,17 @@ else
 
 comptime {
     if (builtin.os.tag == .linux) {
-        if (@sizeOf(EpollEvent) != 12)
-            @compileError("Linux epoll_event size must be 12");
-        if (@offsetOf(EpollEvent, "events") != 0)
-            @compileError("Linux epoll_event.events offset must be 0");
-        if (@offsetOf(EpollEvent, "data") != 4)
-            @compileError("Linux epoll_event.data offset must be 4");
+        // <sys/epoll.h> is the source of truth: no hard-coded numbers here.
+        const abi = @import("c_layout");
+        if (@sizeOf(EpollEvent) != abi.EpollEvent__size)
+            @compileError("fdm: EpollEvent size disagrees with the C probe");
+        if (@offsetOf(EpollEvent, "events") != abi.EpollEvent_events)
+            @compileError("fdm: EpollEvent.events offset disagrees with the C probe");
+        if (@offsetOf(EpollEvent, "data") != abi.EpollEvent_data)
+            @compileError("fdm: EpollEvent.data offset disagrees with the C probe");
     } else {
+        // epoll-shim is only probed when the native build is FreeBSD. Until
+        // then these two literals are the only guard on its 16/8 layout.
         if (@sizeOf(EpollEvent) != 16)
             @compileError("epoll-shim epoll_event size must be 16");
         if (@offsetOf(EpollEvent, "data") != 8)

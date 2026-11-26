@@ -249,6 +249,31 @@ int main(void)
     snprintf(detail, sizeof(detail), "status=%d errno=%d", r.status, r.err);
     report("PATH unset uses CS_PATH", exited_with(&r, 43), detail);
 
+    char *env_path_empty[] = { "PATH=", NULL };
+    char *argv_cwd_empty_path[] = { "cwdcmd", NULL };
+    r = run_case("cwdcmd", argv_cwd_empty_path, env_path_empty, tmp);
+    snprintf(detail, sizeof(detail), "status=%d errno=%d", r.status, r.err);
+    report("empty PATH searches cwd", exited_with(&r, 0), detail);
+
+    char *argv_empty_file[] = { "", NULL };
+    r = run_case("", argv_empty_file, env_bin, NULL);
+    snprintf(detail, sizeof(detail), "status=%d errno=%d", r.status, r.err);
+    report("empty file name returns ENOENT", r.marker && r.err == ENOENT, detail);
+
+    /*
+     * Deliberate divergence from glibc: execvpe() uses getenv("PATH") from
+     * environ, while the Zig port searches the PATH provided in envp. Make
+     * environ's PATH unusable so only the envp lookup can succeed.
+     */
+    if (setenv("PATH", "/nonexistent-foot-execvpe-environ-path", 1) < 0) {
+        perror("setenv");
+        return 2;
+    }
+    char *argv_envp_path[] = { "sh", "-c", "exit 44", NULL };
+    r = run_case("sh", argv_envp_path, env_bin, NULL);
+    snprintf(detail, sizeof(detail), "status=%d errno=%d (deliberate divergence from glibc getenv)", r.status, r.err);
+    report("envp PATH used, not environ PATH (deliberate glibc divergence)", exited_with(&r, 44), detail);
+
     printf("%d failure(s)\n", failures);
     return failures == 0 ? 0 : 1;
 }

@@ -11,6 +11,7 @@ pub const grapheme_clustering = build_options.grapheme_clustering;
 // mirrored struct/field against these values at compile time, so a mismatch
 // between this file and the C headers is a build error, not a runtime bug.
 const abi = @import("c_layout");
+const tll = @import("tll.zig");
 
 const vt_size: usize = abi.Vt__size;
 const vt_utf8_offset: usize = abi.Vt_utf8;
@@ -73,12 +74,19 @@ fn expectAbi(comptime T: type, comptime key_prefix: []const u8) void {
             }
 
             // Recurse into value-typed structs the probe also looked inside.
+            // Arrays are included: an array of mirrors holds its elements by
+            // value, so a broken element layout breaks the containing struct.
             switch (@typeInfo(f.type)) {
                 .@"struct" => |s| {
                     if (s.layout != .@"packed" and
                         @hasDecl(abi, key ++ "__abi_fields"))
                     {
                         expectAbi(f.type, key);
+                    }
+                },
+                .@"array" => |a| {
+                    if (@hasDecl(abi, key ++ "__abi_fields")) {
+                        expectAbi(a.child, key ++ "__element");
                     }
                 },
                 else => {},
@@ -1131,6 +1139,15 @@ pub const Timespec = extern struct {
     tv_nsec: c_long,
 };
 
+/// `struct epoll_event`: glibc packs it (12 bytes, data at offset 4), while
+/// epoll-shim on FreeBSD uses the natural alignment of epoll_data_t. The C
+/// probe in abi_probe.c checks whichever platform built it; fdm.zig uses the
+/// same layout, and expectAbi() below makes a mismatch a compile error.
+pub const EpollEvent = extern struct {
+    events: u32 align(if (builtin.os.tag == .linux) 1 else @alignOf(u32)),
+    data: u64 align(if (builtin.os.tag == .linux) 1 else @alignOf(u64)),
+};
+
 pub const Timeval = extern struct {
     tv_sec: std.c.time_t,
     tv_usec: c_long,
@@ -1771,6 +1788,20 @@ pub const Seat = extern struct {
     ime: SeatIme,
 };
 
+/// wayland.h's `tll(struct seat) seats`: the anonymous node has the item
+/// first. terminal.zig's SeatIter and tll.zig both cast C nodes to this shape.
+pub const SeatNode = extern struct {
+    item: Seat,
+    prev: ?*SeatNode,
+    next: ?*SeatNode,
+};
+
+pub const SeatList = extern struct {
+    head: ?*SeatNode,
+    tail: ?*SeatNode,
+    length: usize,
+};
+
 // Every mirror that is handed to/from C must match the C layout exactly.
 // The values come from `c_layout.zig`, generated from the real headers by
 // `abi_probe.c`; see `scripts/gen_abi_probe.py`.
@@ -1828,6 +1859,33 @@ comptime {
     expectAbi(SeatMouse, "Seat_mouse");
     expectAbi(SeatIme, "Seat_ime");
     expectAbi(Seat, "Seat");
+    expectAbi(SeatNode, "SeatNode");
+    expectAbi(SeatList, "SeatList");
+
+    // Both node shapes used by Zig (tll.Tll().Node and the older TllNode())
+    // are cast onto these C tll(struct seat) objects at runtime. Pin them
+    // directly against the probe, together with the three-word list head.
+    const node_types = .{ tll.Tll(Seat).Node, TllNode(Seat) };
+    for (node_types) |NodeT| {
+        if (@sizeOf(NodeT) != abi.SeatNode__size)
+            @compileError("tll node size disagrees with C tll node");
+        if (@offsetOf(NodeT, "item") != abi.SeatNode_item)
+            @compileError("tll node item offset disagrees with C tll node");
+        if (@offsetOf(NodeT, "prev") != abi.SeatNode_prev)
+            @compileError("tll node prev offset disagrees with C tll node");
+        if (@offsetOf(NodeT, "next") != abi.SeatNode_next)
+            @compileError("tll node next offset disagrees with C tll node");
+    }
+
+    const GenericSeatList = tll.Tll(Seat);
+    if (@sizeOf(GenericSeatList) != abi.SeatList__size)
+        @compileError("tll.Tll size disagrees with C tll head");
+    if (@offsetOf(GenericSeatList, "head") != abi.SeatList_head)
+        @compileError("tll.Tll.head offset disagrees with C tll head");
+    if (@offsetOf(GenericSeatList, "tail") != abi.SeatList_tail)
+        @compileError("tll.Tll.tail offset disagrees with C tll head");
+    if (@offsetOf(GenericSeatList, "length") != abi.SeatList_length)
+        @compileError("tll.Tll.length offset disagrees with C tll head");
 }
 
 comptime {
@@ -2399,6 +2457,18 @@ comptime {
     expectAbi(Config, "Config");
     expectAbi(ColorTheme, "ColorTheme");
     expectAbi(ConfigContext, "ConfigContext");
+
+    // Most of Config's list members are pointer-reached, so neither
+    // expectAbi(Config, ...) nor array recursion covers them. Keep these
+    // explicit checks; ConfigFontList is also reached via Config.fonts[].
+    expectAbi(ConfigFont, "ConfigFont");
+    expectAbi(ConfigFontList, "ConfigFontList");
+    expectAbi(ConfigSpawnTemplate, "ConfigSpawnTemplate");
+    expectAbi(Argv, "Argv");
+    expectAbi(BindingAux, "BindingAux");
+    expectAbi(ConfigKeyBinding, "ConfigKeyBinding");
+    expectAbi(ConfigKeyBindingList, "ConfigKeyBindingList");
+    expectAbi(CustomRegex, "CustomRegex");
 }
 
 test "pt-or-px to pixels" {
@@ -2581,6 +2651,11 @@ test "server layout matches C probe" {
 comptime {
     expectAbi(PtOrPx, "PtOrPx");
     expectAbi(Timespec, "Timespec");
+    // c_layout.zig is generated by the native C probe. On a FreeBSD cross
+    // build it still describes Linux's packed epoll_event, while this mirror
+    // deliberately takes the epoll-shim shape; only check the native case.
+    if (builtin.os.tag == .linux)
+        expectAbi(EpollEvent, "EpollEvent");
     expectAbi(TllStr, "TllStr");
     expectAbi(EnvVar, "EnvVar");
     expectAbi(EnvVarNode, "EnvVarNode");

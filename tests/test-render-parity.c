@@ -12,9 +12,10 @@
 
 #include <fcft/fcft.h>
 #include <pixman.h>
+#include <tllist.h>
 #include <wayland-client.h>
 
-#include "grid.h"
+#include "composed.h"
 #include "grid.h"
 #include "render.h"
 
@@ -49,6 +50,9 @@ extern void render_csd_border(
     const struct csd_data *info, struct buffer *buf);
 extern void render_csd_title(
     struct terminal *term, const struct csd_data *info, struct buffer *buf);
+extern void render_sixel_images(
+    struct terminal *term, pixman_image_t *pix, pixman_region32_t *damage,
+    const struct coord *cursor);
 
 /* The oracle links the real C painters. Their protocol requests need no
  * compositor in this corpus. */
@@ -78,13 +82,26 @@ void __wrap_wayland_shim_viewport_set_destination(void *viewport, int32_t width,
 
 enum {
     COLS = 16,
-    ROWS = 6,
+    /* Eight rows (a power of two, as required by grid row masking): the
+     * original six, one cursor-shape matrix, one wide/combining row. */
+    ROWS = 8,
     CELL_W = 10,
     CELL_H = 20,
-    ATLAS_W = 320,
-    ATLAS_H = 320,
+    /* Scale 2 doubles the OSD/CSD surfaces; keep them all disjoint. */
+    ATLAS_W = 640,
+    ATLAS_H = 640,
     GRID_W = COLS * CELL_W,
     GRID_H = ROWS * CELL_H,
+
+    GRID_X = 3, GRID_Y = 3,
+    URL_X = 0, URL_Y = 176,
+    TIMER_X = 0, TIMER_Y = 256,
+    CSD_TOP_X = 0, CSD_TOP_Y = 336,
+    CSD_LEFT_X = 0, CSD_LEFT_Y = 376,
+    CSD_RIGHT_X = 32, CSD_RIGHT_Y = 376,
+    CSD_BOTTOM_X = 64, CSD_BOTTOM_Y = 376,
+    CSD_TITLE_X = 352, CSD_TITLE_Y = 512,
+    SIXEL_X = 0, SIXEL_Y = 592,
 };
 
 struct corpus {
@@ -95,6 +112,7 @@ struct corpus {
     struct buffer buf;
     struct terminal term;
     struct config conf;
+    struct grid grid;
     struct wl_window win;
     struct wayland wayl;
     struct fcft_font *fonts[4];
@@ -152,6 +170,22 @@ region_image(struct corpus *c, int x, int y, int width, int height)
         PIXMAN_a8r8g8b8, width, height, data, ATLAS_W * 4);
 }
 
+static char32_t
+insert_composed(
+    struct corpus *c, const char32_t *chars, uint8_t count, uint8_t forced_width)
+{
+    struct composed *node = calloc(1, sizeof(*node));
+    if (node == NULL) exit(1);
+    node->chars = calloc(count, sizeof(*node->chars));
+    if (node->chars == NULL) exit(1);
+    memcpy(node->chars, chars, (size_t)count * sizeof(*chars));
+    node->key = composed_key_from_chars(node->chars, count);
+    node->count = count;
+    node->forced_width = forced_width;
+    composed_insert(&c->term.composed, node);
+    return (char32_t)(CELL_COMB_CHARS_LO + node->key);
+}
+
 static void
 fill_rows(struct corpus *c)
 {
@@ -162,6 +196,8 @@ fill_rows(struct corpus *c)
         U"\u2591\u2592\u2593\u2588\u2581\u2582\u2583\u2584\u2585\u2586\u2587\u2588\u28ff\u28c0",
         U"0123456789abcdef",
         U"render parity ok!",
+        U"cursor-styles!!!",
+        U"wide+combining!!",
     };
 
     for (int r = 0; r < ROWS; r++) {
@@ -209,6 +245,23 @@ fill_rows(struct corpus *c)
         row->cells[i * 2].attrs.underline = true;
         row->cells[i * 2 + 1].attrs.underline = true;
     }
+
+    /* Row 6 is the cursor-shape matrix; paint_grid() assigns the style,
+     * focus and blink state to each cell. */
+    /* Row 7: a real double-width glyph followed by its spacer, a second
+     * pair, and three composed (combining-character) clusters. */
+    row = c->rows[ROWS - 1];
+    row->cells[0].wc = U'\u4e2d';
+    row->cells[1].wc = CELL_SPACER + 1;
+    row->cells[2].wc = U'\u65e5';
+    row->cells[3].wc = CELL_SPACER + 1;
+
+    static const char32_t acute[] = {U'A', U'\u0301'};
+    static const char32_t wide_acute[] = {U'\u4e2d', U'\u0301'};
+    static const char32_t forced[] = {U'B', U'\u0300', U'\u0301'};
+    row->cells[4].wc = insert_composed(c, acute, 2, 0);
+    row->cells[5].wc = insert_composed(c, wide_acute, 2, 0);
+    row->cells[6].wc = insert_composed(c, forced, 3, 2);
 }
 
 static void
@@ -224,6 +277,7 @@ paint_grid(struct corpus *c)
             bool has_cursor = false;
             c->term.kbd_focus = false;
             c->term.cursor_blink.state = CURSOR_BLINK_OFF;
+            c->term.cursor_style = CURSOR_BLOCK;
 
             if (r == 4 && col == 5) {
                 /* focused block cursor, blink ON */
@@ -238,6 +292,16 @@ paint_grid(struct corpus *c)
             } else if (r == ROWS - 1 && col == 5) {
                 /* unfocused block cursor, blink OFF */
                 has_cursor = true;
+            } else if (r == ROWS - 2 && col < 12) {
+                /* Three styles (legacy "bar" == BEAM) x focus x blink. */
+                static const enum cursor_style styles[3] = {
+                    CURSOR_UNDERLINE, CURSOR_BEAM, CURSOR_HOLLOW,
+                };
+                has_cursor = true;
+                c->term.cursor_style = styles[col / 4];
+                c->term.kbd_focus = (col % 4) < 2;
+                c->term.cursor_blink.state =
+                    (col % 2) == 0 ? CURSOR_BLINK_ON : CURSOR_BLINK_OFF;
             }
 
             render_cell(
@@ -291,6 +355,61 @@ paint_csd(struct corpus *c, int x, int y, int width, int height,
 }
 
 static void
+paint_sixels(struct corpus *c)
+{
+    /* render_sixel_images() needs only a grid with dirty rows and a tll of
+     * sixels whose cached pixman image is already present. No compositor,
+     * Wayland shm pool, or VT parser is involved. */
+    memset(&c->grid, 0, sizeof(c->grid));
+    c->grid.num_rows = ROWS;
+    c->grid.num_cols = COLS;
+    c->grid.rows = c->rows;
+    c->term.grid = &c->grid;
+    c->term.margins.left = SIXEL_X;
+    c->term.margins.right = ATLAS_W - SIXEL_X - 120;
+    c->term.margins.top = SIXEL_Y;
+    c->term.margins.bottom = 0;
+    c->term.width = ATLAS_W;
+    c->term.height = ATLAS_H;
+
+    enum { SIXEL_W = 65, SIXEL_H = 20 };
+    static uint32_t data_a[SIXEL_W * SIXEL_H];
+    static uint32_t data_b[SIXEL_W * SIXEL_H];
+    for (int y = 0; y < SIXEL_H; y++) {
+        for (int x = 0; x < SIXEL_W; x++) {
+            data_a[y * SIXEL_W + x] =
+                (uint32_t)(0x80000000u | ((x * 4) & 0xff) << 16 |
+                           ((y * 9) & 0xff) << 8 | ((x + y) & 0xff));
+            data_b[y * SIXEL_W + x] =
+                (uint32_t)(0xff000000u | ((y * 7) & 0xff) << 16 |
+                           ((x * 3) & 0xff) << 8 | ((x ^ y) & 0xff));
+        }
+    }
+
+    for (int i = 0; i < 2; i++) {
+        struct sixel six = {0};
+        six.width = six.height = -1;
+        six.scaled.width = six.scaled.height = -1;
+        six.rows = 1;
+        six.cols = 6;
+        six.pos = (struct coord){.row = i, .col = i == 0 ? 0 : 5};
+        six.opaque = i == 1;
+        six.cell_width = CELL_W;
+        six.cell_height = CELL_H;
+        six.original.width = SIXEL_W;
+        six.original.height = SIXEL_H;
+        six.original.pix = pixman_image_create_bits(
+            PIXMAN_a8r8g8b8, SIXEL_W, SIXEL_H,
+            i == 0 ? data_a : data_b, SIXEL_W * 4);
+        if (six.original.pix == NULL) exit(1);
+        tll_push_back(c->grid.sixel_images, six);
+    }
+
+    static const struct coord cursor = {.row = -1, .col = -1};
+    render_sixel_images(&c->term, c->pix, &c->damage, &cursor);
+}
+
+static void
 run_scale(float scale)
 {
     struct corpus c = {0};
@@ -333,6 +452,8 @@ run_scale(float scale)
     c.term.colors.alpha = 0xffff;
     c.term.colors.selection_fg = 0x00000000;
     c.term.colors.selection_bg = 0x00406080;
+    c.term.colors.cursor_bg = 0xff1040c0;
+    c.term.colors.cursor_fg = 0xfff0e0d0;
     c.term.cursor_blink.state = CURSOR_BLINK_ON;
     c.term.cursor_style = CURSOR_BLOCK;
     c.term.kbd_focus = false;
@@ -344,7 +465,12 @@ run_scale(float scale)
         c.term.colors.table[i] = (v << 16) | ((v * 3) << 8) | (255 - v);
     }
     c.conf.box_drawings_uses_font_glyphs = false;
-    c.conf.can_shape_grapheme = false;
+    /* Exercise the real HarfBuzz/fcft grapheme path, not only the
+     * per-codepoint fallback, for the composed row. */
+    c.conf.can_shape_grapheme = true;
+    c.conf.tweak.grapheme_shaping = true;
+    c.conf.cursor.beam_thickness = (struct pt_or_px){.px = 0, .pt = 1.0f};
+    c.conf.cursor.underline_thickness = (struct pt_or_px){.px = 0, .pt = 0.75f};
     c.conf.use_custom_underline_offset = true;
     c.conf.underline_offset.px = 3;
     c.conf.underline_thickness.px = 1;
@@ -379,31 +505,53 @@ run_scale(float scale)
     const int timer_w = snap_to_scale(160, scale);
     const int timer_h = snap_to_scale(margin + CELL_H + margin, scale);
     paint_osd(
-        &c, 0, 128, url_w, U"1: https://example.com/render-parity",
+        &c, URL_X, URL_Y, url_w, U"1: https://example.com/render-parity",
         0x00ffffff, 0xff203040, margin);
     paint_osd(
-        &c, 0, 176, timer_w, U"12.34 \u00b5s", 0x00000000, 0xff806020, margin);
+        &c, TIMER_X, TIMER_Y, timer_w, U"12.34 \u00b5s", 0x00000000, 0xff806020,
+        margin);
 
-    const int top_w = snap_to_scale(160, scale), top_h = snap_to_scale(12, scale);
+    /* Border surfaces must be at least 2 * visible border width wide/tall,
+     * otherwise the painter's own bounds assertions reject them at HiDPI. */
+    const int top_w = snap_to_scale(160, scale), top_h = snap_to_scale(24, scale);
     const struct csd_data top = {.width = top_w, .height = top_h};
-    paint_csd(&c, 0, 216, top_w, top_h, CSD_SURF_TOP, &top);
-    const int left_w = snap_to_scale(12, scale), left_h = snap_to_scale(60, scale);
+    paint_csd(&c, CSD_TOP_X, CSD_TOP_Y, top_w, top_h, CSD_SURF_TOP, &top);
+    const int left_w = snap_to_scale(24, scale), left_h = snap_to_scale(60, scale);
     const struct csd_data left = {.width = left_w, .height = left_h};
-    paint_csd(&c, 160, 216, left_w, left_h, CSD_SURF_LEFT, &left);
+    paint_csd(&c, CSD_LEFT_X, CSD_LEFT_Y, left_w, left_h, CSD_SURF_LEFT, &left);
+    const int right_w = snap_to_scale(24, scale), right_h = snap_to_scale(60, scale);
+    const struct csd_data right = {.width = right_w, .height = right_h};
+    paint_csd(
+        &c, CSD_RIGHT_X, CSD_RIGHT_Y, right_w, right_h, CSD_SURF_RIGHT, &right);
+    const int bottom_w = snap_to_scale(160, scale), bottom_h = snap_to_scale(24, scale);
+    const struct csd_data bottom = {.width = bottom_w, .height = bottom_h};
+    paint_csd(
+        &c, CSD_BOTTOM_X, CSD_BOTTOM_Y, bottom_w, bottom_h, CSD_SURF_BOTTOM,
+        &bottom);
     const int title_w = snap_to_scale(144, scale), title_h = snap_to_scale(26, scale);
     const struct csd_data title = {.width = title_w, .height = title_h};
-    paint_csd(&c, 176, 216, title_w, title_h, CSD_SURF_TITLE, &title);
+    paint_csd(
+        &c, CSD_TITLE_X, CSD_TITLE_Y, title_w, title_h, CSD_SURF_TITLE, &title);
+
+    paint_sixels(&c);
 
     printf("SCALE %.9g margin=%d cell=%dx%d atlas=%dx%d\n",
            (double)scale, margin, CELL_W, CELL_H, ATLAS_W, ATLAS_H);
-    hash_cells(&c, "grid", 3, 3, GRID_W, GRID_H);
-    hash_cells(&c, "url", 0, 128, url_w, url_h);
-    hash_cells(&c, "timer", 0, 176, timer_w, timer_h);
-    hash_cells(&c, "csd-top", 0, 216, top_w, top_h);
-    hash_cells(&c, "csd-left", 160, 216, left_w, left_h);
-    hash_cells(&c, "csd-title", 176, 216, title_w, title_h);
+    hash_cells(&c, "grid", GRID_X, GRID_Y, GRID_W, GRID_H);
+    hash_cells(&c, "url", URL_X, URL_Y, url_w, url_h);
+    hash_cells(&c, "timer", TIMER_X, TIMER_Y, timer_w, timer_h);
+    hash_cells(&c, "csd-top", CSD_TOP_X, CSD_TOP_Y, top_w, top_h);
+    hash_cells(&c, "csd-left", CSD_LEFT_X, CSD_LEFT_Y, left_w, left_h);
+    hash_cells(&c, "csd-right", CSD_RIGHT_X, CSD_RIGHT_Y, right_w, right_h);
+    hash_cells(&c, "csd-bottom", CSD_BOTTOM_X, CSD_BOTTOM_Y, bottom_w, bottom_h);
+    hash_cells(&c, "csd-title", CSD_TITLE_X, CSD_TITLE_Y, title_w, title_h);
+    hash_cells(&c, "sixel", SIXEL_X, SIXEL_Y, 120, 48);
     printf("TOTAL %016llx\n", (unsigned long long)hash_rect(&c, 0, 0, ATLAS_W, ATLAS_H));
 
+    tll_foreach(c.grid.sixel_images, it)
+        pixman_image_unref(it->item.original.pix);
+    tll_free(c.grid.sixel_images);
+    composed_free(c.term.composed);
     for (int r = 0; r < ROWS; r++) grid_row_free(c.rows[r]);
     for (int i = 0; i < 4; i++) fcft_destroy(c.fonts[i]);
     pixman_region32_fini(&c.damage);
@@ -420,6 +568,7 @@ main(void)
     }
     run_scale(126.0f / 120.0f);
     run_scale(100.0f / 120.0f);
+    run_scale(2.0f);
     fcft_fini();
     return 0;
 }

@@ -9,8 +9,9 @@ const c_layout = @import("c_layout");
 // user-notification banner written to the pty.
 //
 // Signal-mask/handler restoration is Zig now. The configured terminfo path
-// arrives through build_options. slave_execvpe() searches the PATH from
-// the caller-provided envp and follows glibc execvpe semantics.
+// arrives through build_options. slave_execvpe() follows glibc execvpe
+// semantics, except that it searches the PATH from the caller-provided
+// envp rather than glibc's getenv("PATH")/environ (see slave_execvpe).
 //
 
 const LOG_CLASS_ERROR: c_int = 1;
@@ -152,6 +153,9 @@ const ENOENT: c_int = @intFromEnum(std.c.E.NOENT);
 const ENOTDIR: c_int = @intFromEnum(std.c.E.NOTDIR);
 const ENOEXEC: c_int = @intFromEnum(std.c.E.NOEXEC);
 const ENOMEM: c_int = @intFromEnum(std.c.E.NOMEM);
+const ESTALE: c_int = @intFromEnum(std.c.E.STALE);
+const ENODEV: c_int = @intFromEnum(std.c.E.NODEV);
+const ETIMEDOUT: c_int = @intFromEnum(std.c.E.TIMEDOUT);
 
 extern fn execve(path: [*:0]const u8, argv: [*]?[*:0]u8, envp: [*]?[*:0]u8) c_int;
 extern fn confstr(name: c_int, buf: ?[*]u8, len: usize) usize;
@@ -242,18 +246,27 @@ export fn slave_execvpe(
 ) c_int {
     const file_slice = std.mem.span(file);
 
+    // glibc rejects an empty file name before doing any PATH lookup.
+    if (file_slice.len == 0) {
+        setErrno(ENOENT);
+        return -1;
+    }
+
     if (std.mem.indexOfScalar(u8, file_slice, '/') != null)
         return execve(file, argv, envp);
 
     var owned_path: ?[*]u8 = null;
     defer if (owned_path) |path| std.c.free(@ptrCast(path));
 
+    // Deliberately read PATH from the caller-provided envp, not from
+    // glibc's getenv("PATH")/environ as the old C code did. This honours
+    // foot's [environment] PATH= setting; it is an intentional divergence
+    // from glibc execvpe(), not "glibc semantics".
     var path: []const u8 = undefined;
     if (pathFromEnv(envp)) |env_path| {
-        if (env_path.len != 0)
-            path = env_path
-        else
-            path = csPath(&owned_path) orelse return -1;
+        // An empty PATH is one empty component: search "./file". Only an
+        // unset PATH falls back to confstr(_CS_PATH), as glibc does.
+        path = if (env_path.len == 0) "." else env_path;
     } else {
         path = csPath(&owned_path) orelse return -1;
     }
@@ -272,7 +285,8 @@ export fn slave_execvpe(
 
         switch (err) {
             EACCES => seen_eacces = true,
-            ENOENT, ENOTDIR => {},
+            // glibc keeps searching for these, even when no candidate succeeds.
+            ENOENT, ENOTDIR, ESTALE, ENODEV, ETIMEDOUT => {},
             ENOEXEC => {
                 const shell_ret = execThroughShell(candidate, argv, envp);
                 std.c.free(@ptrCast(candidate));
