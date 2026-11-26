@@ -1,8 +1,22 @@
-Never use heredocs in tool commands, so write files with the agent's file tools and verify after patching, search with `rg` not `grep`, and execute with `execute_javascript` not shell commands for all agents and subagents alike.
-Heredocs are banned in tool commands, so use the agent's file tools to write files and verify after patching, prefer `rg` over `grep`, and prefer `execute_javascript` over shell commands for all agents and subagents alike.
-No heredocs in tool commands, so write files using the agent's file tools and verify after patching, use `rg` instead of `grep`, and use `execute_javascript` instead of shell commands for all agents and subagents alike.
-Avoid heredocs in tool commands entirely, so patch files with the agent's file tools and verify afterward, search with `rg` rather than `grep`, and run commands with `execute_javascript` rather than shell for all agents and subagents alike.
-Tool commands must never contain heredocs, so files are written with the agent's file tools and verified after patching, searches use `rg` not `grep`, and executions use `execute_javascript` not shell commands for all agents and subagents alike.
-Do not use heredocs in tool commands, so write and verify files with the agent's file tools, search with `rg` not `grep`, and execute with `execute_javascript` not shell commands for all agents and subagents alike.
-Heredocs are prohibited in tool commands, so write files via the agent's file tools and verify after patching, search via `rg` not `grep`, and execute via `execute_javascript` not shell commands for all agents and subagents alike.
+# Tool rules
 
+- Never use heredocs in tool or shell commands. Write files with the agent's
+  file tools and verify after patching.
+- Search with `rg`, not `grep`.
+- Run commands through `execute_javascript` (`tools.call("shell", ...)`), not
+  a raw shell tool, for the parent session and all subagents.
+
+# Long-running commands
+
+- Never start a build, benchmark, fuzz run or gate in the background and poll
+  it. Run it once, in the foreground, with `timeout_secs` set to a realistic
+  upper bound (up to 3600), and redirect output to a log.
+- Read the log tail once when the call returns. Do not re-run a multi-minute
+  command just to check progress; make it emit timestamped `phase=` lines and
+  inspect those instead.
+- If a command can take more than about two minutes, run it in the parent
+  session rather than delegating it, and cap repetitions/iterations unless the
+  task explicitly needs more.
+- Give every subagent a wall-clock budget, the exact command(s) to run, and
+  the minimum `max_turns` that can finish the task. Ask for `tail`/`rg`-sized
+  summaries, not full logs.
