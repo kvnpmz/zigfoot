@@ -14,6 +14,7 @@
 const std = @import("std");
 const build_options = @import("build_options");
 const types = @import("terminal_types.zig");
+const abi = @import("c_layout");
 
 const Context = types.ConfigContext;
 
@@ -795,15 +796,62 @@ export fn parse_section_environment(ctx: *Context) callconv(.c) bool {
 
 // ── [url] and [regex] (C2h) ───────────────────────────────────────
 
-// regex_t is libc-private (glibc and musl disagree on its layout), so the
-// Zig side keeps it opaque and lets config.c compile/validate it.
+// regex_t has no portable layout (glibc and musl disagree). Zig owns an
+// opaque byte buffer whose size/alignment and re_nsub offset are probed from
+// C. libc only ever receives a pointer to it.
+//
+// Ownership: a compiled RegexT owns libc allocations made by regcomp(). The
+// caller must call regfree() exactly once on every successfully compiled
+// buffer, before reuse or when the owning config/custom_regex is destroyed.
+// The stack temporaries below are copied into config fields only after a
+// successful compile; on failure they are never installed.
+const RegexTBuffer = [abi.RegexT__size]u8;
+
+extern fn regcomp(preg: *anyopaque, regex: [*:0]const u8, cflags: c_int) callconv(.c) c_int;
+extern fn regerror(
+    errcode: c_int,
+    preg: *const anyopaque,
+    err_buf: [*]u8,
+    err_buf_len: usize,
+) callconv(.c) usize;
 extern fn regfree(preg: *anyopaque) callconv(.c) void;
-extern fn config_regex_compile(
+
+/// C config_regex_compile(): 0 = compiled with a subexpression, -1 = regcomp
+/// failed (regerror text in err_buf), -2 = compiled but no subexpression and
+/// already freed.
+fn regexCompile(
+    regex: [*:0]const u8,
+    preg: *align(abi.RegexT__align) RegexTBuffer,
+    err_buf: [*]u8,
+    err_buf_len: usize,
+) c_int {
+    const r = regcomp(@ptrCast(preg), regex, @intCast(abi.REG_EXTENDED));
+    if (r != 0) {
+        _ = regerror(r, @ptrCast(preg), err_buf, err_buf_len);
+        return -1;
+    }
+
+    // Explicit read at the probed offset of regex_t.re_nsub. The pointer cast
+    // is intentional: Zig must not mirror libc's private regex_t layout.
+    const nsub: *const usize = @ptrFromInt(@intFromPtr(preg) + abi.RegexT_re_nsub);
+    if (nsub.* == 0) {
+        regfree(@ptrCast(preg));
+        return -2;
+    }
+
+    return 0;
+}
+
+/// Test entry point for tests/test-regex.c. The production call sites use
+/// regexCompile() directly; the C config.c is deleted by Agent A.
+export fn config_regex_compile_zig(
     regex: [*:0]const u8,
     preg: *anyopaque,
     err_buf: [*]u8,
     err_buf_len: usize,
-) callconv(.c) c_int;
+) callconv(.c) c_int {
+    return regexCompile(regex, @ptrCast(@alignCast(preg)), err_buf, err_buf_len);
+}
 
 /// Mirrors regcomp() + the re_nsub check + regerror() in the C original.
 /// Returns false (and logs the same message) on failure.
@@ -811,11 +859,11 @@ fn compileRegex(
     ctx: *Context,
     src: std.builtin.SourceLocation,
     regex: [*:0]const u8,
-    preg: *anyopaque,
+    preg: *align(abi.RegexT__align) RegexTBuffer,
 ) bool {
     var err_buf: [128]u8 = undefined;
 
-    switch (config_regex_compile(regex, preg, &err_buf, err_buf.len)) {
+    switch (regexCompile(regex, preg, &err_buf, err_buf.len)) {
         0 => return true,
         -2 => return errValue(ctx, src, "invalid regex: no marked subexpression(s)", .{}),
         else => return errValue(
@@ -885,8 +933,8 @@ export fn parse_section_url(ctx: *Context) callconv(.c) bool {
 
         // Compile into a local first: a failed regex must leave the
         // currently active one untouched.
-        var new_preg: types.RegexT align(16) = undefined;
-        if (!compileRegex(ctx, @src(), regex, @ptrCast(&new_preg)))
+        var new_preg: RegexTBuffer align(abi.RegexT__align) = undefined;
+        if (!compileRegex(ctx, @src(), regex, &new_preg))
             return false;
 
         regfree(@ptrCast(&conf.url.preg));
@@ -909,8 +957,8 @@ export fn parse_section_regex(ctx: *Context) callconv(.c) bool {
     if (eq(key, "regex")) {
         const regex_string = ctx.value orelse return false;
 
-        var new_preg: types.RegexT align(16) = undefined;
-        if (!compileRegex(ctx, @src(), regex_string, @ptrCast(&new_preg)))
+        var new_preg: RegexTBuffer align(abi.RegexT__align) = undefined;
+        if (!compileRegex(ctx, @src(), regex_string, &new_preg))
             return false;
 
         if (regex == null)
@@ -3713,14 +3761,14 @@ export fn config_load(
 
     {
         var err_buf: [1024]u8 = undefined;
-        const r = config_regex_compile(
+        const r = regexCompile(
             default_url_regex_string.ptr,
-            @ptrCast(&conf.url.preg),
+            @ptrCast(@alignCast(&conf.url.preg)),
             &err_buf,
             err_buf.len,
         );
         // C: xassert(r == 0); xassert(conf->url.preg.re_nsub >= 1);
-        // config_regex_compile() folds the re_nsub check into -2.
+        // regexCompile() folds the re_nsub check into -2.
         std.debug.assert(r == 0);
         conf.url.regex = xstrdup(default_url_regex_string.ptr);
     }
@@ -3827,10 +3875,7 @@ export fn config_load(
 // owns the allocation; the rest alias it). Getting that wrong shows up as a
 // double free the first time a config with `pipe-*` bindings is cloned.
 
-extern fn regcomp(preg: *anyopaque, regex: [*:0]const u8, cflags: c_int) callconv(.c) c_int;
 extern fn strdup(s: [*:0]const u8) callconv(.c) ?[*:0]u8;
-
-const REG_EXTENDED: c_int = 1;
 const O_CLOEXEC: c_int = 0o2000000;
 const LOG_CLASS_DEBUG: c_int = 4;
 
@@ -3983,7 +4028,7 @@ export fn config_clone(old: *const types.Config) callconv(.c) *types.Config {
     conf.url.label_letters = c32dup(old.url.label_letters);
     spawn_template_clone(&conf.url.launch, &old.url.launch);
     conf.url.regex = xstrdup(old.url.regex.?);
-    _ = regcomp(@ptrCast(&conf.url.preg), conf.url.regex.?, REG_EXTENDED);
+    _ = regcomp(@ptrCast(@alignCast(&conf.url.preg)), conf.url.regex.?, @intCast(abi.REG_EXTENDED));
 
     {
         const RegexList = tll.Tll(types.CustomRegex);
@@ -4001,7 +4046,7 @@ export fn config_clone(old: *const types.Config) callconv(.c) *types.Config {
             dst.pushBack(item);
 
             const new_regex = dst.back();
-            _ = regcomp(@ptrCast(&new_regex.preg), new_regex.regex.?, REG_EXTENDED);
+            _ = regcomp(@ptrCast(@alignCast(&new_regex.preg)), new_regex.regex.?, @intCast(abi.REG_EXTENDED));
             spawn_template_clone(&new_regex.launch, &old_regex.launch);
         }
     }

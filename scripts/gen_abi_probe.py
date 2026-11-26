@@ -357,6 +357,7 @@ def generate() -> str:
         '#include <sys/stat.h>',
         '#include <time.h>',
         '#include "client-protocol.h"',
+        '#include <regex.h>',
         '#include "server.h"',
         '#include "shm.h"',
         '#include "terminal.h"',
@@ -390,6 +391,14 @@ def generate() -> str:
                 f"gen_abi_probe: {name} not found in {SRC}")
         emit_type(out, name, "struct terminal", [member],
                   types[name]["fields"], types, [member])
+
+    out += [
+        "    /* Libc-private regex_t facts and the flag config.zig passes to regcomp(). */",
+        '    fprintf(out, "pub const RegexT__size: usize = %zu;\\n", sizeof(regex_t));',
+        '    fprintf(out, "pub const RegexT__align: usize = %zu;\\n", _Alignof(regex_t));',
+        '    fprintf(out, "pub const RegexT_re_nsub: usize = %zu;\\n", offsetof(regex_t, re_nsub));',
+        '    fprintf(out, "pub const REG_EXTENDED: usize = %d;\\n", REG_EXTENDED);',
+    ]
 
     out += [
         "    if (out != stdout)",

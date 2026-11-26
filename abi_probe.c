@@ -18,6 +18,7 @@
 #include <sys/stat.h>
 #include <time.h>
 #include "client-protocol.h"
+#include <regex.h>
 #include "server.h"
 #include "shm.h"
 #include "terminal.h"
@@ -3466,6 +3467,11 @@ fprintf(out, "pub const Margins_top__size: usize = %zu;\n", sizeof(((struct term
 fprintf(out, "pub const Margins_top: usize = %zu;\n", offsetof(struct terminal, margins.top) - offsetof(struct terminal, margins));
 fprintf(out, "pub const Margins_bottom__size: usize = %zu;\n", sizeof(((struct terminal *)0)->margins.bottom));
 fprintf(out, "pub const Margins_bottom: usize = %zu;\n", offsetof(struct terminal, margins.bottom) - offsetof(struct terminal, margins));
+    /* Libc-private regex_t facts and the flag config.zig passes to regcomp(). */
+    fprintf(out, "pub const RegexT__size: usize = %zu;\n", sizeof(regex_t));
+    fprintf(out, "pub const RegexT__align: usize = %zu;\n", _Alignof(regex_t));
+    fprintf(out, "pub const RegexT_re_nsub: usize = %zu;\n", offsetof(regex_t, re_nsub));
+    fprintf(out, "pub const REG_EXTENDED: usize = %d;\n", REG_EXTENDED);
     if (out != stdout)
         fclose(out);
     return 0;
