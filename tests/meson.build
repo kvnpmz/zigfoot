@@ -23,11 +23,25 @@ zig_build_root = meson.project_build_root()
 zig_c_layout = join_paths(zig_build_root, 'c_layout.zig')
 zig_build_options = join_paths(zig_build_root, 'zig_test_build_options.zig')
 
+# compile_zig.py reads `zig_optimize` from meson-info when compiling the
+# objects. Do the same for the test runner: it accepts extra zig flags, so
+# pass the resolved mode explicitly, with `auto` keeping the old buildtype
+# mapping (and plain builds defaulting to ReleaseSafe).
+zig_optimize = get_option('zig_optimize')
+if zig_optimize == 'auto'
+  zig_optimize = {
+    'debug': 'Debug',
+    'debugoptimized': 'ReleaseSafe',
+    'release': 'ReleaseSafe',
+    'minsize': 'ReleaseSmall',
+  }.get(get_option('buildtype'), 'ReleaseSafe')
+endif
+
 foreach m : zig_test_modules
   test(
     'zig-' + m[0],
     python,
-    args: [zig_test_script, m[1], zig_build_options, zig_c_layout] + m[2],
+    args: [zig_test_script, m[1], zig_build_options, zig_c_layout, '-O', zig_optimize] + m[2],
     depends: [c_layout])
 endforeach
 

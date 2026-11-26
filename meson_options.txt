@@ -29,3 +29,6 @@ option('utmp-default-helper-path', type: 'string', value: 'auto',
        description: 'Default path to the utmp helper binary. Default: auto-detect')
 
 option('fanalyzer', type: 'boolean', value: false, description: 'enable GCC static analyzer')
+
+option('zig_optimize', type: 'combo', value: 'auto', choices: ['auto', 'Debug', 'ReleaseSafe', 'ReleaseFast', 'ReleaseSmall'],
+       description: 'Zig optimization mode; auto follows buildtype, other values override it for all Zig objects and tests')
