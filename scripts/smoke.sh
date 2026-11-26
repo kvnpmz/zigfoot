@@ -1,36 +1,43 @@
 #!/bin/sh
-# Smoke-test a foot build.
+# Smoke-test a zigfoot build.
 #
 # Checks, in order:
-#   1. `foot --version` (also runs the C UNITTEST constructors in assertion
+#   1. `zigfoot --version` (also runs the C UNITTEST constructors in assertion
 #      builds, e.g. the term_to_slave/ptmx test)
-#   2. `foot -C` (config parser)
+#   2. `zigfoot -C` (config parser)
 #   3. real window launches at a few sizes, asserting a clean exit and no
 #      panic. Uses $WAYLAND_DISPLAY if set, otherwise starts a headless
 #      weston (when installed).
 #
-# Usage: scripts/smoke.sh [path-to-foot]
+# Usage: scripts/smoke.sh [path-to-zigfoot]
 
 set -eu
 
-foot=${1:-./build/foot}
+zigfoot=${1:-./build/zigfoot}
 
-if [ ! -x "$foot" ]; then
-    echo "smoke: $foot is not executable" >&2
+if [ ! -x "$zigfoot" ]; then
+    echo "smoke: $zigfoot is not executable" >&2
     exit 1
 fi
 
-echo "smoke: $foot --version"
-"$foot" --version >/dev/null
+echo "smoke: $zigfoot --version"
+version=$("$zigfoot" --version)
+case "$version" in
+    "zigfoot version: "*) ;;
+    *)
+        echo "smoke: unexpected --version output: $version" >&2
+        exit 1
+        ;;
+esac
 
 tmp_dir=$(mktemp -d)
 conf=$tmp_dir/foot.ini
 printf '[main]\nfont=monospace:size=10\n' > "$conf"
 
-# `-C` treats "no configuration found" as an error (foot exits -26), so give
+# `-C` treats "no configuration found" as an error (zigfoot exits -26), so give
 # it a known-good file instead of depending on the machine's config.
-echo "smoke: $foot -C -c <temp config>"
-"$foot" -C -c "$conf"
+echo "smoke: $zigfoot -C -c <temp config>"
+"$zigfoot" -C -c "$conf"
 
 weston_pid=
 xvfb_pid=
@@ -49,7 +56,7 @@ if [ -z "${WAYLAND_DISPLAY:-}" ]; then
         export XDG_RUNTIME_DIR=$runtime_dir
         export WAYLAND_DISPLAY=wayland-smoke
         backend=headless-backend.so
-        # Weston's headless backend creates no wl_seat, and foot refuses to
+        # Weston's headless backend creates no wl_seat, and zigfoot refuses to
         # start without one. The x11 backend under a throwaway Xvfb has a
         # virtual keyboard and pointer, so prefer it when Xvfb is available.
         if command -v Xvfb >/dev/null 2>&1; then
@@ -107,7 +114,7 @@ run() {
     size=$1
     shift
     echo "smoke: launching at $size"
-    if ! out=$(timeout 30 "$foot" -W "$size" "$@" -e sh -c 'printf "smoke\n"; exit 0' 2>&1); then
+    if ! out=$(timeout 30 "$zigfoot" -W "$size" "$@" -e sh -c 'printf "smoke\n"; exit 0' 2>&1); then
         echo "smoke: launch at $size failed" >&2
         echo "$out" >&2
         return 1

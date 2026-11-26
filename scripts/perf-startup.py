@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Measure foot startup-to-child-exec and full process lifetime.
+"""Measure zigfoot startup-to-child-exec and full process lifetime.
 
 Requires a live Wayland compositor (XDG_RUNTIME_DIR + WAYLAND_DISPLAY).
 Each variant is run interleaved with the others so drift affects all equally.
@@ -17,6 +17,12 @@ import tempfile
 import time
 
 VARIANTS = ("c-o3", "c-o2", "zig-rs", "zig-fast")
+
+
+def binary_for(builds, variant):
+    """HEAD Zen builds are zigfoot; the pinned C oracle still builds foot."""
+    name = "foot" if variant.startswith("c-") else "zigfoot"
+    return f"{builds}/{variant}/{name}"
 
 
 def stat(xs):
@@ -37,9 +43,12 @@ def main() -> int:
     args = p.parse_args()
 
     variants = [v for v in args.variants.split(",") if v]
-    missing = [v for v in variants if not os.access(f"{args.builds}/{v}/foot", os.X_OK)]
+    missing = [v for v in variants
+               if not os.access(binary_for(args.builds, v), os.X_OK)]
     if missing:
-        print(f"perf-startup: no foot binary for {', '.join(missing)}", file=sys.stderr)
+        print(f"perf-startup: no executable for {', '.join(missing)} "
+              f"(expected foot for c-* variants, zigfoot otherwise)",
+              file=sys.stderr)
         return 2
     if not os.environ.get("WAYLAND_DISPLAY") or not os.environ.get("XDG_RUNTIME_DIR"):
         print("perf-startup: WAYLAND_DISPLAY and XDG_RUNTIME_DIR are required",
@@ -62,7 +71,7 @@ def main() -> int:
                 t0 = time.time_ns()
                 p0 = time.perf_counter_ns()
                 subprocess.run(
-                    [f"{args.builds}/{v}/foot", *opts, "-e", "sh", "-c",
+                    [binary_for(args.builds, v), *opts, "-e", "sh", "-c",
                      f"date +%s%N > {stamp}"],
                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                     timeout=30, check=False)

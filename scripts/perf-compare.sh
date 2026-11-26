@@ -1,5 +1,6 @@
 #!/bin/sh
-# Reproducible headless C-vs-Zig performance comparison for foot.
+# Reproducible headless C-vs-Zig performance comparison for the zigfoot fork
+# (the pinned C oracle still builds foot).
 #
 # Scope: pixman/pango render corpus, config parser unit corpus, VT input
 # throughput, and peak RSS of each harness. Everything is built from git
@@ -88,10 +89,18 @@ setup() { # builddir source "extra meson args"
             echo "perf-compare: meson setup --wipe failed for $b" >&2
             tail -20 "$work/logs/setup-$(basename "$b").log" >&2; exit 1; }
     fi
-    # The pre-port oracle has no meson target for the render driver; its
-    # private harness is linked by mkrender.py from the foot link line.
-    targets="foot tests/test-config"
-    case $b in *zig-*) targets="$targets tests/test-render-parity" ;; esac
+    # The HEAD Zen builds have a zigfoot executable; the pinned pre-port C
+    # oracle still has a foot executable. The C oracle has no meson target
+    # for the render driver; mkrender.py derives that harness from its foot
+    # link line.
+    case $b in
+        *zig-*) targets="zigfoot tests/test-config tests/test-render-parity" ;;
+        *c-*) targets="foot tests/test-config" ;;
+        *)
+            echo "perf-compare: unknown build variant: $b" >&2
+            exit 1
+            ;;
+    esac
     phase build-$(basename "$b")
     ninja -C "$b" -j4 $targets \
         > "$work/logs/build-$(basename "$b").log" 2>&1 || {
@@ -256,10 +265,10 @@ print(shlex.join(lw))
 
 python3 -c 'import pathlib,sys; pathlib.Path(sys.argv[1]).write_text(sys.argv[2])' "$work/bin/mkvt.py" '
 import os, shlex, subprocess, sys
-build, source, output = sys.argv[1:]
+build, source, output, target = sys.argv[1:]
 def commands(target):
     return subprocess.run(["ninja", "-C", build, "-t", "commands", target], capture_output=True, text=True, check=True).stdout.splitlines()
-words = shlex.split(next(l for l in commands("foot") if " -c " in l))
+words = shlex.split(next(l for l in commands(target) if " -c " in l))
 keep = []
 for w in words[1:]:
     if w == "-MD":
@@ -268,10 +277,14 @@ for w in words[1:]:
         keep.append(w)
 obj = os.path.join(build, "perf-vt.o")
 subprocess.run(["cc"] + keep + ["-c", source, "-o", obj], cwd=build, check=True)
-lw = shlex.split(commands("foot")[-1])
+lw = shlex.split(commands(target)[-1])
+replaced = 0
 for i, w in enumerate(lw):
-    if w.endswith("foot.p/main.c.o") or w == "main.o":
+    if w.endswith(("main.c.o", "main.zig.o")) or w == "main.o":
         lw[i] = obj
+        replaced += 1
+if replaced != 1:
+    raise SystemExit("cannot replace main object in %s link line: %d" % (target, replaced))
 lw[lw.index("-o") + 1] = os.path.abspath(output)
 wraps = ["-Wl,--wrap=" + n for n in ("zwp_primary_selection_source_v1_destroy", "wl_data_source_destroy", "render_shim_xdg_toplevel_set_title", "wayland_shim_xdg_toplevel_set_app_id", "wayland_shim_data_offer_receive", "wayland_shim_primary_offer_receive", "wayland_shim_add_data_offer_listener", "wayland_shim_add_primary_offer_listener", "wayland_shim_data_offer_destroy", "wayland_shim_primary_selection_offer_destroy", "wayland_shim_data_offer_accept", "wayland_shim_data_offer_set_actions", "wayland_shim_data_offer_finish")]
 lw[1:1] = wraps
@@ -427,7 +440,8 @@ for v in zig-rs zig-fast c-o3 c-o2; do
     src="$work/head/tests/test-config.c"; b="$builds/$v"
     case $v in c-*) src="$work/oracle/tests/test-config.c" ;; esac
     python3 "$work/bin/mkconfig.py" "$b" "$src" "$harness/config-$v" "$config_iters" >> "$work/logs/harness.log" 2>&1
-    python3 "$work/bin/mkvt.py" "$b" "$work/bin/vt-throughput.c" "$harness/vt-$v" >> "$work/logs/harness.log" 2>&1
+    case $v in c-*) exe=foot ;; *) exe=zigfoot ;; esac
+    python3 "$work/bin/mkvt.py" "$b" "$work/bin/vt-throughput.c" "$harness/vt-$v" "$exe" >> "$work/logs/harness.log" 2>&1
 done
 
 cells=$(python3 -c 'import subprocess,sys; out=subprocess.run([sys.argv[1]],capture_output=True,text=True,check=True).stdout; print(sum(l.startswith("CELL ") for l in out.splitlines()))' "$builds/zig-rs/tests/test-render-parity")

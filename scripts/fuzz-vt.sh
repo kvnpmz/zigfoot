@@ -32,7 +32,7 @@ import sys
 lines = sys.stdin.read().splitlines()
 print(next(line for line in lines if " -c " in line and "csi-shim.c" in line))
 ')
-link_line=$(ninja -C "$BUILD_DIR" -t commands foot | tail -1)
+link_line=$(ninja -C "$BUILD_DIR" -t commands zigfoot | tail -1)
 compile_flags=$(python3 -c '
 import shlex, sys
 words = shlex.split(sys.argv[1])
