@@ -1,6 +1,7 @@
 const std = @import("std");
 const types = @import("terminal_types.zig");
 const build_options = @import("build_options");
+const c_layout = @import("c_layout");
 
 //
 // slave.c ported to Zig: the fork/exec of the child process that becomes the
@@ -8,9 +9,8 @@ const build_options = @import("build_options");
 // user-notification banner written to the pty.
 //
 // Signal-mask/handler restoration is Zig now. The configured terminfo path
-// arrives through build_options. Only execvpe() stays in C because Zig 0.16
-// has no execvpeZ(), and its portable PATH-search fallback must use the
-// caller-provided environment.
+// arrives through build_options. slave_shim_execvpe() searches the PATH from
+// the caller-provided envp and follows glibc execvpe semantics.
 //
 
 const LOG_CLASS_ERROR: c_int = 1;
@@ -59,7 +59,11 @@ const F_OK: c_int = @intCast(std.posix.F_OK);
 const STDIN_FILENO: c_int = std.posix.STDIN_FILENO;
 const STDOUT_FILENO: c_int = std.posix.STDOUT_FILENO;
 const STDERR_FILENO: c_int = std.posix.STDERR_FILENO;
-const CS_PATH: c_int = libc._CS_PATH;
+const CS_PATH: c_int = if (@hasDecl(c_layout, "SlaveConstants_cs_path"))
+    c_layout.SlaveConstants_cs_path
+else
+    libc._CS_PATH; // c_layout does not expose the probe constant yet
+
 const TIOCSCTTY: c_ulong = libc.TIOCSCTTY;
 
 const constants = SlaveConstants{
@@ -143,11 +147,149 @@ export fn slave_shim_terminfo_path() ?[*:0]const u8 {
     return path.ptr;
 }
 
-extern fn slave_shim_execvpe(
+const EACCES: c_int = @intFromEnum(std.c.E.ACCES);
+const ENOENT: c_int = @intFromEnum(std.c.E.NOENT);
+const ENOTDIR: c_int = @intFromEnum(std.c.E.NOTDIR);
+const ENOEXEC: c_int = @intFromEnum(std.c.E.NOEXEC);
+const ENOMEM: c_int = @intFromEnum(std.c.E.NOMEM);
+
+extern fn execve(path: [*:0]const u8, argv: [*]?[*:0]u8, envp: [*]?[*:0]u8) c_int;
+extern fn confstr(name: c_int, buf: ?[*]u8, len: usize) usize;
+
+fn setErrno(err: c_int) void {
+    std.c._errno().* = err;
+}
+
+fn pathFromEnv(envp: [*]?[*:0]u8) ?[]const u8 {
+    var i: usize = 0;
+    while (envp[i]) |entry| : (i += 1) {
+        const value = std.mem.span(entry);
+        if (std.mem.startsWith(u8, value, "PATH="))
+            return value[5..];
+    }
+    return null;
+}
+
+fn csPath(owned: *?[*]u8) ?[]const u8 {
+    const len = confstr(CS_PATH, null, 0);
+    if (len == 0) {
+        setErrno(ENOENT);
+        return null;
+    }
+
+    const raw = std.c.malloc(len) orelse {
+        setErrno(ENOMEM);
+        return null;
+    };
+    const got = confstr(CS_PATH, @ptrCast(raw), len);
+    if (got == 0 or got > len) {
+        std.c.free(raw);
+        setErrno(ENOENT);
+        return null;
+    }
+
+    owned.* = @ptrCast(raw);
+    return @as([*]u8, @ptrCast(raw))[0 .. got - 1];
+}
+
+fn buildCandidate(dir: []const u8, file: []const u8) ?[*:0]u8 {
+    const prefix = if (dir.len == 0) "." else dir;
+    const len = prefix.len + 1 + file.len + 1;
+    const raw = std.c.malloc(len) orelse {
+        setErrno(ENOMEM);
+        return null;
+    };
+    const buf: [*]u8 = @ptrCast(raw);
+
+    @memcpy(buf[0..prefix.len], prefix);
+    buf[prefix.len] = '/';
+    @memcpy(buf[prefix.len + 1 .. prefix.len + 1 + file.len], file);
+    buf[len - 1] = 0;
+    return @ptrCast(buf);
+}
+
+fn execThroughShell(
+    candidate: [*:0]const u8,
+    argv: [*]?[*:0]u8,
+    envp: [*]?[*:0]u8,
+) c_int {
+    var argc: usize = 0;
+    while (argv[argc] != null)
+        argc += 1;
+
+    const raw = std.c.malloc((argc + 2) * @sizeOf(?[*:0]u8)) orelse {
+        setErrno(ENOMEM);
+        return -1;
+    };
+    const sh_argv: [*]?[*:0]u8 = @ptrCast(@alignCast(raw));
+    sh_argv[0] = @ptrCast(@constCast("sh"));
+    sh_argv[1] = @constCast(candidate);
+    var i: usize = 1;
+    while (i < argc) : (i += 1)
+        sh_argv[i + 1] = argv[i];
+    sh_argv[argc + 1] = null;
+
+    const ret = execve("/bin/sh", sh_argv, envp);
+    std.c.free(raw);
+    return ret;
+}
+
+/// glibc-style execvpe(). argv and envp are borrowed and never modified.
+export fn slave_shim_execvpe(
     file: [*:0]const u8,
     argv: [*]?[*:0]u8,
     envp: [*]?[*:0]u8,
-) c_int;
+) c_int {
+    const file_slice = std.mem.span(file);
+
+    if (std.mem.indexOfScalar(u8, file_slice, '/') != null)
+        return execve(file, argv, envp);
+
+    var owned_path: ?[*]u8 = null;
+    defer if (owned_path) |path| std.c.free(@ptrCast(path));
+
+    var path: []const u8 = undefined;
+    if (pathFromEnv(envp)) |env_path| {
+        if (env_path.len != 0)
+            path = env_path
+        else
+            path = csPath(&owned_path) orelse return -1;
+    } else {
+        path = csPath(&owned_path) orelse return -1;
+    }
+
+    var seen_eacces = false;
+    var it = std.mem.splitScalar(u8, path, ':');
+    while (it.next()) |dir| {
+        const candidate = buildCandidate(dir, file_slice) orelse return -1;
+        const ret = execve(candidate, argv, envp);
+        const err = errno();
+
+        if (ret != -1) {
+            std.c.free(@ptrCast(candidate));
+            return ret;
+        }
+
+        switch (err) {
+            EACCES => seen_eacces = true,
+            ENOENT, ENOTDIR => {},
+            ENOEXEC => {
+                const shell_ret = execThroughShell(candidate, argv, envp);
+                std.c.free(@ptrCast(candidate));
+                return shell_ret;
+            },
+            else => {
+                std.c.free(@ptrCast(candidate));
+                return -1;
+            },
+        }
+
+        std.c.free(@ptrCast(candidate));
+    }
+
+    setErrno(if (seen_eacces) EACCES else ENOENT);
+    return -1;
+}
 
 extern fn fork() c_int;
 extern fn pipe2(fds: *[2]c_int, flags: c_int) c_int;
