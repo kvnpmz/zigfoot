@@ -1913,3 +1913,24 @@ enabled); valgrind still shows fontconfig residue in non-main logs (measured
 above); FreeBSD/aarch64 remain compile-only claims (measured by
 `scripts/check-targets.sh`); ASan is broken in this container (historical
 observation in §15.5a, not re-run on `ab5f4261` — unverified here).
+
+### 15.11 Post-publication hygiene (2026-11-26, after `3a0bc3d6`)
+
+Four behaviour-carrying shim bodies were moved to Zig after publication (the
+fork is now named **zigfoot**):
+
+| Was | Now |
+|---|---|
+| `terminal-shim.c` `url_shim_regex_match()` | `url-mode.zig`, with `regmatch_t` mirrored as probed `RegMatch` |
+| `shm-shim.c` backing file / punch-hole / mmap / seal | `shm.zig` |
+| `main-shim.c` `main_shim_is_directory()` | `misc.zig`; `main-shim.c` deleted |
+| `wayland-shim.c` keyboard/pointer leave wrappers | `wayland.zig` |
+
+Current shim size: **10 files / 2,409 lines** (was 11 / 2,552); `abi_probe.c`
+is 4,163 lines. What remains is generated-C/varargs glue: iface-id and
+registry binding, the `TIOCSWINSZ` ioctl, the fcft text-run wrapper,
+presentation-clock sampling, cursor-image field helpers, the headless
+`wl_shm`/`wl_buffer` sentinels and the listener tables. Gate after the
+change: 9/9 suites in debug, release, ReleaseFast and grapheme-disabled;
+valgrind clean; render parity 1,058 cells; fuzz 24,000 iterations;
+cross-target 10/10; smoke ok.

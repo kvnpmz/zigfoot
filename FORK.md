@@ -42,7 +42,9 @@ frame-rate or compositor-level number is claimed.
 The application modules are Zig, but this is a port, not a pure-Zig rewrite.
 The tree still contains:
 
-* 11 FFI shim files (2,552 lines total) that bridge libc/Wayland/other C APIs;
+* 10 FFI shim files (2,409 lines total) that bridge libc/Wayland/other C APIs;
+  the URL-regex, shm-syscall, directory-test and leave-callback bodies were
+  moved into Zig during the post-publication hygiene pass;
 * generated C for ABI layout probing and Wayland/sRGB data (`abi_probe.c` and
   the generated Wayland and sRGB C files);
 * C test harnesses and benchmark utilities, including the render-parity

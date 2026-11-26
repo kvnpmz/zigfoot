@@ -21,35 +21,40 @@ Base: `9f4f1def`. Audit date: 2026-11-25.
 > below stays as an audit record and its per-row class and body count are
 > historical.
 >
-> **Correction — current shim classification (2026-11-26).** The claim above
-> that the iface-id/registry-bind functions are "reclassified as class (a)",
-> like the broader "all shim lines are class (a)" reading of this table, is
-> **not accurate for the shipped 1.2 tree**. The shims are accessor-only
-> **except these enumerated behaviour-carrying bodies** (verified by source
-> inspection; line numbers are from this checkout):
+> **Update — post-publication hygiene (2026-11-26).** Four of the five
+> behaviour-carrying bodies named in the earlier correction are now Zig:
 >
-> - `terminal-shim.c:725-753` `url_shim_regex_match()` — `regexec()` and
->   match-span extraction (class-c behaviour, kept because `regex_t` and
->   `regmatch_t` are libc-specific);
-> - `shm-shim.c:92-167` — memfd/`SHM_ANON`/`mkostemp` backing-file creation,
->   `fallocate()` punch-hole probing and pool sealing;
-> - `main-shim.c:12-17` `main_shim_is_directory()` — `stat()`/`S_ISDIR()`;
-> - `terminal-shim.c:917-1057` `wayland_shim_iface_id()` and
->   `wayland_shim_registry_bind()` — iface-name dispatch chains and registry
->   binding;
-> - `wayland-shim.c:223-233` — keyboard/pointer leave wrappers that synthesise
->   the leave callbacks.
+> - `url_shim_regex_match()` → `url-mode.zig`, with `regmatch_t` mirrored as a
+>   probed `RegMatch` type;
+> - memfd/`SHM_ANON`/`mkostemp` backing-file creation, punch-hole probe/punch,
+>   `mmap` and sealing → `shm.zig`;
+> - `main_shim_is_directory()` → `misc.zig` (`main-shim.c` deleted);
+> - keyboard/pointer leave wrappers → `wayland.zig`.
 >
-> No module logic is hand-written C; these are the exceptions inside the
-> shim files. The table below is retained unchanged as the original audit
-> snapshot, so its class letters are historical, not a current classification.
+> The shims are now **10 files / 2,409 lines**. What still carries behaviour:
+>
+> - `terminal-shim.c` `wayland_shim_iface_id()`/`wayland_shim_registry_bind()`:
+>   these exist because `wl_registry_bind()` is a generated C static inline
+>   over `wl_proxy_marshal_flags()` and the `wl_*_interface` globals live in
+>   generated C; porting them means reimplementing protocol marshalling;
+> - `terminal-shim.c`: `render_shim_tiocswinsz()` (varargs `ioctl`), the fcft
+>   text-run out-parameter wrapper, presentation-clock sampling and the
+>   cursor-image field helpers;
+> - `shm-shim.c`: the headless `wl_shm`/`wl_buffer` sentinel forwarders, stride
+>   wrapper and format constants;
+> - `wayland-shim.c`: listener tables and add-listener wrappers over generated
+>   protocol structs.
+>
+> No module logic is hand-written C. The table below is retained unchanged as
+> the original audit snapshot, so its class letters are historical, not a
+> current classification.
 
 ## Scope and result
 
 At the original audit base the checkout had 13 `*-shim.c` files, not 11, with
-390 functions and 3,417 lines. The 1.2 tree has **11 files / 2,552 lines**
-(`git ls-files '*shim.c' | xargs wc -l`); the counts below are the historical
-audit snapshot.
+390 functions and 3,417 lines. The current tree has **10 files / 2,409
+lines** (`git ls-files '*shim.c' | xargs wc -l`); the 1.2 snapshot was 11 files /
+2,552 lines, and the counts below are the historical audit snapshot.
 
 - Class a: 259 functions. Keep them.
 - Class b: 57 functions. One dead mirror adapter was deleted.
