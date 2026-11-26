@@ -24,19 +24,10 @@ const PtOrPx = types.PtOrPx;
 // pixman
 // ─────────────────────────────────────────────────────────────────────────
 
-pub const PixmanColor = extern struct {
-    red: u16,
-    green: u16,
-    blue: u16,
-    alpha: u16,
-};
-
-pub const PixmanRectangle16 = extern struct {
-    x: i16,
-    y: i16,
-    width: u16,
-    height: u16,
-};
+// C-ABI mirrors now live in terminal_types.zig, where the generated ABI
+// probe checks them. Keep the local names as aliases for callers.
+pub const PixmanColor = types.PixmanColor;
+pub const PixmanRectangle16 = types.PixmanRectangle16;
 
 pub const PixmanImage = opaque {};
 
@@ -601,15 +592,9 @@ export fn draw_cursor(
 // Cursor dirtiness and the refresh flags (D3b)
 // ─────────────────────────────────────────────────────────────────────────
 
-pub const Timespec = extern struct {
-    tv_sec: isize,
-    tv_nsec: isize,
-};
-
-const Itimerspec = extern struct {
-    it_interval: Timespec,
-    it_value: Timespec,
-};
+// Aliases: terminal_types.zig owns the probed C mirrors.
+pub const Timespec = types.Timespec;
+const Itimerspec = types.Itimerspec;
 
 const CLOCK_MONOTONIC: c_int = 1;
 const LOG_CLASS_DEBUG: c_int = 4;
@@ -2424,12 +2409,7 @@ const OVERLAY_SEARCH: c_int = 1;
 const OVERLAY_FLASH: c_int = 2;
 const OVERLAY_UNICODE_MODE: c_int = 3;
 
-pub const PixmanBox32 = extern struct {
-    x1: i32,
-    y1: i32,
-    x2: i32,
-    y2: i32,
-};
+pub const PixmanBox32 = types.PixmanBox32;
 
 /// Opaque storage for `pixman_region32_t` (a 16-byte extents box plus a data
 /// pointer = 24 bytes on LP64, the same size as `Render.last_overlay_clip`).

@@ -52,6 +52,7 @@ C_TYPES: dict[str, str] = {
     "Cursor": "struct cursor",
     "ScrollRegion": "struct scroll_region",
     "Damage": "struct damage",
+    "DamageNode": "__typeof__(*foot_grid_probe.scroll_damage.head)",
     "Cell": "struct cell",
     "Attributes": "struct attributes",
     "RowData": "struct row_data",
@@ -67,6 +68,7 @@ C_TYPES: dict[str, str] = {
     "Composed": "struct composed",
     "Grid": "struct grid",
     "Sixel": "struct sixel",
+    "SixelNode": "__typeof__(*foot_grid_probe.sixel_images.head)",
     "Vt": "struct vt",
     "VtParam": "struct vt_param",
     "VtSubparams": "struct vt_subparams",
@@ -74,8 +76,10 @@ C_TYPES: dict[str, str] = {
     "Timeval": "struct timeval",
     "PresentationContext": "struct presentation_context",
     "Notification": "struct notification",
+    "NotificationNode": "__typeof__(*foot_terminal_probe.active_notifications.head)",
     "NotificationIcon": "struct notification_icon",
     "Url": "struct url",
+    "UrlNode": "__typeof__(*foot_terminal_probe.url.list.head)",
     "ColorTheme": "struct color_theme",
     "Config": "struct config",
     "ConfigContext": "struct context",
@@ -92,7 +96,10 @@ C_TYPES: dict[str, str] = {
     "KeyBindingManager": "struct key_binding_manager",
     "ConfigKeyBindingList": "struct config_key_binding_list",
     "CustomRegex": "struct custom_regex",
+    "CustomRegexNode": "__typeof__(*foot_config_probe.custom_regexes.head)",
     "PixmanBox32": "pixman_box32_t",
+    "PixmanColor": "pixman_color_t",
+    "PixmanRectangle16": "pixman_rectangle16_t",
     "PixmanPointFixed": "pixman_point_fixed_t",
     "PixmanTriangle": "pixman_triangle_t",
     "PixmanLineFixed": "pixman_line_fixed_t",
@@ -119,6 +126,7 @@ C_TYPES: dict[str, str] = {
     "ShmBufferPool": "struct buffer_pool",
     "ShmBufferPrivate": "struct buffer_private",
     "ShmBufferChain": "struct buffer_chain",
+    "TllBufferPrivate": "__typeof__(foot_shm_chain_probe.bufs)",
     "ShmFormatConstants": "struct shm_format_constants",
     "Server": "struct server",
     "ServerClient": "struct client",
@@ -131,6 +139,7 @@ C_TYPES: dict[str, str] = {
     "LinuxStat": "struct stat",
     "PtOrPx": "struct pt_or_px",
     "Timespec": "struct timespec",
+    "Itimerspec": "struct itimerspec",
     "EpollEvent": "struct epoll_event",
     "TllStr": "__typeof__(foot_tll_str_probe)",
     "EnvVar": "struct env_var",
@@ -139,6 +148,9 @@ C_TYPES: dict[str, str] = {
     "UserNotification": "struct user_notification",
     "UserNotificationNode": "__typeof__(*foot_notification_probe.head)",
     "UserNotifications": "user_notifications_t",
+    # terminal-shim.c keeps this struct private; the declaration below must
+    # stay in sync with it.
+    "FontMetrics": "struct terminal_font_metrics",
 }
 
 NESTED_IN_TERMINAL: dict[str, str] = {
@@ -150,14 +162,18 @@ NESTED_IN_TERMINAL: dict[str, str] = {
 }
 
 # Zig-only helpers with no C counterpart; do not recurse into them.
+# Remaining list heads (TllNotification, UrlList, SixelList, DamageList) are
+# an accepted gap: only their size/offset as fields of the owning struct is
+# pinned, not head/tail/length individually. The node types they allocate or
+# point to are probed directly below.
 SKIP: set[str] = {
     "AsciiPrinterBits", "TllInt", "TllNotification", "UrlList",
-    "SixelList", "DamageList", "DamageNode", "SixelNode", "UrlNode",
-    "NotificationNode", "Itimerspec", "TllBufferPrivate",
-    "FcftGlyphAdvance",
+    "SixelList", "DamageList", "FcftGlyphAdvance",
 }
 
 # C packed structs: the size is checkable, individual members are bit-fields.
+# WlWindowConfigure additionally gets targeted probes for csd_mode and the
+# flag storage (see generate()).
 PACKED: set[str] = {"Attributes", "CsdColorFlags", "WlWindowConfigure"}
 
 # Inline structs whose members are C bit-fields: only the size is checkable.
@@ -404,6 +420,55 @@ def generate() -> str:
         "static user_notifications_t foot_notification_probe;",
         "/* wayland.seats is a tll(struct seat): probe its head and node. */",
         "static struct wayland foot_wayland_probe;",
+        "/* Named containers for other pointer-reached tll() nodes. */",
+        "static struct config foot_config_probe;",
+        "static struct grid foot_grid_probe;",
+        "static struct terminal foot_terminal_probe;",
+        "static struct buffer_chain foot_shm_chain_probe;",
+        "",
+        "/* terminal-shim.c defines this struct internally. Keep this copy in",
+        " * sync with it: unlike the header-backed mirrors, a change in the shim",
+        " * alone cannot be detected by this probe. */",
+        "struct terminal_font_metrics {",
+        "    int height;",
+        "    int descent;",
+        "    int ascent;",
+        "    int max_advance_x;",
+        "};",
+        "",
+        "/* struct wl_window.configure is an anonymous struct containing C",
+        " * bit-fields; offsetof() cannot name a bit-field. Probe the enclosing",
+        " * member directly, and use a shadow with a named `flags` struct to pin",
+        " * the flag storage's offset and size. The static assertions tie the",
+        " * shadow to the real member; individual bit positions are not probed. */",
+        "struct foot_wl_configure_flags_probe {",
+        "    bool is_activated:1;",
+        "    bool is_suspended:1;",
+        "    bool is_fullscreen:1;",
+        "    bool is_maximized:1;",
+        "    bool is_resizing:1;",
+        "    bool is_tiled_top:1;",
+        "    bool is_tiled_bottom:1;",
+        "    bool is_tiled_left:1;",
+        "    bool is_tiled_right:1;",
+        "    bool is_constrained_top:1;",
+        "    bool is_constrained_bottom:1;",
+        "    bool is_constrained_left:1;",
+        "    bool is_constrained_right:1;",
+        "};",
+        "struct foot_wl_configure_probe {",
+        "    int width;",
+        "    int height;",
+        "    struct foot_wl_configure_flags_probe flags;",
+        "    enum csd_mode csd_mode;",
+        "};",
+        '_Static_assert(sizeof(struct foot_wl_configure_probe) ==',
+        '               sizeof(((struct wl_window *)0)->configure),',
+        '               "configure shadow size drifted from wayland.h");',
+        '_Static_assert(offsetof(struct foot_wl_configure_probe, csd_mode) ==',
+        '               offsetof(struct wl_window, configure.csd_mode) -',
+        '               offsetof(struct wl_window, configure),',
+        '               "configure shadow csd_mode offset drifted");',
         "",
         "int main(int argc, char **argv) {",
         "    FILE *out = stdout;",
@@ -425,6 +490,21 @@ def generate() -> str:
                 f"gen_abi_probe: {name} not found in {SRC}")
         emit_type(out, name, "struct terminal", [member],
                   types[name]["fields"], types, [member])
+
+    out += [
+        "    /* struct wl_window.configure: C bit-fields, probed via a shadow. */",
+        '    fprintf(out, "pub const WlWindowConfigure__size: usize = %zu;\\n", '
+        'sizeof(((struct wl_window *)0)->configure));',
+        '    fprintf(out, "pub const WlWindowConfigure_csd_mode__abs: usize = %zu;\\n", '
+        'offsetof(struct wl_window, configure.csd_mode));',
+        '    fprintf(out, "pub const WlWindowConfigure_csd_mode: usize = %zu;\\n", '
+        'offsetof(struct wl_window, configure.csd_mode) -',
+        ' offsetof(struct wl_window, configure));',
+        '    fprintf(out, "pub const WlWindowConfigure_flags: usize = %zu;\\n", '
+        'offsetof(struct foot_wl_configure_probe, flags));',
+        '    fprintf(out, "pub const WlWindowConfigure_flags__size: usize = %zu;\\n", '
+        'sizeof(((struct foot_wl_configure_probe *)0)->flags));',
+    ]
 
     out += [
         "    /* Libc-private regex_t facts and the flag config.zig passes to regcomp(). */",

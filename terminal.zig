@@ -83,12 +83,8 @@ export fn term_free_custom_glyphs(term: *types.Terminal) callconv(.c) void {
 // terminal_types.zig so it has a unit test.
 //
 
-const FontMetrics = extern struct {
-    height: c_int,
-    descent: c_int,
-    ascent: c_int,
-    max_advance_x: c_int,
-};
+// terminal_types.zig owns the probed C mirror of the shim's return type.
+const FontMetrics = types.FontMetrics;
 
 extern fn terminal_shim_fcft_font_metrics(font: *anyopaque) callconv(.c) FontMetrics;
 
