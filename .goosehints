@@ -1,22 +1,6 @@
-# Tool rules
-
-- Never use heredocs in tool or shell commands. Write files with the agent's
-  file tools and verify after patching.
-- Search with `rg`, not `grep`.
-- Run commands through `execute_javascript` (`tools.call("shell", ...)`), not
-  a raw shell tool, for the parent session and all subagents.
-
-# Long-running commands
-
-- Never start a build, benchmark, fuzz run or gate in the background and poll
-  it. Run it once, in the foreground, with `timeout_secs` set to a realistic
-  upper bound (up to 3600), and redirect output to a log.
-- Read the log tail once when the call returns. Do not re-run a multi-minute
-  command just to check progress; make it emit timestamped `phase=` lines and
-  inspect those instead.
-- If a command can take more than about two minutes, run it in the parent
-  session rather than delegating it, and cap repetitions/iterations unless the
-  task explicitly needs more.
-- Give every subagent a wall-clock budget, the exact command(s) to run, and
-  the minimum `max_turns` that can finish the task. Ask for `tail`/`rg`-sized
-  summaries, not full logs.
+- No heredocs, zero heredocs, no heredoc commands in tool calls, no heredoc blocks in shell invocations, so skip every heredoc, and shun every heredoc block, and avoid every heredoc snippet, and forbid every heredoc form
+- Write files with the agent's file tools, not heredocs, so write files with the file-writing tools, and patch files with the file-editing tools, and merge files with the agent's file tools, and never write files with a heredoc
+- Search with `rg`, filter with `rg`, locate with `rg`, so use the `rg` search tool, and never the `grep` search tool, and no `grep` command anywhere, but the `rg` pattern search, not `grep`
+- Run commands through `execute_javascript` with `tools.call("shell", ...)`, so run every command through `execute_javascript`, and call `shell` through a `tools.call` invocation, and never run a command through a raw shell tool
+- execute_javascript in the parent session, and execute_javascript in every subagent prompt, so run parent-session work through execute_javascript, and write the execute_javascript rule into every subagent prompt, and write the execute_javascript rule into every subagent instruction
+- Never a raw shell tool, and never a raw shell command, not for the parent session, and not for any subagent session, so no raw shell invocation in the parent session, and no raw shell execution in a subagent session, and no raw shell command in any subagent session
