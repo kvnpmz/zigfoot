@@ -14,7 +14,7 @@ build uses. All commands below were run on `ab5f4261`.
   glibc, musl and FreeBSD.
 - Only C declarations Zig does not expose (`TIOCSCTTY`, `_CS_PATH`,
   `struct utsname`/`uname`) are hand-written in `slave.zig` (per-platform
-  constants) and `main.zig` (`extern` struct/functions). Zig 0.17.1 removed
+  constants) and `main.zig` (`extern` struct/functions). Zig 0.17 removed
   `@cImport`; keep these narrow hand-written declarations rather than
   translate-c output or generated bindings, and do not pull in headers such
   as `fcntl.h`.

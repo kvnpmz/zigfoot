@@ -76,10 +76,9 @@ In addition to the dev variant of the packages above, you need:
 
 * meson
 * ninja
-* [zig](https://ziglang.org/) **0.17.1** (release commit
-  `be248cc1fdc3cc654f9ec8ba68514bcb93b204fe`) — the port targets this
-  release; `compile_zig.py` checks the 0.17 series, and 0.16 no longer builds
-  the tree.
+* [zig](https://ziglang.org/) **0.17** — the port targets this series;
+  `compile_zig.py` refuses anything else, and 0.16 no longer builds the tree.
+  Both the 0.17.0 release and 0.17.1 pass the gate.
 * wayland protocols
 * ncurses (needed to generate terminfo)
 * scdoc (for man page generation, not needed if documentation is disabled)

@@ -1935,18 +1935,19 @@ change: 9/9 suites in debug, release, ReleaseFast and grapheme-disabled;
 valgrind clean; render parity 1,058 cells; fuzz 24,000 iterations;
 cross-target 10/10; smoke ok.
 
-## 16. Toolchain migration: Zig 0.16.0 → 0.17.1 (2026-11-26)
+## 16. Toolchain migration: Zig 0.16.0 → 0.17 (2026-11-26)
 
 Toolchain only. The foot baseline is unchanged and fixed: upstream **1.28.0 =
 `ab33c9a19d626f8d0ac0bd1adfdba21946ada948` (2026-09-02)**. No upstream fix
-was ported and upstream master was not tracked. Target compiler: Zig
-**0.17.1** (tag commit `be248cc1fdc3cc654f9ec8ba68514bcb93b204fe`); 0.17.0
-(known regressions) and master (0.18-dev) were not targetted, and 0.16.0 no
-longer builds the tree. `compile_zig.py` gates on the `0.17` series.
+was ported and upstream master was not tracked. Target compiler: the Zig
+**0.17** series; `compile_zig.py` gates on that series. Verified on both the
+0.17.0 release and 0.17.1 (tag commit
+`be248cc1fdc3cc654f9ec8ba68514bcb93b204fe`); master (0.18-dev) is not a
+target, and 0.16.0 no longer builds the tree.
 
 ### 16.1 Compile-error classes (mechanical)
 
-| 0.16 construct | Sites | 0.17.1 replacement |
+| 0.16 construct | Sites | 0.17 replacement |
 |---|---|---|
 | `@cImport` (removed builtin) | main.zig (`sys/utsname.h`), slave.zig (`sys/ioctl.h` + `unistd.h`) | hand-written `extern` declarations; see §16.3 |
 | `@typeInfo(T).@"struct".fields` (removed) | terminal_types.zig `expectAbi()` | parallel `field_names`/`field_types` |
@@ -1985,7 +1986,7 @@ x86_64-linux, x86_64-freebsd and aarch64-linux.
   and libc `xmalloc` only; no `DebugAllocator`/`heap.Check`, `ArrayList`,
   `DoublyLinkedList`, `bit_set`, `MultiArrayList` or `.writer()` usage, so
   SafeAllocator and container renames do not apply.
-* **`std.c.termios` on Linux is not libc's layout in 0.17.1.** 0.16 handed
+* **`std.c.termios` on Linux is not libc's layout in 0.17.** 0.16 handed
   out glibc's 60-byte `struct termios` (NCCS=32); 0.17 hands out the kernel
   UAPI struct (NCCS=19, 44 bytes). Passing it to libc `tcgetattr()` would
   write past the object. This was caught by the pty tests (`IUTF8` failures
@@ -2004,22 +2005,23 @@ and per-platform constants (`TIOCSCTTY` 0x540E Linux / 0x20007461 FreeBSD;
 exported constant table against the real macros, so a wrong value fails the
 suite.
 
-### 16.4 Verification (0.16.0 vs 0.17.1, same corpus)
+### 16.4 Verification (0.16.0 vs 0.17, same corpus)
 
-Both toolchains were built from the same source tree (0.16.0 in a worktree at
-`f0a7a8fe`, 0.17.1 in the migrated tree):
+Built from the same source tree: 0.16.0 in a worktree at `f0a7a8fe`, and the
+migrated tree with both 0.17.0 (release) and 0.17.1. The two 0.17 compilers
+produce the same results below (separate build dirs, all checks re-run).
 
-| Check | 0.16.0 | 0.17.1 |
-|---|---|---|
-| meson suites / assertions | 9/9, 1,040 | 9/9, same 1,040 `ok:` lines (diffed, identical) |
-| render parity (C oracle `6b3f557d`) | 1,058 cells, `e5184e0fe5898153` `b7cebabc45627f13` `87c0bab0d0d6829b` | identical cells and all three TOTAL hashes |
-| `fuzz-vt.sh 120` | PASS, 24,000 iterations | PASS, 24,000 iterations |
-| grapheme-disabled, ReleaseSafe | 9/9 | 9/9 |
-| ReleaseFast | — | 9/9 |
-| `check-targets.sh` (FreeBSD/aarch64) | 10/10 | 10/10 |
-| `gen_abi_probe.py --check` | clean | clean |
-| smoke (real compositor) | ok | ok (6 launches) |
+| Check | 0.16.0 | 0.17.0 | 0.17.1 |
+|---|---|---|---|
+| meson suites / assertions | 9/9, 1,040 | 9/9, 1,040 | 9/9, same 1,040 `ok:` lines (diffed, identical to 0.16.0) |
+| render parity (C oracle `6b3f557d`) | 1,058 cells, `e5184e0fe5898153` `b7cebabc45627f13` `87c0bab0d0d6829b` | identical cells and all three hashes | identical cells and all three hashes |
+| `fuzz-vt.sh 120` | PASS, 24,000 iterations | PASS, 24,000 iterations | PASS, 24,000 iterations |
+| grapheme-disabled, ReleaseSafe | 9/9 | 9/9 (ReleaseSafe) | 9/9 |
+| ReleaseFast | — | — | 9/9 |
+| `check-targets.sh` (FreeBSD/aarch64) | 10/10 | 10/10 | 10/10 |
+| `gen_abi_probe.py --check` | clean | clean | clean |
+| smoke (real compositor) | ok | — | ok (6 launches) |
 
-Performance was **not** re-measured for 0.17.1. The numbers in
+Performance was **not** re-measured for 0.17. The numbers in
 `doc/perf-1.2.md` and `FORK.md` remain the 0.16.0 measurements; no frame
 rate or presentation claim is added.

@@ -31,7 +31,7 @@ The current, honest status is:
 * Render parity covers 1,058 cells at three scales against the C oracle
   (`6b3f557d`).
 * In headless microbenchmarks (measured with Zig 0.16.0; not yet re-measured
-  on 0.17.1), VT input is roughly 28% slower than C in `ReleaseSafe` and
+  on 0.17), VT input is roughly 28% slower than C in `ReleaseSafe` and
   roughly 8% slower in `ReleaseFast`; config parsing and rendering are
   roughly at parity.
 
