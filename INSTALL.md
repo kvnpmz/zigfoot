@@ -1,4 +1,14 @@
-# Installing
+# Installing Zigfoot
+
+Zigfoot is an unofficial port of [dnkl/foot](https://codeberg.org/dnkl/foot)
+(upstream version 1.28.0; see [FORK.md](FORK.md)).
+
+* Package/install name: `zigfoot`; installed commands are `zigfoot` and
+  `zigfootclient`.
+* Installing Zigfoot does **not** replace or overwrite a distribution's
+  `foot` package or binary.
+* It shares upstream's `foot.ini` configuration path and the `foot` terminfo
+  identity for compatibility.
 
 1. [Overview](#overview)
 1. [Requirements](#requirements)
@@ -22,14 +32,14 @@
 
 ## Overview
 
-foot makes use of a couple of libraries I have developed:
+Zigfoot uses the same libraries as upstream foot (upstream projects):
 [tllist](https://codeberg.org/dnkl/tllist) and
 [fcft](https://codeberg.org/dnkl/fcft). As such, they will most likely
 not have been installed already. You can either install them as system
-libraries or build them as _subprojects_ in foot.
+libraries or build them as _subprojects_ in Zigfoot.
 
-When building foot, they will first be searched for as system
-libraries. If **found**, foot will link dynamically against them.
+When building Zigfoot, they will first be searched for as system
+libraries. If **found**, Zigfoot will link dynamically against them.
 If **not** found, meson will attempt to download and build them as
 subprojects.
 
@@ -52,7 +62,7 @@ subprojects.
 [^1]: can also be built as subprojects, in which case they are
     statically linked.
 
-If you are packaging foot, you may also want to consider adding the
+If you are packaging Zigfoot, you may also want to consider adding the
 following **optional** dependencies:
 
 * libnotify: desktop notifications by default uses `notify-send`.
@@ -72,10 +82,12 @@ In addition to the dev variant of the packages above, you need:
 * scdoc (for man page generation, not needed if documentation is disabled)
 * llvm (for PGO builds with Clang)
 * [tllist](https://codeberg.org/dnkl/tllist) [^1]
-* systemd (optional, foot will install systemd unit files if detected)
+* systemd (optional, Zigfoot installs its own `zigfoot-server` unit files if
+  detected)
 
-**Zig is required**, not optional. Every foot-owned module is Zig; the
-remaining C is a set of libc-only shims plus two documented exceptions
+**Zig is required**, not optional. Every ported Zigfoot module is Zig; the
+remaining C is a set of FFI shims, generated C and test utilities, plus two
+documented exceptions
 (`slave.c`'s `execvpe()`, which Zig 0.16 cannot express, and `config.c`'s
 35-line `regex_t` wrapper). Each Zig module is a meson `custom_target`
 that runs `compile_zig.py`, which:
@@ -97,7 +109,8 @@ the Zig side checks them at compile time. `meson test` runs
 `ZIG_GLOBAL_CACHE_DIR` to your build environment if you want the Zig cache
 somewhere other than `~/.cache/zig`.
 
-A note on compilers; in general, foot runs **much** faster when
+Upstream C-build note (not measured for the Zig port): in general, foot runs
+**much** faster when
 compiled with gcc instead of clang. A profile-guided gcc build can be
 more than twice as fast as a clang build.
 
@@ -111,7 +124,7 @@ override it (`makepkg` uses `-O2` by default).
 
 ## Other
 
-Foot uses _meson_. If you are unfamiliar with it, the official
+Zigfoot uses _meson_. If you are unfamiliar with it, the official
 [tutorial](https://mesonbuild.com/Tutorial.html) might be a good
 starting point.
 
@@ -131,7 +144,8 @@ reasons for this:
 As of ncurses 2021-07-31, ncurses includes a version of foot's
 terminfo. **The recommendation is to use those**, and only install the
 terminfo definitions from this git repo if the system's ncurses
-predates 2021-07-31.
+predates 2021-07-31. Zigfoot keeps upstream's `foot` and `foot-direct`
+terminfo names and `TERM=foot` for compatibility.
 
 But, note that the foot terminfo definitions in ncurses' lack the
 non-standard capabilities. This mostly affects tmux; without them,
@@ -141,10 +155,10 @@ definitions as well, either in a non-default location, or under a
 different name.
 
 Both have their set of issues. When installing to a non-default
-location, foot will set the environment variable `TERMINFO` in the
+location, Zigfoot will set the environment variable `TERMINFO` in the
 child process. However, there are many situations where this simply
-does not work. See https://codeberg.org/dnkl/foot/issues/695 for
-details.
+does not work. See upstream foot issue 695
+(https://codeberg.org/dnkl/foot/issues/695) for details.
 
 Installing them under a different name generally works well, but will
 break applications that check if `$TERM == foot`.
@@ -154,7 +168,7 @@ if available.
 
 If packaging "our" terminfo definitions, I recommend doing that as a
 separate package, to allow them to be installed on remote systems
-without having to install foot itself.
+without having to install Zigfoot itself.
 
 
 ### Setup
@@ -203,32 +217,32 @@ meson ... -Ddefault-terminfo=foot -Dterminfo-base-name=foot-extra
 
 Finally, `-Dcustom-terminfo-install-location` enables foot's terminfo
 to co-exist with ncurses' version, without changing the terminfo
-names. The idea is that you install foot's terminfo to a non-standard
-location, for example `/usr/share/foot/terminfo`. Use
-`-Dcustom-terminfo-install-location` to tell foot where the terminfo
-is. Foot will set the environment variable `TERMINFO` to this value
+names. The idea is that you install foot-compatible terminfo to a non-standard
+location, for example `/usr/share/zigfoot/terminfo`. Use
+`-Dcustom-terminfo-install-location` to tell Zigfoot where the terminfo
+is. Zigfoot will set the environment variable `TERMINFO` to this value
 (with `${prefix}` added). The value is **relative to ${prefix}**.
 
-Note that there are several issues with this approach:
-https://codeberg.org/dnkl/foot/issues/695.
+Note that there are several issues with this approach; see upstream foot
+issue 695: https://codeberg.org/dnkl/foot/issues/695.
 
-If left unset, foot will **not** set or modify `TERMINFO`.
+If left unset, Zigfoot will **not** set or modify `TERMINFO`.
 
 `-Dterminfo` can be used to disable building the terminfo definitions
 in the meson build. It does **not** change the default value of
 `TERM`, and it does **not** disable `TERMINFO`, if
 `-Dcustom-terminfo-install-location` has been set. Use this if
 packaging the terminfo definitions in a separate package (and the
-build script isn't shared with the 'foot' package).
+build script isn't shared with the 'zigfoot' package).
 
 Example:
 
 ```sh
-meson --prefix=/usr -Dcustom-terminfo-install-location=lib/foot/terminfo
+meson --prefix=/usr -Dcustom-terminfo-install-location=lib/zigfoot/terminfo
 ```
 
-The above tells foot its terminfo definitions will be installed to
-`/usr/lib/foot/terminfo`. This is the value foot will set the
+The above tells Zigfoot its terminfo definitions will be installed to
+`/usr/lib/zigfoot/terminfo`. This is the value Zigfoot will set the
 `TERMINFO` environment variable to.
 
 If `-Dterminfo` is enabled (the default), then the terminfo files will
@@ -241,13 +255,13 @@ and [install the terminfo](#terminfo) files instead.
 
 ### Release build
 
-Below are instructions for building foot either [size
+Below are instructions for building Zigfoot either [size
 optimized](#size-optimized), [performance
 optimized](performance-optimized-non-pgo), or performance
 optimized using [PGO](#performance-optimized-pgo).
 
 PGO - _Profile Guided Optimization_ - is a way to optimize a program
-better than `-O3` can, and is done by compiling foot twice: first to
+better than `-O3` can, and is done by compiling Zigfoot twice: first to
 generate an instrumented version which is used to run a payload that
 exercises the performance critical parts of foot, and then a second
 time to rebuild foot using the generated profiling data to guide
@@ -301,8 +315,8 @@ possible) **require** `LC_CTYPE` to be set to an UTF-8 locale. This is
 Example:
 
 ```sh
-cd foot
-./pgo/pgo.sh auto . /tmp/foot-pgo-build-output
+cd zigfoot
+./pgo/pgo.sh auto . /tmp/zigfoot-pgo-build-output
 ```
 
 (run `./pgo/pgo.sh` to get help on usage)
@@ -366,8 +380,8 @@ We will use the `pgo` binary along with input corpus generated by
 
 ```sh
 ./utils/xtgettcap
-./footclient --version
-./foot --version
+./zigfootclient --version
+./zigfoot --version
 tmp_file=$(mktemp)
 ../../scripts/generate-alt-random-writes \
     --rows=67 \
@@ -387,7 +401,7 @@ tmp_file=$(mktemp)
 rm ${tmp_file}
 ```
 
-The first step, running `./foot --version` and `./footclient
+The first step, running `./zigfoot --version` and `./zigfootclient
 --version` etc, might seem unnecessary, but is needed to ensure we
 have _some_ profiling data for functions not covered by the PGO helper
 binary, for **all** binaries. Without this, the final link phase will
@@ -412,9 +426,9 @@ We will use the script `scripts/generate-alt-random-writes.py`:
 
 ```sh
 ./utils/xtgettcap
-./footclient --version
+./zigfootclient --version
 foot_tmp_file=$(mktemp)
-./foot \
+./zigfoot \
     --config=/dev/null \
     --override tweak.grapheme-shaping=no \
     --term=xterm \
@@ -422,10 +436,10 @@ foot_tmp_file=$(mktemp)
 rm ${foot_tmp_file}
 ```
 
-You should see a foot window open up, with random colored text. The
+You should see a zigfoot window open up, with random colored text. The
 window should close after ~1-2s.
 
-The first step, `./utils/xtgettcap && ./footclient --version`
+The first step, `./utils/xtgettcap && ./zigfootclient --version`
 might seem unnecessary, but is needed to ensure we have _some_
 profiling data for **all** binaries we build. Without this, the final
 link phase will fail.
@@ -433,7 +447,7 @@ link phase will fail.
 
 ##### Use the generated PGO data
 
-Now that we have _generated_ PGO data, we need to rebuild foot. This
+Now that we have _generated_ PGO data, we need to rebuild Zigfoot. This
 time telling meson (and ultimately gcc/clang) to _use_ the PGO data.
 
 If using Clang, now do (this requires _llvm_ to have been installed):
@@ -476,7 +490,7 @@ sed 's/@default_terminfo@/foot/g' foot.info | \
 ```
 
 Where _"output-directory"_ **must** match the value passed to
-`-Dcustom-terminfo-install-location` in the foot build. If
+`-Dcustom-terminfo-install-location` in the Zigfoot build. If
 `-Dcustom-terminfo-install-location` has not been set, `-o
 <output-directory>` can simply be omitted.
 
@@ -491,11 +505,11 @@ tic -o ${DESTDIR}/usr/share/terminfo ...
 
 You can now run it directly from the build directory:
 ```sh
-./foot
+./zigfoot
 ```
 
 Or, if you did not install the terminfo definitions:
 
 ```sh
-./foot --term xterm-256color
+./zigfoot --term xterm-256color
 ```

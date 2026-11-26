@@ -1,24 +1,28 @@
-footclient(1)
+zigfootclient(1)
 
 # NAME
-footclient - start new terminals in a foot server
+zigfootclient - start new terminals in a zigfoot server
 
 # SYNOPSIS
-*footclient* [_OPTIONS_]++
-*footclient* [_OPTIONS_] <_command_> [_COMMAND OPTIONS_]
+*zigfootclient* [_OPTIONS_]++
+*zigfootclient* [_OPTIONS_] <_command_> [_COMMAND OPTIONS_]
 
 All trailing (non-option) arguments are treated as a command, and its
 arguments, to execute (instead of the default shell).
 
 # DESCRIPTION
 
-*footclient* is used together with *foot*(1) in *--server*
+*zigfootclient* is used together with *zigfoot*(1) in *--server*
 mode.
 
 Running it without arguments will open a new terminal window (hosted
-in the foot server), with your default shell. The exit code will be
-that of the terminal. I.e *footclient* does not exit until the
+in the zigfoot server), with your default shell. The exit code will be
+that of the terminal. I.e *zigfootclient* does not exit until the
 terminal has terminated.
+
+Zigfootclient is the client for zigfoot's server mode. Zigfoot is an
+unofficial port of upstream foot 1.28.0; foot.ini and TERM=foot are retained
+for compatibility.
 
 # OPTIONS
 
@@ -27,11 +31,11 @@ terminal has terminated.
 	and *ENVIRONMENT*). Default: _@default_terminfo@_.
 
 *-T*,*--title*=_TITLE_
-	Initial window title. Default: _foot_.
+	Initial window title. Default: _zigfoot_.
 
 *-a*,*--app-id*=_ID_
 	Value to set the *app-id* property on the Wayland window
-	to. Default: _foot_ (normal mode), or _footclient_ (server mode).
+	to. Default: _zigfoot_ (normal mode), or _zigfootclient_ (server mode).
 
 *--class*=_ID_
 	Alias for *--app-id*.
@@ -60,11 +64,11 @@ terminal has terminated.
 
 *-D*,*--working-directory*=_DIR_
 	Initial working directory for the client application. Default:
-	_CWD of footclient_.
+	_CWD of zigfootclient_.
 
 *-s*,*--server-socket*=_PATH_
 	Connect to _PATH_ instead of
-	*$XDG\_RUNTIME\_DIR/foot-$WAYLAND\_DISPLAY.sock*.
+	*$XDG\_RUNTIME\_DIR/zigfoot-$WAYLAND\_DISPLAY.sock*.
 
 *-H*,*--hold*
 	Remain open after child process exits.
@@ -79,12 +83,12 @@ terminal has terminated.
 
 *-E*,*--client-environment*
 	The child process in the new terminal instance will use
-	footclient's environment, instead of the server's.
+	zigfootclient's environment, instead of the server's.
 
 	Environment variables listed in the *Variables set in the child
-	process* section will be overwritten by the foot server. For
+	process* section will be overwritten by the zigfoot server. For
 	example, the new terminal will use *TERM* from the configuration,
-	not footclient's environment.
+	not zigfootclient's environment.
 
 *-d*,*--log-level*={*info*,*warning*,*error*,*none*}
 	Log level, used both for log output on stderr as well as
@@ -97,19 +101,19 @@ terminal has terminated.
 	Show the version number and quit
 
 *-e*
-	Ignored; for compatibility with *xterm -e*. See *foot*(1) for more
+	Ignored; for compatibility with *xterm -e*. See *zigfoot*(1) for more
 	details.
 
 # EXIT STATUS
 
-Footclient will exit with code 220 if there is a failure in footclient
+Zigfootclient will exit with code 220 if there is a failure in zigfootclient
 itself (for example, the server socket does not exist).
 
-If *-N*,*--no-wait* is used, footclient exits with code 0 as soon as
-the foot server has been instructed to open a new window.
+If *-N*,*--no-wait* is used, zigfootclient exits with code 0 as soon as
+the zigfoot server has been instructed to open a new window.
 
-If not, footclient may also exit with code 230. This indicates a
-failure in the foot server.
+If not, zigfootclient may also exit with code 230. This indicates a
+failure in the zigfoot server.
 
 In all other cases the exit code is that of the client application
 (i.e. the shell).
@@ -117,11 +121,11 @@ In all other cases the exit code is that of the client application
 # TERMINFO
 
 Client applications use the terminfo identifier specified by the
-environment variable *TERM* (set by foot) to determine terminal
+environment variable *TERM* (set by zigfoot) to determine terminal
 capabilities.
 
-Foot has two terminfo definitions: *foot* and *foot-direct*, with
-*foot* being the default.
+Zigfoot uses upstream-compatible terminfo definitions *foot* and
+*foot-direct*, with *foot* being the default.
 
 The difference between the two is in the number of colors they
 describe; *foot* describes 256 colors and *foot-direct* 16.7 million
@@ -138,18 +142,18 @@ for 24-bit support. Emacs is one such example.
 
 While using either *foot* or *foot-direct* is strongly recommended, it
 is possible to use e.g. *xterm-256color* as well. This can be useful
-when remoting to a system where foot's terminfo entries cannot easily
+when remoting to a system where zigfoot's terminfo entries cannot easily
 be installed.
 
 Note that terminfo entries can be installed in the user's home
 directory. I.e. if you do not have root access, or if there is no
-distro package for foot's terminfo entries, you can install foot's
+distro package for zigfoot's terminfo entries, you can install zigfoot's
 terminfo entries manually, by copying *foot* and *foot-direct* to
 *~/.terminfo/f/*.
 
 # ENVIRONMENT
 
-## Variables used by footclient
+## Variables used by zigfootclient
 
 *XDG\_RUNTIME\_DIR*
 	Used to construct the default _PATH_ for the *--server-socket*
@@ -159,10 +163,10 @@ terminfo entries manually, by copying *foot* and *foot-direct* to
 	Used to construct the default _PATH_ for the *--server-socket*
 	option, when no explicit argument is given (see above).
 
-If the socket at default _PATH_ does not exist, *footclient* will
+If the socket at default _PATH_ does not exist, *zigfootclient* will
 fallback to the less specific path, with the following priority:
-*$XDG\_RUNTIME\_DIR/foot-$WAYLAND\_DISPLAY.sock*,
-*$XDG\_RUNTIME\_DIR/foot.sock*, */tmp/foot.sock*.
+*$XDG\_RUNTIME\_DIR/zigfoot-$WAYLAND\_DISPLAY.sock*,
+*$XDG\_RUNTIME\_DIR/zigfoot.sock*, */tmp/zigfoot.sock*.
 
 ## Variables set in the child process
 
@@ -177,7 +181,7 @@ fallback to the less specific path, with the following priority:
 	applications that 24-bit RGB colors are supported.
 
 *PWD*
-	Current working directory (at the time of launching foot)
+	Current working directory (at the time of launching zigfoot)
 
 *SHELL*
 	Set to the launched shell, if the shell is valid (it is listed in
@@ -192,26 +196,26 @@ variables may be defined in *foot.ini*(5).
 *TERM_PROGRAM_VERSION*
 	These environment variables are set by certain other terminal
 	emulators. We unset them, to prevent applications from
-	misdetecting foot.
+	misdetecting zigfoot.
 
 In addition to the variables listed above, custom environment
 variables to unset may be defined in *foot.ini*(5).
 
 # Signals
 
-The following signals have special meaning in footclient:
+The following signals have special meaning in zigfootclient:
 
 - SIGUSR1: switch to the dark color theme (*[colors-dark]*).
 - SIGUSR2: switch to the light color theme (*[colors-light]*).
 
-When sending SIGUSR1/SIGUSR2 to a footclient instance, the theme is
+When sending SIGUSR1/SIGUSR2 to a zigfootclient instance, the theme is
 changed in that instance only. This is different from when you send
 SIGUSR1/SIGUSR2 to the server process, where all instances change the
 theme.
 
-Note: for obvious reasons, this is not supported when footclient is
+Note: for obvious reasons, this is not supported when zigfootclient is
 started with *--no-wait*.
 
 # SEE ALSO
 
-*foot*(1)
+*foot.ini*(5), *zigfoot*(1), *zigfoot-ctlseqs*(7)

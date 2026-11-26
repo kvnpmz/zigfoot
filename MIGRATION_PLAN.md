@@ -1,3 +1,8 @@
+> **Historical engineering documentation for the zigfoot port.** This file
+> records the C → Zig migration as planned and measured during development; it
+> is not a current user guide or a claim about the present tree. Throughout
+> the body below, "foot" refers to **upstream foot**, not to zigfoot.
+
 # foot: finishing the C → Zig migration
 
 Status snapshot and a concrete continuation plan.

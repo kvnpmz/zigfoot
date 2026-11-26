@@ -1,11 +1,26 @@
-# ![Logo: a terminal with a foot shaped prompt](icons/hicolor/48x48/apps/foot.png) foot
+# Zigfoot
 
-The fast, lightweight and minimalistic Wayland terminal emulator.
+an unofficial Zig port of foot, the Wayland terminal emulator
 
-[![CI status](https://ci.codeberg.org/api/badges/dnkl/foot/status.svg)](https://ci.codeberg.org/dnkl/foot)
+> **Fork status:** This is an unofficial port, not the upstream project. See
+> [FORK.md](FORK.md) for scope, limitations, AI-assisted development and bug
+> reporting. Upstream is [dnkl/foot](https://codeberg.org/dnkl/foot), base
+> version **1.28.0**; the documented verification snapshot is `66a61615`
+> on top of that release.
+>
+> Verified in this checkout: x86_64 Linux is runtime-tested; FreeBSD and
+> aarch64 are compile-only. Nine test suites pass with 1,040 assertions; render
+> parity covers 1,058 cells at three scales against the C oracle. Terminal
+> input (VT) work is roughly 28% slower than C in `ReleaseSafe` and roughly 8%
+> slower in `ReleaseFast`; config parsing and rendering are roughly at parity.
+> No compositor-frame/FPS measurement was possible here. The application layer
+> is Zig, but FFI shims, generated ABI/Wayland/sRGB C, and test/utility C
+> remain.
 
-[![Packaging status](https://repology.org/badge/vertical-allrepos/foot.svg?columns=4)](https://repology.org/project/foot/versions)
-
+Installed commands are `zigfoot` and `zigfootclient`; the package name is
+`zigfoot` (it does not replace a distribution's `foot` package). For
+compatibility, the configuration file remains `foot.ini` and `TERM` remains
+`foot`.
 
 ## Index
 
@@ -13,7 +28,7 @@ The fast, lightweight and minimalistic Wayland terminal emulator.
 1. [Installing](#installing)
 1. [Configuration](#configuration)
 1. [Troubleshooting](#troubleshooting)
-1. [Why the name 'foot'?](#why-the-name-foot)
+1. [Why 'foot' in the config and TERM?](#why-foot-in-the-config-and-term)
 1. [Fonts](#fonts)
 1. [Shortcuts](#shortcuts)
    1. [Keyboard](#keyboard)
@@ -34,7 +49,7 @@ The fast, lightweight and minimalistic Wayland terminal emulator.
 1. [Supported OSCs](#supported-oscs)
 1. [Programmatically checking if running in foot](#programmatically-checking-if-running-in-foot)
 1. [XTGETTCAP](#xtgettcap)
-1. [No AI / LLM policy](#no-ai-llm-policy)
+1. [No AI / LLM policy (upstream)](#no-ai--llm-policy-upstream)
 1. [Contributing](#contributing)
 1. [Code of Conduct](#code-of-conduct)
 1. [Bugs](#bugs)
@@ -47,8 +62,8 @@ The fast, lightweight and minimalistic Wayland terminal emulator.
 
 ## Features
 
-* Fast (see [benchmarks](doc/benchmark.md), and
-  [performance](https://codeberg.org/dnkl/foot/wiki/Performance))
+* Fast (see [benchmarks](doc/benchmark.md) and the
+  [upstream foot performance notes](https://codeberg.org/dnkl/foot/wiki/Performance))
 * Lightweight, in dependencies, on-disk and in-memory
 * Wayland native
 * DE agnostic
@@ -71,28 +86,33 @@ The fast, lightweight and minimalistic Wayland terminal emulator.
 
 # Installing
 
-See [INSTALL.md](INSTALL.md). Note that building foot now requires Zig
-0.16 in addition to a C compiler: every foot-owned module is Zig, and the
-build runs `zig build-obj` through `compile_zig.py`.
+See [INSTALL.md](INSTALL.md). Building Zigfoot requires **Zig 0.16** and a C
+compiler: the ported modules are Zig and are compiled through
+`compile_zig.py`, while FFI shims and generated C remain.
 
 
 ## Configuration
 
-**foot** can be configured by creating a file
+Zigfoot reads the same `foot.ini` file as upstream foot, for compatibility:
 `$XDG_CONFIG_HOME/foot/foot.ini` (defaulting to
-`~/.config/foot/foot.ini`).  A template for that can usually be found
-in `/etc/xdg/foot/foot.ini` or
-[here](https://codeberg.org/dnkl/foot/src/branch/master/foot.ini).
+`~/.config/foot/foot.ini`). A template can usually be found in
+`/etc/xdg/foot/foot.ini` or in the
+[upstream foot.ini template](https://codeberg.org/dnkl/foot/src/branch/master/foot.ini).
 
-Further information can be found in foot's man page `foot.ini(5)`.
+Further information is in the `foot.ini(5)` man page, whose filename is kept
+for compatibility.
 
 
 ## Troubleshooting
 
-See the [wiki](https://codeberg.org/dnkl/foot/wiki#user-content-troubleshooting)
+See the [upstream foot wiki](https://codeberg.org/dnkl/foot/wiki#user-content-troubleshooting)
 
 
-## Why the name 'foot'?
+## Why 'foot' in the config and TERM?
+
+The name `foot` belongs to upstream foot; this port keeps it in configuration
+and terminal-identification strings for compatibility. In the upstream
+maintainer's words:
 
 I'm bad at names. Most of my projects usually start out as _foo
 something_ (for example, [yambar](https://codeberg.org/dnkl/yambar)
@@ -114,10 +134,10 @@ _fot_, which incidentally means (you guessed it) _foot_.
 **foot** supports all fonts that can be loaded by _freetype_,
 including **bitmap** fonts and **color emoji** fonts.
 
-Foot uses _fontconfig_ to locate and configure the font(s) to
+Zigfoot uses _fontconfig_ to locate and configure the font(s) to
 use. Since fontconfig's fallback mechanism is imperfect, especially
 for monospace fonts (it doesn't prefer monospace fonts even though the
-requested font is one), foot allows you, the user, to configure the
+requested font is one), Zigfoot allows you, the user, to configure the
 fallback fonts to use.
 
 This also means you can configure _each_ fallback font individually;
@@ -165,7 +185,7 @@ These are the default shortcuts. See `man foot.ini` and the example
 <kbd>ctrl</kbd>+<kbd>shift</kbd>+<kbd>n</kbd>
 : Spawn a new terminal. If the shell has been [configured to emit the
   OSC 7 escape
-  sequence](https://codeberg.org/dnkl/foot/wiki#user-content-spawning-new-terminal-instances-in-the-current-working-directory),
+  sequence (upstream foot docs)](https://codeberg.org/dnkl/foot/wiki#user-content-spawning-new-terminal-instances-in-the-current-working-directory),
   the new terminal will start in the current working directory.
 
 <kbd>ctrl</kbd>+<kbd>shift</kbd>+<kbd>o</kbd>
@@ -177,11 +197,11 @@ These are the default shortcuts. See `man foot.ini` and the example
 
 <kbd>ctrl</kbd>+<kbd>shift</kbd>+<kbd>z</kbd>
 : Jump to the previous, currently not visible, prompt. Requires [shell
-  integration](https://codeberg.org/dnkl/foot/wiki#user-content-jumping-between-prompts).
+  integration (upstream foot docs)](https://codeberg.org/dnkl/foot/wiki#user-content-jumping-between-prompts).
 
 <kbd>ctrl</kbd>+<kbd>shift</kbd>+<kbd>x</kbd>
 : Jump to the next prompt. Requires [shell
-  integration](https://codeberg.org/dnkl/foot/wiki#user-content-jumping-between-prompts).
+  integration (upstream foot docs)](https://codeberg.org/dnkl/foot/wiki#user-content-jumping-between-prompts).
 
 
 #### Scrollback search
@@ -278,14 +298,14 @@ These are the default shortcuts. See `man foot.ini` and the example
 
 ## Server (daemon) mode
 
-When run normally, **foot** is a single-window application; if you
-want another window, start another foot process.
+When run normally, **zigfoot** is a single-window application; if you
+want another window, start another zigfoot process.
 
-However, foot can also be run in a _server_ mode. In this mode, one
+However, zigfoot can also be run in a _server_ mode. In this mode, one
 process hosts multiple windows. All Wayland communication, VT parsing
 and rendering is done in the server process.
 
-New windows are opened by running `footclient`, which remains running
+New windows are opened by running `zigfootclient`, which remains running
 until the terminal window is closed, at which point it exits with the
 exit value of the client process (typically the shell).
 
@@ -302,18 +322,18 @@ with, for example, producing output, then other windows will suffer.
 And of course, should the server process crash, **all** windows will
 be gone.
 
-Typical usage would be to start the server process (`foot --server`)
+Typical usage would be to start the server process (`zigfoot --server`)
 when starting your Wayland compositor (i.e. logging in to your
-desktop), and then run `footclient` instead of `foot` whenever you
+desktop), and then run `zigfootclient` instead of `zigfoot` whenever you
 want to launch a new terminal.
 
-Foot supports socket activation, which means `foot --server` will only be
-started the first time you'll run `footclient`. (systemd user units are
+Zigfoot supports socket activation, which means `zigfoot --server` will only
+be started the first time you run `zigfootclient`. (systemd user units are
 included, but it can work with other supervision suites).
 
 ## URLs
 
-Foot supports URL detection. But, unlike many other terminal
+Zigfoot supports URL detection. But, unlike many other terminal
 emulators, where URLs are highlighted when they are hovered and opened
 by clicking on them, foot uses a keyboard driven approach.
 
@@ -348,7 +368,7 @@ terminal reports directory changes.
 
 This is done with the OSC-7 escape sequence. Most shells can be
 scripted to do this, if they do not support it natively. See the
-[wiki](https://codeberg.org/dnkl/foot/wiki#user-content-spawning-new-terminal-instances-in-the-current-working-directory)
+[upstream foot wiki](https://codeberg.org/dnkl/foot/wiki#user-content-spawning-new-terminal-instances-in-the-current-working-directory)
 for details.
 
 
@@ -371,7 +391,7 @@ precmd() {
 ```
 
 See the
-[wiki](https://codeberg.org/dnkl/foot/wiki#user-content-jumping-between-prompts)
+[upstream foot wiki](https://codeberg.org/dnkl/foot/wiki#user-content-jumping-between-prompts)
 for details, and examples for other shells.
 
 ### Piping last command's output
@@ -382,13 +402,13 @@ key bindings):
 
 ```ini
 [key-bindings]
-pipe-command-output=[sh -c "f=$(mktemp); cat - > $f; footclient emacsclient -nw $f; rm $f"] Control+Shift+g
+pipe-command-output=[sh -c "f=$(mktemp); cat - > $f; zigfootclient emacsclient -nw $f; rm $f"] Control+Shift+g
 ```
 
 When pressing <kbd>ctrl</kbd>+<kbd>shift</kbd>+<kbd>g</kbd>, the last
 command's output is written to a temporary file, then an emacsclient
-is started in a new footclient instance. The temporary file is removed
-after the footclient instance has closed.
+is started in a new zigfootclient instance. The temporary file is removed
+after the zigfootclient instance has closed.
 
 For this to work, the shell must emit an OSC-133;C (`\E]133;C\E\\`)
 sequence before command output starts, and an OSC-133;D
@@ -407,7 +427,7 @@ end
 ```
 
 See the
-[wiki](https://codeberg.org/dnkl/foot/wiki#user-content-piping-last-command-s-output)
+[upstream foot wiki](https://codeberg.org/dnkl/foot/wiki#user-content-piping-last-command-s-output)
 for details, and examples for other shells
 
 
@@ -555,13 +575,13 @@ with the terminal emulator itself. Foot implements the following OSCs:
 * `OSC 777` - desktop notification (only the `;notify` sub-command of
   OSC 777 is supported.)
 
-See the **foot-ctlseqs**(7) man page for a complete list of supported
+See the **zigfoot-ctlseqs**(7) man page for a complete list of supported
 control sequences.
 
 
 ## Programmatically checking if running in foot
 
-Foot does **not** set any environment variables that can be used to
+Zigfoot does **not** set any environment variables that can be used to
 identify foot (reading `TERM` is not reliable since the user may have
 chosen to use a different terminfo).
 
@@ -583,7 +603,7 @@ _Primary DA_.
 Thus, a safe way to query the terminal is to request the tertiary,
 secondary and primary DA all at once, in that order. All terminals
 should ignore escape sequences they do not recognize. You will have to
-parse the response (which in foot will consist of all three DA
+parse the response (which in zigfoot will consist of all three DA
 responses, all at once) to determine which requests the terminal
 emulator actually responded to.
 
@@ -615,7 +635,7 @@ XTerm's implementation (as of XTerm-370) only supports querying key
 Kitty has extended this, and also supports querying all integer and
 string capabilities.
 
-Foot supports this, and extends it even further, to also include
+Zigfoot supports this, and extends it even further, to also include
 boolean capabilities. This means foot's entire terminfo can be queried
 via `XTGETTCAP`.
 
@@ -649,28 +669,29 @@ will be answered with a response of the form `uname=$(uname -s)`,
 where `$(uname -s)` is the name of the OS foot was compiled for.
 
 
-# No AI / LLM policy
+# No AI / LLM policy (upstream)
 
-Use of generative AI/LLMs is strictly forbidden for **all**
-contributions to foot.
-
-This includes bug reports and comments on the issue and pull request
-trackers.
+The upstream foot project forbids generative AI/LLMs in contributions to
+**upstream foot**, including its issue and pull request trackers. That policy
+does not apply to this fork: see [FORK.md](FORK.md) for the AI-assisted
+development disclosure and the test suites gating the port.
 
 
 # Contributing
 
-See [Contributing](CONTRIBUTING.md)
+Upstream foot's guidelines are in [CONTRIBUTING](CONTRIBUTING.md). For this
+fork, please open an issue in this repository.
 
 
 # Code of Conduct
 
-See [Code of Conduct](CODE_OF_CONDUCT.md)
+The upstream [Code of Conduct](CODE_OF_CONDUCT.md) is retained for reference.
 
 
 # Bugs
 
-Please report bugs to https://codeberg.org/dnkl/foot/issues
+Please open an issue in this repository for zigfoot bugs; do not use the
+upstream tracker for problems with this port.
 
 Before you open a new issue, please search existing bug reports, both
 open **and** closed ones. Chances are someone else has already
@@ -678,8 +699,8 @@ reported the same issue.
 
 The report should contain the following:
 
-- Foot version (`foot --version`).
-- Log output from foot (run `foot -d info` from another terminal).
+- Zigfoot version (`zigfoot --version`).
+- Log output from zigfoot (run `zigfoot -d info` from another terminal).
 - Which Wayland compositor (and version) you are running.
 - If reporting a crash, please try to provide a `bt full` backtrace
   with symbols.
@@ -690,24 +711,25 @@ The report should contain the following:
 
 ## IRC
 
-Ask questions, hang out, sing praise or just say hi in the `#foot`
-channel on
+Upstream foot community channel (not this fork's support channel): ask
+questions, hang out, sing praise or just say hi in the `#foot` channel on
 [irc.libera.chat](https://web.libera.chat/?channels=#foot). Logs are
 available at https://libera.irclog.whitequark.org/foot.
 
 
 ## Mastodon
 
-Every now and then I post foot related updates on
+Upstream maintainer's announcements (not this fork's channel):
 [@dnkl@social.treehouse.systems](https://social.treehouse.systems/@dnkl)
 
 
 # Credits
 
-* [Ordoviz](https://codeberg.org/Ordoviz), for designing and
-contributing foot's [logo](icons/hicolor/48x48/apps/foot.png).
+* Upstream credit: [Ordoviz](https://codeberg.org/Ordoviz), for designing and
+contributing foot's [logo](icons/hicolor/48x48/apps/zigfoot.png).
 
 
 # License
 
-Foot is released under the [MIT license](LICENSE).
+Zigfoot is distributed under the [MIT license](LICENSE), retaining upstream
+copyright; see [NOTICE](NOTICE) and [FORK.md](FORK.md).

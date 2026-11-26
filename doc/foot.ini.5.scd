@@ -2,16 +2,18 @@ foot.ini(5)
 
 # NAME
 
-foot.ini - configuration file for *foot*(1)
+foot.ini - configuration file for *zigfoot*(1)
 
 # DESCRIPTION
 
-*foot* uses the standard _unix configuration format_, with section based
+Zigfoot is an unofficial port of upstream foot. This file keeps the upstream
+foot.ini name and format for compatibility. Zigfoot uses the standard _unix
+configuration format_, with section based
 key/value pairs. The default section is usually unnamed, i.e. not prefixed
 with a _[section]_. However it can also be explicitly named _[main]_,
 say if it needs to be reopened after any of the other sections.
 
-foot will search for a configuration file in the following locations,
+zigfoot will search for a configuration file in the following locations,
 in this order:
 
 	- *XDG_CONFIG_HOME/foot/foot.ini* (defaulting to
@@ -389,8 +391,8 @@ empty string to be set, but it must be quoted: *KEY=""*
 	
 	Use the *color-theme-switch-dark*, *color-theme-switch-light* and
 	*color-theme-toggle* key bindings to switch between the two themes
-	at runtime, or send SIGUSR1/SIGUSR2 to the foot process (see
-	*foot*(1) for details).
+	at runtime, or send SIGUSR1/SIGUSR2 to the zigfoot process (see
+	*zigfoot*(1) for details).
 	
 	Default: _dark_
 
@@ -437,8 +439,8 @@ empty string to be set, but it must be quoted: *KEY=""*
 *app-id*
 	Value to set the *app-id* property on the Wayland window to. The
 	compositor can use this value to e.g. group multiple windows, or
-	apply window management rules. Default: _foot_ (normal mode), or
-	_footclient_ (server mode).
+	apply window management rules. Default: _zigfoot_ (normal mode), or
+	_zigfootclient_ (server mode).
 
 *toplevel-tag*
 	Value to set the *toplevel-tag* property on the Wayland window
@@ -588,8 +590,8 @@ Note: do not set *TERM* here; use the *term* option in the main
 		notification's actual _title_ and _body_ (message content).
 		
 		_${app-id}_ is replaced with the value of the command line
-		option _--app-id_, and defaults to *foot* (normal mode), or
-		*footclient* (server mode).
+		option _--app-id_, and defaults to *zigfoot* (normal mode), or
+		*zigfootclient* (server mode).
 		
 		_${window-title}_ is replaced with the current window title.
 		
@@ -1457,11 +1459,11 @@ e.g. *search-start=none*.
 
 *prompt-prev*
 	Jump to the previous, currently not visible, prompt (requires
-	shell integration, see *foot*(1)). Default: _Control+Shift+z_.
+	shell integration, see *zigfoot*(1)). Default: _Control+Shift+z_.
 
 *prompt-next*
 	Jump to the next prompt (requires shell integration, see
-	*foot*(1)). Default: _Control+Shift+x_.
+	*zigfoot*(1)). Default: _Control+Shift+x_.
 
 *unicode-input*
 	Input a Unicode character by typing its codepoint in hexadecimal,
@@ -1503,8 +1505,8 @@ e.g. *search-start=none*.
 	*color-theme-toggle* toggles between the primary and alternative
 	color themes.
 	
-	Note: you can also send SIGUSR1/SIGUSR2 to the foot process to
-	change the theme (see *foot*(1) for details.)
+	Note: you can also send SIGUSR1/SIGUSR2 to the zigfoot process to
+	change the theme (see *zigfoot*(1) for details.)
 	
 	Default: _none_
 
@@ -2179,4 +2181,4 @@ any of these options.
 
 # SEE ALSO
 
-*foot*(1), *footclient*(1)
+*foot.ini*(5), *zigfoot*(1), *zigfootclient*(1), *zigfoot-ctlseqs*(7)

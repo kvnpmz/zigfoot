@@ -2,11 +2,13 @@
 
 ## 1.2 C → Zig port comparison
 
-See [perf-1.2.md](perf-1.2.md) for the C → Zig port comparison. This
-environment has **no compositor**, so there are **no FPS or startup-time
-numbers measured here**; none are inferred or fabricated. The vtebench tables
-below are historical 2022 measurements on the listed hardware, not
-measurements of the 1.2 port.
+See [perf-1.2.md](perf-1.2.md) for the C → Zig port comparison. The linked
+report contains measurements for the zigfoot port against the C oracle; the
+tables below are unchanged historical 2022 figures and are not port
+measurements. This environment has **no compositor**, so there are **no FPS or
+startup-time numbers measured here**; none are inferred or fabricated. The
+vtebench tables below are historical 2022 measurements on the listed hardware,
+not measurements of the 1.2 port.
 
 ## vtebench
 

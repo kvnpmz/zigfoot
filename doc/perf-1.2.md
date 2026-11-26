@@ -4,7 +4,9 @@ Date of measurement: **2026-11-26T09:11:17Z**. HEAD:
 `66a61615ade98711419b6a343e6bc5b5c30c6fa1`. C oracle:
 `6b3f557daaae17f4572fd7e850767f5c607a3caa` (the ref used by
 `scripts/render-parity.sh`). All numbers below come from one end-to-end run of
-`scripts/perf-compare.sh`; none are estimated or copied from elsewhere.
+`scripts/perf-compare.sh`; none are estimated or copied from elsewhere. All
+figures here are measurements for the zigfoot port against the C oracle, not
+measurements of an upstream foot release.
 
 ## Scope and methodology
 
