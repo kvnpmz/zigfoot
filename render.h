@@ -105,9 +105,6 @@ struct presentation_context {
     struct timeval commit;
 };
 
-void render_shim_presentation_stat_get(
-    size_t *total, size_t *zero, size_t *one, size_t *two);
-
 struct csd_data {
     int x;
     int y;

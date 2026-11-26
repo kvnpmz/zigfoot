@@ -712,7 +712,13 @@ export fn render_refresh_app_id(term: *Terminal) callconv(.c) void {
     const app_id: [*:0]const u8 =
         if (term.app_id) |id| id else term.conf.?.app_id.?;
 
-    wayland_shim_xdg_toplevel_set_app_id(term.window.?.xdg_toplevel, app_id);
+    // Same guard as render_update_title(): C dereferences unconditionally, and
+    // the rate limiter can expire under valgrind, so the harness's bare window
+    // reached wl_proxy_get_version(NULL) here (harness SIGSEGV, V-01 family).
+    const window = term.window orelse return;
+    const toplevel = window.xdg_toplevel orelse return;
+
+    wayland_shim_xdg_toplevel_set_app_id(toplevel, app_id);
 }
 
 export fn render_refresh_icon(term: *Terminal) callconv(.c) void {
@@ -2949,18 +2955,30 @@ export fn render_shim_presentation_stat_add(frames: c_uint) callconv(.c) void {
         presentation_statistics.zero += 1;
 }
 
-/// The C DESTRUCTOR keeps the exit-time logging attribute; this supplies the
-/// counters without exposing Zig global storage to C.
-export fn render_shim_presentation_stat_get(
-    total: *usize,
-    zero: *usize,
-    one: *usize,
-    two: *usize,
-) callconv(.c) void {
-    total.* = presentation_statistics.total;
-    zero.* = presentation_statistics.zero;
-    one.* = presentation_statistics.one;
-    two.* = presentation_statistics.two;
+/// Exit-time summary of the presentation frame counts.
+///
+/// C kept this in a `__attribute__((destructor))` in terminal-shim.c, which the
+/// C runtime runs after `main` returns. Zig has no destructor attribute with
+/// the same ordering across linkers, so main.zig calls this as its last
+/// statement — after `log_deinit()`, which only closes syslog, i.e. at the same
+/// point in the process's life. Keeping it here also keeps the counters, which
+/// are Zig globals, out of C.
+export fn render_log_presentation_statistics() callconv(.c) void {
+    const stats = presentation_statistics;
+    if (stats.total == 0)
+        return;
+
+    const total: f64 = @floatFromInt(stats.total);
+    log_msg(
+        LOG_CLASS_INFO,
+        "render",
+        "render.zig",
+        @intCast(@src().line),
+        "presentation statistics: zero=%f%%, one=%f%%, two=%f%%",
+        100.0 * @as(f64, @floatFromInt(stats.zero)) / total,
+        100.0 * @as(f64, @floatFromInt(stats.one)) / total,
+        100.0 * @as(f64, @floatFromInt(stats.two)) / total,
+    );
 }
 
 export fn render_init(fdm: *Fdm, wayl: *types.Wayland) callconv(.c) ?*Renderer {

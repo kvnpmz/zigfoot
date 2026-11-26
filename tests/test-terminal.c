@@ -66,6 +66,8 @@
 #include <math.h>
 
 /* Ported to render.zig; exposed for the harness only. */
+void render_log_presentation_statistics(void);
+void render_shim_presentation_stat_add(unsigned frames);
 unsigned render_presentation_frame_count(int64_t total_us, float refresh);
 int render_url_format_label(char32_t *label, const char32_t *key,
                             const char32_t *url, bool show_url,
@@ -1437,6 +1439,48 @@ test_sgr_bad_colour_keeps_parsing(void)
 
     term_free(term);
 }
+/* render_log_presentation_statistics(): C ran this from a DESTRUCTOR after
+ * main returned; the port calls it as main's last statement. It must respect
+ * the log level and print one INFO line when there are frames to report. */
+static void
+test_presentation_statistics_log(void)
+{
+    int fds[2];
+    xassert(pipe(fds) == 0);
+
+    fflush(stderr);
+    int saved = dup(STDERR_FILENO);
+    xassert(saved >= 0);
+    xassert(dup2(fds[1], STDERR_FILENO) >= 0);
+
+    /* Silent at LOG_CLASS_NONE ... */
+    log_init(LOG_COLORIZE_NEVER, false, LOG_FACILITY_USER, LOG_CLASS_NONE);
+    render_shim_presentation_stat_add(0);
+    render_log_presentation_statistics();
+
+    /* ... and one line at INFO. */
+    log_init(LOG_COLORIZE_NEVER, false, LOG_FACILITY_USER, LOG_CLASS_INFO);
+    render_shim_presentation_stat_add(2);
+    render_log_presentation_statistics();
+
+    fflush(stderr);
+    xassert(dup2(saved, STDERR_FILENO) >= 0);
+    close(saved);
+    close(fds[1]);
+
+    char buf[1024];
+    ssize_t n = read(fds[0], buf, sizeof(buf) - 1);
+    close(fds[0]);
+    if (n < 0)
+        n = 0;
+    buf[n] = '\0';
+
+    check(strstr(buf, "presentation statistics: zero=") != NULL,
+          "the exit-time statistics line is printed at INFO");
+
+    /* Restore the harness default (no logging). */
+    log_init(LOG_COLORIZE_NEVER, false, LOG_FACILITY_USER, LOG_CLASS_NONE);
+}
 /* osc.c sets LOG_ENABLE_DBG 0, so an unknown OSC sequence is silent even
  * in a debug build; the port used to print it to stderr (audit VT-06). */
 static void
@@ -1551,6 +1595,14 @@ test_base64_final_size(void)
     pid_t pid = fork();
     xassert(pid >= 0);
     if (pid == 0) {
+        /* The abort is the point; keep its Zig panic trace out of the log so
+         * the valgrind gate sees no noise from an expected child death. */
+        int devnull = open("/dev/null", O_WRONLY);
+        if (devnull >= 0) {
+            dup2(devnull, STDOUT_FILENO);
+            dup2(devnull, STDERR_FILENO);
+            close(devnull);
+        }
         char bad[4];
         base64_encode_final((const uint8_t *)"a", 0, bad);
         _exit(0); /* silently encoding "====" is the bug */
@@ -8327,6 +8379,7 @@ main(void)
     test_sgr_bad_colour_keeps_parsing();
     test_osc_unknown_is_silent();
     test_cursor_outside_region();
+    test_presentation_statistics_log();
     test_allocator_contract();
     test_base64_final_size();
     test_set_fonts();

@@ -94,6 +94,7 @@ extern fn log_init(
     log_level: c_int,
 ) callconv(.c) void;
 extern fn log_deinit() callconv(.c) void;
+extern fn render_log_presentation_statistics() callconv(.c) void;
 extern fn log_msg(log_class: c_int, module: [*:0]const u8, file: [*:0]const u8, lineno: c_int, fmt: [*:0]const u8, ...) callconv(.c) void;
 extern fn log_errno(log_class: c_int, module: [*:0]const u8, file: [*:0]const u8, lineno: c_int, fmt: [*:0]const u8, ...) callconv(.c) void;
 extern fn log_errno_provided(log_class: c_int, module: [*:0]const u8, file: [*:0]const u8, lineno: c_int, errnum: c_int, fmt: [*:0]const u8, ...) callconv(.c) void;
@@ -1055,5 +1056,8 @@ export fn main(argc_in: c_int, argv_in: [*]?[*:0]u8) c_int {
     logInfo("goodbye", .{});
     fcft_fini();
     log_deinit();
+
+    // Last statement, where C's exit-time destructor used to run.
+    render_log_presentation_statistics();
     return if (ret == EXIT_SUCCESS and !as_server) shutdown_ctx.exit_code else ret;
 }

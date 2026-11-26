@@ -1525,29 +1525,15 @@ int terminal_shim_grid_row_absolute_in_view(const struct grid *grid, int row_no)
 }
 
 /* ======================================================================
- * The last of render.c (D3l4). The exit-time presentation logger keeps C's
- * DESTRUCTOR attribute; its counters and the context allocation are in
- * render.zig. Protocol listener tables remain generated-struct knowledge.
+ * The last of render.c (D3l4). The exit-time presentation logger and its
+ * counters are Zig now: render.zig owns render_log_presentation_statistics()
+ * and main.zig calls it as its last statement. Protocol listener tables remain
+ * generated-struct knowledge.
  * ====================================================================== */
 
 void fdm_hook_refresh_pending_terminals(struct fdm *fdm, void *data);
 
 /* render_init()/render_destroy() are in render.zig (D3k1). */
-
-static void DESTRUCTOR
-log_presentation_statistics(void)
-{
-    size_t total, zero, one, two;
-    render_shim_presentation_stat_get(&total, &zero, &one, &two);
-
-    if (total == 0)
-        return;
-
-    LOG_INFO("presentation statistics: zero=%f%%, one=%f%%, two=%f%%",
-             100. * zero / total,
-             100. * one / total,
-             100. * two / total);
-}
 
 /* Ported to render.zig: the callbacks, not the tables. */
 void sync_output(

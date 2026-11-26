@@ -4036,6 +4036,10 @@ extern fn pthread_create(
     func: *const fn (?*anyopaque) callconv(.c) ?*anyopaque,
     arg: ?*anyopaque,
 ) callconv(.c) c_int;
+const RENDER_WORKER_STACK_SIZE: usize = 16 * 1024 * 1024;
+
+extern fn pthread_attr_init(attr: *anyopaque) callconv(.c) c_int;
+extern fn pthread_attr_setstacksize(attr: *anyopaque, size: usize) callconv(.c) c_int;
 extern fn terminal_shim_thrd_err_as_string(err: c_int) callconv(.c) [*:0]const u8;
 extern fn render_worker_thread(ctx: ?*anyopaque) callconv(.c) ?*anyopaque;
 extern fn xcalloc(nmemb: usize, size: usize) callconv(.c) ?*anyopaque;
@@ -4092,12 +4096,22 @@ export fn initialize_render_workers(term: *types.Terminal) callconv(.c) bool {
     term.render.workers.threads = xcalloc(count, @sizeOf(u64));
     const threads: [*]u64 = @ptrCast(@alignCast(term.render.workers.threads.?));
 
+    // Render workers get an explicit stack size. A Debug (-O Debug) build
+    // peaks above the 8 MiB pthread default while rendering a row for a wide
+    // grid: 8 MiB crashes deterministically (SIGSEGV inside whatever library
+    // call runs at the boundary), 12 MiB and 16 MiB are clean. ReleaseSafe
+    // needs well under 8 MiB. 16 MiB is lazy-committed, so the cost is address
+    // space only. Shrinking the Debug frames is tracked as a follow-up.
+    var attr: [64]u8 align(16) = undefined;
+    _ = pthread_attr_init(&attr);
+    _ = pthread_attr_setstacksize(&attr, RENDER_WORKER_STACK_SIZE);
+
     var i: usize = 0;
     while (i < count) : (i += 1) {
         const ctx: *RenderWorkerContext = @ptrCast(@alignCast(xmalloc(@sizeOf(RenderWorkerContext)).?));
         ctx.* = .{ .my_id = @intCast(1 + i), .term = term };
 
-        const ret = pthread_create(@ptrCast(&threads[i]), null, &render_worker_thread, ctx);
+        const ret = pthread_create(@ptrCast(&threads[i]), &attr, &render_worker_thread, ctx);
         if (ret != THRD_SUCCESS) {
             log_msg(
                 LOG_CLASS_ERROR,
