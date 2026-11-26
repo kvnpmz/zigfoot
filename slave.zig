@@ -51,7 +51,7 @@ const SlaveConstants = extern struct {
 
 // These values are C macros and differ per platform. Read them from the
 // target libc headers, then expose the same private struct to the C harness.
-const O_RDWR: c_int = @intFromEnum(std.posix.ACCMODE.RDWR);
+const O_RDWR: c_int = @backingInt(std.posix.ACCMODE.RDWR);
 const O_CLOEXEC: c_int = @as(c_int, 1) << @bitOffsetOf(std.posix.O, "CLOEXEC");
 const O_NONBLOCK: c_int = @as(c_int, 1) << @bitOffsetOf(std.posix.O, "NONBLOCK");
 const F_GETFL: c_int = @intCast(std.posix.F.GETFL);
@@ -128,7 +128,7 @@ comptime {
 
 extern fn tcgetattr(fd: c_int, termios: *Termios) c_int;
 extern fn tcsetattr(fd: c_int, action: c_int, termios: *const Termios) c_int;
-const TCSANOW: c_int = @intFromEnum(std.posix.TCSA.NOW);
+const TCSANOW: c_int = @backingInt(std.posix.TCSA.NOW);
 
 /// Enable IUTF8 on the pty slave: return 0 on success, 1 if the attributes
 /// cannot be read, 2 if they cannot be written (the C shim's contract).
@@ -168,8 +168,8 @@ export fn slave_shim_reset_signals() bool {
     _ = sigemptyset(&dfl.mask);
     _ = sigemptyset(&mask);
     if (sigprocmask(std.posix.SIG.SETMASK, &mask, null) < 0 or
-        sigaction(@intFromEnum(std.posix.SIG.HUP), &dfl, null) < 0 or
-        sigaction(@intFromEnum(std.posix.SIG.PIPE), &dfl, null) < 0)
+        sigaction(@backingInt(std.posix.SIG.HUP), &dfl, null) < 0 or
+        sigaction(@backingInt(std.posix.SIG.PIPE), &dfl, null) < 0)
     {
         return false;
     }
@@ -183,14 +183,14 @@ export fn slave_shim_terminfo_path() ?[*:0]const u8 {
     return path.ptr;
 }
 
-const EACCES: c_int = @intFromEnum(std.c.E.ACCES);
-const ENOENT: c_int = @intFromEnum(std.c.E.NOENT);
-const ENOTDIR: c_int = @intFromEnum(std.c.E.NOTDIR);
-const ENOEXEC: c_int = @intFromEnum(std.c.E.NOEXEC);
-const ENOMEM: c_int = @intFromEnum(std.c.E.NOMEM);
-const ESTALE: c_int = @intFromEnum(std.c.E.STALE);
-const ENODEV: c_int = @intFromEnum(std.c.E.NODEV);
-const ETIMEDOUT: c_int = @intFromEnum(std.c.E.TIMEDOUT);
+const EACCES: c_int = @backingInt(std.c.E.ACCES);
+const ENOENT: c_int = @backingInt(std.c.E.NOENT);
+const ENOTDIR: c_int = @backingInt(std.c.E.NOTDIR);
+const ENOEXEC: c_int = @backingInt(std.c.E.NOEXEC);
+const ENOMEM: c_int = @backingInt(std.c.E.NOMEM);
+const ESTALE: c_int = @backingInt(std.c.E.STALE);
+const ENODEV: c_int = @backingInt(std.c.E.NODEV);
+const ETIMEDOUT: c_int = @backingInt(std.c.E.TIMEDOUT);
 
 extern fn execve(path: [*:0]const u8, argv: [*]?[*:0]u8, envp: [*]?[*:0]u8) c_int;
 extern fn confstr(name: c_int, buf: ?[*]u8, len: usize) usize;
@@ -448,7 +448,7 @@ const UnResult = enum { ok, no_more, fail };
 
 fn isWouldBlock(e: c_int) bool {
     // EWOULDBLOCK == EAGAIN on Linux; only EAGAIN exists in std.c.E.
-    return e == @intFromEnum(std.c.E.AGAIN);
+    return e == @backingInt(std.c.E.AGAIN);
 }
 
 fn writeStr(fd: c_int, s: []const u8) bool {

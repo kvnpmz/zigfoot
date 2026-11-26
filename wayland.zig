@@ -121,8 +121,8 @@ export fn output_geometry(
     mon.inch = @floatCast(@sqrt(mw * mw + mh * mh) * 0.03937008);
     mon.make = strdupOrNull(make);
     mon.model = strdupOrNull(model);
-    mon.subpixel = @enumFromInt(subpixel);
-    mon.transform = @enumFromInt(transform);
+    mon.subpixel = @fromBackingInt(@intCast(subpixel));
+    mon.transform = @fromBackingInt(@intCast(transform));
 
     outputUpdatePpi(mon);
 }
@@ -805,7 +805,7 @@ export fn csd_instantiate(win: *types.WlWindow) callconv(.c) void {
     const wayl = waylandOf(win);
     std.debug.assert(@intFromPtr(wayl) != 0);
 
-    const minimize: usize = @intFromEnum(types.CsdSurface.minimize);
+    const minimize: usize = @backingInt(types.CsdSurface.minimize);
     var i: usize = 0;
     while (i < minimize) : (i += 1) {
         const ret = wayl_win_subsurface_new(win, &win.csd.surface[i], true);
@@ -815,7 +815,7 @@ export fn csd_instantiate(win: *types.WlWindow) callconv(.c) void {
     while (i < types.CSD_SURF_COUNT) : (i += 1) {
         const ret = wayl_win_subsurface_new_with_custom_parent(
             win,
-            win.csd.surface[@intFromEnum(types.CsdSurface.title)].surface.surf,
+            win.csd.surface[@backingInt(types.CsdSurface.title)].surface.surf,
             &win.csd.surface[i],
             true,
         );
@@ -997,7 +997,7 @@ export fn wayl_win_destroy(win_in: ?*types.WlWindow) callconv(.c) void {
             if (seat.touch.surface != null and
                 wayland_shim_surface_get_user_data(seat.touch.surface) == @as(?*anyopaque, win))
             {
-                seat.touch.state = @enumFromInt(TOUCH_STATE_IDLE);
+                seat.touch.state = @fromBackingInt(@intCast(TOUCH_STATE_IDLE));
                 seat.touch.surface = null;
             }
         }

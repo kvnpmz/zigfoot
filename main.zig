@@ -357,12 +357,12 @@ fn fdm_sigusr(fdm: *Fdm, signo: c_int, data: ?*anyopaque) callconv(.c) bool {
     return true;
 }
 
-const SIGHUP: c_int = @intFromEnum(std.posix.SIG.HUP);
-const SIGINT: c_int = @intFromEnum(std.posix.SIG.INT);
-const SIGPIPE: c_int = @intFromEnum(std.posix.SIG.PIPE);
-const SIGTERM: c_int = @intFromEnum(std.posix.SIG.TERM);
-const SIGUSR1: c_int = @intFromEnum(std.posix.SIG.USR1);
-const SIGUSR2: c_int = @intFromEnum(std.posix.SIG.USR2);
+const SIGHUP: c_int = @backingInt(std.posix.SIG.HUP);
+const SIGINT: c_int = @backingInt(std.posix.SIG.INT);
+const SIGPIPE: c_int = @backingInt(std.posix.SIG.PIPE);
+const SIGTERM: c_int = @backingInt(std.posix.SIG.TERM);
+const SIGUSR1: c_int = @backingInt(std.posix.SIG.USR1);
+const SIGUSR2: c_int = @backingInt(std.posix.SIG.USR2);
 
 const SigSet = std.c.sigset_t;
 const Sigaction = std.c.Sigaction;
@@ -401,8 +401,8 @@ fn sanitizeSignals() void {
     const rtmax = signalCount();
     var i: c_int = 1;
     while (i < rtmax) : (i += 1) {
-        if (i == @intFromEnum(std.posix.SIG.KILL) or
-            i == @intFromEnum(std.posix.SIG.STOP))
+        if (i == @backingInt(std.posix.SIG.KILL) or
+            i == @backingInt(std.posix.SIG.STOP))
         {
             continue;
         }
@@ -436,7 +436,7 @@ fn term_shutdown_cb(data: ?*anyopaque, exit_code: c_int) callconv(.c) void {
     ctx.exit_code = exit_code;
 }
 
-const O_WRONLY: c_int = @intFromEnum(std.posix.ACCMODE.WRONLY);
+const O_WRONLY: c_int = @backingInt(std.posix.ACCMODE.WRONLY);
 const O_CREAT: c_int = @as(c_int, 1) << @bitOffsetOf(std.posix.O, "CREAT");
 const O_EXCL: c_int = @as(c_int, 1) << @bitOffsetOf(std.posix.O, "EXCL");
 const O_CLOEXEC: c_int = @as(c_int, 1) << @bitOffsetOf(std.posix.O, "CLOEXEC");
@@ -945,12 +945,12 @@ export fn main(argc_in: c_int, argv_in: [*]?[*:0]u8) c_int {
             while (true) {
                 owned_cwd = @ptrCast(xrealloc(owned_cwd, buf_len));
                 std.c._errno().* = 0;
-                if (getcwd(owned_cwd.?, buf_len) == null and std.c._errno().* != @intFromEnum(std.posix.E.RANGE)) {
+                if (getcwd(owned_cwd.?, buf_len) == null and std.c._errno().* != @backingInt(std.posix.E.RANGE)) {
                     logErrno("failed to get current working directory");
                     break :out;
                 }
                 buf_len *= 2;
-                if (std.c._errno().* != @intFromEnum(std.posix.E.RANGE))
+                if (std.c._errno().* != @backingInt(std.posix.E.RANGE))
                     break;
             }
             cwd = owned_cwd;

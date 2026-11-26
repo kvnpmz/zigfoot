@@ -29,7 +29,7 @@ export fn user_notification_add_owned(
         null;
 
     node.* = .{
-        .item = .{ .kind = @enumFromInt(kind), .text = text },
+        .item = .{ .kind = @fromBackingInt(@intCast(kind)), .text = text },
         .prev = tail,
         .next = null,
     };

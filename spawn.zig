@@ -5,8 +5,8 @@ const SignalHandler = std.c.Sigaction.handler_fn;
 
 const O_CLOEXEC: c_int = @as(c_int, 1) << @bitOffsetOf(std.posix.O, "CLOEXEC");
 const SIG_SETMASK: c_int = std.posix.SIG.SETMASK;
-const SIGHUP: c_int = @intFromEnum(std.posix.SIG.HUP);
-const SIGPIPE: c_int = @intFromEnum(std.posix.SIG.PIPE);
+const SIGHUP: c_int = @backingInt(std.posix.SIG.HUP);
+const SIGPIPE: c_int = @backingInt(std.posix.SIG.PIPE);
 const SIG_DFL: ?SignalHandler = std.posix.SIG.DFL;
 const SIG_ERR: ?SignalHandler = std.posix.SIG.ERR;
 const LOG_CLASS_ERROR: c_int = 1;

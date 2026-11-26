@@ -69,7 +69,7 @@ export fn csi_sgr(term: *types.Terminal) callconv(.c) void {
                     term.vt.underline.style = style;
                     term.vt.attrs.underline = style != .none;
                     term.bits_affecting_ascii_printer._.underline_style =
-                        @intFromEnum(style) > @intFromEnum(UnderlineStyle.single);
+                        @backingInt(style) > @backingInt(UnderlineStyle.single);
                 } else {
                     term.bits_affecting_ascii_printer._.underline_style = false;
                 }
@@ -108,7 +108,7 @@ export fn csi_sgr(term: *types.Terminal) callconv(.c) void {
 
             // Regular foreground colors
             30, 31, 32, 33, 34, 35, 36, 37 => {
-                term.vt.attrs.fg_src = @intCast(@intFromEnum(COLOR_BASE16));
+                term.vt.attrs.fg_src = @intCast(@backingInt(COLOR_BASE16));
                 term.vt.attrs.fg = @intCast(param - 30);
             },
 
@@ -164,23 +164,23 @@ export fn csi_sgr(term: *types.Terminal) callconv(.c) void {
                     term.bits_affecting_ascii_printer._.underline_color = true;
                     term_update_ascii_printer(term);
                 } else if (param == 38) {
-                    term.vt.attrs.fg_src = @intCast(@intFromEnum(src));
+                    term.vt.attrs.fg_src = @intCast(@backingInt(src));
                     term.vt.attrs.fg = @intCast(color);
                 } else {
-                    term.vt.attrs.bg_src = @intCast(@intFromEnum(src));
+                    term.vt.attrs.bg_src = @intCast(@backingInt(src));
                     term.vt.attrs.bg = @intCast(color);
                 }
             },
 
-            39 => term.vt.attrs.fg_src = @intFromEnum(COLOR_DEFAULT),
+            39 => term.vt.attrs.fg_src = @backingInt(COLOR_DEFAULT),
 
             // Regular background colors
             40, 41, 42, 43, 44, 45, 46, 47 => {
-                term.vt.attrs.bg_src = @intCast(@intFromEnum(COLOR_BASE16));
+                term.vt.attrs.bg_src = @intCast(@backingInt(COLOR_BASE16));
                 term.vt.attrs.bg = @intCast(param - 40);
             },
 
-            49 => term.vt.attrs.bg_src = @intFromEnum(COLOR_DEFAULT),
+            49 => term.vt.attrs.bg_src = @backingInt(COLOR_DEFAULT),
 
             59 => {
                 term.vt.underline.color_src = COLOR_DEFAULT;
@@ -191,13 +191,13 @@ export fn csi_sgr(term: *types.Terminal) callconv(.c) void {
 
             // Bright foreground colors
             90, 91, 92, 93, 94, 95, 96, 97 => {
-                term.vt.attrs.fg_src = @intCast(@intFromEnum(COLOR_BASE16));
+                term.vt.attrs.fg_src = @intCast(@backingInt(COLOR_BASE16));
                 term.vt.attrs.fg = @intCast(param - 90 + 8);
             },
 
             // Bright background colors
             100, 101, 102, 103, 104, 105, 106, 107 => {
-                term.vt.attrs.bg_src = @intCast(@intFromEnum(COLOR_BASE16));
+                term.vt.attrs.bg_src = @intCast(@backingInt(COLOR_BASE16));
                 term.vt.attrs.bg = @intCast(param - 100 + 8);
             },
 
@@ -285,7 +285,7 @@ export fn xtsave(term: *types.Terminal, param: c_uint) callconv(.c) void {
     switch (param) {
         1 => csi_xtsave_set(term, XTSAVE_APPLICATION_CURSOR_KEYS, term.cursor_keys_mode == CURSOR_KEYS_APPLICATION),
         5 => csi_xtsave_set(term, XTSAVE_REVERSE, term.reverse),
-        6 => csi_xtsave_set(term, XTSAVE_ORIGIN, @intFromEnum(term.origin) != 0),
+        6 => csi_xtsave_set(term, XTSAVE_ORIGIN, @backingInt(term.origin) != 0),
         7 => csi_xtsave_set(term, XTSAVE_AUTO_MARGIN, term.auto_margin),
         9 => {}, // mouse_x10 disabled
         12 => csi_xtsave_set(term, XTSAVE_CURSOR_BLINK, term.cursor_blink.decset),
@@ -719,7 +719,7 @@ export fn decrqm(term: *const types.Terminal, param: c_uint) callconv(.c) Decrpm
         1070 => decrpm(sixel_get_use_private_palette(t)),
         2004 => decrpm(term.bracketed_paste),
         2026 => decrpm(term.render.app_sync_updates.enabled),
-        2027 => if (@intFromEnum(t.conf.?.tweak.grapheme_width_method) != GRAPHEME_WIDTH_DOUBLE)
+        2027 => if (@backingInt(t.conf.?.tweak.grapheme_width_method) != GRAPHEME_WIDTH_DOUBLE)
             .permanently_reset
         else
             decrpm(t.grapheme_shaping),
@@ -826,7 +826,7 @@ fn case0Dispatch(term: *types.Terminal, final: u8) void {
 
             var reply: [32]u8 = undefined;
             const has_sixel = term.conf.?.tweak.sixel;
-            const osc52 = @intFromEnum(term.conf.?.security.osc52);
+            const osc52 = @backingInt(term.conf.?.security.osc52);
             const has_osc52 = (osc52 == OSC52_ENABLED or osc52 == OSC52_COPY_ENABLED);
 
             const sixel_str: [*:0]const u8 = if (has_sixel) ";4" else "";
@@ -1403,7 +1403,7 @@ fn caseQuestion(term: *types.Terminal, final: u8) void {
             else
                 .not_recognized;
             var reply: [32]u8 = undefined;
-            const n = xsnprintf(&reply, reply.len, "\x1b[%u;%u$y", param, @intFromEnum(status));
+            const n = xsnprintf(&reply, reply.len, "\x1b[%u;%u$y", param, @backingInt(status));
             term_to_slave(term, &reply, n);
         },
         'u' => { // kitty keyboard protocol query
@@ -1506,12 +1506,12 @@ fn caseSpace(term: *types.Terminal, final: u8) void {
     const param = vtParamGet(term, 0, 0);
     switch (param) {
         0 => {
-            term.cursor_style = @enumFromInt(@intFromEnum(term.conf.?.cursor.style));
+            term.cursor_style = @fromBackingInt(@intCast(@backingInt(term.conf.?.cursor.style)));
             term.cursor_blink.deccsusr = term.conf.?.cursor.blink.enabled;
             term_cursor_blink_update(term);
         },
         1, 2 => {
-            term.cursor_style = if (@intFromEnum(term.conf.?.cursor.style) == 3) .hollow else .block;
+            term.cursor_style = if (@backingInt(term.conf.?.cursor.style) == 3) .hollow else .block;
         },
         3, 4 => {
             term.cursor_style = .underline;
@@ -1562,7 +1562,7 @@ fn caseQuestionDollar(term: *types.Terminal, final: u8) void {
     const param: c_uint = @intCast(vtParamGet(term, 0, 0));
     const status = decrqm(term, param);
     var reply: [32]u8 = undefined;
-    const n = xsnprintf(&reply, reply.len, "\x1b[?%u;%u$y", param, @intFromEnum(status));
+    const n = xsnprintf(&reply, reply.len, "\x1b[?%u;%u$y", param, @backingInt(status));
     term_to_slave(term, &reply, n);
 }
 

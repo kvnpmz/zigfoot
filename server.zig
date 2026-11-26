@@ -130,8 +130,8 @@ const SOL_SOCKET: c_int = @intCast(std.posix.SOL.SOCKET);
 const SO_DOMAIN: c_int = @intCast(std.posix.SO.DOMAIN);
 const SO_ACCEPTCONN: c_int = @intCast(std.posix.SO.ACCEPTCONN);
 const SO_TYPE: c_int = @intCast(std.posix.SO.TYPE);
-const SIGUSR1: c_int = @intFromEnum(std.posix.SIG.USR1);
-const SIGUSR2: c_int = @intFromEnum(std.posix.SIG.USR2);
+const SIGUSR1: c_int = @backingInt(std.posix.SIG.USR1);
+const SIGUSR2: c_int = @backingInt(std.posix.SIG.USR2);
 const NON_ZERO_OPT: c_int = @divTrunc(std.math.minInt(c_int), 7);
 const MAX_SETUP_SIZE: u32 = 128 * 1024;
 const EXIT_CODE_NO_MONITORS: c_int = -26;
@@ -703,7 +703,7 @@ fn tryConnect(sock_path: [*:0]const u8) ConnectStatus {
 
 /// Exported under its C name so the harness can compare it with the macros.
 export fn server_try_connect(sock_path: [*:0]const u8) callconv(.c) c_int {
-    return @intFromEnum(tryConnect(sock_path));
+    return @backingInt(tryConnect(sock_path));
 }
 
 fn setSocketFdFlags(fd: c_int) bool {

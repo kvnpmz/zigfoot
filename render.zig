@@ -2023,7 +2023,7 @@ export fn render_csd_title(term: *Terminal, info: *const CsdData, buf: *Buffer) 
     const win = term.window.?;
     std.debug.assert(win.csd_mode == .yes);
 
-    const surf = &win.csd.surface[@intFromEnum(types.CsdSurface.title)];
+    const surf = &win.csd.surface[@backingInt(types.CsdSurface.title)];
     if (info.width == 0 or info.height == 0)
         return;
 
@@ -2062,10 +2062,10 @@ export fn render_csd_title(term: *Terminal, info: *const CsdData, buf: *Buffer) 
 export fn render_csd_border(term: *Terminal, surf_idx: types.CsdSurface, info: *const CsdData, buf: *Buffer) callconv(.c) void {
     const win = term.window.?;
     std.debug.assert(win.csd_mode == .yes);
-    std.debug.assert(@intFromEnum(surf_idx) >= @intFromEnum(types.CsdSurface.left) and
-        @intFromEnum(surf_idx) <= @intFromEnum(types.CsdSurface.bottom));
+    std.debug.assert(@backingInt(surf_idx) >= @backingInt(types.CsdSurface.left) and
+        @backingInt(surf_idx) <= @backingInt(types.CsdSurface.bottom));
 
-    const surf = &win.csd.surface[@intCast(@intFromEnum(surf_idx))].surface;
+    const surf = &win.csd.surface[@intCast(@backingInt(surf_idx))].surface;
 
     if (info.width == 0 or info.height == 0)
         return;
@@ -2145,10 +2145,10 @@ export fn render_csd_border(term: *Terminal, surf_idx: types.CsdSurface, info: *
 export fn render_csd_button(term: *Terminal, surf_idx: types.CsdSurface, info: *const CsdData, buf: *Buffer) callconv(.c) void {
     const win = term.window.?;
     std.debug.assert(win.csd_mode == .yes);
-    std.debug.assert(@intFromEnum(surf_idx) >= @intFromEnum(types.CsdSurface.minimize) and
-        @intFromEnum(surf_idx) <= @intFromEnum(types.CsdSurface.close));
+    std.debug.assert(@backingInt(surf_idx) >= @backingInt(types.CsdSurface.minimize) and
+        @backingInt(surf_idx) <= @backingInt(types.CsdSurface.close));
 
-    const surf = &win.csd.surface[@intCast(@intFromEnum(surf_idx))].surface;
+    const surf = &win.csd.surface[@intCast(@backingInt(surf_idx))].surface;
 
     if (info.width == 0 or info.height == 0)
         return;
@@ -2225,7 +2225,7 @@ export fn render_csd(term: *Terminal) callconv(.c) void {
     var heights: [types.CSD_SURF_COUNT]c_int = undefined;
 
     for (0..types.CSD_SURF_COUNT) |i| {
-        const surf_idx: types.CsdSurface = @enumFromInt(@as(c_int, @intCast(i)));
+        const surf_idx: types.CsdSurface = @fromBackingInt(@intCast(@as(c_int, @intCast(i))));
         infos[i] = get_csd_data(term, surf_idx);
 
         const width = infos[i].width;
@@ -2254,15 +2254,15 @@ export fn render_csd(term: *Terminal) callconv(.c) void {
     var bufs: [types.CSD_SURF_COUNT]?*Buffer = undefined;
     shm_get_many(@ptrCast(@alignCast(term.render.chains.csd.?)), types.CSD_SURF_COUNT, &widths, &heights, &bufs);
 
-    var i: usize = @intFromEnum(types.CsdSurface.left);
-    while (i <= @intFromEnum(types.CsdSurface.bottom)) : (i += 1)
-        render_csd_border(term, @enumFromInt(@as(c_int, @intCast(i))), &infos[i], bufs[i].?);
+    var i: usize = @backingInt(types.CsdSurface.left);
+    while (i <= @backingInt(types.CsdSurface.bottom)) : (i += 1)
+        render_csd_border(term, @fromBackingInt(@intCast(@as(c_int, @intCast(i)))), &infos[i], bufs[i].?);
 
-    i = @intFromEnum(types.CsdSurface.minimize);
-    while (i <= @intFromEnum(types.CsdSurface.close)) : (i += 1)
-        render_csd_button(term, @enumFromInt(@as(c_int, @intCast(i))), &infos[i], bufs[i].?);
+    i = @backingInt(types.CsdSurface.minimize);
+    while (i <= @backingInt(types.CsdSurface.close)) : (i += 1)
+        render_csd_button(term, @fromBackingInt(@intCast(@as(c_int, @intCast(i)))), &infos[i], bufs[i].?);
 
-    render_csd_title(term, &infos[@intFromEnum(types.CsdSurface.title)], bufs[@intFromEnum(types.CsdSurface.title)].?);
+    render_csd_title(term, &infos[@backingInt(types.CsdSurface.title)], bufs[@backingInt(types.CsdSurface.title)].?);
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -5639,7 +5639,7 @@ fn renderXcursorUpdate(seat: *types.Seat) void {
             const wp_shape: c_int = if (custom_shape != 0)
                 custom_shape
             else
-                cursor_shape_to_server_shape(@intFromEnum(shape));
+                cursor_shape_to_server_shape(@backingInt(shape));
 
             log_msg(LOG_CLASS_DEBUG, "render", "render.zig", @intCast(@src().line), "setting %scursor shape using cursor-shape-v1", @as([*:0]const u8, if (custom_shape != 0) "custom " else ""));
 
@@ -5841,7 +5841,7 @@ export fn render_xcursor_set(
                 }
             }
         } else {
-            const names = cursor_shape_to_string(@intFromEnum(shape));
+            const names = cursor_shape_to_string(@backingInt(shape));
             std.debug.assert(names[0] != null);
 
             var i: usize = 0;
@@ -5858,7 +5858,7 @@ export fn render_xcursor_set(
             const first: [*:0]const u8 = if (shape == .custom)
                 term.mouse_user_cursor.?
             else
-                cursor_shape_to_string(@intFromEnum(shape))[0];
+                cursor_shape_to_string(@backingInt(shape))[0];
             log_msg(LOG_CLASS_ERROR, "render", "render.zig", @intCast(@src().line), "failed to load xcursor pointer '%s', and all of its fallbacks", first);
             return false;
         }

@@ -1411,7 +1411,7 @@ export fn kitty_text_size_impl(term: *types.Terminal, string: [*:0]u8) callconv(
     }
 
     var calculated_width: usize = 0;
-    const method = @intFromEnum(term.conf.?.tweak.grapheme_width_method);
+    const method = @backingInt(term.conf.?.tweak.grapheme_width_method);
     if (method == GRAPHEME_WIDTH_WCSWIDTH) calculated_width = all_cp_width else if (method == GRAPHEME_WIDTH_MAX) calculated_width = max_cp_width else if (method == GRAPHEME_WIDTH_DOUBLE) calculated_width = @min(max_cp_width, 2);
 
     const width: usize = if (forced_width == 0) calculated_width else @intCast(forced_width);

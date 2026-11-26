@@ -394,7 +394,7 @@ export fn shm_shim_create_backing_file() callconv(.c) c_int {
             std.c.MFD.CLOEXEC | std.c.MFD.ALLOW_SEALING | MFD_NOEXEC_SEAL,
         );
         var fd = memfd_create(name, flags);
-        if (fd < 0 and std.c._errno().* == @as(c_int, @intFromEnum(std.os.linux.E.INVAL))) {
+        if (fd < 0 and std.c._errno().* == @as(c_int, @backingInt(std.os.linux.E.INVAL))) {
             fd = memfd_create(
                 name,
                 @intCast(std.c.MFD.CLOEXEC | std.c.MFD.ALLOW_SEALING),
@@ -545,7 +545,7 @@ const page_size_cache = struct {
 
 fn page_size() usize {
     if (page_size_cache.size == 0) {
-        const n = std.c.sysconf(@intFromEnum(std.c._SC.PAGESIZE));
+        const n = std.c.sysconf(@backingInt(std.c._SC.PAGESIZE));
         if (n <= 0) {
             logErrno("failed to get page size");
             page_size_cache.size = 4096;

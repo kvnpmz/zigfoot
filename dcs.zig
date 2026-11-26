@@ -298,7 +298,7 @@ fn decrqssUnhook(term: *types.Terminal) void {
             {
                 var value: [8]u8 = undefined;
                 const v = std.fmt.bufPrint(&value, "4:{d}", .{
-                    @intFromEnum(term.vt.underline.style),
+                    @backingInt(term.vt.underline.style),
                 }) catch return;
                 appendSgrAttrN(&reply, &len, v);
             } else {
@@ -311,7 +311,7 @@ fn decrqssUnhook(term: *types.Terminal) void {
         if (a.strikethrough) appendSgrAttrN(&reply, &len, "9");
 
         // fg
-        switch (@as(types.ColorSource, @enumFromInt(a.fg_src))) {
+        switch (@as(types.ColorSource, @fromBackingInt(@intCast(a.fg_src)))) {
             .default => {},
             .base16 => {
                 var value: [8]u8 = undefined;
@@ -336,7 +336,7 @@ fn decrqssUnhook(term: *types.Terminal) void {
         }
 
         // bg
-        switch (@as(types.ColorSource, @enumFromInt(a.bg_src))) {
+        switch (@as(types.ColorSource, @fromBackingInt(@intCast(a.bg_src)))) {
             .default => {},
             .base16 => {
                 var value: [8]u8 = undefined;

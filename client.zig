@@ -75,9 +75,9 @@ extern fn sigemptyset(set: *std.posix.sigset_t) c_int;
 const SOCK_STREAM: c_int = std.posix.SOCK.STREAM;
 const AF_UNIX: c_int = std.posix.AF.UNIX;
 const MSG_NOSIGNAL: c_int = std.posix.MSG.NOSIGNAL;
-const EINTR: c_int = @intFromEnum(std.c.E.INTR);
+const EINTR: c_int = @backingInt(std.c.E.INTR);
 const ERANGE: c_int = 34;
-const ENOENT: c_int = @intFromEnum(std.c.E.NOENT);
+const ENOENT: c_int = @backingInt(std.c.E.NOENT);
 const S_IFDIR: u32 = std.posix.S.IFDIR;
 
 // Shared with misc.zig; terminal_types.zig owns and probes the Linux mirror.
@@ -142,7 +142,7 @@ fn sigintHandler(signo: std.posix.SIG) callconv(.c) void {
 }
 
 fn sigusrHandler(signo: std.posix.SIG) callconv(.c) void {
-    sigusr = @bitCast(@intFromEnum(signo));
+    sigusr = @bitCast(@backingInt(signo));
 }
 
 /// Send all bytes, matching the C client's EINTR and MSG_NOSIGNAL behavior.
@@ -668,10 +668,10 @@ export fn footclient_main(argc: c_int, argv: [*][*:0]u8) callconv(.c) c_int {
     };
     _ = sigemptyset(&sa_int.mask);
     _ = sigemptyset(&sa_usr.mask);
-    if (sigaction(@intFromEnum(std.posix.SIG.INT), &sa_int, null) < 0 or
-        sigaction(@intFromEnum(std.posix.SIG.TERM), &sa_int, null) < 0 or
-        sigaction(@intFromEnum(std.posix.SIG.USR1), &sa_usr, null) < 0 or
-        sigaction(@intFromEnum(std.posix.SIG.USR2), &sa_usr, null) < 0)
+    if (sigaction(@backingInt(std.posix.SIG.INT), &sa_int, null) < 0 or
+        sigaction(@backingInt(std.posix.SIG.TERM), &sa_int, null) < 0 or
+        sigaction(@backingInt(std.posix.SIG.USR1), &sa_usr, null) < 0 or
+        sigaction(@backingInt(std.posix.SIG.USR2), &sa_usr, null) < 0)
     {
         logErrno("failed to register signal handlers", .{});
         return ret;

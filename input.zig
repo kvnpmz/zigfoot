@@ -2069,11 +2069,11 @@ export fn keymap_lookup(
     var count: usize = 0;
     const info = keymap_data_for_sym(sym, &count) orelse return null;
 
-    const cursor_keys_mode: c_int = @intFromEnum(term.cursor_keys_mode);
+    const cursor_keys_mode: c_int = @backingInt(term.cursor_keys_mode);
     const keypad_keys_mode: c_int = if (term.num_lock_modifier)
         KEYPAD_NUMERICAL
     else
-        @intFromEnum(term.keypad_keys_mode);
+        @backingInt(term.keypad_keys_mode);
 
     var j: usize = 0;
     while (j < count) : (j += 1) {
@@ -2731,15 +2731,15 @@ export fn touch_is_active(seat: *const Seat) callconv(.c) bool {
     // Read the state as a plain int: the C enum has a negative member
     // (TOUCH_STATE_INHIBITED = -1), and switching on the mirrored Zig enum
     // here mis-compiled in ReleaseSafe (it reported "active" for idle).
-    const state: c_int = @bitCast(@intFromEnum(seat.touch.state));
+    const state: c_int = @bitCast(@backingInt(seat.touch.state));
     return switch (state) {
-        @intFromEnum(types.TouchState.inhibited),
-        @intFromEnum(types.TouchState.idle),
+        @backingInt(types.TouchState.inhibited),
+        @backingInt(types.TouchState.idle),
         => false,
 
-        @intFromEnum(types.TouchState.held),
-        @intFromEnum(types.TouchState.dragging),
-        @intFromEnum(types.TouchState.scrolling),
+        @backingInt(types.TouchState.held),
+        @backingInt(types.TouchState.dragging),
+        @backingInt(types.TouchState.scrolling),
         => true,
 
         else => false,
@@ -3945,7 +3945,7 @@ fn mouseButtonsConst(seat: *const Seat) *const tll.Tll(types.ButtonTracker) {
 /// The touch state as a plain integer: the C enum has a negative member
 /// (see touch_is_active()).
 fn touchState(seat: *const Seat) c_int {
-    return @bitCast(@intFromEnum(seat.touch.state));
+    return @bitCast(@backingInt(seat.touch.state));
 }
 
 fn pointerIsOnButton(
@@ -4038,11 +4038,11 @@ export fn wl_pointer_leave(
 
     if (seat.wl_touch != null) {
         const state = touchState(seat);
-        if (state == @intFromEnum(types.TouchState.inhibited)) {
+        if (state == @backingInt(types.TouchState.inhibited)) {
             seat.touch.state = .idle;
-        } else if (state == @intFromEnum(types.TouchState.held) or
-            state == @intFromEnum(types.TouchState.dragging) or
-            state == @intFromEnum(types.TouchState.scrolling))
+        } else if (state == @backingInt(types.TouchState.held) or
+            state == @backingInt(types.TouchState.dragging) or
+            state == @backingInt(types.TouchState.scrolling))
         {
             return;
         }
@@ -4169,7 +4169,7 @@ export fn wl_pointer_motion(
     const buttons = mouseButtons(seat);
     if (buttons.len() > 0) {
         const tracker = buttons.frontConst();
-        surf_kind = @enumFromInt(tracker.surf_kind);
+        surf_kind = @fromBackingInt(@intCast(tracker.surf_kind));
         button = tracker.button;
         send_to_client = tracker.send_to_client;
     }
@@ -4264,7 +4264,7 @@ export fn wl_pointer_motion(
                     const divisor: c_int = @intFromFloat(@as(f32, @floatFromInt(distance)) *
                         term.conf.?.scrollback.multiplier / term.scale);
 
-                    selection_start_scroll_timer(term, @divTrunc(400_000_000, if (divisor > 0) divisor else 1), @intFromEnum(auto_scroll_direction), seat.mouse.col);
+                    selection_start_scroll_timer(term, @divTrunc(400_000_000, if (divisor > 0) divisor else 1), @backingInt(auto_scroll_direction), seat.mouse.col);
                 }
 
                 if (term.selection.ongoing and
@@ -4348,7 +4348,7 @@ export fn wl_pointer_button(
 
     if (state == WL_POINTER_BUTTON_STATE_PRESSED) {
         if (seat.wl_touch != null and
-            touchState(seat) == @intFromEnum(types.TouchState.idle))
+            touchState(seat) == @backingInt(types.TouchState.idle))
         {
             seat.touch.state = .inhibited;
         }
@@ -4390,7 +4390,7 @@ export fn wl_pointer_button(
         // pointer is no longer over it.
         buttons.pushBack(.{
             .button = @intCast(button),
-            .surf_kind = @intFromEnum(term.active_surface),
+            .surf_kind = @backingInt(term.active_surface),
             .send_to_client = false,
         });
 
@@ -4404,7 +4404,7 @@ export fn wl_pointer_button(
         while (it.next()) |node| {
             if (node.item.button == button) {
                 have_button = true;
-                surf_kind = @enumFromInt(node.item.surf_kind);
+                surf_kind = @fromBackingInt(@intCast(node.item.surf_kind));
                 send_to_client = node.item.send_to_client;
                 buttons.removeNode(node);
                 break;
@@ -4412,7 +4412,7 @@ export fn wl_pointer_button(
         }
 
         if (seat.wl_touch != null and
-            touchState(seat) == @intFromEnum(types.TouchState.inhibited))
+            touchState(seat) == @backingInt(types.TouchState.inhibited))
         {
             if (buttons.len() == 0)
                 seat.touch.state = .idle;
@@ -4786,7 +4786,7 @@ export fn wl_touch_down(
 ) callconv(.c) void {
     const seat: *Seat = @ptrCast(@alignCast(data orelse return));
 
-    if (touchState(seat) != @intFromEnum(types.TouchState.idle))
+    if (touchState(seat) != @backingInt(types.TouchState.idle))
         return;
 
     const win: *types.WlWindow = @ptrCast(@alignCast(wayland_shim_surface_get_user_data(surface) orelse return));
@@ -4805,7 +4805,7 @@ export fn wl_touch_down(
     seat.touch.serial = serial;
     seat.touch.time = time +% term.conf.?.touch.long_press_delay;
     seat.touch.surface = surface;
-    seat.touch.surface_kind = @intFromEnum(term_surface_kind(term, surface));
+    seat.touch.surface_kind = @backingInt(term_surface_kind(term, surface));
     seat.touch.id = id;
 }
 
@@ -4830,17 +4830,17 @@ export fn wl_touch_up(
     const old_term = seat.mouse_focus;
     const old_active_surface = term.active_surface;
     seat.mouse_focus = term;
-    term.active_surface = @enumFromInt(seat.touch.surface_kind);
+    term.active_surface = @fromBackingInt(@intCast(seat.touch.surface_kind));
 
     // C falls through HELD -> DRAGGING -> SCROLLING, so a held touch gets
     // both the press and the release, and every terminal state clears the
     // active surface.
-    if (state == @intFromEnum(types.TouchState.held)) {
+    if (state == @backingInt(types.TouchState.held)) {
         wl_pointer_button(seat, null, seat.touch.serial, time, @intCast(BTN_LEFT), WL_POINTER_BUTTON_STATE_PRESSED);
         wl_pointer_button(seat, null, serial, time, @intCast(BTN_LEFT), WL_POINTER_BUTTON_STATE_RELEASED);
-    } else if (state == @intFromEnum(types.TouchState.dragging)) {
+    } else if (state == @backingInt(types.TouchState.dragging)) {
         wl_pointer_button(seat, null, serial, time, @intCast(BTN_LEFT), WL_POINTER_BUTTON_STATE_RELEASED);
-    } else if (state != @intFromEnum(types.TouchState.scrolling)) {
+    } else if (state != @backingInt(types.TouchState.scrolling)) {
         bug("input.zig", @intCast(@src().line), "wl_touch_up", "Bad touch state: %d", state);
     }
 
@@ -4873,9 +4873,9 @@ export fn wl_touch_motion(
     const old_term = seat.mouse_focus;
     const old_active_surface = term.active_surface;
     seat.mouse_focus = term;
-    term.active_surface = @enumFromInt(seat.touch.surface_kind);
+    term.active_surface = @fromBackingInt(@intCast(seat.touch.surface_kind));
 
-    if (state == @intFromEnum(types.TouchState.held)) {
+    if (state == @backingInt(types.TouchState.held)) {
         if (time <= seat.touch.time and term.active_surface == .grid) {
             if (touchToScroll(seat, term, surface_x, surface_y))
                 seat.touch.state = .scrolling;
@@ -4884,9 +4884,9 @@ export fn wl_touch_motion(
             seat.touch.state = .dragging;
             wl_pointer_motion(seat, null, time, surface_x, surface_y);
         }
-    } else if (state == @intFromEnum(types.TouchState.dragging)) {
+    } else if (state == @backingInt(types.TouchState.dragging)) {
         wl_pointer_motion(seat, null, time, surface_x, surface_y);
-    } else if (state == @intFromEnum(types.TouchState.scrolling)) {
+    } else if (state == @backingInt(types.TouchState.scrolling)) {
         _ = touchToScroll(seat, term, surface_x, surface_y);
     } else {
         bug("input.zig", @intCast(@src().line), "wl_touch_motion", "Bad touch state: %d", state);
@@ -4911,7 +4911,7 @@ export fn wl_touch_cancel(
     _ = wl_touch;
     const seat: *Seat = @ptrCast(@alignCast(data orelse return));
 
-    if (touchState(seat) == @intFromEnum(types.TouchState.inhibited))
+    if (touchState(seat) == @backingInt(types.TouchState.inhibited))
         return;
 
     seat.touch.state = .idle;

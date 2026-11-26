@@ -184,13 +184,13 @@ export fn action_execute(term: *types.Terminal, c: u8) callconv(.c) void {
         0x0e => {
             term.charsets.selected = G1;
             term.bits_affecting_ascii_printer._.charset =
-                term.charsets.set[@as(usize, @intCast(@intFromEnum(term.charsets.selected)))] != CHARSET_ASCII;
+                term.charsets.set[@as(usize, @intCast(@backingInt(term.charsets.selected)))] != CHARSET_ASCII;
             term_update_ascii_printer(term);
         },
         0x0f => {
             term.charsets.selected = G0;
             term.bits_affecting_ascii_printer._.charset =
-                term.charsets.set[@as(usize, @intCast(@intFromEnum(term.charsets.selected)))] != CHARSET_ASCII;
+                term.charsets.set[@as(usize, @intCast(@backingInt(term.charsets.selected)))] != CHARSET_ASCII;
             term_update_ascii_printer(term);
         },
         else => {},
@@ -290,13 +290,13 @@ export fn action_esc_dispatch(term: *types.Terminal, final: u8) callconv(.c) voi
             'n' => {
                 term.charsets.selected = G2;
                 term.bits_affecting_ascii_printer._.charset =
-                    term.charsets.set[@as(usize, @intCast(@intFromEnum(term.charsets.selected)))] != CHARSET_ASCII;
+                    term.charsets.set[@as(usize, @intCast(@backingInt(term.charsets.selected)))] != CHARSET_ASCII;
                 term_update_ascii_printer(term);
             },
             'o' => {
                 term.charsets.selected = G3;
                 term.bits_affecting_ascii_printer._.charset =
-                    term.charsets.set[@as(usize, @intCast(@intFromEnum(term.charsets.selected)))] != CHARSET_ASCII;
+                    term.charsets.set[@as(usize, @intCast(@backingInt(term.charsets.selected)))] != CHARSET_ASCII;
                 term_update_ascii_printer(term);
             },
             'D' => term_linefeed(term),
@@ -319,13 +319,13 @@ export fn action_esc_dispatch(term: *types.Terminal, final: u8) callconv(.c) voi
                 '0' => {
                     term.charsets.set[idx] = CHARSET_GRAPHIC;
                     term.bits_affecting_ascii_printer._.charset =
-                        term.charsets.set[@as(usize, @intCast(@intFromEnum(term.charsets.selected)))] != CHARSET_ASCII;
+                        term.charsets.set[@as(usize, @intCast(@backingInt(term.charsets.selected)))] != CHARSET_ASCII;
                     term_update_ascii_printer(term);
                 },
                 'B' => {
                     term.charsets.set[idx] = CHARSET_ASCII;
                     term.bits_affecting_ascii_printer._.charset =
-                        term.charsets.set[@as(usize, @intCast(@intFromEnum(term.charsets.selected)))] != CHARSET_ASCII;
+                        term.charsets.set[@as(usize, @intCast(@backingInt(term.charsets.selected)))] != CHARSET_ASCII;
                     term_update_ascii_printer(term);
                 },
                 else => {},

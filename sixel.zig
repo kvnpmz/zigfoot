@@ -524,18 +524,18 @@ fn resize(term: *types.Terminal, new_width_mutable: c_int, new_height_mutable: c
 fn decsixel_generic(term: *types.Terminal, c: u8) void {
     switch (c) {
         '"' => {
-            term.sixel.state = @enumFromInt(SIXEL_DECGRA);
+            term.sixel.state = @fromBackingInt(@intCast(SIXEL_DECGRA));
             term.sixel.param = 0;
             term.sixel.param_idx = 0;
         },
         '!' => {
-            term.sixel.state = @enumFromInt(SIXEL_DECGRI);
+            term.sixel.state = @fromBackingInt(@intCast(SIXEL_DECGRI));
             term.sixel.param = 0;
             term.sixel.param_idx = 0;
             term.sixel.repeat_count = 1;
         },
         '#' => {
-            term.sixel.state = @enumFromInt(SIXEL_DECGCI);
+            term.sixel.state = @fromBackingInt(@intCast(SIXEL_DECGCI));
             term.sixel.color_idx = 0;
             term.sixel.param = 0;
             term.sixel.param_idx = 0;
@@ -624,7 +624,7 @@ fn decgra(term: *types.Terminal, c: u8) void {
                 _ = resize(term, @intCast(pv), @intCast(ph));
             }
 
-            term.sixel.state = @enumFromInt(SIXEL_DECSIXEL);
+            term.sixel.state = @fromBackingInt(@intCast(SIXEL_DECSIXEL));
 
             const h = term.vt.dcs.put_handler orelse unreachable;
             if (pan == 1 and pad == 1) {
@@ -652,11 +652,11 @@ fn decgri_generic(term: *types.Terminal, c: u8) void {
         var count_v: c_uint = term.sixel.repeat_count;
         if (count_v == 0) count_v = 1;
         sixel_add_many_generic(term, c - 63, count_v);
-        term.sixel.state = @enumFromInt(SIXEL_DECSIXEL);
+        term.sixel.state = @fromBackingInt(@intCast(SIXEL_DECSIXEL));
         return;
     }
 
-    term.sixel.state = @enumFromInt(SIXEL_DECSIXEL);
+    term.sixel.state = @fromBackingInt(@intCast(SIXEL_DECSIXEL));
     if (term.vt.dcs.put_handler) |h| {
         h(@ptrCast(term), c);
     }
@@ -667,7 +667,7 @@ fn decgri_ar_11(term: *types.Terminal, c: u8) void {
         var count_v: c_uint = term.sixel.repeat_count;
         if (count_v == 0) count_v = 1;
         sixel_add_many_ar_11(term, c - 63, count_v);
-        term.sixel.state = @enumFromInt(SIXEL_DECSIXEL);
+        term.sixel.state = @fromBackingInt(@intCast(SIXEL_DECSIXEL));
     } else {
         decgri_generic(term, c);
     }
@@ -729,7 +729,7 @@ fn decgci(term: *types.Terminal, c: u8) void {
         term.sixel.color = term.sixel.palette.?[idx];
     }
 
-    term.sixel.state = @enumFromInt(SIXEL_DECSIXEL);
+    term.sixel.state = @fromBackingInt(@intCast(SIXEL_DECSIXEL));
 
     if (term.sixel.pan == 1 and term.sixel.pad == 1) {
         decsixel_ar_11(term, c);

@@ -53,7 +53,7 @@ const SIG_BLOCK: c_int = std.posix.SIG.BLOCK;
 const SIG_UNBLOCK: c_int = std.posix.SIG.UNBLOCK;
 const SIG_SETMASK: c_int = std.posix.SIG.SETMASK;
 const SIG_DFL: ?std.c.Sigaction.handler_fn = std.posix.SIG.DFL;
-const EINTR: c_int = @intFromEnum(std.posix.E.INTR);
+const EINTR: c_int = @backingInt(std.posix.E.INTR);
 const LOG_CLASS_ERROR: c_int = 1;
 const LOG_CLASS_WARNING: c_int = 2;
 

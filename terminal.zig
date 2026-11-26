@@ -574,9 +574,9 @@ fn getFontSubpixel(term: *const types.Terminal) c_int {
     var wl_subpixel: c_int = undefined;
 
     if (windowLastOutput(term)) |m|
-        wl_subpixel = @intFromEnum(m.subpixel)
+        wl_subpixel = @backingInt(m.subpixel)
     else if (firstMonitor(term)) |m|
-        wl_subpixel = @intFromEnum(m.subpixel)
+        wl_subpixel = @backingInt(m.subpixel)
     else
         wl_subpixel = WL_OUTPUT_SUBPIXEL_UNKNOWN;
 
@@ -1084,7 +1084,7 @@ export fn term_restore_cursor(
     term.charsets = term.saved_charsets;
 
     term.bits_affecting_ascii_printer.value =
-        if (term.charsets.set[@intCast(@intFromEnum(term.charsets.selected))] != .ascii) 1 else 0;
+        if (term.charsets.set[@intCast(@backingInt(term.charsets.selected))] != .ascii) 1 else 0;
     term_update_ascii_printer(term);
 }
 
@@ -1626,7 +1626,7 @@ export fn term_print(
 
     const grid = term.grid.?;
 
-    if (term.charsets.set[@intCast(@intFromEnum(term.charsets.selected))] == .graphic and
+    if (term.charsets.set[@intCast(@backingInt(term.charsets.selected))] == .graphic and
         wc >= 0x60 and wc <= 0x7e)
     {
         const vt100_0 = [31]u32{
@@ -1753,7 +1753,7 @@ fn ascii_printer_single_shift(term: *types.Terminal, wc: u32) callconv(.c) void 
     term.charsets.selected = term.charsets.saved;
 
     term.bits_affecting_ascii_printer._.charset =
-        term.charsets.set[@intCast(@intFromEnum(term.charsets.selected))] != .ascii;
+        term.charsets.set[@intCast(@backingInt(term.charsets.selected))] != .ascii;
     term_update_ascii_printer(term);
 }
 
@@ -4245,21 +4245,21 @@ export fn term_surface_kind(
         return .grid;
 
     const csd = &win.csd.surface;
-    if (surface == csd[@intFromEnum(types.CsdSurface.title)].surface.surf)
+    if (surface == csd[@backingInt(types.CsdSurface.title)].surface.surf)
         return .title;
-    if (surface == csd[@intFromEnum(types.CsdSurface.left)].surface.surf)
+    if (surface == csd[@backingInt(types.CsdSurface.left)].surface.surf)
         return .border_left;
-    if (surface == csd[@intFromEnum(types.CsdSurface.right)].surface.surf)
+    if (surface == csd[@backingInt(types.CsdSurface.right)].surface.surf)
         return .border_right;
-    if (surface == csd[@intFromEnum(types.CsdSurface.top)].surface.surf)
+    if (surface == csd[@backingInt(types.CsdSurface.top)].surface.surf)
         return .border_top;
-    if (surface == csd[@intFromEnum(types.CsdSurface.bottom)].surface.surf)
+    if (surface == csd[@backingInt(types.CsdSurface.bottom)].surface.surf)
         return .border_bottom;
-    if (surface == csd[@intFromEnum(types.CsdSurface.minimize)].surface.surf)
+    if (surface == csd[@backingInt(types.CsdSurface.minimize)].surface.surf)
         return .button_minimize;
-    if (surface == csd[@intFromEnum(types.CsdSurface.maximize)].surface.surf)
+    if (surface == csd[@backingInt(types.CsdSurface.maximize)].surface.surf)
         return .button_maximize;
-    if (surface == csd[@intFromEnum(types.CsdSurface.close)].surface.surf)
+    if (surface == csd[@backingInt(types.CsdSurface.close)].surface.surf)
         return .button_close;
 
     return .none;
@@ -4586,9 +4586,9 @@ const KSigaction = std.c.Sigaction;
 extern fn sigemptyset(set: *SigSet) callconv(.c) c_int;
 extern fn sigaction(sig: c_int, act: ?*const KSigaction, old: ?*KSigaction) callconv(.c) c_int;
 
-const SIGALRM: c_int = @intFromEnum(std.posix.SIG.ALRM);
+const SIGALRM: c_int = @backingInt(std.posix.SIG.ALRM);
 const SIG_DFL_HANDLER: ?KSigaction.handler_fn = std.posix.SIG.DFL;
-const EINTR: c_int = @intFromEnum(std.c.E.INTR);
+const EINTR: c_int = @backingInt(std.c.E.INTR);
 
 var alarm_raised: c_int = 0;
 
@@ -5388,13 +5388,13 @@ export fn term_init(
     term.bell_action_enabled = true;
     term.wl = wayl;
 
-    term.render.chains.grid = shm_chain_new(wayl, true, 1 + conf.render_worker_count, @intFromEnum(desired_bit_depth), &render_buffer_release_callback, term);
-    term.render.chains.search = shm_chain_new(wayl, false, 1, @intFromEnum(desired_bit_depth), null, null);
-    term.render.chains.scrollback_indicator = shm_chain_new(wayl, false, 1, @intFromEnum(desired_bit_depth), null, null);
-    term.render.chains.render_timer = shm_chain_new(wayl, false, 1, @intFromEnum(desired_bit_depth), null, null);
-    term.render.chains.url = shm_chain_new(wayl, false, 1, @intFromEnum(desired_bit_depth), null, null);
-    term.render.chains.csd = shm_chain_new(wayl, false, 1, @intFromEnum(desired_bit_depth), null, null);
-    term.render.chains.overlay = shm_chain_new(wayl, false, 1, @intFromEnum(desired_bit_depth), null, null);
+    term.render.chains.grid = shm_chain_new(wayl, true, 1 + conf.render_worker_count, @backingInt(desired_bit_depth), &render_buffer_release_callback, term);
+    term.render.chains.search = shm_chain_new(wayl, false, 1, @backingInt(desired_bit_depth), null, null);
+    term.render.chains.scrollback_indicator = shm_chain_new(wayl, false, 1, @backingInt(desired_bit_depth), null, null);
+    term.render.chains.render_timer = shm_chain_new(wayl, false, 1, @backingInt(desired_bit_depth), null, null);
+    term.render.chains.url = shm_chain_new(wayl, false, 1, @backingInt(desired_bit_depth), null, null);
+    term.render.chains.csd = shm_chain_new(wayl, false, 1, @backingInt(desired_bit_depth), null, null);
+    term.render.chains.overlay = shm_chain_new(wayl, false, 1, @backingInt(desired_bit_depth), null, null);
 
     term.render.scrollback_lines = conf.scrollback.lines;
     term.render.app_sync_updates.timer_fd = app_sync_updates_fd;

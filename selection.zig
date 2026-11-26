@@ -1415,7 +1415,7 @@ export fn selection_finalize(seat: ?*anyopaque, term: *types.Terminal, serial: u
     term.selection.coords.start.row &= term.grid.?.num_rows - 1;
     term.selection.coords.end.row &= term.grid.?.num_rows - 1;
 
-    const target = @intFromEnum(term.conf.?.selection_target);
+    const target = @backingInt(term.conf.?.selection_target);
     switch (target) {
         0 => {}, // SELECTION_TARGET_NONE
         1 => selection_to_primary(seat, term, serial),
@@ -1644,7 +1644,7 @@ const ClipboardCb = *const fn (data: [*]u8, size: usize, user: ?*anyopaque) call
 const ClipboardDone = *const fn (user: ?*anyopaque) callconv(.c) void;
 
 fn mimeTypeName(mime_type: types.DataOfferMimeType) ?[*:0]const u8 {
-    const idx = @intFromEnum(mime_type);
+    const idx = @backingInt(mime_type);
     if (idx < 0 or idx >= mime_type_map.len)
         return null;
     return mime_type_map[@intCast(idx)];
@@ -1684,7 +1684,7 @@ fn textFromClipboard(
     // Don't keep our copy of the write-end open (or we'll never get EOF)
     _ = close(write_fd);
 
-    begin_receive_clipboard(term, no_strip, read_fd, @intFromEnum(clipboard.mime_type), cb, done, user);
+    begin_receive_clipboard(term, no_strip, read_fd, @backingInt(clipboard.mime_type), cb, done, user);
 }
 
 fn textFromPrimary(
@@ -1724,7 +1724,7 @@ fn textFromPrimary(
 
     _ = close(write_fd);
 
-    begin_receive_clipboard(term, no_strip, read_fd, @intFromEnum(primary.mime_type), cb, done, user);
+    begin_receive_clipboard(term, no_strip, read_fd, @backingInt(primary.mime_type), cb, done, user);
 }
 
 fn receiveOffer(data: [*]u8, size: usize, user: ?*anyopaque) callconv(.c) void {
@@ -1958,7 +1958,7 @@ export fn selection_start_scroll_timer(
         return;
     }
 
-    term.selection.auto_scroll.direction = @enumFromInt(direction);
+    term.selection.auto_scroll.direction = @fromBackingInt(@intCast(direction));
     term.selection.auto_scroll.col = col;
 }
 
@@ -2677,7 +2677,7 @@ export fn selection_select_mime_type_for_offer(
         for (mime_type_map, 0..) |candidate, i| {
             const candidate_z = candidate orelse continue;
             if (std.mem.eql(u8, std.mem.span(mime_type_in), std.mem.span(candidate_z)))
-                break :blk @enumFromInt(i);
+                break :blk @fromBackingInt(@intCast(i));
         }
         break :blk .unset;
     };
@@ -2994,7 +2994,7 @@ export fn selection_data_device_drop(
     if (term.bracketed_paste)
         term_paste_data_to_slave(term, "\x1b[200~", 6);
 
-    begin_receive_clipboard(term, false, read_fd, @intFromEnum(clipboard.mime_type), &receiveDnd, &receiveDndDone, ctx);
+    begin_receive_clipboard(term, false, read_fd, @backingInt(clipboard.mime_type), &receiveDnd, &receiveDndDone, ctx);
 
     // data offer is now "owned" by the receive context
     clipboard.data_offer = null;
