@@ -1,12 +1,12 @@
 /* C shims for the shm port.
  *
  * This file holds only what Zig cannot express: generated wl_shm/wl_buffer
- * request inlines (static inline in wayland-client-protocol.h), the
- * #ifdef'd platform feature tests (memfd_create/SHM_ANON/mkostemp,
- * fallocate()'s FALLOC_FL_PUNCH_HOLE, mmap flags, sealing), sysconf()'s
- * _SC_PAGE_SIZE, and the pixman/wl_shm_format macro values. Everything else
- * lives in shm.zig; the headless wl_shm/wl_buffer sentinels stay here because
- * the inline forwarders have to recognise them.
+ * request inlines (static inline in wayland-client-protocol.h), the headless
+ * wl_shm/wl_buffer sentinels (recognised by those forwarders), the
+ * stride_for_format_and_width() wrapper, and the pixman/wl_shm_format macro
+ * values. The platform/syscall bodies (memfd_create/SHM_ANON/mkostemp,
+ * fallocate()'s FALLOC_FL_PUNCH_HOLE, mmap flags, sealing, _SC_PAGE_SIZE) now
+ * live in shm.zig under their original exported C symbol names.
  */
 
 #include "shm.h"
@@ -27,14 +27,6 @@
 #include "log.h"
 #include "macros.h"
 #include "stride.h"
-
-#if !defined(MAP_UNINITIALIZED)
- #define MAP_UNINITIALIZED 0
-#endif
-
-#if !defined(MFD_NOEXEC_SEAL)
- #define MFD_NOEXEC_SEAL 0
-#endif
 
 /* Headless harness has no wl_shm connection: chain->shm == NULL selects a
  * pair of never-dereferenced sentinels, so allocation and cache logic can run
@@ -89,82 +81,9 @@ int shm_shim_stride_for_format(pixman_format_code_t fmt, int width) {
     return stride_for_format_and_width(fmt, width);
 }
 
-int shm_shim_create_backing_file(void) {
-#if defined(MEMFD_CREATE)
-    /*
-     * Older kernels reject MFD_NOEXEC_SEAL with EINVAL. Try first
-     * *with* it, and if that fails, try again *without* it.
-     */
-    errno = 0;
-    int fd = memfd_create(
-        "foot-wayland-shm-buffer-pool",
-        MFD_CLOEXEC | MFD_ALLOW_SEALING | MFD_NOEXEC_SEAL);
-
-    if (fd < 0 && errno == EINVAL && MFD_NOEXEC_SEAL != 0) {
-        fd = memfd_create(
-            "foot-wayland-shm-buffer-pool", MFD_CLOEXEC | MFD_ALLOW_SEALING);
-    }
-    return fd;
-#elif defined(__FreeBSD__)
-    // memfd_create on FreeBSD 13 is SHM_ANON without sealing support
-    return shm_open(SHM_ANON, O_RDWR | O_CLOEXEC, 0600);
-#else
-    char name[] = "/tmp/foot-wayland-shm-buffer-pool-XXXXXX";
-    int fd = mkostemp(name, O_CLOEXEC);
-    if (fd >= 0)
-        unlink(name);
-    return fd;
-#endif
-}
-
-/* Zig owns the "already probed" cache; this is the raw #ifdef'd probe. */
-bool shm_shim_probe_punch_hole(int fd) {
-#if __SIZEOF_POINTER__ == 8 && defined(FALLOC_FL_PUNCH_HOLE)
-    bool supported = fallocate(
-        fd, FALLOC_FL_PUNCH_HOLE | FALLOC_FL_KEEP_SIZE, 0, 1) == 0;
-
-    if (!supported) {
-        LOG_WARN(
-            "fallocate(FALLOC_FL_PUNCH_HOLE) not "
-            "supported (%s): expect lower performance", strerror(errno));
-    }
-    return supported;
-#else
-    (void)fd;
-    return false;
-#endif
-}
-
-bool shm_shim_punch_hole(int fd, off_t ofs, off_t len) {
-#if __SIZEOF_POINTER__ == 8 && defined(FALLOC_FL_PUNCH_HOLE)
-    return fallocate(
-        fd, FALLOC_FL_PUNCH_HOLE | FALLOC_FL_KEEP_SIZE, ofs, len) == 0;
-#else
-    (void)fd; (void)ofs; (void)len;
-    return false;
-#endif
-}
-
-void *shm_shim_mmap_pool(int fd, size_t size) {
-    return mmap(
-        NULL, size, PROT_READ | PROT_WRITE,
-        MAP_SHARED | MAP_UNINITIALIZED, fd, 0);
-}
-
-void shm_shim_seal_pool(int fd) {
-#if defined(MEMFD_CREATE)
-    /* TODO: wayland mmaps(PROT_WRITE), for some unknown reason, hence we
-     * cannot use F_SEAL_FUTURE_WRITE */
-    if (fcntl(fd, F_ADD_SEALS,
-              F_SEAL_GROW | F_SEAL_SHRINK | /*F_SEAL_FUTURE_WRITE |*/ F_SEAL_SEAL) < 0)
-    {
-        LOG_ERRNO("failed to seal SHM backing memory file");
-        /* This is not a fatal error */
-    }
-#else
-    (void)fd;
-#endif
-}
+/* The backing-file, punch-hole, mmap and sealing bodies are now exported by
+ * shm.zig under the same shm_shim_* symbols; see the platform section there.
+ */
 
 /* Format/wayland-capability constants: pixman and wl_shm_format values are
  * macros/enums, so they are exported once here rather than hard-coded. */

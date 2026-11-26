@@ -1,12 +1,15 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const types = @import("terminal_types.zig");
 
 //
 // The shm module: buffer lifetime (S1), allocation (S2), the buffer cache
 // (S3), chain construction/bit depth (S4), scrolling (S5), and the state that
 // used to be static in shm.c (S6). shm.c is gone; shm-shim.c keeps only what
-// Zig cannot express: the generated wl_shm/wl_buffer request inlines and the
-// #ifdef'd platform tests and macro-valued format constants.
+// Zig still cannot express: the generated wl_shm/wl_buffer request inlines,
+// the headless sentinels, the stride wrapper and the macro-valued format
+// constants. The platform/syscall bodies live here, under their original C
+// symbol names.
 //
 // The private structs live in shm.h so the ABI probe can pin them; this file
 // mirrors them in terminal_types.zig (including struct shm_format_constants)
@@ -23,7 +26,7 @@ var max_pool_size: i64 = 512 * 1024 * 1024;
 var min_stride_alignment: usize = 0;
 
 // The fallocate() capability is probed once, on the first scrollable pool.
-// The raw, #ifdef'd probe lives in shm-shim.c.
+// The raw probe is shm_shim_probe_punch_hole(), ported below.
 var punch_hole_probed: bool = false;
 var can_punch_hole: bool = false;
 
@@ -324,9 +327,9 @@ export fn shm_get_buffer(
 // Chunk S2 — allocation: instantiate_offset() and get_new_buffers().
 //
 // Platform bits that are #ifdef-heavy in C (memfd vs FreeBSD shm_open vs
-// mkostemp, fallocate probing, sealing, mmap flags) and the generated Wayland
-// inline wrappers stay in shm-shim.c; everything about sizes, offsets and buffer
-// ownership is here.
+// mkostemp, fallocate probing, sealing, mmap flags) are ported above; the
+// generated Wayland inline wrappers stay in shm-shim.c. Everything about sizes,
+// offsets and buffer ownership is here.
 //
 
 const LOG_CLASS_ERROR: c_int = 1;
@@ -334,10 +337,140 @@ const LOG_CLASS_ERROR: c_int = 1;
 extern fn log_errno(class: c_int, module: [*:0]const u8, file: [*:0]const u8, lineno: c_int, fmt: [*:0]const u8, ...) void;
 
 extern fn shm_shim_stride_for_format(fmt: c_int, width: c_int) callconv(.c) c_int;
-extern fn shm_shim_create_backing_file() callconv(.c) c_int;
-extern fn shm_shim_probe_punch_hole(fd: c_int) callconv(.c) bool;
-extern fn shm_shim_mmap_pool(fd: c_int, size: usize) callconv(.c) ?*anyopaque;
-extern fn shm_shim_seal_pool(fd: c_int) callconv(.c) void;
+
+//
+// Platform/syscall bodies ported from shm-shim.c. The C `#ifdef`s become
+// comptime branches on the target OS; no runtime probing beyond the original
+// MFD_NOEXEC_SEAL retry and the fallocate() capability probe is introduced.
+//
+const os_tag = builtin.os.tag;
+
+// C's off_t is i64 on the tested targets; std.c.off_t mirrors the C ABI type
+// (linux.off_t == i64), with an explicit i64 fallback for targets that do not
+// expose it.
+const shm_off_t = if (@hasDecl(std.c, "off_t")) std.c.off_t else i64;
+
+extern fn memfd_create(
+    name: [*:0]const u8,
+    flags: c_uint,
+) callconv(.c) c_int;
+extern fn fallocate(
+    fd: c_int,
+    mode: c_int,
+    offset: shm_off_t,
+    len: shm_off_t,
+) callconv(.c) c_int;
+extern fn mmap(
+    addr: ?*anyopaque,
+    len: usize,
+    prot: c_int,
+    flags: c_int,
+    fd: c_int,
+    offset: shm_off_t,
+) callconv(.c) ?*anyopaque;
+extern fn fcntl(fd: c_int, cmd: c_int, ...) callconv(.c) c_int;
+extern fn shm_open(
+    name: [*:0]const u8,
+    flags: c_int,
+    mode: std.c.mode_t,
+) callconv(.c) c_int;
+extern fn mkostemp(template: [*]u8, flags: c_int) callconv(.c) c_int;
+extern fn unlink(path: [*:0]const u8) callconv(.c) c_int;
+extern fn strerror(errnum: c_int) callconv(.c) [*:0]const u8;
+
+// Linux UAPI values absent from Zig 0.16's std.os.linux.MFD/FALLOC structs.
+const MFD_NOEXEC_SEAL: c_uint = 0x0008;
+const FALLOC_FL_KEEP_SIZE: c_int = 0x01;
+const FALLOC_FL_PUNCH_HOLE: c_int = 0x02;
+
+export fn shm_shim_create_backing_file() callconv(.c) c_int {
+    if (comptime os_tag == .linux) {
+        const name = "foot-wayland-shm-buffer-pool";
+
+        // Older kernels reject MFD_NOEXEC_SEAL with EINVAL; try with it
+        // first, then retry without it.
+        const flags: c_uint = @intCast(
+            std.c.MFD.CLOEXEC | std.c.MFD.ALLOW_SEALING | MFD_NOEXEC_SEAL,
+        );
+        var fd = memfd_create(name, flags);
+        if (fd < 0 and std.c._errno().* == @as(c_int, @intFromEnum(std.os.linux.E.INVAL))) {
+            fd = memfd_create(
+                name,
+                @intCast(std.c.MFD.CLOEXEC | std.c.MFD.ALLOW_SEALING),
+            );
+        }
+        return fd;
+    } else if (comptime os_tag == .freebsd) {
+        // FreeBSD 13's memfd_create is SHM_ANON without sealing support.
+        // SHM_ANON is ((char *)-1) in <sys/mman.h>.
+        const shm_anon: [*:0]const u8 = @ptrFromInt(@as(usize, @bitCast(@as(isize, -1))));
+        const flags: c_int = @bitCast(std.c.O{ .ACCMODE = .RDWR, .CLOEXEC = true });
+        return shm_open(shm_anon, flags, @as(std.c.mode_t, 0o600));
+    } else {
+        const template = "/tmp/foot-wayland-shm-buffer-pool-XXXXXX";
+        var name: [template.len:0]u8 = undefined;
+        @memcpy(name[0..template.len], template);
+        name[template.len] = 0;
+
+        const flags: c_int = @bitCast(std.c.O{ .CLOEXEC = true });
+        const fd = mkostemp(&name, flags);
+        if (fd >= 0)
+            _ = unlink(&name);
+        return fd;
+    }
+}
+
+export fn shm_shim_probe_punch_hole(fd: c_int) callconv(.c) bool {
+    // 32-bit lacks the address space; FALLOC_FL_* is Linux-only.
+    if (comptime (@sizeOf(usize) != 8 or os_tag != .linux))
+        return false;
+
+    const supported = fallocate(
+        fd,
+        FALLOC_FL_PUNCH_HOLE | FALLOC_FL_KEEP_SIZE,
+        0,
+        1,
+    ) == 0;
+
+    if (!supported) {
+        log_msg(
+            LOG_CLASS_WARNING,
+            "shm",
+            "shm.zig",
+            @intCast(@src().line),
+            "fallocate(FALLOC_FL_PUNCH_HOLE) not supported (%s): expect lower performance",
+            strerror(std.c._errno().*),
+        );
+    }
+    return supported;
+}
+
+export fn shm_shim_mmap_pool(fd: c_int, size: usize) callconv(.c) ?*anyopaque {
+    const prot: c_int = @bitCast(std.c.PROT{ .READ = true, .WRITE = true });
+
+    // MAP_UNINITIALIZED is 0 where it is not defined by the platform.
+    const flags: c_int = if (comptime os_tag == .linux)
+        @bitCast(std.c.MAP{ .TYPE = .SHARED, .UNINITIALIZED = true })
+    else
+        @bitCast(std.c.MAP{ .TYPE = .SHARED });
+
+    return mmap(null, size, prot, flags, fd, 0);
+}
+
+export fn shm_shim_seal_pool(fd: c_int) callconv(.c) void {
+    if (comptime os_tag != .linux)
+        return;
+
+    // TODO: wayland mmaps(PROT_WRITE); F_SEAL_FUTURE_WRITE would break it.
+    const seals: c_int = @intCast(
+        std.os.linux.F.SEAL_GROW | std.os.linux.F.SEAL_SHRINK |
+            std.os.linux.F.SEAL_SEAL,
+    );
+    if (fcntl(fd, @intCast(std.os.linux.F.ADD_SEALS), seals) < 0) {
+        logErrno("failed to seal SHM backing memory file");
+        // Not a fatal error.
+    }
+}
 extern fn shm_shim_wl_shm_create_pool(
     shm: ?*anyopaque,
     fd: c_int,
@@ -363,7 +496,21 @@ extern fn pixman_image_create_bits_no_clear(
 ) callconv(.c) ?*anyopaque;
 extern fn pixman_region32_init(region: ?*anyopaque) callconv(.c) void;
 extern fn pixman_region32_clear(region: ?*anyopaque) callconv(.c) void;
-extern fn shm_shim_punch_hole(fd: c_int, ofs: i64, len: i64) callconv(.c) bool;
+export fn shm_shim_punch_hole(
+    fd: c_int,
+    ofs: shm_off_t,
+    len: shm_off_t,
+) callconv(.c) bool {
+    if (comptime (@sizeOf(usize) != 8 or os_tag != .linux))
+        return false;
+
+    return fallocate(
+        fd,
+        FALLOC_FL_PUNCH_HOLE | FALLOC_FL_KEEP_SIZE,
+        ofs,
+        len,
+    ) == 0;
+}
 extern fn memcpy(dest: ?*anyopaque, src: ?*const anyopaque, n: usize) callconv(.c) ?*anyopaque;
 extern fn memmove(dest: ?*anyopaque, src: ?*const anyopaque, n: usize) callconv(.c) ?*anyopaque;
 
@@ -803,8 +950,8 @@ export fn shm_chain_bit_depth(
 
 //
 // Chunk S5 — SHM scrolling. The punch-hole capability probe and the
-// fallocate() call are guarded by __SIZEOF_POINTER__/FALLOC_FL_PUNCH_HOLE in
-// shm-shim.c, so the 32-bit and no-punch-hole builds fall out of
+// fallocate() call are guarded by comptime pointer-width/OS checks in the
+// ported platform bodies, so the 32-bit and no-punch-hole builds fall out of
 // shm_shim_punch_hole() returning false and shm_can_scroll() returning false.
 //
 
