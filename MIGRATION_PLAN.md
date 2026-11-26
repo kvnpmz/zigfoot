@@ -1484,8 +1484,8 @@ state after `port-c2` and the three audits landed.
 |---|---:|
 | Module C remaining | **99 lines** (`config.c` 35 `regex_t`, `slave.c` 64 `execvpe`) |
 | `*-shim.c` | **2,554 lines / 11 files** (`terminal-shim.c` 1,683) |
-| Generated `abi_probe.c` | 3,445 lines |
-| Zig source | 55,339 lines |
+| Generated `abi_probe.c` | 3,472 lines |
+| Zig source | 54,961 lines (`zig fmt` applied in `81c81212`) |
 | Unported modules | **0** |
 | Class-(c) shim functions left | **1** — `log_presentation_statistics()`, see §15.3 |
 | Harness | 988 checks, 6 meson suites (the parity corpus is the sixth) |
@@ -1593,4 +1593,43 @@ unverified *here* and provable only on the target:
 2. `zig fmt .` as its own commit, then re-gate.
 3. Recompute §15.1 (module C, shims, probe, Zig), tag `zig-migration-1.0`, run
    the full gate at the tag and paste it here.
+
+### 15.7 Final
+
+Tag: **`zig-migration-1.0`**, cut after `81c81212` (`zig fmt: format the tree`)
+and this ledger commit; `port-abi-2` (`a458b54f`) closed the last PL-08
+residue. The gate below was run on this tree immediately before tagging.
+
+| Metric | Final value |
+|---|---:|
+| Module C | **99 lines / 48,924 (99.8%)** — `config.c` 35, `slave.c` 64 |
+| Unported modules | **0** |
+| `*-shim.c` | 2,554 lines / 11 files, all class (a) except the documented
+  destructor (§15.3) |
+| Generated `abi_probe.c` | 3,472 lines |
+| Zig source | 54,961 lines |
+| Harness | 988 checks, 6 meson suites |
+| Audit findings | **34 / 34 closed** (0 open) |
+
+The gate was run on this tree, in this order, all green:
+
+| Check | Result |
+|---|---|
+| `scripts/full-check.sh` | 6/6 in `build`, `build-disabled`, `build-release`; six window launches ok |
+| terminal harness under valgrind | exit 0, no errors |
+| config harness `--leak-check=full` | exit 0, no definite loss |
+| `scripts/fuzz-vt.sh 120` | PASS, 24,000 iterations |
+| 10 seeds under valgrind | all clean (incl. seed 58, VT-08) |
+| `scripts/check-targets.sh` | PASS, 2 targets x 5 files |
+| `python3 scripts/gen_abi_probe.py --check` | clean |
+| `scripts/render-parity.sh` | PASS, 447 cells x 2 scales, byte-identical |
+
+What the migration leaves in C, and why, is the two entries in
+`doc/endgame-verification.md` (libc-private regex and `execvpe`) plus the
+destructor in §15.3. Everything else is Zig, including the four private ABI
+mirrors that `port-abi-2` either replaced with `std.c` types or probed.
+
+The accepted gaps in §15.5 are unchanged and remain target-only claims:
+FreeBSD epoll layout and epoll-shim constants (comptime-pinned), and the
+aarch64 layout derived from the C struct definition rather than a host probe.
 
