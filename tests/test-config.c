@@ -5,11 +5,10 @@
 
 #include "../log.h"
 
-#include "../config.c"
 #include <fontconfig/fontconfig.h>
 
-/* These used to come in transitively through config.c; config.c is now only
- * the regex_t shim, so declare what the parser tests call. */
+/* These used to come in transitively through config.c; they are declared here
+ * now that config.c is gone and the parser is entirely Zig. */
 #include "../char32.h"
 #include "../xmalloc.h"
 #include "../debug.h"

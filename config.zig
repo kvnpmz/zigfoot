@@ -844,7 +844,7 @@ fn regexCompile(
 
 /// Test entry point for tests/test-regex.c. The production call sites use
 /// regexCompile() directly; the C config.c is deleted by Agent A.
-export fn config_regex_compile_zig(
+export fn config_regex_compile(
     regex: [*:0]const u8,
     preg: *anyopaque,
     err_buf: [*]u8,

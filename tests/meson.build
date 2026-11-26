@@ -2,9 +2,8 @@ config_test = executable(
   'test-config',
   'test-config.c',
   'test-config-stubs.c',
-  # test-config.c #includes config.c, so the parser is compiled into the
-  # test itself; the value-parsing helpers live in config.zig and come in
-  # as an object file.
+  # The parser and its value helpers are config.zig; the test links that
+  # object and declares what it calls.
   config_obj,
   wl_proto_headers,
   link_with: [common, tokenize],
@@ -41,6 +40,17 @@ terminal_harness = executable(
   link_with: footlib)
 
 test('terminal-harness', terminal_harness)
+
+# regex_t is owned by config.zig now: opaque buffer, probed size/alignment and
+# the re_nsub offset. This test drives the exported entry point directly.
+regex_test = executable(
+  'test-regex',
+  'test-regex.c',
+  include_directories: '..',
+  dependencies: foot_deps,
+  link_with: footlib)
+
+test('regex', regex_test)
 
 # Render parity corpus: paints the same cells/CSD/URL/OSD cases as a build of
 # origin/master and compares FNV-1a hashes per cell. See scripts/render-parity.sh

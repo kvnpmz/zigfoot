@@ -3,7 +3,7 @@
 #include <stdio.h>
 #include <string.h>
 
-int config_regex_compile_zig(
+int config_regex_compile(
     const char *regex, void *preg, char *err_buf, size_t err_buf_len);
 
 static int failures;
@@ -27,7 +27,7 @@ case_group(void)
     char err[128] = {0};
 
     memset(&re, 0xaa, sizeof(re));
-    int r = config_regex_compile_zig("^(a)(b)$", &re, err, sizeof(err));
+    int r = config_regex_compile("^(a)(b)$", &re, err, sizeof(err));
     check(r == 0, "^(a)(b)$ compiles");
     check(re.re_nsub >= 1, "grouped pattern has at least one subexpression");
     check(regexec(&re, "ab", 3, matches, 0) == 0, "regexec finds ab");
@@ -43,7 +43,7 @@ case_no_group(void)
     char err[128] = {0};
 
     memset(&re, 0xaa, sizeof(re));
-    int r = config_regex_compile_zig("^abc$", &re, err, sizeof(err));
+    int r = config_regex_compile("^abc$", &re, err, sizeof(err));
     check(r == -2, "ungrouped pattern returns -2");
     /* The implementation already called regfree(). Do not call it again. */
 }
@@ -55,7 +55,7 @@ case_invalid(void)
     char err[128] = {0};
 
     memset(&re, 0xaa, sizeof(re));
-    int r = config_regex_compile_zig("[", &re, err, sizeof(err));
+    int r = config_regex_compile("[", &re, err, sizeof(err));
     check(r == -1, "invalid pattern returns -1");
     check(err[0] != '\0', "invalid pattern produces an error string");
 }
@@ -68,7 +68,7 @@ case_truncated_error(void)
 
     memset(err, 0xaa, sizeof(err));
     memset(&re, 0xaa, sizeof(re));
-    int r = config_regex_compile_zig("[", &re, err, sizeof(err));
+    int r = config_regex_compile("[", &re, err, sizeof(err));
     check(r == -1, "invalid pattern with a short error buffer returns -1");
     check(memchr(err, '\0', sizeof(err)) != NULL,
           "short error buffer is NUL-terminated");
@@ -81,12 +81,12 @@ case_two_compiles(void)
     char err[128] = {0};
 
     memset(&re, 0xaa, sizeof(re));
-    check(config_regex_compile_zig("^(x)$", &re, err, sizeof(err)) == 0,
+    check(config_regex_compile("^(x)$", &re, err, sizeof(err)) == 0,
           "first of two compiles succeeds");
     regfree(&re);
 
     memset(&re, 0xaa, sizeof(re));
-    check(config_regex_compile_zig("^(y)$", &re, err, sizeof(err)) == 0,
+    check(config_regex_compile("^(y)$", &re, err, sizeof(err)) == 0,
           "second of two compiles succeeds");
     regfree(&re);
 }
