@@ -134,8 +134,11 @@ export fn base64_encode(data: [*c]const u8, size: usize) callconv(.c) [*c]u8 {
 
 export fn base64_encode_final(data: [*c]const u8, size: usize, result: [*c]u8) callconv(.c) void {
     // C asserts 0 < size < 3 here; without it size 0 encoded as "====" and
-    // size > 2 silently ignored the extra input (audit PL-12).
-    std.debug.assert(size > 0 and size < 3);
+    // size > 2 silently ignored the extra input (audit PL-12). This is a
+    // @panic rather than std.debug.assert so the contract also holds in
+    // ReleaseFast, where debug assertions are compiled out.
+    if (size == 0 or size >= 3)
+        @panic("base64_encode_final: size must be 1 or 2");
 
     var v: u32 = 0;
     if (size >= 1) v |= @as(u32, data[0]) << 16;
