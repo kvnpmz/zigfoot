@@ -1,4 +1,4 @@
-project('foot', 'c',
+project('zigfoot', 'c',
         version: '1.28.0',
         license: 'MIT',
         meson_version: '>=0.59.0',
@@ -953,7 +953,7 @@ footlib = static_library(
   link_with: pgolib)
 
 executable(
-  'foot',
+  'zigfoot',
   main_obj,
   wl_proto_src + wl_proto_headers,
   dependencies: foot_deps,
@@ -961,7 +961,7 @@ executable(
   install: true)
 
 executable(
-  'footclient',
+  'zigfootclient',
   client_obj, 'client-protocol.h',
   foot_features_obj, 'foot-features.h',
   'macros.h',
@@ -972,7 +972,7 @@ executable(
   install: true)
 
 install_data(
-  'foot.desktop', 'foot-server.desktop', 'footclient.desktop',
+  'zigfoot.desktop', 'zigfoot-server.desktop', 'zigfootclient.desktop',
   install_dir: join_paths(get_option('datadir'), 'applications'))
 
 systemd = dependency('systemd', required: false)
@@ -990,13 +990,13 @@ if systemd.found() or custom_systemd_units_dir != ''
 
   configure_file(
     configuration: configuration,
-    input: 'foot-server.service.in',
+    input: 'zigfoot-server.service.in',
     output: '@BASENAME@',
     install_dir: systemd_units_dir
     )
 
   install_data(
-    'foot-server.socket',
+    'zigfoot-server.socket',
     install_dir: systemd_units_dir)
 endif
 
@@ -1005,7 +1005,7 @@ install_data('foot.ini', install_dir: join_paths(get_option('sysconfdir'), 'xdg'
 if scdoc.found()
   install_data(
     'LICENSE', 'README.md', 'CHANGELOG.md',
-    install_dir: join_paths(get_option('datadir'), 'doc', 'foot'))
+    install_dir: join_paths(get_option('datadir'), 'doc', 'zigfoot'))
   subdir('doc')
 endif
 

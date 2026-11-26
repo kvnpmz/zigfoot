@@ -1,11 +1,11 @@
 [Desktop Entry]
 Type=Application
-Exec=footclient
-Icon=foot
+Exec=zigfootclient
+Icon=zigfoot
 Terminal=false
 Categories=System;TerminalEmulator;
 Keywords=shell;prompt;command;commandline;
 
-Name=Foot Client
+Name=Zigfoot Client
 GenericName=Terminal
 Comment=A wayland native terminal emulator (client)

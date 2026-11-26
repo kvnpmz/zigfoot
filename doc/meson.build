@@ -7,8 +7,8 @@ if utmp_backend != 'none'
                    : '@0@'.format(utmp_del))
   utmp_path = utmp_default_helper_path
 else
-  utmp_add_args = '<no utmp support in foot>'
-  utmp_del_args = '<no utmp support in foot>'
+  utmp_add_args = '<no utmp support in zigfoot>'
+  utmp_del_args = '<no utmp support in zigfoot>'
   utmp_path = 'none'
 endif
 
@@ -23,10 +23,10 @@ conf_data = configuration_data(
   }
 )
 
-foreach man_src : [{'name': 'foot', 'section' : 1},
+foreach man_src : [{'name': 'zigfoot', 'section' : 1},
                    {'name': 'foot.ini', 'section': 5},
-                   {'name': 'footclient', 'section': 1},
-                   {'name': 'foot-ctlseqs', 'section': 7}]
+                   {'name': 'zigfootclient', 'section': 1},
+                   {'name': 'zigfoot-ctlseqs', 'section': 7}]
   name = man_src['name']
   section = man_src['section']
   out = '@0@.@1@'.format(name, section)
