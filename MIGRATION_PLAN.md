@@ -2022,6 +2022,20 @@ produce the same results below (separate build dirs, all checks re-run).
 | `gen_abi_probe.py --check` | clean | clean | clean |
 | smoke (real compositor) | ok | — | ok (6 launches) |
 
-Performance was **not** re-measured for 0.17. The numbers in
-`doc/perf-1.2.md` and `FORK.md` remain the 0.16.0 measurements; no frame
-rate or presentation claim is added.
+### 16.5 Performance (measured 2026-11-26)
+
+The toolchain change costs no measurable performance. Both trees' harnesses
+were measured interleaved and CPU-pinned on one P-core, so scheduling drift
+cancels; the C/C control differs by 1.0–1.2% between trees (the noise floor).
+
+| Benchmark | 0.16 → 0.17 | Zig (0.17) vs C |
+|---|---|---|
+| Render corpus | +0.6% | parity once process launch is excluded (+8% RS / +4.5% RF wall-clock) |
+| Config parsing | ±0–1% | 0.95× RS, 0.89× RF (Zig faster) |
+| VT input | +0–2% | ~1.3× RS, ~1.2× RF per sequence; ~1.7×/~1.4× including launch |
+
+The Zig binary starts ≈1.5–3 ms slower than C's (4.3 vs 1.2 ms RS; 2.7 ms RF),
+which accounts for most of the whole-process VT gap; stripping does not change
+it. This supersedes the sequential, unpinned 1.28×/1.08× figures in
+`doc/perf-1.2.md` (kept as the historical record). Full method and raw
+medians: `doc/perf-0.17.md`. No frame rate or presentation claim is added.

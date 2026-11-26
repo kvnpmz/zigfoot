@@ -12,10 +12,12 @@ an unofficial Zig port of foot, the Wayland terminal emulator
 > aarch64 are compile-only. Built with Zig 0.17 (0.17.0 and 0.17.1 both pass):
 > nine test suites pass with 1,040 assertions; render parity covers 1,058
 > cells at three scales against the C oracle, with the same hashes as the
-> 0.16.0 build. Terminal input (VT)
-> work is roughly 28% slower than C in `ReleaseSafe` and roughly 8% slower in
-> `ReleaseFast` (0.16.0 measurements, not yet re-measured); config parsing and
-> rendering are roughly at parity.
+> 0.16.0 build, and the toolchain change costs no measurable performance.
+> Headless microbenchmarks (see [doc/perf-0.17.md](doc/perf-0.17.md)): VT input
+> is ~1.3x C per sequence in `ReleaseSafe` and ~1.2x in `ReleaseFast`
+> (~1.7x/1.4x including process launch, which is ~1.5-3 ms slower than C);
+> config parsing is 5-11% faster than C; rendering is at parity once launch is
+> excluded.
 > No compositor-frame/FPS measurement was possible here. The application layer
 > is Zig, but FFI shims, generated ABI/Wayland/sRGB C, and test/utility C
 > remain.

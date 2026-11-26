@@ -30,13 +30,16 @@ The current, honest status is:
 * Nine meson suites pass with 1,040 assertions.
 * Render parity covers 1,058 cells at three scales against the C oracle
   (`6b3f557d`).
-* In headless microbenchmarks (measured with Zig 0.16.0; not yet re-measured
-  on 0.17), VT input is roughly 28% slower than C in `ReleaseSafe` and
-  roughly 8% slower in `ReleaseFast`; config parsing and rendering are
-  roughly at parity.
+* In headless microbenchmarks (Zig 0.17, measured 2026-11-26), VT input is
+  ~1.3x C per sequence in `ReleaseSafe` and ~1.2x in `ReleaseFast`;
+  including process launch it is ~1.7x/1.4x, because the Zig binary starts
+  ~1.5-3 ms slower. Config parsing is 5-11% faster than C, and rendering is
+  at parity once launch is excluded.
 
-See [doc/perf-1.2.md](doc/perf-1.2.md) for the measurement methodology. No
-frame-rate or compositor-level number is claimed.
+See [doc/perf-0.17.md](doc/perf-0.17.md) for the methodology (CPU-pinned,
+interleaved runs) and the 0.16-vs-0.17 comparison; [doc/perf-1.2.md](doc/perf-1.2.md)
+is the earlier sequential-run record. No frame-rate or compositor-level
+number is claimed.
 
 ## What is still C
 

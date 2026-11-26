@@ -1,5 +1,11 @@
 # Post-port performance comparison (1.2)
 
+> **Historical.** These numbers come from one sequential, unpinned harness
+> run; the VT ratio is not reproducible under controlled conditions (it ranges
+> from 1.23x to 1.71x for identical code depending on core placement).
+> [doc/perf-0.17.md](perf-0.17.md) is the current, CPU-pinned/interleaved
+> measurement and supersedes the VT claim here.
+
 Date of measurement: **2026-11-26T09:11:17Z**. HEAD:
 `66a61615ade98711419b6a343e6bc5b5c30c6fa1`. C oracle:
 `6b3f557daaae17f4572fd7e850767f5c607a3caa` (the ref used by
@@ -131,6 +137,8 @@ line contains both `-O3 -O2`, so the last (`-O2`) wins. It is not a separate
 * **Against C**, the same numbers say: render is ~10% slower in either Zig
   mode; config is ~1% faster in ReleaseSafe and ~11% faster in ReleaseFast
   than C `-O3`; VT is ~28% slower in ReleaseSafe and ~8% slower in ReleaseFast
+  (superseded: controlled interleaved runs give ~1.3x/~1.2x per sequence, see
+  [perf-0.17.md](perf-0.17.md))
   (5.48 µs baseline). C `-O2` is essentially equal to `-O3` on these tasks
   (within 2%), so the C comparison is not an artifact of an unusual C build.
 * **RSS** tracks the Zig runtime/artifacts: ReleaseSafe uses ~10 MB more than
