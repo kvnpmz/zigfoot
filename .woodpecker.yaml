@@ -48,6 +48,8 @@ steps:
       - apk add libxkbcommon-dev pixman-dev freetype-dev fontconfig-dev harfbuzz-dev utf8proc-dev
       - apk add wayland-dev wayland-protocols
       - apk add git python3 zig
+      # The 0.17 series is required (tested with 0.17.1).
+      - test "$(zig version | cut -d. -f1,2)" = 0.17
       - apk add check-dev
       - apk add ttf-hack font-noto-emoji
 
@@ -105,6 +107,8 @@ steps:
       - apk add libxkbcommon-dev pixman-dev freetype-dev fontconfig-dev harfbuzz-dev utf8proc-dev
       - apk add wayland-dev wayland-protocols
       - apk add git python3 zig
+      # The 0.17 series is required (tested with 0.17.1).
+      - test "$(zig version | cut -d. -f1,2)" = 0.17
       - apk add check-dev
       - apk add ttf-hack font-noto-emoji
 
@@ -153,7 +157,8 @@ steps:
       - apk add git python3 zig weston ttf-hack font-noto-emoji
 
       - zig version
-      # compile_zig.py enforces the Zig series this branch targets.
+      # compile_zig.py enforces the 0.17 series (tested with 0.17.1).
+      - test "$(zig version | cut -d. -f1,2)" = 0.17
       - |
         for cfg in enabled disabled; do
           dir=bld/zig-$cfg

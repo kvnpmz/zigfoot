@@ -30,9 +30,10 @@ The current, honest status is:
 * Nine meson suites pass with 1,040 assertions.
 * Render parity covers 1,058 cells at three scales against the C oracle
   (`6b3f557d`).
-* In headless microbenchmarks, VT input is roughly 28% slower than C in
-  `ReleaseSafe` and roughly 8% slower in `ReleaseFast`; config parsing and
-  rendering are roughly at parity.
+* In headless microbenchmarks (measured with Zig 0.16.0; not yet re-measured
+  on 0.17.1), VT input is roughly 28% slower than C in `ReleaseSafe` and
+  roughly 8% slower in `ReleaseFast`; config parsing and rendering are
+  roughly at parity.
 
 See [doc/perf-1.2.md](doc/perf-1.2.md) for the measurement methodology. No
 frame-rate or compositor-level number is claimed.

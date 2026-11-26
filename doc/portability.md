@@ -12,9 +12,18 @@ build uses. All commands below were run on `ab5f4261`.
 - Signal masks and `sigaction` use `std.c.sigset_t` and `std.c.Sigaction`.
   That avoids a private mirror of an ABI whose layout differs between
   glibc, musl and FreeBSD.
-- Only private C macros that Zig does not expose (`TIOCSCTTY`, `_CS_PATH`,
-  `struct utsname`) go through a narrow `@cImport`. Do not pull in
-  `fcntl.h`: glibc's `open()` macro checks make the import fail.
+- Only C declarations Zig does not expose (`TIOCSCTTY`, `_CS_PATH`,
+  `struct utsname`/`uname`) are hand-written in `slave.zig` (per-platform
+  constants) and `main.zig` (`extern` struct/functions). Zig 0.17.1 removed
+  `@cImport`; keep these narrow hand-written declarations rather than
+  translate-c output or generated bindings, and do not pull in headers such
+  as `fcntl.h`.
+- `struct termios` is mirrored locally for Linux (`Termios` in `slave.zig`).
+  Zig 0.17's `std.c.termios` is the kernel UAPI layout (NCCS=19, 44 bytes),
+  not glibc/musl's (NCCS=32, 60 bytes), so libc's `tcgetattr()`/`tcsetattr()`
+  need the libc layout. A `comptime` assertion pins `@sizeOf(Termios) == 60`
+  on Linux, and the pty round-trip in `tests/test-terminal.c` checks the
+  behaviour.
 - `errno` goes through `std.c._errno()`, which resolves to the target's libc
   accessor.
 

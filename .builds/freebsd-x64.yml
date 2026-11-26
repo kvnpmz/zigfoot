@@ -4,6 +4,7 @@ packages:
   - libepoll-shim
   - meson
   - ninja
+  # The 0.17 series is required (tested with 0.17.1); 0.16 no longer builds.
   - zig
   - pkgconf
   - scdoc
@@ -28,6 +29,9 @@ sources:
 #     to: <committer>
 
 tasks:
+  - zig-toolchain: |
+      zig version
+      test "$(zig version | cut -d. -f1,2)" = 0.17
   - fcft: |
       cd foot/subprojects
       git clone https://codeberg.org/dnkl/tllist.git

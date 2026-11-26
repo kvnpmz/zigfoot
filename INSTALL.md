@@ -1,7 +1,8 @@
 # Installing Zigfoot
 
 Zigfoot is an unofficial port of [dnkl/foot](https://codeberg.org/dnkl/foot)
-(upstream version 1.28.0; see [FORK.md](FORK.md)).
+(upstream version 1.28.0, tag SHA
+`ab33c9a19d626f8d0ac0bd1adfdba21946ada948`; see [FORK.md](FORK.md)).
 
 * Package/install name: `zigfoot`; installed commands are `zigfoot` and
   `zigfootclient`.
@@ -75,8 +76,10 @@ In addition to the dev variant of the packages above, you need:
 
 * meson
 * ninja
-* [zig](https://ziglang.org/) **0.16** — the port targets this exact
-  series; `compile_zig.py` refuses any other version
+* [zig](https://ziglang.org/) **0.17.1** (release commit
+  `be248cc1fdc3cc654f9ec8ba68514bcb93b204fe`) — the port targets this
+  release; `compile_zig.py` checks the 0.17 series, and 0.16 no longer builds
+  the tree.
 * wayland protocols
 * ncurses (needed to generate terminfo)
 * scdoc (for man page generation, not needed if documentation is disabled)
@@ -88,7 +91,7 @@ In addition to the dev variant of the packages above, you need:
 **Zig is required**, not optional. Every ported Zigfoot module is Zig; the
 remaining C is a set of FFI shims, generated C and test utilities, plus two
 documented exceptions
-(`slave.c`'s `execvpe()`, which Zig 0.16 cannot express, and `config.c`'s
+(`slave.c`'s `execvpe()`, kept as a C exception, and `config.c`'s
 35-line `regex_t` wrapper). Each Zig module is a meson `custom_target`
 that runs `compile_zig.py`, which:
 

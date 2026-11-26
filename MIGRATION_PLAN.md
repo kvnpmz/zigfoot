@@ -1934,3 +1934,92 @@ presentation-clock sampling, cursor-image field helpers, the headless
 change: 9/9 suites in debug, release, ReleaseFast and grapheme-disabled;
 valgrind clean; render parity 1,058 cells; fuzz 24,000 iterations;
 cross-target 10/10; smoke ok.
+
+## 16. Toolchain migration: Zig 0.16.0 → 0.17.1 (2026-11-26)
+
+Toolchain only. The foot baseline is unchanged and fixed: upstream **1.28.0 =
+`ab33c9a19d626f8d0ac0bd1adfdba21946ada948` (2026-09-02)**. No upstream fix
+was ported and upstream master was not tracked. Target compiler: Zig
+**0.17.1** (tag commit `be248cc1fdc3cc654f9ec8ba68514bcb93b204fe`); 0.17.0
+(known regressions) and master (0.18-dev) were not targetted, and 0.16.0 no
+longer builds the tree. `compile_zig.py` gates on the `0.17` series.
+
+### 16.1 Compile-error classes (mechanical)
+
+| 0.16 construct | Sites | 0.17.1 replacement |
+|---|---|---|
+| `@cImport` (removed builtin) | main.zig (`sys/utsname.h`), slave.zig (`sys/ioctl.h` + `unistd.h`) | hand-written `extern` declarations; see §16.3 |
+| `@typeInfo(T).@"struct".fields` (removed) | terminal_types.zig `expectAbi()` | parallel `field_names`/`field_types` |
+| `.mode == .Debug` (enum fields renamed) | commands.zig ×2, terminal.zig | `.debug` |
+| `std.fmt.bufPrintZ` (removed) | 12 (config.zig ×8, render.zig ×4) | `std.mem.printSentinel(&buf, fmt, args, 0)` |
+| array-repeat `x ** n` (removed) | 6 | `@splat(x)` |
+| `std.c.E.ENOENT` (renamed) | client.zig | `std.c.E.NOENT` |
+| `std.builtin.{SourceLocation,VaList}` (deprecated alias) | 29 | `std.lang.*` |
+| `std.fmt.allocPrintSentinel` (deprecated alias) | 3 (config.zig) | `Allocator.printSentinel` |
+
+No `build.zig` exists in this port (meson drives the build), so the
+package-manager/build-runner changes in 0.17 do not apply. The `zig
+build-obj`/module CLI used by `compile_zig.py`, `zig_test.py` and
+`check-targets.sh` (`-O`, `-fno-stack-check`, `-lc`, `--dep`/`-M`,
+`-femit-bin`, `-target`, `-fno-emit-bin`) is unchanged and was exercised on
+x86_64-linux, x86_64-freebsd and aarch64-linux.
+
+### 16.2 Silent-breakage audit (reviewed before editing)
+
+* **`@bitCast`** — 72 sites enumerated and classified. 59 scalar/pointer
+  casts are unchanged; packed-struct↔integer casts (SixelFlags, Attributes,
+  `std.c.O/PROT/MAP`) were probe-compared on a big-endian target and are
+  identical in both compilers; no whole-extern-struct cast exists. The 3
+  byte-array sites (`csi_xtsave_get/set`, `[4]u8` ↔ `u32`) **did** change
+  meaning: 0.17 makes array casts endian-agnostic, 0.16/C were native-order
+  `memcpy`. They now use `std.mem.bytesToValue`/`@memcpy`, preserving the C
+  behaviour.
+* **`@hasDecl`** (public-only now) — all 7 sites probe cross-module public
+  decls (`std.c`, generated `c_layout`), which 0.16 already treated as
+  public-only. The generator must keep emitting `pub const`, especially for
+  the field-size check in `terminal_types.zig`; no silent false exists today.
+* **`mem.containsAtLeastScalar`** (argument order swapped) — no call sites.
+  Same for the removed `ascii.indexOfIgnoreCase*` and
+  `readPackedInt{Native,Foreign}` aliases: no call sites.
+* **Allocators/containers** — the tree allocates through `std.heap.c_allocator`
+  and libc `xmalloc` only; no `DebugAllocator`/`heap.Check`, `ArrayList`,
+  `DoublyLinkedList`, `bit_set`, `MultiArrayList` or `.writer()` usage, so
+  SafeAllocator and container renames do not apply.
+* **`std.c.termios` on Linux is not libc's layout in 0.17.1.** 0.16 handed
+  out glibc's 60-byte `struct termios` (NCCS=32); 0.17 hands out the kernel
+  UAPI struct (NCCS=19, 44 bytes). Passing it to libc `tcgetattr()` would
+  write past the object. This was caught by the pty tests (`IUTF8` failures
+  and failing child `slave_spawn`), not by the compiler. `slave.zig` now
+  mirrors glibc/musl's `struct termios` for Linux with a `comptime`
+  size assertion (60) and keeps `std.posix.termios` on FreeBSD.
+
+### 16.3 `@cImport` removal
+
+`main.zig` only needed `struct utsname` + `uname()` for the `arch:` log
+line; `slave.zig` only needed `TIOCSCTTY` and `_CS_PATH`. Both are now
+hand-written: a six-`[65]u8` `UtsName` on Linux / five-`[256]u8` on FreeBSD
+(calling `__xuname(256, ...)`, since FreeBSD's `uname()` is a static inline),
+and per-platform constants (`TIOCSCTTY` 0x540E Linux / 0x20007461 FreeBSD;
+`_CS_PATH` 0 Linux / 1 FreeBSD). `tests/test-terminal.c` compares the
+exported constant table against the real macros, so a wrong value fails the
+suite.
+
+### 16.4 Verification (0.16.0 vs 0.17.1, same corpus)
+
+Both toolchains were built from the same source tree (0.16.0 in a worktree at
+`f0a7a8fe`, 0.17.1 in the migrated tree):
+
+| Check | 0.16.0 | 0.17.1 |
+|---|---|---|
+| meson suites / assertions | 9/9, 1,040 | 9/9, same 1,040 `ok:` lines (diffed, identical) |
+| render parity (C oracle `6b3f557d`) | 1,058 cells, `e5184e0fe5898153` `b7cebabc45627f13` `87c0bab0d0d6829b` | identical cells and all three TOTAL hashes |
+| `fuzz-vt.sh 120` | PASS, 24,000 iterations | PASS, 24,000 iterations |
+| grapheme-disabled, ReleaseSafe | 9/9 | 9/9 |
+| ReleaseFast | — | 9/9 |
+| `check-targets.sh` (FreeBSD/aarch64) | 10/10 | 10/10 |
+| `gen_abi_probe.py --check` | clean | clean |
+| smoke (real compositor) | ok | ok (6 launches) |
+
+Performance was **not** re-measured for 0.17.1. The numbers in
+`doc/perf-1.2.md` and `FORK.md` remain the 0.16.0 measurements; no frame
+rate or presentation claim is added.

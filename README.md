@@ -9,10 +9,12 @@ an unofficial Zig port of foot, the Wayland terminal emulator
 > on top of that release.
 >
 > Verified in this checkout: x86_64 Linux is runtime-tested; FreeBSD and
-> aarch64 are compile-only. Nine test suites pass with 1,040 assertions; render
-> parity covers 1,058 cells at three scales against the C oracle. Terminal
-> input (VT) work is roughly 28% slower than C in `ReleaseSafe` and roughly 8%
-> slower in `ReleaseFast`; config parsing and rendering are roughly at parity.
+> aarch64 are compile-only. Built with Zig 0.17.1: nine test suites pass with
+> 1,040 assertions; render parity covers 1,058 cells at three scales against
+> the C oracle, with the same hashes as the 0.16.0 build. Terminal input (VT)
+> work is roughly 28% slower than C in `ReleaseSafe` and roughly 8% slower in
+> `ReleaseFast` (0.16.0 measurements, not yet re-measured); config parsing and
+> rendering are roughly at parity.
 > No compositor-frame/FPS measurement was possible here. The application layer
 > is Zig, but FFI shims, generated ABI/Wayland/sRGB C, and test/utility C
 > remain.
@@ -86,7 +88,7 @@ compatibility, the configuration file remains `foot.ini` and `TERM` remains
 
 # Installing
 
-See [INSTALL.md](INSTALL.md). Building Zigfoot requires **Zig 0.16** and a C
+See [INSTALL.md](INSTALL.md). Building Zigfoot requires **Zig 0.17.1** and a C
 compiler: the ported modules are Zig and are compiled through
 `compile_zig.py`, while FFI shims and generated C remain.
 
