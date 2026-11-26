@@ -2,9 +2,10 @@
  * Regression tests for the hand-written shims that every session depends on.
  *
  * Everything here is plain C and headless: no wayland connection, no pty and
- * no config file. The shim bodies are linked straight out of libfootlib (the
- * same way test-terminal.c and test-regex.c link it), so these checks cover
- * the real memfd/fallocate/seal paths and the real regexec() span copy.
+ * no config file. The shim bodies and Zig exports are linked straight out of
+ * libfootlib (the same way test-terminal.c and test-regex.c link it), so these
+ * checks cover the real memfd/fallocate/seal paths and the real regexec() span
+ * copy (now in url-mode.zig).
  *
  * The URL regex is required to have a marked subexpression, but the shim is
  * also checked with an ungrouped pattern: it must report an empty group 1
@@ -37,7 +38,8 @@ bool shm_shim_probe_punch_hole(int fd);
 void *shm_shim_mmap_pool(int fd, size_t size);
 void shm_shim_seal_pool(int fd);
 
-/* Likewise, url-mode.zig declares this as taking an opaque regex_t pointer. */
+/* url-mode.zig exports this with an opaque regex_t pointer; C's regex_t *
+ * is ABI-identical, so the declaration here stays valid. */
 bool url_shim_regex_match(
     const regex_t *preg, const char *str,
     size_t *so0, size_t *eo0, size_t *so1, size_t *eo1);

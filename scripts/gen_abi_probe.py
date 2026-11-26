@@ -151,6 +151,8 @@ C_TYPES: dict[str, str] = {
     # terminal-shim.c keeps this struct private; the declaration below must
     # stay in sync with it.
     "FontMetrics": "struct terminal_font_metrics",
+    # regexec() writes an array of these; url-mode.zig mirrors the layout.
+    "RegMatch": "regmatch_t",
 }
 
 NESTED_IN_TERMINAL: dict[str, str] = {

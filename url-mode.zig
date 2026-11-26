@@ -8,12 +8,14 @@
 //! the configured label alphabet (base-N counting, built reversed and then
 //! flipped), and reused when the same URL appears twice.
 //!
-//! regex_t's internals are libc-specific, so the regexec() call itself lives
-//! in url_shim_regex_match() (terminal-shim.c); everything around it is here.
+//! regex_t's internals are libc-specific, so url_shim_regex_match() below
+//! reads only the probed re_nsub offset and mirrors regmatch_t through the
+//! generated ABI layout. Everything around it is here.
 
 const std = @import("std");
 const types = @import("terminal_types.zig");
 const tll = @import("tll.zig");
+const abi = @import("c_layout");
 
 const Terminal = types.Terminal;
 const Seat = types.Seat;
@@ -43,6 +45,13 @@ export fn terminal_shim_urls_mode_active(term: *const Terminal) callconv(.c) boo
 extern fn open(path: [*:0]const u8, flags: c_int, ...) callconv(.c) c_int;
 extern fn close(fd: c_int) callconv(.c) c_int;
 extern fn free(ptr: ?*anyopaque) callconv(.c) void;
+extern fn regexec(
+    preg: ?*const anyopaque,
+    str: [*:0]const u8,
+    nmatch: usize,
+    pmatch: [*]types.RegMatch,
+    eflags: c_int,
+) callconv(.c) c_int;
 extern fn xmalloc(size: usize) callconv(.c) ?*anyopaque;
 extern fn xrealloc(ptr: ?*anyopaque, size: usize) callconv(.c) ?*anyopaque;
 extern fn xreallocarray(ptr: ?*anyopaque, nmemb: usize, size: usize) callconv(.c) ?*anyopaque;
@@ -116,19 +125,56 @@ extern fn term_ime_is_enabled(term: *const Terminal) callconv(.c) bool;
 extern fn term_ime_enable(term: *Terminal) callconv(.c) void;
 extern fn term_ime_disable(term: *Terminal) callconv(.c) void;
 
-extern fn url_shim_regex_match(
+extern fn log_msg(class: c_int, module: [*:0]const u8, file: [*:0]const u8, lineno: c_int, fmt: [*:0]const u8, ...) callconv(.c) void;
+extern fn log_errno(class: c_int, module: [*:0]const u8, file: [*:0]const u8, lineno: c_int, fmt: [*:0]const u8, ...) callconv(.c) void;
+
+const LOG_CLASS_ERROR: c_int = 1;
+
+/// C converts a negative `regoff_t` (e.g. an unmatched optional group) to
+/// size_t with modulo-2^N wrapping; keep that instead of trapping.
+fn regOffToSize(off: types.RegOff) usize {
+    return @bitCast(@as(isize, @intCast(off)));
+}
+
+/// Formerly terminal-shim.c's url_shim_regex_match(): regexec() plus the two
+/// spans url-mode consumes. regex_t stays opaque; only its probed re_nsub
+/// offset is read, and regmatch_t is mirrored by types.RegMatch.
+export fn url_shim_regex_match(
     preg: ?*const anyopaque,
     str: [*:0]const u8,
     so0: *usize,
     eo0: *usize,
     so1: *usize,
     eo1: *usize,
-) callconv(.c) bool;
+) callconv(.c) bool {
+    const compiled = preg orelse unreachable;
 
-extern fn log_msg(class: c_int, module: [*:0]const u8, file: [*:0]const u8, lineno: c_int, fmt: [*:0]const u8, ...) callconv(.c) void;
-extern fn log_errno(class: c_int, module: [*:0]const u8, file: [*:0]const u8, lineno: c_int, fmt: [*:0]const u8, ...) callconv(.c) void;
+    // Explicit read at the probed offset of libc's private regex_t.re_nsub.
+    const nsub: *const usize = @ptrFromInt(@intFromPtr(compiled) + abi.RegexT_re_nsub);
+    const nmatch: usize = nsub.* +% 1;
 
-const LOG_CLASS_ERROR: c_int = 1;
+    // xmalloc() aborts on OOM; do the same rather than returning false.
+    const mem = xmalloc(nmatch *% @sizeOf(types.RegMatch)) orelse unreachable;
+    const matches: [*]types.RegMatch = @ptrCast(@alignCast(mem));
+    defer free(mem);
+
+    const matched = regexec(compiled, str, nmatch, matches, 0) == 0;
+    if (matched) {
+        so0.* = regOffToSize(matches[0].rm_so);
+        eo0.* = regOffToSize(matches[0].rm_eo);
+
+        // config.zig requires a marked subexpression, but never read past a
+        // single regmatch_t if an ungrouped pattern reaches us anyway.
+        if (nmatch >= 2) {
+            so1.* = regOffToSize(matches[1].rm_so);
+            eo1.* = regOffToSize(matches[1].rm_eo);
+        } else {
+            so1.* = 0;
+            eo1.* = 0;
+        }
+    }
+    return matched;
+}
 
 /// free() for any optional pointer type (many-pointers included).
 fn freeSlice(p: anytype) void {
