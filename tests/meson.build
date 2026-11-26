@@ -41,6 +41,17 @@ terminal_harness = executable(
 
 test('terminal-harness', terminal_harness)
 
+# execvpe is Zig now (slave.zig, C ABI glue in slave.h). This drives the eight
+# glibc semantics cases: PATH search, EACCES preference, ENOEXEC through /bin/sh.
+execvpe_test = executable(
+  'test-execvpe',
+  'test-execvpe.c',
+  include_directories: '..',
+  dependencies: foot_deps,
+  link_with: footlib)
+
+test('execvpe', execvpe_test)
+
 # regex_t is owned by config.zig now: opaque buffer, probed size/alignment and
 # the re_nsub offset. This test drives the exported entry point directly.
 regex_test = executable(

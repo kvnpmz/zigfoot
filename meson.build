@@ -941,7 +941,7 @@ footlib = static_library(
   'main-shim.c',
   server_obj, 'server.h', 'client-protocol.h',
   shm_obj, 'shm-shim.c', 'shm.h',
-  slave_obj, 'slave.c', 'slave.h',
+  slave_obj, 'slave.h',
   spawn_obj, spawn_template_obj, 'spawn.h',
   tokenize_obj, 'tokenize.h',
   unicode_mode_obj, 'unicode-mode.h',
