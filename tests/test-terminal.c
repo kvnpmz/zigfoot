@@ -7224,9 +7224,9 @@ test_slave_shims(void)
     char *const argv[] = {(char *)"foot-fuzz-missing", NULL};
     char *const envp[] = {NULL};
     errno = 0;
-    check(slave_shim_execvpe("/foot-fuzz-missing", argv, envp) == -1 &&
+    check(slave_execvpe("/foot-fuzz-missing", argv, envp) == -1 &&
           errno == ENOENT,
-          "slave_shim_execvpe() reports a missing executable");
+          "slave_execvpe() reports a missing executable");
 }
 
 /*

@@ -9,7 +9,7 @@ const c_layout = @import("c_layout");
 // user-notification banner written to the pty.
 //
 // Signal-mask/handler restoration is Zig now. The configured terminfo path
-// arrives through build_options. slave_shim_execvpe() searches the PATH from
+// arrives through build_options. slave_execvpe() searches the PATH from
 // the caller-provided envp and follows glibc execvpe semantics.
 //
 
@@ -235,7 +235,7 @@ fn execThroughShell(
 }
 
 /// glibc-style execvpe(). argv and envp are borrowed and never modified.
-export fn slave_shim_execvpe(
+export fn slave_execvpe(
     file: [*:0]const u8,
     argv: [*]?[*:0]u8,
     envp: [*]?[*:0]u8,
@@ -583,7 +583,7 @@ fn slaveExec(
             file = argv[0].?;
         }
 
-        _ = slave_shim_execvpe(file, argv, envp);
+        _ = slave_execvpe(file, argv, envp);
         child_errno = errno();
         // Getting here is an error
     }

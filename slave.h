@@ -29,7 +29,7 @@ const struct slave_constants *slave_shim_constants(void);
 int slave_shim_set_iutf8(int pts);
 const char *slave_shim_terminfo_path(void);
 bool slave_shim_reset_signals(void);
-int slave_shim_execvpe(
+int slave_execvpe(
     const char *file, char *const argv[], char *const envp[]);
 
 pid_t slave_spawn(

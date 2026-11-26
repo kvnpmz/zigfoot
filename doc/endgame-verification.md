@@ -13,10 +13,10 @@ Date: 2026-11-25.
 
 Two files, 99 lines. Both are API gaps, not unfinished ports.
 
-### `slave.c` — 64 lines, `slave_shim_execvpe()`
+### `slave.c` — 64 lines, `slave_execvpe()`
 
 - Zig 0.16 has no `execvpeZ` or `execvpe`. `rg -n 'execvpe|execvp' /opt/zig/lib/std --glob '*.zig'` finds only comments in `std/Io/Threaded.zig`, `std/Io/Uring.zig` and `std/Io/Dispatch.zig`; there is no declaration. `std.posix` exposes no exec wrapper, and `std.c` exposes only `execve` (`/opt/zig/lib/std/c.zig:10705`).
-- `slave.zig:148` declares `extern fn slave_shim_execvpe(file, argv, envp)`; `slave.zig:430` calls it after building the NULL-terminated `argv`/`envp` arrays and rewriting `argv[0]` for a login shell.
+- `slave.zig:148` declares `extern fn slave_execvpe(file, argv, envp)`; `slave.zig:430` calls it after building the NULL-terminated `argv`/`envp` arrays and rewriting `argv[0]` for a login shell.
 - On glibc (`EXECVPE` defined) the helper calls `execvpe(file, argv, envp)`. The PATH search must use the caller's `envp`, not `getenv("PATH")`. The portable `#else` branch uses `getenv("PATH")`, `confstr(_CS_PATH)`, `strtok`, `access(F_OK)` and one `execve`; it does not implement the glibc retry semantics.
 - A Zig PATH walk would have to reproduce: PATH taken from `envp`; one `execve` attempt per `:`-separated candidate; continue on `EACCES` and remember the last error; on `ENOEXEC` retry the file through `/bin/sh`; preserve the NULL-terminated `argv` layout, `argv[0]` and `envp` unchanged; return `-1` with the same errno.
 - Rule from SKILLS: keep a C helper when Zig lacks the API. That is why these 64 lines stay.
@@ -115,4 +115,4 @@ Recommendation: keep `ReleaseSafe` as the default. The measured harness is 4.3 s
 
 ### execvpe coverage
 
-All six smoke launches run `foot -e sh -c 'printf "smoke\n"; exit 0'` at 80x24, 132x43, 20x5, 80x24 maximized, 80x24 fullscreen, and 80x24 with `render-timer=osd` + `scrollback-indicator=percentage`. Each launch spawns the shell through `slave.zig` and `slave_shim_execvpe()`, using the caller's envp. The harness also drives the failure path: `tests/test-terminal.c:6969` checks `slave_shim_execvpe("/foot-fuzz-missing", argv, envp) == -1` with `errno == ENOENT`. Result: launch coverage intact, failure-path check green.
+All six smoke launches run `foot -e sh -c 'printf "smoke\n"; exit 0'` at 80x24, 132x43, 20x5, 80x24 maximized, 80x24 fullscreen, and 80x24 with `render-timer=osd` + `scrollback-indicator=percentage`. Each launch spawns the shell through `slave.zig` and `slave_execvpe()`, using the caller's envp. The harness also drives the failure path: `tests/test-terminal.c:6969` checks `slave_execvpe("/foot-fuzz-missing", argv, envp) == -1` with `errno == ENOENT`. Result: launch coverage intact, failure-path check green.

@@ -115,7 +115,7 @@ Status `OK` means a direct 1:1 port. `OK*` means a verified difference or a docu
 | `main.c` | `fdm_sigint`, `fdm_sigusr`, `print_usage`, `get_foot_exe`, `locale_is_utf8`, `term_shutdown_cb`, `print_pid`, `sanitize_signals`, `main` | Same names in camel case; `main` is exported | `OK`, except PL-03 and PL-11 |
 | `client.c` | `sigint_handler`, `sigusr_handler`, `sendall`, `print_usage`, `get_footclient_exe`, `push_string`, `free_string_list`, `send_string_list`, `main` | Handlers, `client_shim_sendall`, usage/exe helpers, `StringList.push/sendAll/deinit`, `footclient_main` | `OK`, except PL-03 and PL-05 |
 | `server.c` | `client_destroy`, `client_send_exit_code`, `instance_destroy`, `term_shutdown_handler`, `fdm_client`, `fdm_server`, `try_connect`, `prepare_socket`, `server_init`, `server_destroy`, both global theme switches | Same names in camel case; `parseAndInit` replaces the inlined parser body | `OK`, except PL-03 and PL-07 |
-| `slave.c` | `find_file_in_path`, `foot_execvpe` | `slave_shim_execvpe` and its private fallback in `slave.c` | `OK*`, documented exception |
+| `slave.c` | `find_file_in_path`, `foot_execvpe` | `slave_execvpe` and its private fallback in `slave.c` | `OK*`, documented exception |
 | `slave.c` | `is_valid_shell`, `emit_one_notification`, `emit_notifications_of_kind`, `emit_notifications`, `slave_exec`, `env_matches_var_name`, `add_to_env`, `del_from_env`, `slave_spawn` | Same names in camel case | `OK`, except PL-03 and PL-11 |
 | `config.c` | `log_and_notify_va`, `log_and_notify`, `log_contextual`, `log_and_notify_errno_va`, `log_and_notify_errno`, `log_contextual_errno` | `logAndNotify*`, `logContextual*`, exported C entry points | `OK` |
 | `config.c` | `get_shell`, `open_config`, `str_has_prefix` | `get_shell`, `openConfig`, `eq` | `OK`, except PL-03 and PL-08 |
@@ -264,7 +264,7 @@ Class a means C-only platform, opaque-type, macro, or varargs knowledge. Class b
 | `xmalloc-shim.c:xasprintf()` | a | Keep. Zig cannot define a C variadic entry point. |
 | `xsnprintf-shim.c:xsnprintf()` | a | Keep. Same varargs reason. |
 | `config.c:config_regex_compile()` | a | Keep as the documented regex exception. |
-| `slave.c:slave_shim_execvpe()` and fallback | a | Keep as the documented exec/env exception. |
+| `slave.c:slave_execvpe()` and fallback | a | Keep as the documented exec/env exception. |
 | `terminal-shim.c:terminal_shim_fcft_font_name()` | a | Keep. `fcft_font` is opaque here. |
 | `terminal_shim_urls_mode_active()` | c, resolved | The old three-line C adapter is gone. `url-mode.zig:39` now exports the function used by `commands.zig` and other modules. |
 | All other functions called by the owned modules | b | None remain in this call graph. Normal module exports are not shims. |

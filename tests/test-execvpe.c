@@ -82,7 +82,7 @@ static struct child_result run_case(const char *file, char *const argv[],
         write_all(marker_pipe[1], &marker, sizeof(marker));
         close(marker_pipe[1]);
 
-        int rc = slave_shim_execvpe(file, argv, envp);
+        int rc = slave_execvpe(file, argv, envp);
         int e = rc == -1 ? errno : 0;
         write_all(err_pipe[1], &e, sizeof(e));
         _exit(rc == -1 ? CHILD_RETURNED : CHILD_BAD_RETURN);

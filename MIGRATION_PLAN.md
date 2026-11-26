@@ -1165,7 +1165,7 @@ all three build directories, and a fake UNIX server verified the setup packet
 and exit-code response.
 
 **Post-E1b:** `slave.c` is down to **64** lines and contains only
-`slave_shim_execvpe()`: Zig 0.16 has no `execvpeZ()`, and the portable
+`slave_execvpe()`: Zig 0.16 has no `execvpeZ()`, and the portable
 PATH-search fallback must honor the caller-provided `envp`. Signal reset uses
 `std.posix.sigaction()`/`sigprocmask()` with `SIG.DFL`; the configured terminfo
 path is the `foot_terminfo_path` build option. `debug.c` is deleted: the ASAN
