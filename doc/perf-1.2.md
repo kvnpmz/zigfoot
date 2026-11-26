@@ -85,6 +85,19 @@ perf: not_measured=fps_input_latency reason=no_compositor
 perf-compare: complete
 ```
 
+## Re-running (build cache)
+
+The four builds (C -O3, C -O2, Zig ReleaseSafe, Zig ReleaseFast) dominate the
+wall clock, so they are cached under
+`${PERF_CACHE_DIR:-${TMPDIR:-/tmp}/foot-perf-cache}/head-<sha>-oracle-<sha>`.
+A rerun with the same HEAD and oracle reuses the sources and all four build
+directories and only re-measures. Measured here with reduced inner iterations:
+a cold run (builds + measure) took **7m28s**, the identical warm rerun took
+**10.2s**. Use `PERF_NO_CACHE=1` or `WORK=/tmp/...` for the old throwaway
+behaviour, and `PERF_FORCE_BUILD=1` to rebuild without changing the key.
+Progress lines are written to stderr as `perf: phase=<name> at=<utc>`, so a
+long run can be followed from its log instead of being polled.
+
 ## Result table (medians; smaller is better)
 
 | Benchmark | unit | C `-O3` | C `-O2` | Zig ReleaseSafe | Zig ReleaseFast |

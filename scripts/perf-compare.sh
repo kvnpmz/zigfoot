@@ -19,19 +19,11 @@
 set -eu
 
 root=$(cd -- "$(dirname -- "$0")/.." && pwd)
-work=${WORK:-$(mktemp -d "${TMPDIR:-/tmp}/foot-perf.XXXXXX")}
-build_dir=${BUILD_DIR:-$work}
 oracle_ref=${ORACLE_REF:-6b3f557d}
 reps=${PERF_REPS:-12}
 render_iters=${PERF_RENDER_ITERS:-10}
 config_iters=${PERF_CONFIG_ITERS:-100}
 vt_iters=${PERF_VT_ITERS:-2000}
-
-mkdir -p -- "$work" "$build_dir"
-builds=$(mktemp -d "$build_dir/foot-perf-builds.XXXXXX")
-trap 'rm -rf -- "$work" "$builds"' 0 1 2 3 15
-export ZIG_GLOBAL_CACHE_DIR=${ZIG_GLOBAL_CACHE_DIR:-$builds/zig-cache}
-mkdir -p "$work/bin" "$work/logs" "$work/out"
 
 # Fail early instead of producing partial, plausible-looking numbers.
 for tool in git tar meson ninja zig cc python3; do
@@ -40,31 +32,67 @@ done
 head_commit=$(git -C "$root" rev-parse HEAD)
 oracle_commit=$(git -C "$root" rev-parse "${oracle_ref}^{commit}")
 
-# ---------------------------------------------------------------- sources --
-git -C "$root" archive "$head_commit" > "$work/head.tar"
-git -C "$root" archive "$oracle_commit" > "$work/oracle.tar"
-mkdir -p "$work/head" "$work/oracle" "$work/head-fast"
-tar -xf "$work/head.tar" -C "$work/head"
-tar -xf "$work/oracle.tar" -C "$work/oracle"
-cp -a "$work/head/." "$work/head-fast/"
-# The C oracle predates this harness; use the identical HEAD corpus driver.
-cp "$work/head/tests/test-render-parity.c" "$work/oracle/tests/test-render-parity.c"
+# Reuse the four expensive builds across runs. The key contains both commits,
+# so a new HEAD or oracle rebuilds; otherwise a rerun only re-measures.
+# WORK=... or PERF_NO_CACHE=1 restores the old throwaway behaviour.
+if [ "${PERF_NO_CACHE:-0}" = 1 ] || [ -n "${WORK:-}" ]; then
+    work=${WORK:-$(mktemp -d "${TMPDIR:-/tmp}/foot-perf.XXXXXX")}
+    cache=0
+else
+    work=${PERF_CACHE_DIR:-${TMPDIR:-/tmp}/foot-perf-cache}/head-$head_commit-oracle-$oracle_commit
+    cache=1
+fi
+build_dir=${BUILD_DIR:-$work}
+mkdir -p -- "$work" "$build_dir"
+builds=$work/builds
+trap 'if [ "$cache" = 0 ]; then rm -rf -- "$work"; fi' 0 1 2 3 15
+export ZIG_GLOBAL_CACHE_DIR=${ZIG_GLOBAL_CACHE_DIR:-$builds/zig-cache}
+mkdir -p "$work/bin" "$work/logs" "$work/out" "$builds"
 
-# ReleaseFast is not reachable via meson options: compile_zig.py maps release
-# to ReleaseSafe. Patch only the private copy, then assert ninja really emits
-# -O ReleaseFast (never claim a mode that was not used).
-python3 -c 'import pathlib,sys; p=pathlib.Path(sys.argv[1]); s=p.read_text(); old="\"release\": \"ReleaseSafe\","; new="\"release\": \"ReleaseFast\","; assert s.count(old)==1, "compile_zig mapping changed"; p.write_text(s.replace(old,new))' "$work/head-fast/compile_zig.py"
+phase() { echo "perf: phase=$1 at=$(date -u +%FT%TZ)" >&2; }
+phase start
+
+# ---------------------------------------------------------------- sources --
+if [ ! -f "$work/.sources-ok" ]; then
+    phase sources
+    git -C "$root" archive "$head_commit" > "$work/head.tar"
+    git -C "$root" archive "$oracle_commit" > "$work/oracle.tar"
+    mkdir -p "$work/head" "$work/oracle" "$work/head-fast"
+    tar -xf "$work/head.tar" -C "$work/head"
+    tar -xf "$work/oracle.tar" -C "$work/oracle"
+    cp -a "$work/head/." "$work/head-fast/"
+    # The C oracle predates this harness; use the identical HEAD corpus driver.
+    cp "$work/head/tests/test-render-parity.c" "$work/oracle/tests/test-render-parity.c"
+
+    # ReleaseFast is not reachable via meson options: compile_zig.py maps
+    # release to ReleaseSafe. Patch only the private copy, then assert ninja
+    # really emits -O ReleaseFast (never claim a mode that was not used).
+    python3 -c 'import pathlib,sys; p=pathlib.Path(sys.argv[1]); s=p.read_text(); old="\"release\": \"ReleaseSafe\","; new="\"release\": \"ReleaseFast\","; assert s.count(old)==1, "compile_zig mapping changed"; p.write_text(s.replace(old,new))' "$work/head-fast/compile_zig.py"
+    touch "$work/.sources-ok"
+else
+    phase sources_reused
+fi
 
 setup() { # builddir source "extra meson args"
     b=$1; src=$2; shift 2
-    meson setup "$b" "$src" --buildtype=release -Ddocs=disabled -Dthemes=false "$@" \
-        > "$work/logs/setup-$(basename "$b").log" 2>&1 || {
-        echo "perf-compare: meson setup failed for $b" >&2
-        tail -20 "$work/logs/setup-$(basename "$b").log" >&2; exit 1; }
+    if [ ! -f "$b/build.ninja" ]; then
+        phase setup-$(basename "$b")
+        meson setup "$b" "$src" --buildtype=release -Ddocs=disabled -Dthemes=false "$@" \
+            > "$work/logs/setup-$(basename "$b").log" 2>&1 || {
+            echo "perf-compare: meson setup failed for $b" >&2
+            tail -20 "$work/logs/setup-$(basename "$b").log" >&2; exit 1; }
+    elif [ "${PERF_FORCE_BUILD:-0}" = 1 ]; then
+        phase wipe-$(basename "$b")
+        meson setup --wipe "$b" "$src" --buildtype=release -Ddocs=disabled -Dthemes=false "$@" \
+            > "$work/logs/setup-$(basename "$b").log" 2>&1 || {
+            echo "perf-compare: meson setup --wipe failed for $b" >&2
+            tail -20 "$work/logs/setup-$(basename "$b").log" >&2; exit 1; }
+    fi
     # The pre-port oracle has no meson target for the render driver; its
     # private harness is linked by mkrender.py from the foot link line.
     targets="foot tests/test-config"
     case $b in *zig-*) targets="$targets tests/test-render-parity" ;; esac
+    phase build-$(basename "$b")
     ninja -C "$b" -j4 $targets \
         > "$work/logs/build-$(basename "$b").log" 2>&1 || {
         echo "perf-compare: build failed for $b" >&2
@@ -77,6 +105,8 @@ for mode in o2 o3; do
     setup "$builds/c-$mode" "$work/oracle" $extra
 done
 python3 -c 'import pathlib,subprocess,sys; s=pathlib.Path(sys.argv[2]).read_text(); assert s.count("\"release\": \"ReleaseFast\",") == 1, "compile_zig mapping unchanged"; ls=subprocess.run(["ninja","-C",sys.argv[1],"-t","commands"],capture_output=True,text=True,check=True).stdout.splitlines(); zl=[l for l in ls if "compile_zig.py" in l]; assert len(zl) > 10, "zig compile commands missing"; print("perf: mode_check=zig-fast optimize=ReleaseFast zig_modules=%d" % len(zl))' "$builds/zig-fast" "$work/head-fast/compile_zig.py"
+
+phase builds_done
 
 # ------------------------------------------------------------- tool copies --
 # These helpers are deliberately written into WORK: they patch private source
