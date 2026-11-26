@@ -177,17 +177,30 @@ Diagnostics so far:
 * Callgrind instruction counts for the same launch: Zig ReleaseSafe 214.8M vs
   C `-O3` 136.4M (+57%). The extra work is rendering, not term initialisation:
   Zig shows `render_cell` (7.6M) and 19.5M `memset` instructions reached
-  through ~25k `pixman_fill` calls, while C shows neither — i.e. Zig paints an
-  initial full-screen frame before the child exits and C appears not to. The
-  very stable ~100 ms ReleaseSafe teardown looks more like waiting for
-  buffer release / worker shutdown than like data-proportional work. Those are
-  hypotheses from the profiles, not yet proven by instrumentation.
+  through ~25k `pixman_fill` calls, while C shows neither — Zig paints an
+  initial full-screen frame that C does not.
+* `getrusage(RUSAGE_CHILDREN)` confirms the mechanism: immediate-exit
+  ReleaseSafe performs **39,832 minor faults and 58 ms of system time** versus
+  C's 1,318 and 5.5 ms. With `workers=0/1/4/12` the ReleaseSafe fault counts
+  are 14.2k/14.2k/19.3k/39.8k, i.e. roughly one extra 8 MiB pixmap
+  (~2.1k faults) per additional render worker.
 
-**Not fixed here.** The obvious follow-ups are lazy/zero-free scrollback
-initialisation and a cheaper way to join the render workers. First-frame
-latency, FPS and input latency are still not measured: this compositor does
-not deliver `wp_presentation` feedback (foot printed no presentation
-statistics), and there is no frame-timing instrumentation in the tree.
+**This is a short-lived-window artifact, not a steady-state teardown
+regression.** With a child that sleeps 1 s, all three binaries take
+1069.5–1070.2 ms wall — about 70 ms of overhead each. The 114 vs 32 ms gap only
+appears when the child exits immediately: Zig paints a frame first and then
+unmaps the now-dirty buffers, while C exits before painting. A normally-used
+window does not pay that cost. The persistent end-to-end delta is the
+**startup-to-child-exec +4.3 ms** (18.7 vs 23.1 ms with a 0.5 s child), not
+teardown.
+
+**No fix is warranted from these numbers.** The extra work is the eagerly
+painted first frame; a 1 s window shows parity. If the cost of very
+short-lived windows ever matters, deferring the first paint until the child
+produces output would restore C's behaviour. First-frame latency, FPS and
+input latency are still not measured: this compositor does not deliver
+`wp_presentation` feedback (foot printed no presentation statistics), and
+there is no frame-timing instrumentation in the tree.
 
 ## Not measured (and why)
 
