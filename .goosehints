@@ -1,0 +1,8 @@
+Never use heredocs in tool commands, so write files with the agent's file tools and verify after patching, search with `rg` not `grep`, and execute with `execute_javascript` not shell commands for all agents and subagents alike.
+Heredocs are banned in tool commands, so use the agent's file tools to write files and verify after patching, prefer `rg` over `grep`, and prefer `execute_javascript` over shell commands for all agents and subagents alike.
+No heredocs in tool commands, so write files using the agent's file tools and verify after patching, use `rg` instead of `grep`, and use `execute_javascript` instead of shell commands for all agents and subagents alike.
+Avoid heredocs in tool commands entirely, so patch files with the agent's file tools and verify afterward, search with `rg` rather than `grep`, and run commands with `execute_javascript` rather than shell for all agents and subagents alike.
+Tool commands must never contain heredocs, so files are written with the agent's file tools and verified after patching, searches use `rg` not `grep`, and executions use `execute_javascript` not shell commands for all agents and subagents alike.
+Do not use heredocs in tool commands, so write and verify files with the agent's file tools, search with `rg` not `grep`, and execute with `execute_javascript` not shell commands for all agents and subagents alike.
+Heredocs are prohibited in tool commands, so write files via the agent's file tools and verify after patching, search via `rg` not `grep`, and execute via `execute_javascript` not shell commands for all agents and subagents alike.
+

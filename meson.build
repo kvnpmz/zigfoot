@@ -852,16 +852,16 @@ common = static_library(
   'xmalloc-shim.c',
     xmalloc_obj, 'xmalloc.h',
   'xsnprintf-shim.c',
-  xsnprintf_obj, 'xsnprintf.h',
+  xsnprintf_obj,
   dependencies: [utf8proc]
 )
 
 misc = static_library(
   'misc',
-  hsl_obj, 'hsl.h',
+  hsl_obj,
   'macros.h',
   misc_obj, 'misc.h',
-  uri_obj, 'uri.h',
+  uri_obj,
   dependencies: [utf8proc],
   link_with: [common]
 )
@@ -871,9 +871,9 @@ vtlib = static_library(
   base64_obj, 'base64.h',
   composed_obj, 'composed.h',
   cursor_shape_obj, 'cursor-shape.h',
-  csi_obj, 'csi.h',
+  csi_obj,
   'csi-shim.c',
-  dcs_obj, 'dcs.h',
+  dcs_obj,
   'dcs-shim.c',
   'macros.h',
   osc_obj, 'osc.h',
@@ -926,7 +926,7 @@ footlib = static_library(
   async_obj, 'async.h',
   box_drawing_obj, 'box-drawing.h',
   config_obj, 'config.h',
-  commands_obj, 'commands.h',
+  commands_obj,
   extract_obj, 'extract.h',
   fdm_obj, 'fdm.h',
   foot_features_obj, 'foot-features.h',
@@ -943,12 +943,11 @@ footlib = static_library(
   shm_obj, 'shm-shim.c', 'shm.h',
   slave_obj, 'slave.h',
   spawn_obj, spawn_template_obj, 'spawn.h',
-  tokenize_obj, 'tokenize.h',
+  tokenize_obj,
   unicode_mode_obj, 'unicode-mode.h',
   url_mode_obj, 'url-mode.h',
   user_notification_obj, 'user-notification.h',
-  'wayland-shim.c', wayland_obj, 'wayland.h', 'shm-formats.h',
-  'xkbcommon-vmod.h',
+  'wayland-shim.c', wayland_obj, 'wayland.h',
   srgb_funcs, wl_proto_src + wl_proto_headers, version,
   dependencies: foot_deps,
   link_with: pgolib)

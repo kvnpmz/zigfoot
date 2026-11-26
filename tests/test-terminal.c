@@ -4331,11 +4331,11 @@ test_server_port(void)
     close(pair[0]);
     close(pair[1]);
 
-    check(server_try_connect("/tmp/agent-c/foot-server-does-not-exist.sock") == 1,
+    check(server_try_connect("/tmp/foot-server-does-not-exist.sock") == 1,
           "try_connect reports a missing socket");
 
     char path[128];
-    snprintf(path, sizeof(path), "/tmp/agent-c/foot-server-%d.sock",
+    snprintf(path, sizeof(path), "/tmp/foot-server-%d.sock",
              (int)getpid());
     unlink(path);
     conf.server_socket_path = path;
