@@ -11,7 +11,7 @@ fn feature(enabled: bool, name: []const u8) []const u8 {
 }
 
 const features =
-    "version: " ++ build_options.foot_version ++
+    "zigfoot version: " ++ build_options.foot_version ++
     feature(build_options.pgo, "pgo") ++
     feature(build_options.ime, "ime") ++
     feature(build_options.grapheme_clustering, "graphemes") ++

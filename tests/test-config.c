@@ -1773,8 +1773,8 @@ test_config_load(void)
 
     /* [main] defaults */
     xassert(strcmp(original.term, FOOT_DEFAULT_TERM) == 0);
-    xassert(strcmp(original.title, "foot") == 0);
-    xassert(strcmp(original.app_id, "foot") == 0);
+    xassert(strcmp(original.title, "Zigfoot") == 0);
+    xassert(strcmp(original.app_id, "zigfoot") == 0);
     xassert(original.size.type == CONF_SIZE_PX);
     xassert(original.size.width == 700);
     xassert(original.size.height == 500);
@@ -1959,7 +1959,7 @@ test_config_load_from_xdg(void)
     setenv("XDG_CONFIG_DIRS", no_dirs, 1);
 
     xassert(config_load(&conf, NULL, &nots, &overrides, false, false));
-    xassert(strcmp(conf.title, "foot") == 0);
+    xassert(strcmp(conf.title, "Zigfoot") == 0);
     xassert(conf.conf_path == NULL);
     config_free(&conf);
 

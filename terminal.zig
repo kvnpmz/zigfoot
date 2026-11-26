@@ -3084,7 +3084,7 @@ export fn term_set_app_id(term: *types.Terminal, app_id_in: ?[*:0]const u8) void
 export fn term_icon(term: *const types.Terminal) [*:0]const u8 {
     const app_id = if (term.app_id) |id| id else term.conf.?.app_id.?;
 
-    return if (streq(app_id, "footclient")) "foot" else app_id;
+    return if (streq(app_id, "zigfootclient")) "zigfoot" else app_id;
 }
 
 export fn term_spawn_new(term: *const types.Terminal) bool {

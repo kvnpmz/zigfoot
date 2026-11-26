@@ -5322,8 +5322,8 @@ export fn render_worker_thread(ctx_in: ?*anyopaque) callconv(.c) ?*anyopaque {
 
     render_shim_block_all_signals();
 
-    var title_buf: [16]u8 = undefined;
-    const title = std.fmt.bufPrintZ(&title_buf, "foot:render:{d}", .{my_id}) catch "foot:render";
+    var title_buf: [24]u8 = undefined;
+    const title = std.fmt.bufPrintZ(&title_buf, "zigfoot:render:{d}", .{my_id}) catch "zigfoot:render";
     if (render_shim_set_thread_name(title.ptr) < 0) {
         log_errno(LOG_CLASS_ERROR, "render", "render.zig", @intCast(@src().line), "render worker %d: failed to set process title", my_id);
     }
@@ -5518,7 +5518,7 @@ export fn render_update_title(term: *Terminal) callconv(.c) void {
     const window = term.window orelse return;
     const toplevel = window.xdg_toplevel orelse return;
 
-    var title: [*:0]const u8 = "foot";
+    var title: [*:0]const u8 = "Zigfoot";
     if (term.window_title) |t|
         title = t;
 

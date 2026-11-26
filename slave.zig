@@ -433,7 +433,7 @@ fn emitOneNotification(fd: c_int, notif: *const types.UserNotification) UnResult
     const text: []const u8 = if (notif.text) |t| std.mem.span(t) else "";
 
     if (!writeStr(fd, prefix) or
-        !writeStr(fd, "foot: ") or
+        !writeStr(fd, "zigfoot: ") or
         !writeStr(fd, text) or
         !writeStr(fd, postfix))
     {

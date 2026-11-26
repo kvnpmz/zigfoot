@@ -64,7 +64,7 @@ export fn write_icon_file(
     symbolic_name: *?[*:0]u8,
 ) callconv(.c) bool {
     var name: [64:0]u8 = undefined;
-    const template = "/tmp/foot-notification-icon-XXXXXX";
+    const template = "/tmp/zigfoot-notification-icon-XXXXXX";
     @memcpy(name[0..template.len], template);
     name[template.len] = 0;
 

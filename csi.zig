@@ -1474,7 +1474,7 @@ fn caseGreater(term: *types.Terminal, final: u8) void {
             const extra = csi_foot_version_extra();
             const sep: [*:0]const u8 = if (extra[0] != 0) "-" else "";
             var reply: [64]u8 = undefined;
-            const n = xsnprintf(&reply, reply.len, "\x1bP>|foot(%u.%u.%u%s%s)\x1b\\", csi_foot_version_major(), csi_foot_version_minor(), csi_foot_version_patch(), sep, extra);
+            const n = xsnprintf(&reply, reply.len, "\x1bP>|zigfoot(%u.%u.%u%s%s)\x1b\\", csi_foot_version_major(), csi_foot_version_minor(), csi_foot_version_patch(), sep, extra);
             term_to_slave(term, &reply, n);
         },
         else => {},

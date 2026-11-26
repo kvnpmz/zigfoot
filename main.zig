@@ -456,13 +456,13 @@ fn printPid(pid_file: [*:0]const u8, unlink_at_exit: *bool) bool {
 const PATH_MAX = std.posix.PATH_MAX;
 
 fn getFootExe() [*:0]const u8 {
-    // Linux only, fallback to "foot"
+    // Linux only, fallback to "zigfoot"
     const S = struct {
         var lnk: [PATH_MAX]u8 = undefined;
     };
     const ret = readlink("/proc/self/exe", &S.lnk, S.lnk.len - 1);
     if (ret < 0)
-        return "foot";
+        return "zigfoot";
 
     S.lnk[@intCast(ret)] = 0;
     return @ptrCast(&S.lnk);
@@ -479,8 +479,8 @@ const usage_options_head =
     "  -o,--override=[section.]key=value        override configuration option\n" ++
     "  -f,--font=FONT                           comma separated list of fonts in fontconfig format (monospace)\n" ++
     "  -t,--term=TERM                           value to set the environment variable TERM to (" ++ build_options.default_terminfo ++ ")\n" ++
-    "  -T,--title=TITLE                         initial window title (foot)\n" ++
-    "  -a,--app-id=ID                           window application ID (foot)\n" ++
+    "  -T,--title=TITLE                         initial window title (Zigfoot)\n" ++
+    "  -a,--app-id=ID                           window application ID (zigfoot)\n" ++
     "     --toplevel-tag=TAG                    set a custom toplevel tag\n" ++
     "  -m,--maximized                           start in maximized mode\n" ++
     "  -F,--fullscreen                          start in fullscreen mode\n" ++
@@ -489,8 +489,8 @@ const usage_options_head =
     "  -D,--working-directory=DIR               directory to start in (CWD)\n" ++
     "  -w,--window-size-pixels=WIDTHxHEIGHT     initial width and height, in pixels\n" ++
     "  -W,--window-size-chars=WIDTHxHEIGHT      initial width and height, in characters\n" ++
-    "  -s,--server[=PATH]                       run as a server (use 'footclient' to start terminals).\n" ++
-    "                                           Without PATH, $XDG_RUNTIME_DIR/foot-$WAYLAND_DISPLAY.sock will be used.\n" ++
+    "  -s,--server[=PATH]                       run as a server (use 'zigfootclient' to start terminals).\n" ++
+    "                                           Without PATH, $XDG_RUNTIME_DIR/zigfoot-$WAYLAND_DISPLAY.sock will be used.\n" ++
     "  -H,--hold                                remain open after child process exits\n" ++
     "  -p,--print-pid=FILE|FD                   print PID to file or FD (only applicable in server mode)\n" ++
     "  -d,--log-level={info|warning|error|none} log level (warning)\n" ++
@@ -730,7 +730,7 @@ export fn main(argc_in: c_int, argv_in: [*]?[*:0]u8) c_int {
             'S' => log_syslog = false,
 
             'v' => {
-                printVersionAndFeatures("foot ");
+                printVersionAndFeatures("");
                 freeStrList(&overrides);
                 return EXIT_SUCCESS;
             },
@@ -1008,7 +1008,7 @@ export fn main(argc_in: c_int, argv_in: [*]?[*:0]u8) c_int {
         }
 
         if (as_server)
-            logInfo("running as server; launch terminals by running footclient", .{});
+            logInfo("running as server; launch terminals by running zigfootclient", .{});
 
         if (as_server and pid_file != null) {
             if (!printPid(pid_file.?, &unlink_pid_file))

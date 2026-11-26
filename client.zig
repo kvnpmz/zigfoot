@@ -147,7 +147,7 @@ fn errno() c_int {
 fn logErr(comptime fmt: [*:0]const u8, args: anytype) void {
     @call(.auto, log_msg, .{
         LOG_CLASS_ERROR,
-        "foot-client",
+        "zigfoot-client",
         "client.zig",
         @as(c_int, @intCast(@src().line)),
         fmt,
@@ -157,7 +157,7 @@ fn logErr(comptime fmt: [*:0]const u8, args: anytype) void {
 fn logErrno(comptime fmt: [*:0]const u8, args: anytype) void {
     @call(.auto, log_errno, .{
         LOG_CLASS_ERROR,
-        "foot-client",
+        "zigfoot-client",
         "client.zig",
         @as(c_int, @intCast(@src().line)),
         fmt,
@@ -167,7 +167,7 @@ fn logErrno(comptime fmt: [*:0]const u8, args: anytype) void {
 fn logWarn(comptime fmt: [*:0]const u8, args: anytype) void {
     @call(.auto, log_msg, .{
         LOG_CLASS_WARNING,
-        "foot-client",
+        "zigfoot-client",
         "client.zig",
         @as(c_int, @intCast(@src().line)),
         fmt,
@@ -292,7 +292,7 @@ var exe_buffer: [4096]u8 = undefined;
 fn getFootclientExe() [*:0]const u8 {
     const count = readlink("/proc/self/exe", &exe_buffer, exe_buffer.len - 1);
     if (count < 0)
-        return "footclient";
+        return "zigfootclient";
     exe_buffer[@intCast(count)] = 0;
     return @ptrCast(&exe_buffer);
 }
@@ -301,8 +301,8 @@ fn printUsage(prog: [*:0]const u8) void {
     const options =
         "\nOptions:\n" ++
         "  -t,--term=TERM                           value to set the environment variable TERM to (" ++ build_options.default_terminfo ++ ")\n" ++
-        "  -T,--title=TITLE                         initial window title (foot)\n" ++
-        "  -a,--app-id=ID                           window application ID (foot)\n" ++
+        "  -T,--title=TITLE                         initial window title (Zigfoot)\n" ++
+        "  -a,--app-id=ID                           window application ID (zigfoot)\n" ++
         "     --toplevel-tag=TAG                    set a custom toplevel tag\n" ++
         "  -w,--window-size-pixels=WIDTHxHEIGHT     initial width and height, in pixels\n" ++
         "  -W,--window-size-chars=WIDTHxHEIGHT      initial width and height, in characters\n" ++
@@ -310,11 +310,11 @@ fn printUsage(prog: [*:0]const u8) void {
         "  -F,--fullscreen                          start in fullscreen mode\n" ++
         "  -L,--login-shell                         start shell as a login shell\n" ++
         "  -D,--working-directory=DIR               directory to start in (CWD)\n" ++
-        "  -s,--server-socket=PATH                  path to the server UNIX domain socket (default=$XDG_RUNTIME_DIR/foot-$WAYLAND_DISPLAY.sock)\n" ++
+        "  -s,--server-socket=PATH                  path to the server UNIX domain socket (default=$XDG_RUNTIME_DIR/zigfoot-$WAYLAND_DISPLAY.sock)\n" ++
         "  -H,--hold                                remain open after child process exits\n" ++
         "  -N,--no-wait                             detach the client process from the running terminal, exiting immediately\n" ++
         "  -o,--override=[section.]key=value        override configuration option\n" ++
-        "  -E, --client-environment                 exec shell using footclient's environment, instead of the server's\n" ++
+        "  -E, --client-environment                 exec shell using zigfootclient's environment, instead of the server's\n" ++
         "  -d,--log-level={info|warning|error|none} log level (warning)\n" ++
         "  -l,--log-colorize=[{never|always|auto}]  enable/disable colorization of log output on stderr\n" ++
         "  -v,--version                             show the version number and quit\n" ++
@@ -325,7 +325,6 @@ fn printUsage(prog: [*:0]const u8) void {
 }
 
 fn printVersionAndFeatures() void {
-    _ = fputs("footclient ", stdout);
     _ = fputs(@as([*c]const u8, &version_and_features), stdout);
     _ = fputc('\n', stdout);
 }
@@ -535,7 +534,7 @@ export fn footclient_main(argc: c_int, argv: [*][*:0]u8) callconv(.c) c_int {
     if (server_socket_path) |path| {
         setSocketPath(&addr, path);
         if (connect(fd, &addr, @sizeOf(SockaddrUn)) < 0) {
-            logErr("{s}: failed to connect (is 'foot --server' running?)", .{std.mem.span(path).ptr});
+            logErr("{s}: failed to connect (is 'zigfoot --server' running?)", .{std.mem.span(path).ptr});
             return ret;
         }
     } else {
@@ -544,21 +543,21 @@ export fn footclient_main(argc: c_int, argv: [*][*:0]u8) callconv(.c) c_int {
         if (xdg_runtime != null) {
             const wayland_display = getenv("WAYLAND_DISPLAY");
             if (wayland_display != null) {
-                _ = snprintf(&addr.path, addr.path.len, "%s/foot-%s.sock", xdg_runtime, wayland_display);
+                _ = snprintf(&addr.path, addr.path.len, "%s/zigfoot-%s.sock", xdg_runtime, wayland_display);
                 connected = connect(fd, &addr, @sizeOf(SockaddrUn)) == 0;
             }
             if (!connected) {
-                logWarn("{s}: failed to connect, will now try {s}/foot.sock", .{ std.mem.span(@as([*:0]const u8, @ptrCast(&addr.path))).ptr, std.mem.span(xdg_runtime).ptr });
-                _ = snprintf(&addr.path, addr.path.len, "%s/foot.sock", xdg_runtime);
+                logWarn("{s}: failed to connect, will now try {s}/zigfoot.sock", .{ std.mem.span(@as([*:0]const u8, @ptrCast(&addr.path))).ptr, std.mem.span(xdg_runtime).ptr });
+                _ = snprintf(&addr.path, addr.path.len, "%s/zigfoot.sock", xdg_runtime);
                 connected = connect(fd, &addr, @sizeOf(SockaddrUn)) == 0;
             }
             if (!connected)
-                logWarn("{s}: failed to connect, will now try /tmp/foot.sock", .{std.mem.span(@as([*:0]const u8, @ptrCast(&addr.path))).ptr});
+                logWarn("{s}: failed to connect, will now try /tmp/zigfoot.sock", .{std.mem.span(@as([*:0]const u8, @ptrCast(&addr.path))).ptr});
         }
         if (!connected) {
-            setSocketPath(&addr, "/tmp/foot.sock");
+            setSocketPath(&addr, "/tmp/zigfoot.sock");
             if (connect(fd, &addr, @sizeOf(SockaddrUn)) < 0) {
-                logErrno("failed to connect (is 'foot --server' running?)", .{});
+                logErrno("failed to connect (is 'zigfoot --server' running?)", .{});
                 return ret;
             }
         }

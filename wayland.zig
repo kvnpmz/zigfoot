@@ -1234,7 +1234,7 @@ export fn wayl_win_init(term: *types.Terminal, token: [*c]const u8) callconv(.c)
         wayland_shim_toplevel_icon_set(
             wayl.toplevel_icon_manager,
             win.xdg_toplevel,
-            if (std.mem.eql(u8, std.mem.span(app_id), "footclient")) "foot" else app_id,
+            if (std.mem.eql(u8, std.mem.span(app_id), "zigfootclient")) "zigfoot" else app_id,
         );
     }
 

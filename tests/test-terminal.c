@@ -625,7 +625,7 @@ test_theme_get(void)
     term_free(term);
 }
 
-/* term_icon(): falls back to conf->app_id, and maps footclient -> foot */
+/* term_icon(): falls back to conf->app_id, and maps zigfootclient -> zigfoot */
 static void
 test_term_icon(void)
 {
@@ -637,9 +637,9 @@ test_term_icon(void)
     check(strcmp(term_icon(term), "org.example.term") == 0,
           "term_icon falls back to the configured app-id");
 
-    term->app_id = xstrdup("footclient");
-    check(strcmp(term_icon(term), "foot") == 0,
-          "term_icon maps footclient to foot");
+    term->app_id = xstrdup("zigfootclient");
+    check(strcmp(term_icon(term), "zigfoot") == 0,
+          "term_icon maps zigfootclient to zigfoot");
 
     free(term->app_id);
     term->app_id = xstrdup("org.example.custom");
@@ -2498,7 +2498,7 @@ test_slave_spawn(void)
     check(err_at && warn_at && depr_at &&
           err_at < warn_at && warn_at < depr_at,
           "notifications are ordered error, warning, deprecated");
-    check(strstr(out, "\033[31;1merror\033[39;22m: foot: ") != NULL,
+    check(strstr(out, "\033[31;1merror\033[39;22m: zigfoot: ") != NULL,
           "notifications use the coloured prefix");
     check(strstr(out, "shell-output") != NULL,
           "the shell runs after the notifications");
@@ -3104,8 +3104,8 @@ test_quirks(void)
 
 /* foot-features.zig: the --version feature line, now assembled at comptime
  * from build options instead of #ifdefs. Check the shape it must keep: the
- * "version: " prefix, then the six feature tokens in their fixed order, each
- * either enabled or disabled. */
+ * "zigfoot version: " prefix, then the six feature tokens in their fixed
+ * order, each either enabled or disabled. */
 static void
 test_version_and_features(void)
 {
@@ -3113,8 +3113,8 @@ test_version_and_features(void)
         "pgo", "ime", "graphemes", "toplevel-tag", "blur", "assertions",
     };
 
-    check(strncmp(version_and_features, "version: ", 9) == 0,
-          "version string starts with \"version: \"");
+    check(strncmp(version_and_features, "zigfoot version: ", 17) == 0,
+          "version string starts with \"zigfoot version: \"");
 
     const char *p = version_and_features;
     bool ordered = true;
@@ -7081,8 +7081,8 @@ test_main_helpers(void)
     check(!main_shim_is_directory("/nonexistent/for/sure"),
           "main_shim_is_directory: a missing path is not a directory");
 
-    check(strncmp(foot_version_and_features(), "version: ", 9) == 0,
-          "foot_version_and_features() starts with 'version: '");
+    check(strncmp(foot_version_and_features(), "zigfoot version: ", 17) == 0,
+          "foot_version_and_features() starts with 'zigfoot version: '");
 }
 
 /*

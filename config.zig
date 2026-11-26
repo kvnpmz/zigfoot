@@ -1542,15 +1542,15 @@ export fn add_default_mouse_bindings(conf: *types.Config) callconv(.c) void {
 
 export fn get_server_socket_path() callconv(.c) ?[*:0]u8 {
     const xdg_runtime = getenv("XDG_RUNTIME_DIR") orelse
-        return xstrdup("/tmp/foot.sock");
+        return xstrdup("/tmp/zigfoot.sock");
 
     const wayland_display = getenv("WAYLAND_DISPLAY") orelse
-        return strJoin3(xdg_runtime, "/foot.sock", "");
+        return strJoin3(xdg_runtime, "/zigfoot.sock", "");
 
-    // "%s/foot-%s.sock"
+    // "%s/zigfoot-%s.sock"
     const runtime = std.mem.span(xdg_runtime);
     const display = std.mem.span(wayland_display);
-    const parts = [_][]const u8{ runtime, "/foot-", display, ".sock" };
+    const parts = [_][]const u8{ runtime, "/zigfoot-", display, ".sock" };
 
     var len: usize = 0;
     for (parts) |part| len += part.len;
@@ -2717,7 +2717,7 @@ export fn parse_section_tweak(ctx: *Context) callconv(.c) bool {
 
         if (comptime !build_options.grapheme_clustering) {
             if (conf.tweak.grapheme_shaping) {
-                logWarn(@src(), "foot was not compiled with support for grapheme shaping");
+                logWarn(@src(), "zigfoot was not compiled with support for grapheme shaping");
                 conf.tweak.grapheme_shaping = false;
             }
         }
@@ -3619,8 +3619,8 @@ export fn config_load(
     conf.conf_path = if (conf_path) |p| xstrdup(p) else null;
     conf.term = xstrdup(build_options.default_terminfo.ptr);
     conf.shell = get_shell();
-    conf.title = xstrdup("foot");
-    conf.app_id = xstrdup(if (as_server) "footclient" else "foot");
+    conf.title = xstrdup("Zigfoot");
+    conf.app_id = xstrdup(if (as_server) "zigfootclient" else "zigfoot");
     conf.toplevel_tag = xstrdup("");
     conf.word_delimiters = c32dup(&default_word_delimiters);
     conf.size = .{ .type = .px, .width = 700, .height = 500 };
