@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const types = @import("terminal_types.zig");
 const build_options = @import("build_options");
 const c_layout = @import("c_layout");
@@ -17,10 +18,12 @@ const c_layout = @import("c_layout");
 const LOG_CLASS_ERROR: c_int = 1;
 const LOG_CLASS_DEBUG: c_int = 4;
 
-const libc = @cImport({
-    @cInclude("sys/ioctl.h");
-    @cInclude("unistd.h");
-});
+// Constantes from the <sys/ioctl.h> and <unistd.h> macros. Zig 0.17 removed
+// @cImport, and std has neither name, so they are written out per platform.
+// The C harness checks the exported table against the real macros
+// (tests/test-terminal.c, test_slave_shims).
+//   Linux:   asm-generic/ioctls.h -> TIOCSCTTY 0x540E; bits/confname.h _CS_PATH 0.
+//   FreeBSD: sys/ttycom.h _IO('t', 97) -> 0x20007461; unistd.h _CS_PATH 1.
 
 extern fn log_msg(class: c_int, module: [*:0]const u8, file: [*:0]const u8, lineno: c_int, fmt: [*:0]const u8, ...) void;
 extern fn log_errno(class: c_int, module: [*:0]const u8, file: [*:0]const u8, lineno: c_int, fmt: [*:0]const u8, ...) void;
@@ -62,10 +65,15 @@ const STDOUT_FILENO: c_int = std.posix.STDOUT_FILENO;
 const STDERR_FILENO: c_int = std.posix.STDERR_FILENO;
 const CS_PATH: c_int = if (@hasDecl(c_layout, "SlaveConstants_cs_path"))
     c_layout.SlaveConstants_cs_path
-else
-    libc._CS_PATH; // c_layout does not expose the probe constant yet
+else switch (builtin.os.tag) {
+    .freebsd => 1,
+    else => 0,
+};
 
-const TIOCSCTTY: c_ulong = libc.TIOCSCTTY;
+const TIOCSCTTY: c_ulong = switch (builtin.os.tag) {
+    .freebsd => 0x20007461,
+    else => 0x540E,
+};
 
 const constants = SlaveConstants{
     .o_rdwr = O_RDWR,
@@ -91,8 +99,35 @@ export fn slave_shim_constants() *const SlaveConstants {
 // libc's tcgetattr()/tcsetattr(), rather than std.posix: the latter turns
 // EBADF/ENOTTY into unreachable, while the C shim's contract is "1 if the
 // attributes cannot be read, 2 if they cannot be written".
-extern fn tcgetattr(fd: c_int, termios: *std.posix.termios) c_int;
-extern fn tcsetattr(fd: c_int, action: c_int, termios: *const std.posix.termios) c_int;
+// Zig 0.17's std.c.termios on Linux is the kernel UAPI struct (NCCS=19,
+// 44 bytes), not glibc's (NCCS=32, 60 bytes), so passing it to libc's
+// tcgetattr()/tcsetattr() would overflow the object and fail with EINVAL.
+// Mirror glibc/musl's struct termios instead; the else branch is FreeBSD,
+// where std.c already carries the libc layout.
+const Termios = if (builtin.os.tag == .linux) extern struct {
+    iflag: std.posix.tc_iflag_t,
+    oflag: std.posix.tc_oflag_t,
+    cflag: std.posix.tc_cflag_t,
+    lflag: std.posix.tc_lflag_t,
+    line: u8,
+    cc: [32]u8,
+    ispeed: u32,
+    ospeed: u32,
+} else std.posix.termios;
+
+comptime {
+    // glibc/musl: 4 x 4 + c_line + c_cc[32] + 2 x 4 = 60.
+    // FreeBSD:   4 x 4 + c_cc[20] + 2 x 4 = 44 (std.c already has this
+    // layout, but the FreeBSD build is compile-only, so pin it too).
+    switch (builtin.os.tag) {
+        .linux => std.debug.assert(@sizeOf(Termios) == 60),
+        .freebsd => std.debug.assert(@sizeOf(Termios) == 44),
+        else => {},
+    }
+}
+
+extern fn tcgetattr(fd: c_int, termios: *Termios) c_int;
+extern fn tcsetattr(fd: c_int, action: c_int, termios: *const Termios) c_int;
 const TCSANOW: c_int = @intFromEnum(std.posix.TCSA.NOW);
 
 /// Enable IUTF8 on the pty slave: return 0 on success, 1 if the attributes
@@ -104,7 +139,7 @@ export fn slave_shim_set_iutf8(pts: c_int) c_int {
     if (comptime !@hasField(std.posix.tc_iflag_t, "IUTF8"))
         return 0; // the C shim compiles this step out when IUTF8 is undefined
 
-    var flags: std.posix.termios = undefined;
+    var flags: Termios = undefined;
     if (tcgetattr(pts, &flags) < 0)
         return 1;
 

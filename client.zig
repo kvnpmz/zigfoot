@@ -77,7 +77,7 @@ const AF_UNIX: c_int = std.posix.AF.UNIX;
 const MSG_NOSIGNAL: c_int = std.posix.MSG.NOSIGNAL;
 const EINTR: c_int = @intFromEnum(std.c.E.INTR);
 const ERANGE: c_int = 34;
-const ENOENT: c_int = @intFromEnum(std.c.E.ENOENT);
+const ENOENT: c_int = @intFromEnum(std.c.E.NOENT);
 const S_IFDIR: u32 = std.posix.S.IFDIR;
 
 // Shared with misc.zig; terminal_types.zig owns and probes the Linux mirror.

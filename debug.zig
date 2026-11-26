@@ -14,7 +14,7 @@ extern fn vsnprintf(
     str: [*]u8,
     size: usize,
     format: [*:0]const u8,
-    ap: *std.builtin.VaList,
+    ap: *std.lang.VaList,
 ) c_int;
 extern fn strerror(errnum: c_int) [*:0]u8;
 extern var stderr: *std.c.FILE;

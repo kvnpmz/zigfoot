@@ -36,7 +36,7 @@ extern fn ambstoc32(s: [*:0]const u8) callconv(.c) ?[*]u32;
 // config.c
 extern fn tokenize_cmdline(cmdline: [*:0]const u8, argv: *?[*:null]?[*:0]u8) callconv(.c) bool;
 extern fn log_msg(class: c_int, module: [*:0]const u8, file: [*:0]const u8, lineno: c_int, fmt: [*:0]const u8, ...) callconv(.c) void;
-extern fn vasprintf(strp: *?[*:0]u8, fmt: [*:0]const u8, ap: *std.builtin.VaList) callconv(.c) c_int;
+extern fn vasprintf(strp: *?[*:0]u8, fmt: [*:0]const u8, ap: *std.lang.VaList) callconv(.c) c_int;
 extern fn strerror(errnum: c_int) callconv(.c) [*:0]u8;
 extern fn user_notification_add_owned(
     notifications: *types.UserNotifications,
@@ -54,7 +54,7 @@ extern fn bug(file: [*:0]const u8, line: c_int, func: [*:0]const u8, fmt: [*:0]c
 const USER_NOTIFICATION_WARNING_NUM: c_int = 1;
 const USER_NOTIFICATION_ERROR_NUM: c_int = 2;
 
-fn vformat(fmt: [*:0]const u8, va: *std.builtin.VaList) [:0]u8 {
+fn vformat(fmt: [*:0]const u8, va: *std.lang.VaList) [:0]u8 {
     var formatted: ?[*:0]u8 = null;
     const n = vasprintf(&formatted, fmt, va);
 
@@ -111,14 +111,13 @@ fn logAndNotifyErrnoVa(
     file: [*:0]const u8,
     lineno: c_int,
     fmt: [*:0]const u8,
-    va: *std.builtin.VaList,
+    va: *std.lang.VaList,
 ) void {
     const errno_copy = std.c._errno().*;
     const formatted = vformat(fmt, va);
     defer std.c.free(@ptrCast(formatted.ptr));
 
-    const msg = std.fmt.allocPrintSentinel(
-        std.heap.c_allocator,
+    const msg = std.heap.c_allocator.printSentinel(
         "{s}: {s}",
         .{ formatted, std.mem.span(strerror(errno_copy)) },
         0,
@@ -151,8 +150,7 @@ fn logContextualStr(
     if (!print_colon) ctx.value = "";
     if (!print_section_suffix) ctx.section_suffix = "";
 
-    const line = std.fmt.allocPrintSentinel(
-        std.heap.c_allocator,
+    const line = std.heap.c_allocator.printSentinel(
         "{s}:{d}: [{s}{s}{s}]{s}{s}{s}{s}: {s}",
         .{
             ctx.path orelse "(null)",
@@ -192,8 +190,7 @@ export fn log_contextual_errno(ctx: *Context, file: [*:0]const u8, lineno: c_int
     // itself has been formatted; keep that ordering.
     const errno_copy = std.c._errno().*;
 
-    const msg = std.fmt.allocPrintSentinel(
-        std.heap.c_allocator,
+    const msg = std.heap.c_allocator.printSentinel(
         "{s}: {s}",
         .{ formatted, std.mem.span(strerror(errno_copy)) },
         0,
@@ -221,18 +218,18 @@ fn logCtx(ctx: *Context, class: c_int, file: [*:0]const u8, line: u32, msg: [*:0
 // report the helper instead.
 fn contextualErr(
     ctx: *Context,
-    src: std.builtin.SourceLocation,
+    src: std.lang.SourceLocation,
     comptime fmt: []const u8,
     args: anytype,
 ) void {
     var buf: [1024]u8 = undefined;
-    const msg: [:0]const u8 = std.fmt.bufPrintZ(&buf, fmt, args) catch "invalid value";
+    const msg: [:0]const u8 = std.mem.printSentinel(&buf, fmt, args, 0) catch "invalid value";
     logCtx(ctx, LOG_CLASS_ERROR, src.file, src.line, msg.ptr);
 }
 
 fn errValue(
     ctx: *Context,
-    src: std.builtin.SourceLocation,
+    src: std.lang.SourceLocation,
     comptime fmt: []const u8,
     args: anytype,
 ) bool {
@@ -857,7 +854,7 @@ export fn config_regex_compile(
 /// Returns false (and logs the same message) on failure.
 fn compileRegex(
     ctx: *Context,
-    src: std.builtin.SourceLocation,
+    src: std.lang.SourceLocation,
     regex: [*:0]const u8,
     preg: *align(abi.RegexT__align) RegexTBuffer,
 ) bool {
@@ -2036,12 +2033,12 @@ extern fn xkb_keysym_get_name(sym: u32, buf: [*]u8, len: usize) callconv(.c) c_i
 
 fn notifyErr(
     conf: *types.Config,
-    src: std.builtin.SourceLocation,
+    src: std.lang.SourceLocation,
     comptime fmt: []const u8,
     args: anytype,
 ) void {
     var buf: [1024]u8 = undefined;
-    const msg: [:0]const u8 = std.fmt.bufPrintZ(&buf, fmt, args) catch "invalid value";
+    const msg: [:0]const u8 = std.mem.printSentinel(&buf, fmt, args, 0) catch "invalid value";
     log_and_notify(conf, LOG_CLASS_ERROR, src.file, @intCast(src.line), "%s", msg.ptr);
 }
 
@@ -2308,9 +2305,9 @@ fn resolveKeyBindingCollisions(
             .mouse => {
                 const button_name = mouse_button_code_to_name(binding1._u.m.button) orelse "(null)";
                 if (binding1._u.m.count > 1) {
-                    _ = std.fmt.bufPrintZ(&sym_buf, "{s}-{d}", .{
+                    _ = std.mem.printSentinel(&sym_buf, "{s}-{d}", .{
                         std.mem.span(button_name), binding1._u.m.count,
-                    }) catch {
+                    }, 0) catch {
                         sym_buf[0] = 0;
                     };
                 } else {
@@ -2671,17 +2668,17 @@ export fn parse_section_csd(ctx: *Context) callconv(.c) bool {
 
 // ── [tweak] (C2d) ─────────────────────────────────────────────────
 
-fn logWarn(src: std.builtin.SourceLocation, msg: [*:0]const u8) void {
+fn logWarn(src: std.lang.SourceLocation, msg: [*:0]const u8) void {
     log_msg(LOG_CLASS_WARNING, "config", src.file, @intCast(src.line), "%s", msg);
 }
 
 fn logWarnFmt(
-    src: std.builtin.SourceLocation,
+    src: std.lang.SourceLocation,
     comptime fmt: []const u8,
     args: anytype,
 ) void {
     var buf: [1024]u8 = undefined;
-    const msg: [:0]const u8 = std.fmt.bufPrintZ(&buf, fmt, args) catch return;
+    const msg: [:0]const u8 = std.mem.printSentinel(&buf, fmt, args, 0) catch return;
     logWarn(src, msg.ptr);
 }
 
@@ -2812,25 +2809,25 @@ export fn parse_section_tweak(ctx: *Context) callconv(.c) bool {
 
 // ── [main] (C2e) ──────────────────────────────────────────────────
 
-fn logInfo(src: std.builtin.SourceLocation, msg: [*:0]const u8) void {
+fn logInfo(src: std.lang.SourceLocation, msg: [*:0]const u8) void {
     log_msg(LOG_CLASS_INFO, "config", src.file, @intCast(src.line), "%s", msg);
 }
 
-fn logInfoFmt(src: std.builtin.SourceLocation, comptime fmt: []const u8, args: anytype) void {
+fn logInfoFmt(src: std.lang.SourceLocation, comptime fmt: []const u8, args: anytype) void {
     var buf: [1024]u8 = undefined;
-    const msg: [:0]const u8 = std.fmt.bufPrintZ(&buf, fmt, args) catch return;
+    const msg: [:0]const u8 = std.mem.printSentinel(&buf, fmt, args, 0) catch return;
     logInfo(src, msg.ptr);
 }
 
 /// LOG_CONTEXTUAL_ERRNO(): like contextualErr(), plus strerror(errno).
 fn errValueErrno(
     ctx: *Context,
-    src: std.builtin.SourceLocation,
+    src: std.lang.SourceLocation,
     comptime fmt: []const u8,
     args: anytype,
 ) bool {
     var buf: [1024]u8 = undefined;
-    const msg: [:0]const u8 = std.fmt.bufPrintZ(&buf, fmt, args) catch "invalid value";
+    const msg: [:0]const u8 = std.mem.printSentinel(&buf, fmt, args, 0) catch "invalid value";
     log_contextual_errno(ctx, src.file, @intCast(src.line), "%s", msg.ptr);
     return false;
 }
@@ -2945,7 +2942,7 @@ export fn parse_section_main(ctx: *Context) callconv(.c) bool {
         var top: c_uint = 0;
         var right: c_uint = 0;
         var bottom: c_uint = 0;
-        var mode: [64]u8 = [_]u8{0} ** 64;
+        var mode: [64]u8 = @splat(0);
 
         var ret = sscanf(val, "%ux%ux%ux%u %63s", &left, &top, &right, &bottom, &mode);
         var center: types.CenterWhen = .never;
@@ -3594,12 +3591,12 @@ const FILE = *anyopaque;
 
 fn notifyErrno(
     conf: *types.Config,
-    src: std.builtin.SourceLocation,
+    src: std.lang.SourceLocation,
     comptime fmt: []const u8,
     args: anytype,
 ) void {
     var buf: [1024]u8 = undefined;
-    const msg: [:0]const u8 = std.fmt.bufPrintZ(&buf, fmt, args) catch "invalid value";
+    const msg: [:0]const u8 = std.mem.printSentinel(&buf, fmt, args, 0) catch "invalid value";
     log_and_notify_errno(conf, src.file, @intCast(src.line), "%s", msg.ptr);
 }
 
@@ -3902,14 +3899,14 @@ fn c32dup(str: ?[*]const u32) ?[*]u32 {
 }
 
 fn logDbg(
-    src: std.builtin.SourceLocation,
+    src: std.lang.SourceLocation,
     comptime fmt: []const u8,
     args: anytype,
 ) void {
     if (!build_options.debug_build)
         return;
     var buf: [1024]u8 = undefined;
-    const msg: [:0]const u8 = std.fmt.bufPrintZ(&buf, fmt, args) catch return;
+    const msg: [:0]const u8 = std.mem.printSentinel(&buf, fmt, args, 0) catch return;
     log_msg(LOG_CLASS_DEBUG, "config", src.file, @intCast(src.line), "%s", msg.ptr);
 }
 

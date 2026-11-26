@@ -1,9 +1,39 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const types = @import("terminal_types.zig");
-const libc = @cImport({
-    @cInclude("sys/utsname.h");
-});
+// sys/utsname.h, hand-written: Zig 0.17 removed @cImport. Linux uses six
+// char[65] fields (390 bytes; glibc, musl and std.c.utsname agree). FreeBSD
+// uses five char[256] fields, and its uname() is a static inline over
+// __xuname(), so the symbol is called directly.
+const UtsName = if (builtin.os.tag == .freebsd)
+    extern struct {
+        sysname: [256]u8,
+        nodename: [256]u8,
+        release: [256]u8,
+        version: [256]u8,
+        machine: [256]u8,
+    }
+else
+    extern struct {
+        sysname: [65]u8,
+        nodename: [65]u8,
+        release: [65]u8,
+        version: [65]u8,
+        machine: [65]u8,
+        domainname: [65]u8,
+    };
+
+extern "c" fn uname(buf: *UtsName) c_int;
+extern "c" fn __xuname(recordsize: c_int, buf: *anyopaque) c_int;
+
+fn readUtsName() ?UtsName {
+    var name: UtsName = undefined;
+    const rc = if (builtin.os.tag == .freebsd)
+        __xuname(256, @ptrCast(&name))
+    else
+        uname(&name);
+    return if (rc == 0) name else null;
+}
 const build_options = @import("build_options");
 
 //
@@ -774,8 +804,7 @@ export fn main(argc_in: c_int, argv_in: [*]?[*:0]u8) c_int {
     logInfo("%s", .{foot_version_and_features()});
 
     {
-        var name: libc.struct_utsname = undefined;
-        if (libc.uname(&name) == 0) {
+        if (readUtsName()) |name| {
             logInfo("arch: %s %s/%zu-bit", .{
                 @as([*:0]const u8, @ptrCast(&name.sysname)),
                 @as([*:0]const u8, @ptrCast(&name.machine)),

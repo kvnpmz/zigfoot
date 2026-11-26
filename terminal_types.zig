@@ -83,37 +83,39 @@ fn expectAbi(comptime T: type, comptime key_prefix: []const u8) void {
         if (info != .@"struct") return;
         if (info.@"struct".layout == .@"packed") return;
 
-        for (info.@"struct".fields) |f| {
+        // Zig 0.17's std.lang.Type.Struct exposes parallel arrays instead of
+        // a `fields` list; pair the names with their types.
+        for (info.@"struct".field_names, info.@"struct".field_types) |name, field_type| {
             // `_pad*`, `_font_state`, `_sixel_flags`, ... are Zig-only.
-            if (f.name.len > 0 and f.name[0] == '_') continue;
+            if (name.len > 0 and name[0] == '_') continue;
             // Feature-gated fields are `u0` when the C field does not exist.
-            if (@typeInfo(f.type) == .int and @bitSizeOf(f.type) == 0) continue;
+            if (@typeInfo(field_type) == .int and @bitSizeOf(field_type) == 0) continue;
 
-            const key = key_prefix ++ "_" ++ f.name;
+            const key = key_prefix ++ "_" ++ name;
             if (!@hasDecl(abi, key)) {
                 @compileError("abi_probe is missing " ++ key ++
                     " — run scripts/gen_abi_probe.py");
             }
-            if (@offsetOf(T, f.name) != @field(abi, key)) {
-                @compileError(std.fmt.comptimePrint("ABI offset mismatch: {s}: C={d} zig={d}", .{ key, @field(abi, key), @offsetOf(T, f.name) }));
+            if (@offsetOf(T, name) != @field(abi, key)) {
+                @compileError(std.fmt.comptimePrint("ABI offset mismatch: {s}: C={d} zig={d}", .{ key, @field(abi, key), @offsetOf(T, name) }));
             }
 
             const field_size_key = key ++ "__size";
             if (@hasDecl(abi, field_size_key) and
-                @sizeOf(f.type) != @field(abi, field_size_key))
+                @sizeOf(field_type) != @field(abi, field_size_key))
             {
-                @compileError(std.fmt.comptimePrint("ABI field size mismatch: {s}: C={d} zig={d}", .{ field_size_key, @field(abi, field_size_key), @sizeOf(f.type) }));
+                @compileError(std.fmt.comptimePrint("ABI field size mismatch: {s}: C={d} zig={d}", .{ field_size_key, @field(abi, field_size_key), @sizeOf(field_type) }));
             }
 
             // Recurse into value-typed structs the probe also looked inside.
             // Arrays are included: an array of mirrors holds its elements by
             // value, so a broken element layout breaks the containing struct.
-            switch (@typeInfo(f.type)) {
+            switch (@typeInfo(field_type)) {
                 .@"struct" => |s| {
                     if (s.layout != .@"packed" and
                         @hasDecl(abi, key ++ "__abi_fields"))
                     {
-                        expectAbi(f.type, key);
+                        expectAbi(field_type, key);
                     }
                 },
                 .array => |a| {
@@ -2690,7 +2692,7 @@ pub const Server = extern struct {
 
 /// client-protocol.h: struct client_data (packed, with C bit-fields).
 /// C's three flag bits + five reserved bits are the opaque first byte; the
-/// remaining fields are parsed byte-by-byte in server.zig. Zig 0.16 rounds
+/// remaining fields are parsed byte-by-byte in server.zig. Zig rounds
 /// packed-struct sizes up to a power of two, so this is an extern mirror with
 /// the exact 14-byte layout; expectAbi() still pins every real C field.
 pub const ClientData = extern struct {

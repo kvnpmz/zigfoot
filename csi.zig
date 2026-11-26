@@ -215,18 +215,19 @@ extern fn term_ime_is_enabled(term: *types.Terminal) callconv(.c) bool;
 
 // ── csi-shim.c: xtsave bit access ─────────────────────────────────
 // C did `memcpy(&v, &t->xtsave, sizeof(v))` on the four-byte bool:1
-// bitfield block. @bitCast on the mirror's [4]u8 is the same native
-// byte-order read; all callers pass bit < 32.
+// bitfield block, i.e. a native byte-order copy. Zig 0.17's @bitCast is
+// endian-agnostic for arrays ([0] goes to the least significant byte), so
+// use the native-order memory helpers instead; all callers pass bit < 32.
 export fn csi_xtsave_get(term: *types.Terminal, bit: c_uint) callconv(.c) bool {
-    const bits: u32 = @bitCast(term.xtsave);
+    const bits: u32 = std.mem.bytesToValue(u32, &term.xtsave);
     return (bits >> @as(u5, @intCast(bit))) & 1 != 0;
 }
 
 export fn csi_xtsave_set(term: *types.Terminal, bit: c_uint, v: bool) callconv(.c) void {
-    var bits: u32 = @bitCast(term.xtsave);
+    var bits: u32 = std.mem.bytesToValue(u32, &term.xtsave);
     const mask: u32 = @as(u32, 1) << @as(u5, @intCast(bit));
     if (v) bits |= mask else bits &= ~mask;
-    term.xtsave = @bitCast(bits);
+    @memcpy(term.xtsave[0..], std.mem.asBytes(&bits));
 }
 
 // sixel-shim.c accessors (already exist)
@@ -1378,7 +1379,7 @@ fn caseQuestion(term: *types.Terminal, final: u8) void {
                 else => {},
             }
             if (value >= 0) {
-                var reply: [16]u8 = .{0} ** 16;
+                var reply: [16]u8 = @splat(0);
                 const chars = snprintf(&reply, reply.len, "\x1b[>%d;%dm", resource, value);
                 if (chars > 0) term_to_slave(term, &reply, @intCast(chars));
             }
@@ -1387,7 +1388,7 @@ fn caseQuestion(term: *types.Terminal, final: u8) void {
             const param = vtParamGet(term, 0, 0);
             switch (param) {
                 996 => { // query theme mode
-                    var reply: [16]u8 = .{0} ** 16;
+                    var reply: [16]u8 = @splat(0);
                     const chars = snprintf(&reply, reply.len, "\x1b[?997;%dn", if (term.colors.active_theme == .dark) @as(c_int, 1) else @as(c_int, 2));
                     if (chars > 0) term_to_slave(term, &reply, @intCast(chars));
                 },

@@ -35,8 +35,8 @@ const LOG_DEBUG: c_int = 7;
 const STDERR_FILENO: c_int = 2;
 
 extern var stderr: *std.c.FILE;
-extern fn vfprintf(stream: *std.c.FILE, format: [*:0]const u8, ap: *std.builtin.VaList) c_int;
-extern fn vsnprintf(str: [*]u8, size: usize, format: [*:0]const u8, ap: *std.builtin.VaList) c_int;
+extern fn vfprintf(stream: *std.c.FILE, format: [*:0]const u8, ap: *std.lang.VaList) c_int;
+extern fn vsnprintf(str: [*]u8, size: usize, format: [*:0]const u8, ap: *std.lang.VaList) c_int;
 extern fn snprintf(str: [*]u8, size: usize, format: [*:0]const u8, ...) c_int;
 extern fn fprintf(stream: *std.c.FILE, format: [*:0]const u8, ...) c_int;
 extern fn fputc(c: c_int, stream: *std.c.FILE) c_int;
@@ -119,7 +119,7 @@ fn log(
     lineno: c_int,
     fmt: [*:0]const u8,
     sys_errno: c_int,
-    va: *std.builtin.VaList,
+    va: *std.lang.VaList,
 ) void {
     std.debug.assert(class > LOG_CLASS_NONE);
     std.debug.assert(class < log_level_map.len);
@@ -159,7 +159,7 @@ fn sysLog(
     module: [*:0]const u8,
     fmt: [*:0]const u8,
     sys_errno: c_int,
-    va: *std.builtin.VaList,
+    va: *std.lang.VaList,
 ) void {
     std.debug.assert(class > LOG_CLASS_NONE);
     std.debug.assert(class < log_level_map.len);
@@ -195,7 +195,7 @@ export fn log_msg_va(
     file: [*:0]const u8,
     lineno: c_int,
     fmt: [*:0]const u8,
-    va: *std.builtin.VaList,
+    va: *std.lang.VaList,
 ) callconv(.c) void {
     var va2 = @cVaCopy(va);
 
@@ -217,7 +217,7 @@ export fn log_errno_va(
     file: [*:0]const u8,
     lineno: c_int,
     fmt: [*:0]const u8,
-    va: *std.builtin.VaList,
+    va: *std.lang.VaList,
 ) callconv(.c) void {
     log_errno_provided_va(class, module, file, lineno, std.c._errno().*, fmt, va);
 }
@@ -235,7 +235,7 @@ export fn log_errno_provided_va(
     lineno: c_int,
     errno_copy: c_int,
     fmt: [*:0]const u8,
-    va: *std.builtin.VaList,
+    va: *std.lang.VaList,
 ) callconv(.c) void {
     var va2 = @cVaCopy(va);
 

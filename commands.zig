@@ -48,7 +48,7 @@ export fn cmd_scrollback_up(term: *types.Terminal, rows_in: c_int) void {
     std.debug.assert(new_view != view);
     std.debug.assert(grid.rows.?[@intCast(new_view)] != null);
 
-    if (comptime @import("builtin").mode == .Debug) {
+    if (comptime @import("builtin").mode == .debug) {
         var r: c_int = 0;
         while (r < term.rows) : (r += 1) {
             const row_idx = (new_view + r) & (grid.num_rows - 1);
@@ -104,7 +104,7 @@ export fn cmd_scrollback_down(term: *types.Terminal, rows_in: c_int) void {
     std.debug.assert(new_view != view);
     std.debug.assert(grid.rows.?[@intCast(new_view)] != null);
 
-    if (comptime @import("builtin").mode == .Debug) {
+    if (comptime @import("builtin").mode == .debug) {
         var r: c_int = 0;
         while (r < term.rows) : (r += 1) {
             const row_idx = (new_view + r) & (grid_rows - 1);

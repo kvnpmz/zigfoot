@@ -2571,7 +2571,7 @@ export fn term_erase_scrollback(term: *types.Terminal) void {
 
     grid.view = grid.offset;
 
-    if (comptime @import("builtin").mode == .Debug) {
+    if (comptime @import("builtin").mode == .debug) {
         // Every row in view must still exist (C guarded this with _DEBUG).
         var r: c_int = 0;
         while (r < term.rows) : (r += 1) {

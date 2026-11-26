@@ -30,7 +30,7 @@ import subprocess
 import sys
 
 # The migration branch is developed against this Zig series.
-ZIG_SERIES = "0.16"
+ZIG_SERIES = "0.17"
 
 OPTIMIZE_MODES = {
     "debug": "Debug",

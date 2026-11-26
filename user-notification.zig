@@ -8,7 +8,7 @@ const types = @import("terminal_types.zig");
 // user-notification.h (C callers use them directly).
 //
 
-extern fn vasprintf(strp: *?[*:0]u8, fmt: [*:0]const u8, ap: *std.builtin.VaList) c_int;
+extern fn vasprintf(strp: *?[*:0]u8, fmt: [*:0]const u8, ap: *std.lang.VaList) c_int;
 
 fn mallocOrAbort(size: usize) *anyopaque {
     return std.c.malloc(size) orelse @panic("out of memory");

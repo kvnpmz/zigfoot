@@ -155,19 +155,19 @@ fn signalHandler(signo: c_int) callconv(.c) void {
     received_signals.?[@intCast(signo)] = 1;
 }
 
-fn logCall(comptime f: anytype, class: c_int, src: std.builtin.SourceLocation, fmt: [*:0]const u8, args: anytype) void {
+fn logCall(comptime f: anytype, class: c_int, src: std.lang.SourceLocation, fmt: [*:0]const u8, args: anytype) void {
     @call(.auto, f, .{ class, "fdm", "fdm.zig", @as(c_int, @intCast(src.line)), fmt } ++ args);
 }
-fn logErr(src: std.builtin.SourceLocation, fmt: [*:0]const u8, args: anytype) void {
+fn logErr(src: std.lang.SourceLocation, fmt: [*:0]const u8, args: anytype) void {
     logCall(log_msg, LOG_CLASS_ERROR, src, fmt, args);
 }
-fn logWarn(src: std.builtin.SourceLocation, fmt: [*:0]const u8, args: anytype) void {
+fn logWarn(src: std.lang.SourceLocation, fmt: [*:0]const u8, args: anytype) void {
     logCall(log_msg, LOG_CLASS_WARNING, src, fmt, args);
 }
-fn logErrno(src: std.builtin.SourceLocation, fmt: [*:0]const u8, args: anytype) void {
+fn logErrno(src: std.lang.SourceLocation, fmt: [*:0]const u8, args: anytype) void {
     logCall(log_errno, LOG_CLASS_ERROR, src, fmt, args);
 }
-fn logErrnoP(src: std.builtin.SourceLocation, errnum: c_int, fmt: [*:0]const u8, args: anytype) void {
+fn logErrnoP(src: std.lang.SourceLocation, errnum: c_int, fmt: [*:0]const u8, args: anytype) void {
     @call(.auto, log_errno_provided, .{ LOG_CLASS_ERROR, "fdm", "fdm.zig", @as(c_int, @intCast(src.line)), errnum, fmt } ++ args);
 }
 

@@ -525,7 +525,7 @@ fn regexDetected(
     var vline = &vlines[vline_idx];
 
     // glibc's mbstate_t is 8 bytes.
-    var ps: [8]u8 align(4) = .{0} ** 8;
+    var ps: [8]u8 align(4) = @splat(0);
 
     const grid = term.grid orelse return;
     const view = grid.view;
@@ -586,7 +586,7 @@ fn regexDetected(
             if (vline.len > 0) {
                 vline.utf8.?[vline.len] = 0;
                 vline.len += 1;
-                ps = .{0} ** 8;
+                ps = @splat(0);
 
                 vline_idx += 1;
                 vline = &vlines[vline_idx];

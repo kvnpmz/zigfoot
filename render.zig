@@ -3348,14 +3348,14 @@ export fn render_scrollback_position(term: *Terminal) callconv(.c) void {
     switch (conf.scrollback.indicator.format) {
         .percentage => {
             var str_buf: [8]u8 = undefined;
-            const str = std.fmt.bufPrintZ(&str_buf, "{d}%", .{@as(c_int, @intFromFloat(100.0 * percent))}) catch unreachable;
+            const str = std.mem.printSentinel(&str_buf, "{d}%", .{@as(c_int, @intFromFloat(100.0 * percent))}, 0) catch unreachable;
             _ = mbsntoc32(&text_buf, str.ptr, text_buf.len, str.len);
             cell_count = 3;
         },
 
         .lineno => {
             var str_buf: [64]u8 = undefined;
-            const str = std.fmt.bufPrintZ(&str_buf, "{d}", .{rebased_view + 1}) catch unreachable;
+            const str = std.mem.printSentinel(&str_buf, "{d}", .{rebased_view + 1}, 0) catch unreachable;
             _ = mbsntoc32(&text_buf, str.ptr, text_buf.len, str.len);
             cell_count = @intFromFloat(@ceil(@log10(@as(f32, @floatFromInt(grid.num_rows)))));
         },
@@ -3442,7 +3442,7 @@ export fn render_render_timer(term: *Terminal, render_time: Timespec) callconv(.
         @as(f64, @floatFromInt(render_time.tv_nsec)) / 1000.0;
 
     var str_buf: [256]u8 = undefined;
-    const str = std.fmt.bufPrintZ(&str_buf, "{d:.2} µs", .{usecs}) catch unreachable;
+    const str = std.mem.printSentinel(&str_buf, "{d:.2} µs", .{usecs}, 0) catch unreachable;
 
     var text_buf: [256]u32 = undefined;
     _ = mbsntoc32(&text_buf, str.ptr, text_buf.len, str.len);
@@ -5323,7 +5323,7 @@ export fn render_worker_thread(ctx_in: ?*anyopaque) callconv(.c) ?*anyopaque {
     render_shim_block_all_signals();
 
     var title_buf: [24]u8 = undefined;
-    const title = std.fmt.bufPrintZ(&title_buf, "zigfoot:render:{d}", .{my_id}) catch "zigfoot:render";
+    const title = std.mem.printSentinel(&title_buf, "zigfoot:render:{d}", .{my_id}, 0) catch "zigfoot:render";
     if (render_shim_set_thread_name(title.ptr) < 0) {
         log_errno(LOG_CLASS_ERROR, "render", "render.zig", @intCast(@src().line), "render worker %d: failed to set process title", my_id);
     }

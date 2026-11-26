@@ -378,7 +378,8 @@ extern fn mkostemp(template: [*]u8, flags: c_int) callconv(.c) c_int;
 extern fn unlink(path: [*:0]const u8) callconv(.c) c_int;
 extern fn strerror(errnum: c_int) callconv(.c) [*:0]const u8;
 
-// Linux UAPI values absent from Zig 0.16's std.os.linux.MFD/FALLOC structs.
+// Linux UAPI values the port defines locally: std.os.linux has no
+// MFD.NOEXEC_SEAL, and the FALLOC masks are kept explicit here.
 const MFD_NOEXEC_SEAL: c_uint = 0x0008;
 const FALLOC_FL_KEEP_SIZE: c_int = 0x01;
 const FALLOC_FL_PUNCH_HOLE: c_int = 0x02;

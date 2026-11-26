@@ -562,7 +562,7 @@ export fn notif_done(_reaper: ?*anyopaque, pid: c_int, _status: c_int, data: ?*a
         const id_str: [*:0]const u8 = if (notif.id) |i| i else "0";
 
         if (notif.activated and notif.report_activated) {
-            var button_nr_buf: [16]u8 = [_]u8{0} ** 16;
+            var button_nr_buf: [16]u8 = @splat(0);
             if (notif.activated_button > 0) {
                 const bn = xsnprintf(&button_nr_buf, button_nr_buf.len, "%u", notif.activated_button);
                 button_nr_buf[@intCast(bn)] = 0;
