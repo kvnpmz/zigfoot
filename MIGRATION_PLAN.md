@@ -1633,3 +1633,30 @@ The accepted gaps in §15.5 are unchanged and remain target-only claims:
 FreeBSD epoll layout and epoll-shim constants (comptime-pinned), and the
 aarch64 layout derived from the C struct definition rather than a host probe.
 
+### 15.8 Post-1.0 fixes (towards 1.1)
+
+`zig-migration-1.0` was tagged from a tree whose Debug gate is flaky. Two
+defects found immediately after, both fixed in `b77c7706`, plus the last
+class-(c) shim body:
+
+| id | what | status |
+|---|---|---|
+| R-01 | Render worker threads overflowed the 8 MiB pthread default stack in
+  `-O Debug`: a wide-grid row crashed 7–8 times out of 8, SIGSEGV landing in
+  whichever library call ran at the boundary (`do_lookup_x`, `libfreetype`).
+  12 MiB and 16 MiB are clean; ReleaseSafe peaks well under 8 MiB. Workers
+  now get an explicit 16 MiB stack (`RENDER_WORKER_STACK_SIZE`). This is the
+  intermittent `smoke` failure that the 1.0 gate got lucky on. Shrinking the
+  Debug frames is a follow-up. | fixed `b77c7706` |
+| V-02 | `render_refresh_app_id()` dereferenced `window.?.xdg_toplevel` with
+  no guard (the same expression `render_update_title()` had before
+  `c819c0f2`). Under valgrind the harness fake window reached
+  `wl_proxy_get_version(NULL)` and the terminal harness segfaulted. | fixed
+  `b77c7706` |
+| — | The exit-time presentation statistics logger, the last class-(c) shim
+  body, is now Zig (`render_log_presentation_statistics()`), called as the
+  last statement of `foot_main`. | fixed `b77c7706` |
+
+Gate after the three: 6/6 in all three dirs, six smoke launches, terminal
+harness clean under valgrind, 10/10 manual Debug launches clean.
+
