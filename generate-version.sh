@@ -34,16 +34,18 @@ if [ -e "${src_dir}/.git" ] && command -v git > /dev/null; then
     git_branch=$(git rev-parse --abbrev-ref HEAD)
     cd "${workdir}"
 
-    new_version="${git_version} ($(date "+%b %d %Y"), branch '${git_branch}')"
+    # The fork suffix is part of the descriptive version; a .zig front-end
+    # adds the "zigfoot version: " display prefix separately.
+    new_version="${git_version}-zig.1 ($(date "+%b %d %Y"), branch '${git_branch}')"
 else
-    new_version="${default_version}"
+    new_version="${default_version}-zig.1"
     extra=""
 fi
 
 major=$(echo "${new_version}" | sed -r 's/^([0-9]+)\.([0-9]+)\.([0-9]+).*/\1/')
 minor=$(echo "${new_version}" | sed -r 's/^([0-9]+)\.([0-9]+)\.([0-9]+).*/\2/')
 patch=$(echo "${new_version}" | sed -r 's/^([0-9]+)\.([0-9]+)\.([0-9]+).*/\3/')
-extra=$(echo "${new_version}" | sed -r 's/^([0-9]+)\.([0-9]+)\.([0-9]+)(-([0-9]+-g[a-z0-9]+) .*)?.*/\5/')
+extra=$(echo "${new_version}" | sed -r 's/^([0-9]+)\.([0-9]+)\.([0-9]+)(-([0-9]+-g[a-z0-9]+)(-zig[.][0-9]+)? .*)?.*/\5/')
 
 is_number() {
     case "${1}" in

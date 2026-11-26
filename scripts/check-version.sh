@@ -1,6 +1,7 @@
 #!/bin/sh
-# Verify that generate-version.sh emits numeric FOOT_MAJOR/MINOR/PATCH for the
-# current tree (in particular when HEAD is described by a non-semver tag).
+# Verify that generate-version.sh emits numeric FOOT_MAJOR/MINOR/PATCH and the
+# zigfoot fork suffix for the current tree (in particular when HEAD is
+# described by a non-semver tag).
 #
 # Usage: scripts/check-version.sh
 
@@ -18,12 +19,23 @@ for macro in MAJOR MINOR PATCH; do
     value=$(sed -n "s/^#define FOOT_${macro}[[:space:]]*\\([^[:space:]]*\\).*/\\1/p" "$tmp")
     case "${value}" in
         ''|*[!0-9]*)
-            echo "check-version: FOOT_${macro} is not numeric: '${value}'" >&2
-            echo "check-version: generated header:" >&2
+            echo "zigfoot check-version: FOOT_${macro} is not numeric: '${value}'" >&2
+            echo "zigfoot check-version: generated header:" >&2
             cat "$tmp" >&2
             exit 1
             ;;
     esac
 done
 
-echo "check-version: ok ($(sed -n 's/^#define FOOT_VERSION "\(.*\)"/\1/p' "$tmp" | head -1))"
+version=$(sed -n 's/^#define FOOT_VERSION "\(.*\)"/\1/p' "$tmp" | head -1)
+case "${version}" in
+    *-zig.1*) ;;
+    *)
+        echo "zigfoot check-version: FOOT_VERSION is missing the '-zig.1' fork suffix: '${version}'" >&2
+        echo "zigfoot check-version: generated header:" >&2
+        cat "$tmp" >&2
+        exit 1
+        ;;
+esac
+
+echo "zigfoot check-version: ok (${version})"
