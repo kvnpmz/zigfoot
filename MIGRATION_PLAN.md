@@ -1482,14 +1482,14 @@ state after `port-c2` and the three audits landed.
 
 | Metric | Value |
 |---|---:|
-| Module C remaining | **99 lines** (`config.c` 35 `regex_t`, `slave.c` 64 `execvpe`) |
-| `*-shim.c` | **2,554 lines / 11 files** (`terminal-shim.c` 1,683) |
-| Generated `abi_probe.c` | 3,472 lines |
-| Zig source | 54,961 lines (`zig fmt` applied in `81c81212`) |
+| Module C remaining | **0 lines** — `config.c` and `slave.c` are deleted |
+| `*-shim.c` | **2,540 lines / 11 files**, all class (a) |
+| Generated `abi_probe.c` | 3,478 lines |
+| Zig source | 55,184 lines |
 | Unported modules | **0** |
-| Class-(c) shim functions left | **1** — `log_presentation_statistics()`, see §15.3 |
-| Harness | 988 checks, 6 meson suites (the parity corpus is the sixth) |
-| Open audit findings | **0 High/Medium**; 1 residual Medium item on `port-abi-2` |
+| Class-(c) shim functions left | **0**, see §15.3 |
+| Harness | 1,001 checks, 8 meson suites |
+| Open audit findings | **0**; 34 of 34 closed |
 
 Merged into `feature/zig-migration` in this session: `port-c2` (`dad2f048`),
 `audit-vt` (`0ad2e56b`), `audit-surface` (`2b058876`), `audit-plumbing`
@@ -1526,18 +1526,15 @@ in the three-agent split (`PLAN_3AGENTS.md`).
 | PL-11 | low | `main.zig`, `slave.zig` | fixed `f6f83686` |
 | PL-12 | low | `base64.zig` | fixed `75be865f` |
 
-### 15.3 Why `log_presentation_statistics()` stays in C
+### 15.3 No class-(c) bodies are left
 
-It is the only remaining class-(c) body, and it is now reclassified as class
-(a): a **compiler mechanism**, not behaviour. The function carries
-`__attribute__((destructor))`, so the C runtime registers it in `.fini_array`
-and runs it after `main` returns, after the FDM and the wayland connection are
-gone. That ordering is the whole point of the function — it reads counters
-that must outlive every consumer. Zig has no equivalent attribute; reproducing
-it would mean an exported symbol plus hand-written `.fini_array` section glue,
-which is more C, not less. Its body is ten lines of formatting over
-`render_shim_presentation_stat_get()`, and the counters themselves live in
-`render.zig`. Keep it, with the reason recorded in `doc/shim-audit.md`.
+§15.3 used to argue that one body had to stay: `log_presentation_statistics()`,
+kept only for `__attribute__((destructor))`. It is Zig as of `b77c7706`
+(`render_log_presentation_statistics()`, called as the last statement of
+`foot_main`), and `config.c` and `slave.c` were deleted in `fe88f7ce` and
+`ebbdadd8`. There are now **zero class-(c) shim bodies**: every line of
+`*-shim.c` is class (a) — generated protocol inlines, listener tables, C
+macros and libc types — and no hand-written foot C remains at all.
 
 ### 15.4 Divergences recorded in this session
 
@@ -1565,7 +1562,7 @@ which is more C, not less. Its body is ten lines of formatting over
 
 | Check | Result |
 |---|---|
-| `scripts/full-check.sh` | 6/6 in `build`, `build-disabled`, `build-release`; smoke ok |
+| `scripts/full-check.sh` | 8/8 in `build`, `build-disabled`, `build-release`; smoke ok |
 | `valgrind -q --error-exitcode=99 ./build/tests/test-terminal` | clean |
 | `valgrind --leak-check=full ./build/tests/test-config` | no definite loss |
 | `scripts/fuzz-vt.sh 120` | PASS, 24,000 iterations |
@@ -1581,10 +1578,13 @@ unverified *here* and provable only on the target:
   FreeBSD headers exist in the cross gate.
 - The aarch64 `epoll_event` shape is checked against the packed C struct
   definition and the audit, not against an aarch64 C probe on this host.
-- The private `Stat`/`sockaddr_un`/`Passwd`/`sigaction` mirrors in `client.zig`,
-  `config.zig` and `terminal.zig` are exercised behaviourally on Linux and
-  probed by `port-abi-2`; until that lands they remain the one residual
-  PL-08 item.
+- `regex_t` is an opaque buffer whose size, alignment and `re_nsub` offset
+  come from the ABI probe, so they are correct for whatever libc configured
+  the build; the cross-target gate does not compile `config.zig`, so FreeBSD's
+  `regex_t` is covered by that per-target probe rather than by a cross
+  compile.
+- The private `Stat`/`sockaddr_un`/`Passwd`/`sigaction` mirrors were replaced
+  or probed in `port-abi-2` (`a458b54f`); no unprobed mirror remains.
 
 ### 15.6 Closing sequence
 
@@ -1659,4 +1659,27 @@ class-(c) shim body:
 
 Gate after the three: 6/6 in all three dirs, six smoke launches, terminal
 harness clean under valgrind, 10/10 manual Debug launches clean.
+
+### 15.9 1.1: no hand-written C
+
+Tag **`zig-migration-1.1`** deletes the last hand-written C in the tree:
+
+| Unit | Was | Now |
+|---|---|---|
+| `config.c` | 35 lines, `config_regex_compile()` over `regex_t` | `config.zig`: opaque `[RegexT__size]u8 align(RegexT__align)` buffer, `regcomp`/`regerror`/`regfree` declared directly, `re_nsub` read at the probed offset (`c92be7cc`, deleted `fe88f7ce`) |
+| `slave.c` | 64 lines, glibc `execvpe` + a non-equivalent PATH walk | `slave.zig`: glibc semantics written down and tested (`doc/execvpe.md`, `tests/test-execvpe.c`; `30feac4c`, deleted `ebbdadd8`, renamed `20471353`) |
+
+Final numbers: **0 module-C lines**, 11 shim files / 2,540 lines (all class
+(a)), 3,478 generated probe lines, 55,184 Zig lines, 1,001 harness checks in
+8 meson suites.
+
+The only C a build of this tree contains is generated: the wayland-scanner
+protocol stubs and `abi_probe.c`. "100% Zig" in the sense that matters —
+every line a human wrote for foot is Zig.
+
+Gate on the 1.1 tree: full-check 8/8 in all three build dirs plus six window
+launches; terminal harness clean under valgrind; config and regex harnesses
+clean with full leak checking; the execvpe test green including its eight
+glibc-semantics cases; fuzz 120 PASS; `check-targets.sh` PASS for FreeBSD and
+aarch64; probe check clean; render parity 447 cells x 2 scales, byte-identical.
 

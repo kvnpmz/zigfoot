@@ -11,7 +11,12 @@ Date: 2026-11-25.
 
 ## Remaining C
 
-Two files, 99 lines. Both are API gaps, not unfinished ports.
+**None that a human wrote.** `config.c` and `slave.c` were the last two files
+(99 lines between them); both are Zig as of `zig-migration-1.1` — `regex_t`
+lives behind the ABI probe in `config.zig`, and `execvpe`'s glibc semantics
+are written down and tested in `slave.zig`. The sections below keep the
+original arguments for the record. What a build still compiles as C is
+generated: wayland-scanner protocol stubs and `abi_probe.c`.
 
 ### `slave.c` — 64 lines, `slave_execvpe()`
 
