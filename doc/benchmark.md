@@ -1,5 +1,13 @@
 # Benchmarks
 
+## 1.2 C → Zig port comparison
+
+See [perf-1.2.md](perf-1.2.md) for the C → Zig port comparison. This
+environment has **no compositor**, so there are **no FPS or startup-time
+numbers measured here**; none are inferred or fabricated. The vtebench tables
+below are historical 2022 measurements on the listed hardware, not
+measurements of the 1.2 port.
+
 ## vtebench
 
 All benchmarks are done using [vtebench](https://github.com/alacritty/vtebench):

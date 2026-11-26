@@ -10,6 +10,10 @@
 # two debug builds only oversubscribes the machine.
 #
 # Exit status is non-zero if any dir fails, and the failing log is printed.
+#
+# The C render-parity oracle is pinned to ORACLE_REF=6b3f557d by default.
+# Callers may override ORACLE_REF; the effective ref is printed and must exist
+# in this checkout, otherwise the gate fails before invoking render-parity.sh.
 
 cd "$(dirname "$0")/.."
 
@@ -18,6 +22,11 @@ cd "$(dirname "$0")/.."
 # printed by the harnesses (there are 1,040 of those in nine suites), so an
 # "Ok >= 9" threshold on assertion lines cannot detect a missing suite.
 EXPECTED_SUITES=9
+
+# Pinned parity oracle; an explicit caller value wins. render-parity.sh
+# receives it through the environment.
+ORACLE_REF=${ORACLE_REF:-6b3f557d}
+export ORACLE_REF
 
 # Keep Zig's cache per-checkout when the caller has not chosen one. Do not
 # hardcode a developer's /tmp path here: this script is run from clean clones.
@@ -105,7 +114,11 @@ fi
 # Build/test phase is complete. The parity check rebuilds the corpus against
 # the C oracle; do not let a failure there pass unnoticed.
 if [ -f scripts/render-parity.sh ]; then
-    echo "--- render parity ---"
+    echo "--- render parity (ORACLE_REF=$ORACLE_REF) ---"
+    if ! git cat-file -e "${ORACLE_REF}^{commit}" 2>/dev/null; then
+        echo "FAILED (render parity): ORACLE_REF=$ORACLE_REF is missing from $(pwd)" >&2
+        exit 1
+    fi
     if ! ./scripts/render-parity.sh; then
         echo "FAILED (render parity)"
         exit 1

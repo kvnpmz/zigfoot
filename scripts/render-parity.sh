@@ -3,6 +3,13 @@
 set -euo pipefail
 
 root=$(cd -- "$(dirname -- "$0")/.." && pwd)
+# Zig build dir under test. Default is unchanged ($root/build); a relative
+# override is resolved against the repo root, not the caller's cwd.
+BUILD_DIR=${BUILD_DIR:-$root/build}
+case $BUILD_DIR in
+    /*) ;;
+    *) BUILD_DIR=$root/$BUILD_DIR ;;
+esac
 WORK=${WORK:-$(mktemp -d "${TMPDIR:-/tmp}/foot-render-parity.XXXXXX")}
 ORACLE_REF=${ORACLE_REF:-6b3f557d}
 work=$WORK
@@ -46,17 +53,17 @@ elif ! git -C "$root" worktree add --detach "$oracle" "$ORACLE_REF" \
     exit 1
 fi
 
-if ! ninja -C "$root/build" -j4 tests/test-terminal > "$work/zig-build.log" 2>&1; then
+if ! ninja -C "$BUILD_DIR" -j4 tests/test-terminal > "$work/zig-build.log" 2>&1; then
     echo "render-parity: Zig build failed (see $work/zig-build.log)" >&2
     exit 1
 fi
-zig_compile=$(ninja -C "$root/build" -t commands tests/test-terminal |
+zig_compile=$(ninja -C "$BUILD_DIR" -t commands tests/test-terminal |
     grep -F ' -c ../tests/test-terminal.c' | head -1)
-zig_link=$(ninja -C "$root/build" -t commands tests/test-terminal |
+zig_link=$(ninja -C "$BUILD_DIR" -t commands tests/test-terminal |
     grep -F ' -o tests/test-terminal ' | head -1)
 
 python3 - "$zig_compile" "$root/tests/test-render-parity.c" \
-    "$work/test-zig.o" "$root/build" <<'PY'
+    "$work/test-zig.o" "$BUILD_DIR" <<'PY'
 import shlex
 import subprocess
 import sys
@@ -71,7 +78,7 @@ for flag in ("-MF", "-MQ"):
 subprocess.run(words, cwd=build, check=True)
 PY
 
-python3 - "$zig_link" "$work/test-zig.o" "$work/test-zig" "$root/build" <<'PY'
+python3 - "$zig_link" "$work/test-zig.o" "$work/test-zig" "$BUILD_DIR" <<'PY'
 import shlex
 import subprocess
 import sys

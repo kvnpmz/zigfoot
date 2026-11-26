@@ -15,11 +15,34 @@ Base: `9f4f1def`. Audit date: 2026-11-25.
 > **All class-c rows are now closed (reconciled 2026-11-26).** The last body,
 > `log_presentation_statistics()`, is Zig as of `b77c7706`
 > (`render_log_presentation_statistics()`, called at the end of `foot_main`);
-> it is no longer a live class-(a) shim body. Rows marked DONE below were
+> it is no longer a live C body. Rows marked DONE below were
 > likewise verified in Zig. Shims are **2,552 lines in 11 files** on the
 > 1.2 tree (the +12 lines are the URL-regex no-capture-group guard); the table
 > below stays as an audit record and its per-row class and body count are
 > historical.
+>
+> **Correction — current shim classification (2026-11-26).** The claim above
+> that the iface-id/registry-bind functions are "reclassified as class (a)",
+> like the broader "all shim lines are class (a)" reading of this table, is
+> **not accurate for the shipped 1.2 tree**. The shims are accessor-only
+> **except these enumerated behaviour-carrying bodies** (verified by source
+> inspection; line numbers are from this checkout):
+>
+> - `terminal-shim.c:725-753` `url_shim_regex_match()` — `regexec()` and
+>   match-span extraction (class-c behaviour, kept because `regex_t` and
+>   `regmatch_t` are libc-specific);
+> - `shm-shim.c:92-167` — memfd/`SHM_ANON`/`mkostemp` backing-file creation,
+>   `fallocate()` punch-hole probing and pool sealing;
+> - `main-shim.c:12-17` `main_shim_is_directory()` — `stat()`/`S_ISDIR()`;
+> - `terminal-shim.c:917-1057` `wayland_shim_iface_id()` and
+>   `wayland_shim_registry_bind()` — iface-name dispatch chains and registry
+>   binding;
+> - `wayland-shim.c:223-233` — keyboard/pointer leave wrappers that synthesise
+>   the leave callbacks.
+>
+> No module logic is hand-written C; these are the exceptions inside the
+> shim files. The table below is retained unchanged as the original audit
+> snapshot, so its class letters are historical, not a current classification.
 
 ## Scope and result
 

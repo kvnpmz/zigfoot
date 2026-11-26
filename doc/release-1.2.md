@@ -5,17 +5,30 @@ reports measured numbers only; older release numbers are labelled historical
 in `MIGRATION_PLAN.md` §§15.5–15.9. The per-command matrix is
 `doc/endgame-verification.md`.
 
+> **Provenance / superseded snapshot (added 2026-11-26).** The numbers below
+> were **measured on `ab5f4261`**, which is not an ancestor of this checkout's
+> HEAD `66a61615` (merge base `00cdb2c0`). HEAD is one commit past tag
+> `zig-migration-1.2`; here `git describe --tags --always` prints
+> `zig-migration-1.2-1-g66a61615` and `sh scripts/check-version.sh` prints
+> `1.28.0-318-g66a61615` (macros 1/28/0) — not the `ab5f4261` strings quoted
+> below. There is no `zig-migration-1.1` tag here. The measured numbers are
+> retained and the version rows are marked superseded; they were not silently
+> rewritten or re-measured at HEAD.
+
 ## What 1.2 is
 
 1.2 is the release in which the migration's gate, ABI checks and documented
 divergences were made reproducible from a clean checkout. It is cut from
-`00cdb2c0` and finalized at `ab5f4261`; the `zig-migration-1.1` tag is left
-untouched as an audit snapshot, but its generated `FOOT_MAJOR/MINOR/PATCH`
-were not numeric and a clean clone of it did not compile. In 1.2,
-`generate-version.sh` restricts `git describe` to semver tags,
-`scripts/check-version.sh` prints `check-version: ok` for
-`FOOT_VERSION` **1.28.0-345-gab5f4261** with macros **1/28/0**, and
-`scripts/check-clean-clone.sh` reports `Ok: 9 Fail: 0`.
+`00cdb2c0` and finalized at `ab5f4261`. Earlier notes called the 1.1 snapshot
+a `zig-migration-1.1` tag; **no such tag exists in this repository** — it was
+a commit, whose generated `FOOT_MAJOR/MINOR/PATCH` were not numeric and whose
+clean clone did not compile. In 1.2, `generate-version.sh` restricts
+`git describe` to semver tags; on `ab5f4261`, `scripts/check-version.sh`
+printed `check-version: ok` for `FOOT_VERSION` **1.28.0-345-gab5f4261** with
+macros **1/28/0**, and `scripts/check-clean-clone.sh` reported
+`Ok: 9 Fail: 0`. Those version strings are superseded here by
+**1.28.0-318-g66a61615** (macros 1/28/0); the clean-clone gate was not re-run
+at HEAD.
 
 ## What changed since 1.1
 
@@ -43,7 +56,8 @@ the source/probe commands cited with each result in `MIGRATION_PLAN.md` §15.10:
   and URL-regex paths: 39 checks, all pass. Commits: `feec9225`, `97d3d2aa`.
 - **url-shim over-read fix.** `url_shim_regex_match()` no longer reads
   `matches[1]` when the pattern has no capture group. Commits: `e4fc52e9`,
-  `ee778d41`, `bb5bcfb9`.
+  `bb5bcfb9` (an earlier revision also listed `ee778d41`, which does not
+  exist in this repository).
 - **Leak-free harness.** `valgrind -q --error-exitcode=99 --leak-check=full
   ./build/tests/test-terminal` now exits 0 (main process 0 definite/indirect
   loss). Commit: `c0445a3e`.
@@ -65,7 +79,7 @@ All rows measured on `ab5f4261`; full commands and caveats are in
 | Fuzz | `bash scripts/fuzz-vt.sh 120` → PASS, seeds=120, iterations=24,000 |
 | Cross targets | `sh scripts/check-targets.sh` → 10 combinations, 0 SKIP (compile-only) |
 | ABI check | `python3 scripts/gen_abi_probe.py --check` clean; 3,838 probe lines, 2,552 shim lines, 55,293 Zig lines |
-| Version / clean clone | `check-version: ok` (1/28/0, 1.28.0-345-gab5f4261); `check-clean-clone: ok` (9/9) |
+| Version / clean clone | **Measured on `ab5f4261`, superseded here:** `check-version: ok` (1/28/0, 1.28.0-345-gab5f4261); `check-clean-clone: ok` (9/9). Current checkout: `1.28.0-318-g66a61615`, `zig-migration-1.2-1-g66a61615`. |
 
 ## What the C claims actually mean
 
@@ -80,6 +94,12 @@ Measured break-out: the unlinked test C is 11,805 lines
 `test-shims.c` 250), plus `utils/xtgettcap.c` 199; unique C compiled by a
 default build is therefore 20,673 lines. "100% Zig" is true of module logic,
 not of every C line in a build.
+
+The quoted "class-(a)" label follows the original 1.2 audit; it does **not**
+mean every shim line is an accessor. `MIGRATION_PLAN.md` §15.3 now enumerates
+the behaviour-carrying shim bodies (URL regex matching, shm memfd/seal logic,
+the `stat()` directory check, iface-id/registry-bind chains and synthesised
+leave callbacks). The line counts above are unchanged.
 
 ## Known limitations
 

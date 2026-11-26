@@ -1,19 +1,28 @@
 #!/bin/sh
 set -eu
 
-cd "$(dirname "$0")/.."
+root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+cd "$root"
 : "${ZIG_GLOBAL_CACHE_DIR:=${TMPDIR:-/tmp}/foot-zig-target-cache}"
 export ZIG_GLOBAL_CACHE_DIR
 
+# Native build dir that supplies c_layout.zig. Default is unchanged; a
+# relative override is resolved against the repo root.
+BUILD_DIR=${BUILD_DIR:-$root/build}
+case $BUILD_DIR in
+    /*) ;;
+    *) BUILD_DIR=$root/$BUILD_DIR ;;
+esac
+
 layout=
-for candidate in build/c_layout.zig build-release/c_layout.zig                  bld/zig-enabled/c_layout.zig bld/zig-disabled/c_layout.zig                  bld/zig-release/c_layout.zig; do
+for candidate in "$BUILD_DIR/c_layout.zig" build-release/c_layout.zig                  bld/zig-enabled/c_layout.zig bld/zig-disabled/c_layout.zig                  bld/zig-release/c_layout.zig; do
     if [ -f "$candidate" ]; then
         layout=$candidate
         break
     fi
 done
 if [ -z "$layout" ]; then
-    echo "check-targets: build/c_layout.zig is missing; run a native build first" >&2
+    echo "check-targets: $BUILD_DIR/c_layout.zig is missing; run a native build first" >&2
     exit 1
 fi
 

@@ -7,6 +7,11 @@
 
 set -eu
 
+# Number of registered Meson suites in tests/meson.build. Both the summary
+# count and the registered suite list must equal this value; "Ok >= 9" would
+# let a suite disappear as long as another one passed extra tests.
+EXPECTED_SUITES=9
+
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 commit=$(git -C "$root" rev-parse HEAD)
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/foot-clean-clone.XXXXXX")
@@ -59,10 +64,14 @@ echo "check-clean-clone: ${summary}"
 ok=$(sed -n 's/^Ok:[[:space:]]*\([0-9][0-9]*\).*/\1/p' "$tmp/test.log" | tail -1)
 fail_count=$(sed -n 's/^Fail:[[:space:]]*\([0-9][0-9]*\).*/\1/p' "$tmp/test.log" | tail -1)
 skipped=$(sed -n 's/^Skipped:[[:space:]]*\([0-9][0-9]*\).*/\1/p' "$tmp/test.log" | tail -1)
+listed=$(meson test -C "$tmp/src/build" --list 2>/dev/null | wc -l | tr -d ' ')
+observed=${ok:-none}
+registered=${listed:-none}
 
-if [ "$test_status" -ne 0 ] || [ -z "${ok}" ] || [ "${ok}" -lt 9 ] ||
+if [ "$test_status" -ne 0 ] || [ "$observed" != "$EXPECTED_SUITES" ] ||
+   [ "$registered" != "$EXPECTED_SUITES" ] ||
    [ "${fail_count}" != 0 ] || { [ -n "${skipped}" ] && [ "${skipped}" -gt 0 ]; }; then
-    fail "meson test" "$tmp/test.log"
+    fail "meson test: expected exactly $EXPECTED_SUITES registered and passing suites (observed=$observed, registered=$registered, Fail=${fail_count:-missing}, Skipped=${skipped:-0})" "$tmp/test.log"
 fi
 
 echo "check-clean-clone: ok"

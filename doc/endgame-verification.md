@@ -8,6 +8,16 @@ This is the 1.2 verification matrix. Every result below was reproduced on
 labelled, and are not evidence for 1.2. The full ledger with per-number
 provenance is `MIGRATION_PLAN.md` §15.10.
 
+> **Provenance / superseded snapshot (added 2026-11-26).** All 1.2 gate
+> numbers below were **measured on `ab5f4261`**, which is not an ancestor of this checkout's
+> HEAD `66a61615` (merge base `00cdb2c0`). HEAD is one commit past tag
+> `zig-migration-1.2`; here `git describe --tags --always` prints
+> `zig-migration-1.2-1-g66a61615` and `sh scripts/check-version.sh` prints
+> `1.28.0-318-g66a61615` (macros 1/28/0), not the `ab5f4261` version strings
+> in the table. There is no `zig-migration-1.1` tag in this repository. The
+> measured numbers are kept and the version/describe row is marked superseded;
+> the non-version numbers have **not** been re-run at HEAD.
+
 | Check | Command | Result (measured on ab5f4261) |
 |---|---|---|
 | Full gate | `sh scripts/full-check.sh` | Exit 0. `build`, `build-disabled`, `build-release`: **9/9**, `Fail: 0`, no skips; render parity invoked; six smoke launches, `smoke: ok`. |
@@ -24,8 +34,8 @@ provenance is `MIGRATION_PLAN.md` §15.10.
 | Cross targets | `sh scripts/check-targets.sh` | Exit 0: **10 combinations** (x86_64-freebsd and aarch64-linux-gnu × fdm/spawn/slave/main/server), **0 SKIP**. Compile-only (`zig build-obj -fno-emit-bin`). |
 | ABI freshness | `python3 scripts/gen_abi_probe.py --check` | Clean. `abi_probe.c` 3,838 lines; 11 `*-shim.c` files 2,552 lines; tracked Zig 55,293 lines (all by `wc -l`). |
 | ABI coverage | `rg -n 'expectAbi\(' terminal_types.zig`; `rg -n 'EpollEvent' build/c_layout.zig` | Eight config element mirrors have direct `expectAbi`; fixed arrays recurse (`Config.fonts[4]`, `Terminal.notification_icons[32]`, `KeySet.vmods[8]`, `WlWindow.csd.surface[]`, `Vt.params.v[16]`); native probe: Linux `epoll_event` 12 bytes / `data` at 4; FreeBSD 16/8 is cross-derived. Accepted gaps: pointer-reached element types rely on direct `expectAbi`; tll node is probed only via the seat instantiation. |
-| Version | `scripts/check-version.sh`; `sh generate-version.sh 1.28.0 . <tmp>` | `check-version: ok`, `FOOT_VERSION` **1.28.0-345-gab5f4261**, macros **1/28/0**. Plain `git describe --always --tags` prints `zig-migration-1.1-29-gab5f4261`; the version macro uses the semver-only describe. |
-| Clean clone | `sh scripts/check-clean-clone.sh` | `check-clean-clone: ok`, `Ok: 9 Fail: 0`; a clone with `.git` builds at `ab5f4261` (the 1.1 defect is fixed). |
+| Version | `scripts/check-version.sh`; `sh generate-version.sh 1.28.0 . <tmp>` | **Superseded version strings, measured on `ab5f4261`:** `check-version: ok`, `FOOT_VERSION` **1.28.0-345-gab5f4261**, macros **1/28/0**. Plain `git describe --always --tags` printed `zig-migration-1.1-29-gab5f4261` there only — that tag does not exist in this checkout. Here (`66a61615`): `zig-migration-1.2-1-g66a61615` and `1.28.0-318-g66a61615`. The version macro uses the semver-only describe. |
+| Clean clone | `sh scripts/check-clean-clone.sh` | **Measured on `ab5f4261`, not re-run at HEAD:** `check-clean-clone: ok`, `Ok: 9 Fail: 0`; a clone with `.git` built there. The gate now requires exactly 9 registered suites and 9 `Ok` suites. |
 | Real launch | `scripts/smoke.sh` | Six window launches (80x24, 132x43, 20x5, maximized, fullscreen, OSD+scrollback), `smoke: ok`. Source inspection (`rg -n FOOT_ALLOW_NO_COMPOSITOR scripts/smoke.sh`) confirms it fails when no window can be launched unless that variable is explicitly 1. |
 
 ## What the gate actually enforces
@@ -33,9 +43,13 @@ provenance is `MIGRATION_PLAN.md` §15.10.
 Verified by source inspection on `ab5f4261` (`rg -n 'EXPECTED_SUITES|listed|rm -f|render-parity.sh' scripts/full-check.sh`):
 `EXPECTED_SUITES=9`; the registered suite count and the Meson summary count
 must both equal 9; `Fail: 0` and no skips are required; stale logs are deleted
-before each run; parity is invoked and a failure propagates. `scripts/smoke.sh`
-requires a real window launch unless `FOOT_ALLOW_NO_COMPOSITOR=1` is set
-explicitly.
+before each run; parity is invoked and a failure propagates. The gate's
+default parity oracle is **pinned**: `full-check.sh` exports
+`ORACLE_REF=6b3f557d` when the caller has not set it, prints the effective
+ref, and fails early if that ref is absent; a caller-supplied `ORACLE_REF` is
+still honoured. `render-parity.sh`, `fuzz-vt.sh` and `check-targets.sh` accept
+`BUILD_DIR` (default `$root/build`). `scripts/smoke.sh` requires a real window
+launch unless `FOOT_ALLOW_NO_COMPOSITOR=1` is set explicitly.
 
 ## Known limitations (1.2 final)
 

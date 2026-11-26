@@ -63,6 +63,11 @@ Measured on `ab5f4261` by:
     ORACLE_REF=6b3f557d bash scripts/render-parity.sh
 
 (Any checkout at `ab5f4261` works; `WORK` selects the scratch directory.)
+This is a historical measurement snapshot, not a re-run at current HEAD
+`66a61615`. `full-check.sh` pins the same oracle by default
+(`ORACLE_REF=6b3f557d`, printed before the run; callers may override it and a
+missing ref fails the gate), and `render-parity.sh` accepts `BUILD_DIR`
+(default `$root/build`) for the Zig side.
 
 `WORK` defaults to a fresh `mktemp -d "${TMPDIR:-/tmp}/foot-render-parity.XXXXXX"`;
 set it explicitly to control the scratch location. `ZIG_GLOBAL_CACHE_DIR`

@@ -17,6 +17,9 @@ if [ "$valid" != yes ] || [ "$seeds" -gt 10000 ]; then
 fi
 
 root=$(cd -- "$(dirname -- "$0")/.." && pwd)
+# Build dir to snapshot. Default is unchanged ($root/build); a relative
+# override is resolved from the repo root (cd "$root" happens below).
+BUILD_DIR=${BUILD_DIR:-$root/build}
 # Each invocation gets its own directory: concurrent checks must not reuse
 # another run's snapshot archives, objects or failure artifacts.
 work=$(mktemp -d "${TMPDIR:-/tmp}/fuzz-vt.XXXXXX")
@@ -24,12 +27,12 @@ trap 'rm -rf -- "$work"' EXIT HUP INT TERM
 cd "$root"
 
 # ninja is used only to print existing commands.  Do not invoke a build target.
-compile_line=$(ninja -C build -t commands libvtlib.a | python3 -c '
+compile_line=$(ninja -C "$BUILD_DIR" -t commands libvtlib.a | python3 -c '
 import sys
 lines = sys.stdin.read().splitlines()
 print(next(line for line in lines if " -c " in line and "csi-shim.c" in line))
 ')
-link_line=$(ninja -C build -t commands foot | tail -1)
+link_line=$(ninja -C "$BUILD_DIR" -t commands foot | tail -1)
 compile_flags=$(python3 -c '
 import shlex, sys
 words = shlex.split(sys.argv[1])
@@ -71,14 +74,14 @@ printf '%s\n' "$link_line" > "$work/link-line.txt"
 compile_flags=${compile_flags/-Ilibvtlib.a.p/-I$work/include}
 printf '%s\n' "$compile_flags" > "$work/compile-flags.txt"
 printf '%s\n' "$libs" > "$work/libs.txt"
-sha256sum tests/fuzz-vt.c build/libfootlib.a > "$work/snapshot.sha256"
+sha256sum tests/fuzz-vt.c "$BUILD_DIR/libfootlib.a" > "$work/snapshot.sha256"
 
-# From this point on, no build/ object or archive is read.  Another agent may
-# rebuild build/ while this snapshot is compiled and fuzzed.
+# From this point on, no object or archive under $BUILD_DIR is read.  Another
+# agent may rebuild that dir while this snapshot is compiled and fuzzed.
 mkdir -p "$work/include"
-cp -- build/*.h "$work/include/"
+cp -- "$BUILD_DIR"/*.h "$work/include/"
 # Meson may produce thin archives.  Snapshot their members too; otherwise a
-# copied archive would still refer into the concurrently rebuilt build/ tree.
+# copied archive would still refer into the concurrently rebuilt build tree.
 snapshot_archive() {
     local source=$1 objects_file=$2
     local name member src object index=0
@@ -88,7 +91,7 @@ snapshot_archive() {
         mkdir -p "$work/objects"
         ar t "$source" > "$work/$objects_file.members"
         while IFS= read -r member; do
-            src=build/$member
+            src=$BUILD_DIR/$member
             if [ ! -f "$src" ]; then
                 src=$member
             fi
@@ -101,7 +104,7 @@ snapshot_archive() {
     cp -- "$source" "$work/$name.thin.a"
     if [ "$#" -gt 0 ]; then
         # A regular archive is self-contained; a thin archive resolves members
-        # against the linker cwd and would silently read the live build/ tree.
+        # against the linker cwd and would silently read the live $BUILD_DIR tree.
         rm -f -- "$work/$name"
         ar rcs "$work/$name" "$@"
     else
@@ -109,9 +112,9 @@ snapshot_archive() {
     fi
 }
 for archive in libpgolib.a libvtlib.a libcommon.a libmisc.a; do
-    snapshot_archive "build/$archive" "$archive"
+    snapshot_archive "$BUILD_DIR/$archive" "$archive"
 done
-snapshot_archive build/libfootlib.a libfootlib.a
+snapshot_archive "$BUILD_DIR/libfootlib.a" libfootlib.a
 eval "set -- $compile_flags"
 cc "$@" \
     -Wl,--wrap=zwp_primary_selection_source_v1_destroy \
