@@ -57,8 +57,8 @@ steps:
       - meson setup --buildtype=debug -Dgrapheme-clustering=enabled -Dfcft:grapheme-shaping=enabled -Dfcft:run-shaping=enabled -Dfcft:test-text-shaping=true ../..
       - ninja -v -k0
       - ninja -v test
-      - ./foot --version
-      - ./footclient --version
+      - ./zigfoot --version
+      - ./zigfootclient --version
       - cd ../..
 
       # Release (gcc)
@@ -67,8 +67,8 @@ steps:
       - meson setup --buildtype=release -Db_pgo=generate -Dgrapheme-clustering=enabled -Dfcft:grapheme-shaping=enabled -Dfcft:run-shaping=enabled  -Dfcft:test-text-shaping=true ../..
       - ninja -v -k0
       - ninja -v test
-      - ./foot --version
-      - ./footclient --version
+      - ./zigfoot --version
+      - ./zigfootclient --version
       - cd ../..
 
       # Release (clang)
@@ -77,8 +77,8 @@ steps:
       - CC=clang meson setup --buildtype=release -Dgrapheme-clustering=enabled -Dfcft:grapheme-shaping=enabled -Dfcft:run-shaping=enabled  -Dfcft:test-text-shaping=true ../..
       - ninja -v -k0
       - ninja -v test
-      - ./foot --version
-      - ./footclient --version
+      - ./zigfoot --version
+      - ./zigfootclient --version
       - cd ../..
 
       # no grapheme clustering
@@ -88,8 +88,8 @@ steps:
       - meson setup --buildtype=debug -Dgrapheme-clustering=disabled -Dfcft:grapheme-shaping=disabled -Dfcft:run-shaping=disabled -Dfcft:test-text-shaping=false ../..
       - ninja -v -k0
       - ninja -v test
-      - ./foot --version
-      - ./footclient --version
+      - ./zigfoot --version
+      - ./zigfootclient --version
       - cd ../..
 
   - name: x86
@@ -114,8 +114,8 @@ steps:
       - meson setup --buildtype=debug -Dgrapheme-clustering=enabled -Dfcft:grapheme-shaping=enabled -Dfcft:run-shaping=enabled -Dfcft:test-text-shaping=true ../..
       - ninja -v -k0
       - ninja -v test
-      - ./foot --version
-      - ./footclient --version
+      - ./zigfoot --version
+      - ./zigfootclient --version
       - cd ../..
 
       # Release (gcc)
@@ -124,8 +124,8 @@ steps:
       - meson setup --buildtype=release -Db_pgo=generate -Dgrapheme-clustering=enabled -Dfcft:grapheme-shaping=enabled -Dfcft:run-shaping=enabled -Dfcft:test-text-shaping=true ../..
       - ninja -v -k0
       - ninja -v test
-      - ./foot --version
-      - ./footclient --version
+      - ./zigfoot --version
+      - ./zigfootclient --version
       - cd ../..
 
       # Release (clang)
@@ -134,8 +134,8 @@ steps:
       - CC=clang meson setup --buildtype=release -Dgrapheme-clustering=enabled -Dfcft:grapheme-shaping=enabled -Dfcft:run-shaping=enabled -Dfcft:test-text-shaping=true ../..
       - ninja -v -k0
       - ninja -v test
-      - ./foot --version
-      - ./footclient --version
+      - ./zigfoot --version
+      - ./zigfootclient --version
       - cd ../..
 
   - name: zig
@@ -160,8 +160,8 @@ steps:
           meson setup "$dir" --buildtype=debug -Dgrapheme-clustering=$cfg
           ninja -v -C "$dir"
           meson test -C "$dir" --print-errorlogs
-          ./"$dir"/foot --version
-          scripts/smoke.sh ./"$dir"/foot
+          ./"$dir"/zigfoot --version
+          scripts/smoke.sh ./"$dir"/zigfoot
           scripts/check-targets.sh
         done
       # Release mode must build and pass the same tests.
@@ -170,4 +170,4 @@ steps:
       - meson setup bld/zig-release --buildtype=release -Dgrapheme-clustering=enabled -Dime=true
       - ninja -v -C bld/zig-release
       - meson test -C bld/zig-release --print-errorlogs
-      - ./bld/zig-release/foot --version
+      - ./bld/zig-release/zigfoot --version
