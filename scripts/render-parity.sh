@@ -58,7 +58,7 @@ if ! ninja -C "$BUILD_DIR" -j4 tests/test-terminal > "$work/zig-build.log" 2>&1;
     exit 1
 fi
 zig_compile=$(ninja -C "$BUILD_DIR" -t commands tests/test-terminal |
-    grep -F ' -c ../tests/test-terminal.c' | head -1)
+    grep -E ' -c .*tests/test-terminal\.c' | head -1)
 zig_link=$(ninja -C "$BUILD_DIR" -t commands tests/test-terminal |
     grep -F ' -o tests/test-terminal ' | head -1)
 
