@@ -629,8 +629,6 @@ extern fn term_font_subpixel_changed(term: *types.Terminal) callconv(.c) void;
 
 extern fn wayl_win_alpha_changed(win: ?*anyopaque) callconv(.c) void;
 
-extern fn osc_notify(term: *types.Terminal, string: [*:0]u8) callconv(.c) void;
-
 fn unhandled(term: *types.Terminal) void {
     if (log_enable_dbg)
         std.debug.print("osc: unhandled: OSC: {s}\n", .{term.vt.osc.data.?[0..term.vt.osc.idx]});

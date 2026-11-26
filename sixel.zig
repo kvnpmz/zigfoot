@@ -816,7 +816,6 @@ export fn sixel_put_ar_11(term_opaque: ?*anyopaque, c: u8) callconv(.c) void {
 extern fn pixman_image_unref(image: ?*anyopaque) callconv(.c) void;
 extern fn grid_row_abs_to_sb(grid: *const types.Grid, screen_rows: c_int, abs_row: c_int) callconv(.c) c_int;
 extern fn term_update_ascii_printer(term: *types.Terminal) callconv(.c) void;
-extern fn sixel_conf_colors_dark_sixel_ptr(term: *types.Terminal) callconv(.c) [*]const u32;
 
 // ── tll helpers for SixelList ────────────────────────────────────
 fn sixelListLen(list: *const types.SixelList) usize {

@@ -535,7 +535,6 @@ bool wayl_reload_xcursor_theme(struct seat *seat, float new_scale);
 void wayl_flush(struct wayland *wayl);
 void wayl_roundtrip(struct wayland *wayl);
 
-bool wayl_fractional_scaling(const struct wayland *wayl);
 void wayl_surface_scale(
     const struct wl_window *win, const struct wayl_surface *surf,
     const struct buffer *buf, float scale);

@@ -48,7 +48,6 @@ void render_osd(
     struct terminal *term, const struct wayl_sub_surface *sub_surf,
     struct fcft_font *font, struct buffer *buf, const char32_t *text,
     uint32_t _fg, uint32_t _bg, unsigned x);
-pixman_color_t get_csd_button_fg_color(const struct terminal *term);
 void render_csd_button_minimize(struct terminal *term, struct buffer *buf);
 void render_csd_button_maximize_maximized(
     struct terminal *term, struct buffer *buf);
