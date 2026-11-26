@@ -3,6 +3,19 @@ const build_options = @import("build_options");
 const types = @import("terminal_types.zig");
 extern fn render_refresh_csd(term: *types.Terminal) void;
 
+extern fn stat(path: [*c]const u8, buf: *types.Stat) c_int;
+
+/// C main_shim_is_directory(): stat(2) follows symlinks and any error is
+/// "not a directory". Lives here (libfootlib) rather than main.zig so the
+/// test harness, which does not link main_obj, can exercise the same code.
+export fn main_shim_is_directory(path: [*:0]const u8) bool {
+    var st: types.Stat = undefined;
+    if (stat(path, &st) != 0)
+        return false;
+
+    return (types.statMode(&st) & std.posix.S.IFDIR) != 0;
+}
+
 extern fn row(grid: *types.Grid, row_no: c_int) *types.Row;
 extern fn rowInView(grid: *types.Grid, row_no: c_int) *types.Row;
 

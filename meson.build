@@ -938,7 +938,6 @@ footlib = static_library(
   reaper_obj, 'reaper.h',
   render_obj, 'render.h',
   search_obj, 'search.h',
-  'main-shim.c',
   server_obj, 'server.h', 'client-protocol.h',
   shm_obj, 'shm-shim.c', 'shm.h',
   slave_obj, 'slave.h',

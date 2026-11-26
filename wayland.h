@@ -715,10 +715,6 @@ void wayland_shim_add_shm_listener(struct wl_shm *shm, struct wayland *wayl);
 void wayland_shim_add_wm_base_listener(
     struct xdg_wm_base *shell, struct wayland *wayl);
 void wayland_shim_add_seat_listener(struct wl_seat *wl_seat, struct seat *seat);
-void wayland_shim_keyboard_leave(
-    struct seat *seat, struct wl_keyboard *kbd, struct wl_surface *surface);
-void wayland_shim_pointer_leave(
-    struct seat *seat, struct wl_pointer *pointer, struct wl_surface *surface);
 void wayland_shim_add_output_listener(
     struct wl_output *output, struct monitor *mon);
 void wayland_shim_add_xdg_output_monitor_listener(

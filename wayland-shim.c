@@ -220,18 +220,6 @@ void wayland_shim_add_seat_listener(struct wl_seat *wl_seat, struct seat *seat)
     wl_seat_add_listener(wl_seat, &seat_listener, seat);
 }
 
-void wayland_shim_keyboard_leave(
-    struct seat *seat, struct wl_keyboard *kbd, struct wl_surface *surface)
-{
-    keyboard_listener.leave(seat, kbd, -1, surface);
-}
-
-void wayland_shim_pointer_leave(
-    struct seat *seat, struct wl_pointer *pointer, struct wl_surface *surface)
-{
-    pointer_listener.leave(seat, pointer, -1, surface);
-}
-
 void wayland_shim_add_output_listener(
     struct wl_output *output, struct monitor *mon)
 {

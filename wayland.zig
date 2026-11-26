@@ -3041,8 +3041,19 @@ export fn handle_global(
 // Registry global removal
 // ─────────────────────────────────────────────────────────────────────────
 
-extern fn wayland_shim_keyboard_leave(seat: *types.Seat, kbd: ?*anyopaque, surface: ?*anyopaque) callconv(.c) void;
-extern fn wayland_shim_pointer_leave(seat: *types.Seat, pointer: ?*anyopaque, surface: ?*anyopaque) callconv(.c) void;
+// The C shim's leave forwarders are now Zig: synthesize the same listener
+// callback invocation with serial -1 (u32), as C's -1 did. These are the
+// exported callbacks in input.zig (input.h declares them for C callers).
+extern fn keyboard_leave(data: ?*anyopaque, wl_keyboard: ?*anyopaque, serial: u32, surface: ?*anyopaque) callconv(.c) void;
+extern fn wl_pointer_leave(data: ?*anyopaque, wl_pointer: ?*anyopaque, serial: u32, surface: ?*anyopaque) callconv(.c) void;
+
+fn wayland_shim_keyboard_leave(seat: *types.Seat, kbd: ?*anyopaque, surface: ?*anyopaque) callconv(.c) void {
+    keyboard_leave(@ptrCast(seat), kbd, @as(u32, @bitCast(@as(i32, -1))), surface);
+}
+
+fn wayland_shim_pointer_leave(seat: *types.Seat, pointer: ?*anyopaque, surface: ?*anyopaque) callconv(.c) void {
+    wl_pointer_leave(@ptrCast(seat), pointer, @as(u32, @bitCast(@as(i32, -1))), surface);
+}
 extern fn wayland_shim_fixes_ack_global_remove(fixes: ?*anyopaque, registry: ?*anyopaque, name: u32) callconv(.c) void;
 
 const V_FIXES_ACK_GLOBAL_REMOVE: c_int = 2;

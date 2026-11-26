@@ -11,8 +11,7 @@ const build_options = @import("build_options");
 // parsing, locale setup, config load, the FDM/reaper/wayland/render/terminal
 // construction chain, the signal wiring and the cleanup path.
 //
-// Everything that is C-only knowledge stays in main-shim.c (the struct stat
-// directory test); the FOOT_DEFAULT_TERM #define arrives as a build option.
+// The FOOT_DEFAULT_TERM #define arrives as a build option.
 //
 
 // ── log classes / colorize (log.h) ──────────────────────────────────
@@ -85,6 +84,8 @@ extern fn xrealloc(ptr: ?*anyopaque, size: usize) ?*anyopaque;
 extern fn xstrdup(str: [*:0]const u8) ?[*:0]u8;
 extern fn xasprintf(format: [*:0]const u8, ...) ?[*:0]u8;
 extern fn xsnprintf(buf: [*]u8, n: usize, format: [*:0]const u8, ...) usize;
+// Implemented in misc.zig (exported) so the test harness, which links
+// libmisc but not main_obj, can still exercise it.
 extern fn main_shim_is_directory(path: [*:0]const u8) bool;
 
 extern fn log_init(

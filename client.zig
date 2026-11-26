@@ -80,57 +80,10 @@ const ERANGE: c_int = 34;
 const ENOENT: c_int = @intFromEnum(std.c.E.ENOENT);
 const S_IFDIR: u32 = std.posix.S.IFDIR;
 
-/// glibc x86_64 struct stat. std.c.Stat is void on Linux, so this one
-/// mirror has to stay; it is Linux-only and pinned below. Other targets use
-/// the libc type.
-pub const LinuxStat = extern struct {
-    st_dev: u64,
-    st_ino: u64,
-    st_nlink: u64,
-    st_mode: u32,
-    st_uid: u32,
-    st_gid: u32,
-    __pad0: c_int,
-    st_rdev: u64,
-    st_size: i64,
-    st_blksize: i64,
-    st_blocks: i64,
-    st_atim: std.posix.timespec,
-    st_mtim: std.posix.timespec,
-    st_ctim: std.posix.timespec,
-    __glibc_reserved: [3]i64,
-};
-
-const Stat = if (builtin.os.tag == .linux) LinuxStat else std.c.Stat;
+// Shared with misc.zig; terminal_types.zig owns and probes the Linux mirror.
+const Stat = types.Stat;
+const statMode = types.statMode;
 const SockaddrUn = std.c.sockaddr.un;
-
-fn expectAbi(comptime T: type, comptime prefix: []const u8) void {
-    comptime {
-        const size_key = prefix ++ "__size";
-        if (!@hasDecl(abi, size_key))
-            @compileError("abi_probe is missing " ++ size_key);
-        if (@sizeOf(T) != @field(abi, size_key))
-            @compileError("ABI size mismatch: " ++ size_key);
-
-        for (@typeInfo(T).@"struct".fields) |field| {
-            if (field.name.len > 0 and field.name[0] == '_') continue;
-            const key = prefix ++ "_" ++ field.name;
-            if (!@hasDecl(abi, key))
-                @compileError("abi_probe is missing " ++ key);
-            if (@offsetOf(T, field.name) != @field(abi, key))
-                @compileError("ABI offset mismatch: " ++ key);
-        }
-    }
-}
-
-comptime {
-    if (builtin.os.tag == .linux)
-        expectAbi(LinuxStat, "LinuxStat");
-}
-
-fn statMode(st: *const Stat) u32 {
-    return if (comptime builtin.os.tag == .linux) st.st_mode else @intCast(st.mode);
-}
 
 fn initSocketAddr() SockaddrUn {
     var addr = std.mem.zeroes(SockaddrUn);
