@@ -982,7 +982,7 @@ export fn wayl_win_destroy(win_in: ?*types.WlWindow) callconv(.c) void {
     const wayl = waylandOf(win);
 
     if (win.csd.move_timeout_fd != -1)
-        _ = close(win.csd.move_timeout_fd);
+        _ = fdm_del(wayl.fdm, win.csd.move_timeout_fd);
 
     // wl_touch has no leave event, so the unmapping below cannot drop touch
     // focus the way it drops keyboard and pointer focus. Reset it here, or a

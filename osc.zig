@@ -218,6 +218,11 @@ export fn parse_legacy_color(
     if (len % 3 != 0) return false;
 
     const digits: usize = len / 3;
+    // Four hex digits are the largest legacy component that fits in the
+    // 16-bit value the format represents. Larger components would make the
+    // shift below negative (and invoke undefined behavior in C).
+    if (digits > 4) return false;
+
     var rgb: [3]i32 = .{ 0, 0, 0 };
     var i: usize = 0;
     while (i < 3) : (i += 1) {
@@ -267,7 +272,7 @@ export fn parse_rgb(
     }
 
     var rgb: [4]i32 = .{ 0, 0, 0, 0 };
-    var digits: [4]i32 = .{ 0, 0, 0, 0 };
+    var digits: [4]usize = .{ 0, 0, 0, 0 };
 
     const n_components: usize = if (have_alpha) 4 else 3;
     var i: usize = 0;
@@ -279,6 +284,11 @@ export fn parse_rgb(
             string = @ptrCast(string + 1);
             digits[i] += 1;
         }) {
+            // X11 color components are at most four hex digits. Reject the
+            // fifth digit before shifting, rather than overflowing either
+            // the accumulator or the scale used below.
+            if (digits[i] >= 4) return false;
+
             const c: u8 = @bitCast(string[0]);
             rgb[i] <<= 4;
             if (isxdigit(c)) rgb[i] |= hexNibble(c);
@@ -292,13 +302,16 @@ export fn parse_rgb(
         len -= 1;
     }
 
-    const r: u8 = @intFromFloat(256.0 * (@as(f64, @floatFromInt(rgb[0])) / @as(f64, @floatFromInt(@as(i32, 1) << @intCast(4 * @as(u5, @intCast(digits[0])))))));
-    const g: u8 = @intFromFloat(256.0 * (@as(f64, @floatFromInt(rgb[1])) / @as(f64, @floatFromInt(@as(i32, 1) << @intCast(4 * @as(u5, @intCast(digits[1])))))));
-    const b: u8 = @intFromFloat(256.0 * (@as(f64, @floatFromInt(rgb[2])) / @as(f64, @floatFromInt(@as(i32, 1) << @intCast(4 * @as(u5, @intCast(digits[2])))))));
+    // Indexed by the already-validated digit count. Using a table avoids
+    // constructing an unchecked shift count from untrusted input.
+    const component_max = [_]u32{ 1, 16, 256, 4096, 65536 };
+    const r: u8 = @intFromFloat(256.0 * (@as(f64, @floatFromInt(rgb[0])) / @as(f64, @floatFromInt(component_max[digits[0]]))));
+    const g: u8 = @intFromFloat(256.0 * (@as(f64, @floatFromInt(rgb[1])) / @as(f64, @floatFromInt(component_max[digits[1]]))));
+    const b: u8 = @intFromFloat(256.0 * (@as(f64, @floatFromInt(rgb[2])) / @as(f64, @floatFromInt(component_max[digits[2]]))));
 
     var alpha: u16 = 0xffff;
     if (have_alpha) {
-        alpha = @intFromFloat(65536.0 * (@as(f64, @floatFromInt(rgb[3])) / @as(f64, @floatFromInt(@as(i32, 1) << @intCast(4 * @as(u5, @intCast(digits[3])))))));
+        alpha = @intFromFloat(65536.0 * (@as(f64, @floatFromInt(rgb[3])) / @as(f64, @floatFromInt(component_max[digits[3]]))));
     }
 
     if (have_alpha_out) |h| h.* = have_alpha;
@@ -641,6 +654,13 @@ fn parseIdx(s_in: [*:0]const u8) struct { idx: u32, rest: [*:0]const u8 } {
     while (s_in[p] != 0) : (p += 1) {
         const c = s_in[p];
         if (c < '0' or c > '9') break;
+
+        // Color table indexes are limited to 0..255. Stop before the next
+        // decimal operation can overflow; leading zeroes remain harmless and
+        // an empty index still has C's initial value of zero.
+        if (idx > 25 or (idx == 25 and c > '5'))
+            return .{ .idx = 256, .rest = @ptrCast(s_in + p) };
+
         idx = idx * 10 + @as(u32, c - '0');
     }
     return .{ .idx = idx, .rest = @ptrCast(s_in + p) };
@@ -918,6 +938,7 @@ extern fn notify_icon_del(term: *types.Terminal, id: [*:0]const u8) callconv(.c)
 extern fn xasprintf(fmt: [*:0]const u8, ...) callconv(.c) ?[*:0]u8;
 extern fn strtol(s: [*:0]const u8, endptr: ?*[*:0]u8, base: c_int) callconv(.c) c_long;
 
+const INT32_MIN_C: c_long = -2147483648;
 const INT32_MAX_C: c_long = 2147483647;
 const PAYLOAD_TITLE: c_int = 0;
 const PAYLOAD_BODY: c_int = 1;
@@ -1110,7 +1131,9 @@ export fn kitty_notification_impl(term: *types.Terminal, string: [*:0]u8) callco
                 __errno_location().* = 0;
                 var end: [*:0]u8 = undefined;
                 const timeout = strtol(value, &end, 10);
-                if (__errno_location().* == 0 and end[0] == 0 and timeout <= INT32_MAX_C) {
+                if (__errno_location().* == 0 and end[0] == 0 and
+                    timeout >= INT32_MIN_C and timeout <= INT32_MAX_C)
+                {
                     expire_time = @intCast(timeout);
                     have_w = true;
                 }

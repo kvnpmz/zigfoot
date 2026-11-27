@@ -521,6 +521,17 @@ export fn fdm_poll(fdm: *Fdm) bool {
     const r = epoll_pwait(fdm.epoll_fd, fdm.events, @intCast(n), -1, &fdm.sigmask);
     const errno_copy = std.c._errno().*;
 
+    // Signal callbacks may delete handlers already present in the captured
+    // event array. Keep those handlers allocated until dispatch has finished.
+    fdm.is_polling = true;
+    defer {
+        fdm.is_polling = false;
+        while (fdm.deferred.head) |h| {
+            fdm.deferred.remove(h);
+            free(h);
+        }
+    }
+
     if (gs().* != 0) {
         gs().* = 0;
 
@@ -545,7 +556,6 @@ export fn fdm_poll(fdm: *Fdm) bool {
     }
 
     var ret = true;
-    fdm.is_polling = true;
     if (r > 0) {
         const evs = fdm.events.?;
         var i: usize = 0;
@@ -558,12 +568,6 @@ export fn fdm_poll(fdm: *Fdm) bool {
                 break;
             }
         }
-    }
-    fdm.is_polling = false;
-
-    while (fdm.deferred.head) |h| {
-        fdm.deferred.remove(h);
-        free(h);
     }
     return ret;
 }

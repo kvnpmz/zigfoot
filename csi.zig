@@ -1673,8 +1673,8 @@ fn caseDollar(term: *types.Terminal, final: u8) void {
             const dst_page = vtParamGet(term, 7, 1);
             if (src_page != 1 or dst_page != 1) break :blk;
 
-            const dst_rel_bottom = dst_rel_top + (src_bottom - src_top);
-            const dst_right = @min(dst_left + (src_right - src_left), term.cols - 1);
+            const dst_rel_bottom = std.math.add(c_int, dst_rel_top, src_bottom - src_top) catch break :blk;
+            const dst_right = @min(std.math.add(c_int, dst_left, src_right - src_left) catch break :blk, term.cols - 1);
             const dst_top = term_row_rel_to_abs(term, dst_rel_top);
             const dst_bottom = term_row_rel_to_abs(term, dst_rel_bottom);
             if (dst_left > dst_right or dst_top > dst_bottom) break :blk;
@@ -1682,9 +1682,9 @@ fn caseDollar(term: *types.Terminal, final: u8) void {
             const row_count: c_int = @min(src_bottom - src_top, dst_bottom - dst_top) + 1;
             const cell_count: c_int = @min(src_right - src_left, dst_right - dst_left) + 1;
 
+            const grid = term.grid orelse break :blk;
             sixel_overwrite_by_rectangle(term, dst_top, dst_left, row_count, cell_count);
 
-            const grid = term.grid orelse break :blk;
             const cell_size = @sizeOf(types.Cell);
             const row_count_u: usize = @intCast(row_count);
             const cell_count_u: usize = @intCast(cell_count);
@@ -1692,13 +1692,20 @@ fn caseDollar(term: *types.Terminal, final: u8) void {
             // Save src cells
             const copy_ptr = xmalloc(row_count_u * @sizeOf(?[*]types.Cell)) orelse break :blk;
             const copy: [*]?[*]types.Cell = @ptrCast(@alignCast(copy_ptr));
+            @memset(copy[0..row_count_u], null);
+            defer {
+                for (copy[0..row_count_u]) |copy_row| {
+                    if (copy_row) |row_cells| free(@ptrCast(row_cells));
+                }
+                free(@ptrCast(copy));
+            }
 
             var r: c_int = 0;
             while (r < row_count) : (r += 1) {
-                const row_buf = xmalloc(cell_count_u * cell_size) orelse break;
-                const row_cells: [*]types.Cell = @ptrCast(@alignCast(row_buf));
                 const src_row = gridRow(grid, src_top + r) orelse continue;
                 const src_cells = src_row.cells orelse continue;
+                const row_buf = xmalloc(cell_count_u * cell_size) orelse break :blk;
+                const row_cells: [*]types.Cell = @ptrCast(@alignCast(row_buf));
                 _ = memcpy(row_cells, &src_cells[@intCast(src_left)], cell_count_u * cell_size);
                 copy[@intCast(r)] = row_cells;
             }
@@ -1711,7 +1718,6 @@ fn caseDollar(term: *types.Terminal, final: u8) void {
                 const dst_cells = dst_row.cells orelse continue;
                 const copy_row = copy[@intCast(r)] orelse continue;
                 _ = memcpy(&dst_cells[@intCast(dst_left)], copy_row, cell_count_u * cell_size);
-                free(@ptrCast(copy_row));
 
                 var c: c_int = 0;
                 while (c < cell_count) : (c += 1) {
@@ -1722,7 +1728,6 @@ fn caseDollar(term: *types.Terminal, final: u8) void {
                     grid_row_uri_range_erase(dst_row, dst_left, dst_right);
                 }
             }
-            free(@ptrCast(copy));
         },
         'x' => blk: { // DECFRA — fill rectangular area with char
             const ch = vtParamGet(term, 0, 0);

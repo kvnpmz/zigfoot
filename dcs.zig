@@ -233,10 +233,10 @@ fn xtgettcapUnhook(term: *types.Terminal) void {
 
         xtgettcapReply(term, p, cap_len);
 
+        if (sep == null) break;
+
         left -= cap_len + 1;
         p += cap_len + 1;
-
-        if (sep == null) break;
     }
 }
 

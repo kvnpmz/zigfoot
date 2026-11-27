@@ -376,7 +376,20 @@ static const char *const corpus[] = {
     "\033]777;notify;summary;body\033\\",
     "\033_apc\033\\\033X sos\033\\\033^ pm\033\\",
     "clip\r\n\001board\nfile:///tmp/a b\r\nhttps://example.invalid/\n",
-    "\033]52;p;AAECAwQFBgcICQ==\007"
+    "\033]52;p;AAECAwQFBgcICQ==\007",
+    /* XTGETTCAP: known, unknown, and final-capability regressions. */
+    "\033P+q544e\033\\",
+    "\033P+q544e;436f\033\\",
+    "\033P+q524742\033\\",
+    "\033P+q544e;\033\\",
+    "\033P+q;\033\\",
+    /* Checked-arithmetic regressions: these must be ignored, not abort. */
+    "\033]4;4294967296;?\007",
+    "\033]104;4294967296\007",
+    "\033]10;rgb:fffffffff/0/0\007",
+    "\033]11;#fffff0000000000\007",
+    "\033]99;w=-2147483649;x\007",
+    "\033[$1;1;4;1;1;2147483647;1;1$v"
 };
 
 static const unsigned char ipc_corpus[] = {
