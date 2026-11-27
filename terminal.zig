@@ -1311,6 +1311,7 @@ export fn term_cursor_blink_update(term: *types.Terminal) callconv(.c) void {
 // term_scroll_partial / term_scroll / term_scroll_reverse_partial /
 // term_scroll_reverse / term_linefeed / term_reverse_index.
 
+extern fn cancel_receives(term: *types.Terminal) callconv(.c) void;
 extern fn selection_cancel(term: *types.Terminal) callconv(.c) void;
 extern fn selection_get_start(term: *const types.Terminal) callconv(.c) types.Coord;
 extern fn selection_get_end(term: *const types.Terminal) callconv(.c) types.Coord;
@@ -4637,6 +4638,8 @@ fn freePtmxBuffer(buf: types.PtmxBuffer) callconv(.c) void {
 
 export fn term_destroy(term_arg: ?*types.Terminal) callconv(.c) c_int {
     const term = term_arg orelse return 0;
+
+    cancel_receives(term);
 
     if (term.wl) |wayl|
         removeTerm(wayl, term);

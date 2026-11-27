@@ -2030,13 +2030,31 @@ const ClipboardReceive = struct {
     cb: ReceiveCb,
     done: ReceiveDone,
     user: ?*anyopaque,
+
+    term: *types.Terminal,
+    next: ?*ClipboardReceive = null,
 };
+
+var receive_head: ?*ClipboardReceive = null;
+
+fn receiveUnlink(ctx: *ClipboardReceive) void {
+    var link: *?*ClipboardReceive = &receive_head;
+    while (link.*) |cur| {
+        if (cur == ctx) {
+            link.* = ctx.next;
+            ctx.next = null;
+            return;
+        }
+        link = &cur.next;
+    }
+}
 
 fn receiveCb(ctx: *ClipboardReceive, data: [*]const u8, size: usize) void {
     ctx.cb(@constCast(data), size, ctx.user);
 }
 
 fn clipboardReceiveDone(fdm: *Fdm, ctx: *ClipboardReceive) void {
+    receiveUnlink(ctx);
     _ = fdm_del(fdm, ctx.timeout_fd);
     _ = fdm_del(fdm, ctx.read_fd);
     ctx.done(ctx.user);
@@ -2370,6 +2388,7 @@ fn setupReceive(
         .cb = cb,
         .done = done,
         .user = user,
+        .term = term,
     };
     return ctx;
 }
@@ -2392,6 +2411,8 @@ export fn begin_receive_clipboard(
             if (fdm_add(fdm, read_fd, EPOLLIN, &fdmReceive, ctx) and
                 fdm_add(fdm, timeout_fd, EPOLLIN, &fdmReceiveTimeout, ctx))
             {
+                ctx.next = receive_head;
+                receive_head = ctx;
                 return;
             }
         }
@@ -2404,6 +2425,26 @@ export fn begin_receive_clipboard(
         _ = fdm_del(fdm, read_fd);
     }
     done(user);
+}
+
+export fn cancel_receives(term: *types.Terminal) callconv(.c) void {
+    var link = receive_head;
+    while (link) |ctx| {
+        const next = ctx.next;
+        if (ctx.term == term) {
+            receiveUnlink(ctx);
+            if (term.fdm) |fdm_opaque| {
+                const fdm: *Fdm = @ptrCast(@alignCast(fdm_opaque));
+                _ = fdm_del(fdm, ctx.timeout_fd);
+                _ = fdm_del(fdm, ctx.read_fd);
+            }
+            ctx.done(ctx.user);
+            if (ctx.buf.data) |data|
+                free(data);
+            free(ctx);
+        }
+        link = next;
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────

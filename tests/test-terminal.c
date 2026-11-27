@@ -142,6 +142,7 @@ void begin_receive_clipboard(
     enum data_offer_mime_type mime_type,
     void (*cb)(char *data, size_t size, void *user),
     void (*done)(void *user), void *user);
+void cancel_receives(struct terminal *term);
 void erase_line(struct terminal *term, struct row *row);
 void print_linewrap(struct terminal *term);
 void csi_sgr(struct terminal *term);
@@ -1141,6 +1142,77 @@ test_receive_paste_normalisation(void)
 
     receive(&c, false, true, DATA_OFFER_MIME_TEXT_PLAIN, "a\010b");
     check_text(c.buf, "a\010b", "BS survives a bracketed paste");
+}
+
+static int cancel_done_count;
+
+static void
+cancel_recv_cb(char *data, size_t size, void *user)
+{
+    /* Mimics the OSC-52 callback, which writes into the terminal. */
+    struct terminal *term = user;
+    term->bracketed_paste = (size == 0 || data[0] != '\0');
+}
+
+static void
+cancel_recv_done(void *user)
+{
+    (void)user;
+    cancel_done_count++;
+}
+
+static bool
+cancel_wake_cb(struct fdm *fdm, int fd, int events, void *data)
+{
+    (void)fdm; (void)fd; (void)events; (void)data;
+    return false;
+}
+
+/*
+ * A pending clipboard receive must be cancelled when the terminal is
+ * destroyed. Otherwise its fdm callbacks outlive the terminal and dereference
+ * freed memory (the OSC-52 response path is the realistic trigger: a child
+ * sends "OSC 52;c;?" and exits while the transfer is still in flight).
+ */
+static void
+test_receive_cancel_on_destroy(void)
+{
+    struct terminal *term = term_new();
+    struct fdm *fdm = fdm_init();
+    xassert(fdm != NULL);
+    term->fdm = fdm;
+
+    int fds[2];
+    xassert(pipe(fds) == 0);
+    /* Keep the write end open: no EOF, so the receive stays pending. */
+    xassert(write(fds[1], "abc", 3) == 3);
+
+    cancel_done_count = 0;
+    begin_receive_clipboard(term, false, fds[0], DATA_OFFER_MIME_TEXT_PLAIN,
+                            cancel_recv_cb, cancel_recv_done, term);
+
+    /* term_destroy() must cancel the receive before freeing the terminal. */
+    cancel_receives(term);
+    check(cancel_done_count == 1, "destroy cancels a pending receive once");
+
+    term_free(term);
+
+    /* Let the event loop run: any surviving receive callback would now touch
+     * the freed terminal. */
+    int tfd = timerfd_create(CLOCK_MONOTONIC, TFD_NONBLOCK | TFD_CLOEXEC);
+    xassert(tfd >= 0);
+    struct itimerspec its = {
+        .it_value = {.tv_sec = 0, .tv_nsec = 20 * 1000 * 1000},
+    };
+    xassert(timerfd_settime(tfd, 0, &its, NULL) == 0);
+    fdm_add(fdm, tfd, EPOLLIN, cancel_wake_cb, NULL);
+    fdm_poll(fdm);
+
+    check(cancel_done_count == 1, "no receive callback fires after destroy");
+
+    fdm_destroy(fdm);
+    close(tfd);
+    close(fds[1]);
 }
 
 static void
@@ -8485,6 +8557,7 @@ main(void)
     test_selection_lifecycle();
     test_extract_tabs();
     test_receive_paste_normalisation();
+    test_receive_cancel_on_destroy();
     test_receive_uri_list();
     test_receive_uri_split_reads();
     test_receive_timeout();
